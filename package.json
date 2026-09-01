@@ -13,7 +13,7 @@
     "check": "pnpm -r --if-present check",
     "lint": "pnpm -r --if-present lint",
     "test:unit": "pnpm -r --if-present test",
-    "test:program": "anchor test",
+    "test:program": "sh scripts/test-program-local.sh",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
