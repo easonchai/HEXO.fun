@@ -14,16 +14,16 @@ All token values are unsigned `u64` atomic USDC units (six decimals). `1_000_000
 
 ## Account model
 
-| Account | Owner / PDA seed | Purpose |
-| --- | --- | --- |
-| `ProtocolConfig` | `config` | immutable mint identities; authority, guardian, status, timing, and limits |
-| `PrincipalVault` | `principal-vault` | segregated USDC that backs aggregate PT exactly |
-| `PrizeVault` | `prize-vault` | USDC funded by sponsor/yield adapter; only source of prize claims |
-| `Epoch` | `epoch`, epoch ID | weekly lifecycle, prize snapshot, selected winner, and remaining prize claim |
-| `Round` | `round`, epoch ID, round ID | game time bounds, selected tile, total ET placed by tile, finalization state |
-| `Player` | `player`, owner | canonical PT/ET accounting, last refreshed epoch, round-position nonce |
-| `Position` | `position`, round, player | exactly one immutable board purchase for the player and round |
-| `RandomnessRequest` | `randomness`, domain, subject | binds a provider request to a particular round or epoch and prevents replay |
+| Account             | Owner / PDA seed              | Purpose                                                                      |
+| ------------------- | ----------------------------- | ---------------------------------------------------------------------------- |
+| `ProtocolConfig`    | `config`                      | immutable mint identities; authority, guardian, status, timing, and limits   |
+| `PrincipalVault`    | `principal-vault`             | segregated USDC that backs aggregate PT exactly                              |
+| `PrizeVault`        | `prize-vault`                 | USDC funded by sponsor/yield adapter; only source of prize claims            |
+| `Epoch`             | `epoch`, epoch ID             | weekly lifecycle, prize snapshot, selected winner, and remaining prize claim |
+| `Round`             | `round`, epoch ID, round ID   | game time bounds, selected tile, total ET placed by tile, finalization state |
+| `Player`            | `player`, owner               | canonical PT/ET accounting, last refreshed epoch, round-position nonce       |
+| `Position`          | `position`, round, player     | exactly one immutable board purchase for the player and round                |
+| `RandomnessRequest` | `randomness`, domain, subject | binds a provider request to a particular round or epoch and prevents replay  |
 
 PT and ET are represented by non-transferable Token-2022 mints held in owner-associated token accounts. The `Player` account is the canonical source of epoch semantics; token balances are reconciled by constrained program CPIs. No user-controlled account may become a vault, mint authority, or randomness request.
 

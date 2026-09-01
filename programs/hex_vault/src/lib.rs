@@ -6,8 +6,7 @@ pub mod utils;
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token,
-    token_2022,
+    token, token_2022,
     token_interface::{self, Burn, Mint, MintTo, TokenAccount, TokenInterface, TransferChecked},
 };
 
@@ -24,7 +23,10 @@ pub mod hex_vault {
 
     pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
         require!(params.min_deposit > 0, HexVaultError::ZeroAmount);
-        require!(params.max_stake_per_tile > 0, HexVaultError::InvalidStakeAmount);
+        require!(
+            params.max_stake_per_tile > 0,
+            HexVaultError::InvalidStakeAmount
+        );
         require!(
             params.round_close_buffer_seconds >= 0,
             HexVaultError::InvalidTimeWindow
@@ -116,7 +118,13 @@ pub mod hex_vault {
             HexVaultError::PriorEpochUnresolved
         );
         require!(
-            timing.id == ctx.accounts.prior_epoch.id.checked_add(1).ok_or(HexVaultError::ArithmeticOverflow)?,
+            timing.id
+                == ctx
+                    .accounts
+                    .prior_epoch
+                    .id
+                    .checked_add(1)
+                    .ok_or(HexVaultError::ArithmeticOverflow)?,
             HexVaultError::NonSequentialEpoch
         );
         require!(
@@ -137,8 +145,14 @@ pub mod hex_vault {
         );
         require!(!ctx.accounts.config.paused, HexVaultError::ProtocolPaused);
         require_active_open_epoch(&ctx.accounts.config, &ctx.accounts.epoch)?;
-        require!(now()? >= ctx.accounts.epoch.starts_at, HexVaultError::EpochNotOpen);
-        require!(now()? < ctx.accounts.epoch.ends_at, HexVaultError::EpochNotOpen);
+        require!(
+            now()? >= ctx.accounts.epoch.starts_at,
+            HexVaultError::EpochNotOpen
+        );
+        require!(
+            now()? < ctx.accounts.epoch.ends_at,
+            HexVaultError::EpochNotOpen
+        );
         assert_receipt_accounts(
             &ctx.accounts.config,
             &ctx.accounts.principal_mint,
@@ -157,7 +171,11 @@ pub mod hex_vault {
             player.last_entry_epoch_id = ctx.accounts.epoch.id;
             player.bump = ctx.bumps.player;
         } else {
-            require_keys_eq!(player.owner, ctx.accounts.owner.key(), HexVaultError::PlayerOwnerMismatch);
+            require_keys_eq!(
+                player.owner,
+                ctx.accounts.owner.key(),
+                HexVaultError::PlayerOwnerMismatch
+            );
             if player.last_entry_epoch_id < ctx.accounts.epoch.id {
                 sync_entries_to_principal(
                     &ctx.accounts.config,
@@ -215,7 +233,10 @@ pub mod hex_vault {
     pub fn refresh_entries(ctx: Context<RefreshEntries>) -> Result<()> {
         require!(!ctx.accounts.config.paused, HexVaultError::ProtocolPaused);
         require_active_open_epoch(&ctx.accounts.config, &ctx.accounts.epoch)?;
-        require!(now()? >= ctx.accounts.epoch.starts_at, HexVaultError::EpochNotOpen);
+        require!(
+            now()? >= ctx.accounts.epoch.starts_at,
+            HexVaultError::EpochNotOpen
+        );
         require_keys_eq!(
             ctx.accounts.player.owner,
             ctx.accounts.owner.key(),
@@ -264,7 +285,8 @@ pub mod hex_vault {
             &ctx.accounts.usdc_token_program,
         )?;
         require!(
-            ctx.accounts.owner_principal.amount >= amount && ctx.accounts.owner_entry.amount >= amount,
+            ctx.accounts.owner_principal.amount >= amount
+                && ctx.accounts.owner_entry.amount >= amount,
             HexVaultError::InsufficientMatchedBalance
         );
 
@@ -359,11 +381,7 @@ pub mod hex_vault {
         Ok(())
     }
 
-    pub fn buy_position(
-        ctx: Context<BuyPosition>,
-        tiles: u64,
-        stake_per_tile: u64,
-    ) -> Result<()> {
+    pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) -> Result<()> {
         require!(!ctx.accounts.config.paused, HexVaultError::ProtocolPaused);
         require_active_open_epoch(&ctx.accounts.config, &ctx.accounts.epoch)?;
         require_keys_eq!(
@@ -375,7 +393,10 @@ pub mod hex_vault {
             ctx.accounts.player.last_entry_epoch_id == ctx.accounts.epoch.id,
             HexVaultError::EntriesNeedRefresh
         );
-        require!(ctx.accounts.round.status == ROUND_OPEN, HexVaultError::InvalidRoundState);
+        require!(
+            ctx.accounts.round.status == ROUND_OPEN,
+            HexVaultError::InvalidRoundState
+        );
         require_keys_eq!(
             ctx.accounts.round.epoch,
             ctx.accounts.epoch.key(),
@@ -453,8 +474,14 @@ pub mod hex_vault {
     }
 
     pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<()> {
-        require!(ctx.accounts.round.status == ROUND_OPEN, HexVaultError::InvalidRoundState);
-        require!(now()? >= ctx.accounts.round.ends_at, HexVaultError::RoundClosed);
+        require!(
+            ctx.accounts.round.status == ROUND_OPEN,
+            HexVaultError::InvalidRoundState
+        );
+        require!(
+            now()? >= ctx.accounts.round.ends_at,
+            HexVaultError::RoundClosed
+        );
         ctx.accounts.round.status = ROUND_RANDOMNESS_REQUESTED;
         let request = &mut ctx.accounts.request;
         request.kind = REQUEST_ROUND;
@@ -472,7 +499,10 @@ pub mod hex_vault {
     }
 
     pub fn fulfill_round_with_mock(ctx: Context<FulfillRoundWithMock>, sample: u64) -> Result<()> {
-        require!(!ctx.accounts.config.production_mode, HexVaultError::MockRandomnessDisabled);
+        require!(
+            !ctx.accounts.config.production_mode,
+            HexVaultError::MockRandomnessDisabled
+        );
         require_keys_eq!(
             ctx.accounts.mock_randomness_authority.key(),
             ctx.accounts.config.mock_randomness_authority,
@@ -503,7 +533,10 @@ pub mod hex_vault {
     }
 
     pub fn claim_round_reward(ctx: Context<ClaimRoundReward>) -> Result<()> {
-        require!(ctx.accounts.round.status == ROUND_SETTLED, HexVaultError::InvalidRoundState);
+        require!(
+            ctx.accounts.round.status == ROUND_SETTLED,
+            HexVaultError::InvalidRoundState
+        );
         require_keys_eq!(
             ctx.accounts.position.owner,
             ctx.accounts.owner.key(),
@@ -614,7 +647,10 @@ pub mod hex_vault {
     }
 
     pub fn fulfill_prize_with_mock(ctx: Context<FulfillPrizeWithMock>, sample: u64) -> Result<()> {
-        require!(!ctx.accounts.config.production_mode, HexVaultError::MockRandomnessDisabled);
+        require!(
+            !ctx.accounts.config.production_mode,
+            HexVaultError::MockRandomnessDisabled
+        );
         require_keys_eq!(
             ctx.accounts.mock_randomness_authority.key(),
             ctx.accounts.config.mock_randomness_authority,
@@ -722,10 +758,7 @@ fn create_non_transferable_mint<'info>(
     receipt_token_program: &Interface<'info, TokenInterface>,
     system_program: &Program<'info, System>,
 ) -> Result<()> {
-    use token_interface::spl_token_2022::{
-        extension::ExtensionType,
-        state::Mint as Token2022Mint,
-    };
+    use token_interface::spl_token_2022::{extension::ExtensionType, state::Mint as Token2022Mint};
 
     let space = ExtensionType::try_calculate_account_len::<Token2022Mint>(&[
         ExtensionType::NonTransferable,
@@ -769,8 +802,16 @@ fn assert_receipt_accounts(
     entry_mint: &InterfaceAccount<Mint>,
     receipt_token_program: &Interface<TokenInterface>,
 ) -> Result<()> {
-    require_keys_eq!(principal_mint.key(), config.principal_mint, HexVaultError::ReceiptConfigurationMismatch);
-    require_keys_eq!(entry_mint.key(), config.entry_mint, HexVaultError::ReceiptConfigurationMismatch);
+    require_keys_eq!(
+        principal_mint.key(),
+        config.principal_mint,
+        HexVaultError::ReceiptConfigurationMismatch
+    );
+    require_keys_eq!(
+        entry_mint.key(),
+        config.entry_mint,
+        HexVaultError::ReceiptConfigurationMismatch
+    );
     require_keys_eq!(
         receipt_token_program.key(),
         config.receipt_token_program,
@@ -784,21 +825,28 @@ fn assert_usdc_accounts(
     usdc_mint: &InterfaceAccount<Mint>,
     usdc_token_program: &Interface<TokenInterface>,
 ) -> Result<()> {
-    require_keys_eq!(usdc_mint.key(), config.usdc_mint, HexVaultError::UsdcConfigurationMismatch);
+    require_keys_eq!(
+        usdc_mint.key(),
+        config.usdc_mint,
+        HexVaultError::UsdcConfigurationMismatch
+    );
     require_keys_eq!(
         usdc_token_program.key(),
         config.usdc_token_program,
         HexVaultError::UsdcConfigurationMismatch
     );
-    require!(usdc_mint.decimals == USDC_DECIMALS, HexVaultError::UsdcConfigurationMismatch);
+    require!(
+        usdc_mint.decimals == USDC_DECIMALS,
+        HexVaultError::UsdcConfigurationMismatch
+    );
     Ok(())
 }
 
 fn mint_receipt<'info>(
     config: &Account<'info, ProtocolConfig>,
     receipt_token_program: &Interface<'info, TokenInterface>,
-    mint: &InterfaceAccount<'info, Mint>,
-    destination: &InterfaceAccount<'info, TokenAccount>,
+    mint: &Box<InterfaceAccount<'info, Mint>>,
+    destination: &Box<InterfaceAccount<'info, TokenAccount>>,
     amount: u64,
 ) -> Result<()> {
     let bump = [config.bump];
@@ -819,8 +867,8 @@ fn mint_receipt<'info>(
 
 fn burn_receipt<'info>(
     receipt_token_program: &Interface<'info, TokenInterface>,
-    mint: &InterfaceAccount<'info, Mint>,
-    source: &InterfaceAccount<'info, TokenAccount>,
+    mint: &Box<InterfaceAccount<'info, Mint>>,
+    source: &Box<InterfaceAccount<'info, TokenAccount>>,
     owner: &Signer<'info>,
     amount: u64,
 ) -> Result<()> {
@@ -840,9 +888,9 @@ fn burn_receipt<'info>(
 fn transfer_from_config_vault<'info>(
     config: &Account<'info, ProtocolConfig>,
     usdc_token_program: &Interface<'info, TokenInterface>,
-    source: &InterfaceAccount<'info, TokenAccount>,
-    mint: &InterfaceAccount<'info, Mint>,
-    destination: &InterfaceAccount<'info, TokenAccount>,
+    source: &Box<InterfaceAccount<'info, TokenAccount>>,
+    mint: &Box<InterfaceAccount<'info, Mint>>,
+    destination: &Box<InterfaceAccount<'info, TokenAccount>>,
     amount: u64,
 ) -> Result<()> {
     let bump = [config.bump];
@@ -865,10 +913,10 @@ fn transfer_from_config_vault<'info>(
 
 fn sync_entries_to_principal<'info>(
     config: &Account<'info, ProtocolConfig>,
-    principal_mint: &InterfaceAccount<'info, Mint>,
-    entry_mint: &InterfaceAccount<'info, Mint>,
-    owner_principal: &InterfaceAccount<'info, TokenAccount>,
-    owner_entry: &InterfaceAccount<'info, TokenAccount>,
+    principal_mint: &Box<InterfaceAccount<'info, Mint>>,
+    entry_mint: &Box<InterfaceAccount<'info, Mint>>,
+    owner_principal: &Box<InterfaceAccount<'info, TokenAccount>>,
+    owner_entry: &Box<InterfaceAccount<'info, TokenAccount>>,
     receipt_token_program: &Interface<'info, TokenInterface>,
     owner: &Signer<'info>,
 ) -> Result<()> {
@@ -880,7 +928,9 @@ fn sync_entries_to_principal<'info>(
             receipt_token_program,
             entry_mint,
             owner_entry,
-            principal.checked_sub(entries).ok_or(HexVaultError::ArithmeticOverflow)?,
+            principal
+                .checked_sub(entries)
+                .ok_or(HexVaultError::ArithmeticOverflow)?,
         )
     } else if entries > principal {
         burn_receipt(
@@ -888,12 +938,17 @@ fn sync_entries_to_principal<'info>(
             entry_mint,
             owner_entry,
             owner,
-            entries.checked_sub(principal).ok_or(HexVaultError::ArithmeticOverflow)?,
+            entries
+                .checked_sub(principal)
+                .ok_or(HexVaultError::ArithmeticOverflow)?,
         )
     } else {
         // Keep this argument in the API to ensure callers always provide the
         // matching configured principal mint account for the sync transition.
-        require!(principal_mint.key() == config.principal_mint, HexVaultError::ReceiptConfigurationMismatch);
+        require!(
+            principal_mint.key() == config.principal_mint,
+            HexVaultError::ReceiptConfigurationMismatch
+        );
         Ok(())
     }
 }
@@ -903,8 +958,8 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(init, payer = authority, seeds = [b"config".as_ref()], bump, space = 8 + ProtocolConfig::INIT_SPACE)]
-    pub config: Account<'info, ProtocolConfig>,
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = token::ID)]
     pub usdc_token_program: Interface<'info, TokenInterface>,
     #[account(address = token_2022::ID)]
@@ -920,7 +975,7 @@ pub struct Initialize<'info> {
         associated_token::authority = config,
         associated_token::token_program = usdc_token_program
     )]
-    pub principal_vault: InterfaceAccount<'info, TokenAccount>,
+    pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init,
         payer = authority,
@@ -928,7 +983,7 @@ pub struct Initialize<'info> {
         associated_token::authority = config,
         associated_token::token_program = usdc_token_program
     )]
-    pub prize_vault: InterfaceAccount<'info, TokenAccount>,
+    pub prize_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -937,7 +992,7 @@ pub struct Initialize<'info> {
 pub struct SetPause<'info> {
     pub guardian: Signer<'info>,
     #[account(mut, seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
 }
 
 #[derive(Accounts)]
@@ -946,9 +1001,9 @@ pub struct CreateFirstEpoch<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(mut, seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(init, payer = authority, seeds = [b"epoch".as_ref(), &timing.id.to_le_bytes()], bump, space = 8 + Epoch::INIT_SPACE)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -958,11 +1013,11 @@ pub struct BeginNextEpoch<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(mut, seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(seeds = [b"epoch".as_ref(), &prior_epoch.id.to_le_bytes()], bump = prior_epoch.bump)]
-    pub prior_epoch: Account<'info, Epoch>,
+    pub prior_epoch: Box<Account<'info, Epoch>>,
     #[account(init, payer = authority, seeds = [b"epoch".as_ref(), &timing.id.to_le_bytes()], bump, space = 8 + Epoch::INIT_SPACE)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -971,25 +1026,25 @@ pub struct Deposit<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     #[account(init_if_needed, payer = owner, seeds = [b"player".as_ref(), owner.key().as_ref()], bump, space = 8 + Player::INIT_SPACE)]
-    pub player: Account<'info, Player>,
+    pub player: Box<Account<'info, Player>>,
     #[account(address = config.usdc_mint @ HexVaultError::UsdcConfigurationMismatch)]
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, token::mint = usdc_mint, token::authority = owner, token::token_program = usdc_token_program)]
-    pub owner_usdc: InterfaceAccount<'info, TokenAccount>,
+    pub owner_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = config.principal_vault @ HexVaultError::UsdcConfigurationMismatch, token::mint = usdc_mint, token::authority = config, token::token_program = usdc_token_program)]
-    pub principal_vault: InterfaceAccount<'info, TokenAccount>,
+    pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub principal_mint: InterfaceAccount<'info, Mint>,
+    pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub entry_mint: InterfaceAccount<'info, Mint>,
+    pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(init_if_needed, payer = owner, associated_token::mint = principal_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
-    pub owner_principal: InterfaceAccount<'info, TokenAccount>,
+    pub owner_principal: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(init_if_needed, payer = owner, associated_token::mint = entry_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
-    pub owner_entry: InterfaceAccount<'info, TokenAccount>,
+    pub owner_entry: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.usdc_token_program @ HexVaultError::UsdcConfigurationMismatch)]
     pub usdc_token_program: Interface<'info, TokenInterface>,
     #[account(address = config.receipt_token_program @ HexVaultError::ReceiptConfigurationMismatch)]
@@ -1003,19 +1058,19 @@ pub struct RefreshEntries<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     #[account(mut, seeds = [b"player".as_ref(), owner.key().as_ref()], bump = player.bump)]
-    pub player: Account<'info, Player>,
+    pub player: Box<Account<'info, Player>>,
     #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub principal_mint: InterfaceAccount<'info, Mint>,
+    pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub entry_mint: InterfaceAccount<'info, Mint>,
+    pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, associated_token::mint = principal_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
-    pub owner_principal: InterfaceAccount<'info, TokenAccount>,
+    pub owner_principal: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, associated_token::mint = entry_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
-    pub owner_entry: InterfaceAccount<'info, TokenAccount>,
+    pub owner_entry: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.receipt_token_program @ HexVaultError::ReceiptConfigurationMismatch)]
     pub receipt_token_program: Interface<'info, TokenInterface>,
 }
@@ -1025,21 +1080,21 @@ pub struct Withdraw<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(address = config.usdc_mint @ HexVaultError::UsdcConfigurationMismatch)]
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, token::mint = usdc_mint, token::authority = owner, token::token_program = usdc_token_program)]
-    pub owner_usdc: InterfaceAccount<'info, TokenAccount>,
+    pub owner_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = config.principal_vault @ HexVaultError::UsdcConfigurationMismatch, token::mint = usdc_mint, token::authority = config, token::token_program = usdc_token_program)]
-    pub principal_vault: InterfaceAccount<'info, TokenAccount>,
+    pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub principal_mint: InterfaceAccount<'info, Mint>,
+    pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub entry_mint: InterfaceAccount<'info, Mint>,
+    pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, associated_token::mint = principal_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
-    pub owner_principal: InterfaceAccount<'info, TokenAccount>,
+    pub owner_principal: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, associated_token::mint = entry_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
-    pub owner_entry: InterfaceAccount<'info, TokenAccount>,
+    pub owner_entry: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.usdc_token_program @ HexVaultError::UsdcConfigurationMismatch)]
     pub usdc_token_program: Interface<'info, TokenInterface>,
     #[account(address = config.receipt_token_program @ HexVaultError::ReceiptConfigurationMismatch)]
@@ -1051,13 +1106,13 @@ pub struct FundPrize<'info> {
     #[account(mut)]
     pub funder: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(address = config.usdc_mint @ HexVaultError::UsdcConfigurationMismatch)]
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, token::mint = usdc_mint, token::authority = funder, token::token_program = usdc_token_program)]
-    pub funder_usdc: InterfaceAccount<'info, TokenAccount>,
+    pub funder_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = config.prize_vault @ HexVaultError::UsdcConfigurationMismatch, token::mint = usdc_mint, token::authority = config, token::token_program = usdc_token_program)]
-    pub prize_vault: InterfaceAccount<'info, TokenAccount>,
+    pub prize_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.usdc_token_program @ HexVaultError::UsdcConfigurationMismatch)]
     pub usdc_token_program: Interface<'info, TokenInterface>,
 }
@@ -1068,11 +1123,11 @@ pub struct CreateRound<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     #[account(init, payer = authority, seeds = [b"round".as_ref(), epoch.key().as_ref(), &round_id.to_le_bytes()], bump, space = 8 + Round::INIT_SPACE)]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1081,21 +1136,21 @@ pub struct BuyPosition<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     #[account(mut, seeds = [b"player".as_ref(), owner.key().as_ref()], bump = player.bump)]
-    pub player: Account<'info, Player>,
+    pub player: Box<Account<'info, Player>>,
     #[account(mut, seeds = [b"round".as_ref(), epoch.key().as_ref(), &round.id.to_le_bytes()], bump = round.bump)]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
     #[account(init, payer = owner, seeds = [b"position".as_ref(), round.key().as_ref(), owner.key().as_ref()], bump, space = 8 + Position::INIT_SPACE)]
-    pub position: Account<'info, Position>,
+    pub position: Box<Account<'info, Position>>,
     #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub principal_mint: InterfaceAccount<'info, Mint>,
+    pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub entry_mint: InterfaceAccount<'info, Mint>,
+    pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, associated_token::mint = entry_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
-    pub owner_entry: InterfaceAccount<'info, TokenAccount>,
+    pub owner_entry: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.receipt_token_program @ HexVaultError::ReceiptConfigurationMismatch)]
     pub receipt_token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
@@ -1106,9 +1161,9 @@ pub struct RequestRoundRandomness<'info> {
     #[account(mut)]
     pub requester: Signer<'info>,
     #[account(mut, seeds = [b"round".as_ref(), round.epoch.as_ref(), &round.id.to_le_bytes()], bump = round.bump)]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
     #[account(init, payer = requester, seeds = [b"randomness".as_ref(), round.key().as_ref()], bump, space = 8 + RandomnessRequest::INIT_SPACE)]
-    pub request: Account<'info, RandomnessRequest>,
+    pub request: Box<Account<'info, RandomnessRequest>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1116,11 +1171,11 @@ pub struct RequestRoundRandomness<'info> {
 pub struct FulfillRoundWithMock<'info> {
     pub mock_randomness_authority: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, seeds = [b"round".as_ref(), round.epoch.as_ref(), &round.id.to_le_bytes()], bump = round.bump)]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
     #[account(mut, seeds = [b"randomness".as_ref(), round.key().as_ref()], bump = request.bump)]
-    pub request: Account<'info, RandomnessRequest>,
+    pub request: Box<Account<'info, RandomnessRequest>>,
 }
 
 #[derive(Accounts)]
@@ -1128,17 +1183,17 @@ pub struct ClaimRoundReward<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(seeds = [b"round".as_ref(), round.epoch.as_ref(), &round.id.to_le_bytes()], bump = round.bump)]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
     #[account(mut, seeds = [b"position".as_ref(), round.key().as_ref(), owner.key().as_ref()], bump = position.bump)]
-    pub position: Account<'info, Position>,
+    pub position: Box<Account<'info, Position>>,
     #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub principal_mint: InterfaceAccount<'info, Mint>,
+    pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
-    pub entry_mint: InterfaceAccount<'info, Mint>,
+    pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, associated_token::mint = entry_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
-    pub owner_entry: InterfaceAccount<'info, TokenAccount>,
+    pub owner_entry: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.receipt_token_program @ HexVaultError::ReceiptConfigurationMismatch)]
     pub receipt_token_program: Interface<'info, TokenInterface>,
 }
@@ -1147,11 +1202,11 @@ pub struct ClaimRoundReward<'info> {
 pub struct CommitPrizeSnapshot<'info> {
     pub snapshot_authority: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     #[account(mut, address = config.prize_vault @ HexVaultError::UsdcConfigurationMismatch)]
-    pub prize_vault: InterfaceAccount<'info, TokenAccount>,
+    pub prize_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 }
 
 #[derive(Accounts)]
@@ -1159,9 +1214,9 @@ pub struct RequestPrizeRandomness<'info> {
     #[account(mut)]
     pub requester: Signer<'info>,
     #[account(mut, seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     #[account(init, payer = requester, seeds = [b"randomness".as_ref(), epoch.key().as_ref()], bump, space = 8 + RandomnessRequest::INIT_SPACE)]
-    pub request: Account<'info, RandomnessRequest>,
+    pub request: Box<Account<'info, RandomnessRequest>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1169,27 +1224,27 @@ pub struct RequestPrizeRandomness<'info> {
 pub struct FulfillPrizeWithMock<'info> {
     pub mock_randomness_authority: Signer<'info>,
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     #[account(mut, seeds = [b"randomness".as_ref(), epoch.key().as_ref()], bump = request.bump)]
-    pub request: Account<'info, RandomnessRequest>,
+    pub request: Box<Account<'info, RandomnessRequest>>,
 }
 
 #[derive(Accounts)]
 pub struct ClaimPrize<'info> {
     #[account(seeds = [b"config".as_ref()], bump = config.bump)]
-    pub config: Account<'info, ProtocolConfig>,
+    pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
     /// CHECK: Merkle proof verifies this recipient's public key; no signature is required for relayed claims.
     pub winner: UncheckedAccount<'info>,
     #[account(address = config.usdc_mint @ HexVaultError::UsdcConfigurationMismatch)]
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, token::mint = usdc_mint, token::authority = winner, token::token_program = usdc_token_program)]
-    pub winner_usdc: InterfaceAccount<'info, TokenAccount>,
+    pub winner_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = config.prize_vault @ HexVaultError::UsdcConfigurationMismatch, token::mint = usdc_mint, token::authority = config, token::token_program = usdc_token_program)]
-    pub prize_vault: InterfaceAccount<'info, TokenAccount>,
+    pub prize_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = config.usdc_token_program @ HexVaultError::UsdcConfigurationMismatch)]
     pub usdc_token_program: Interface<'info, TokenInterface>,
 }
@@ -1197,7 +1252,7 @@ pub struct ClaimPrize<'info> {
 #[derive(Accounts)]
 pub struct ExpireUnclaimedPrize<'info> {
     #[account(mut, seeds = [b"epoch".as_ref(), &epoch.id.to_le_bytes()], bump = epoch.bump)]
-    pub epoch: Account<'info, Epoch>,
+    pub epoch: Box<Account<'info, Epoch>>,
 }
 
 #[cfg(test)]

@@ -12,22 +12,32 @@ pub fn now() -> Result<i64> {
 }
 
 pub fn require_active_open_epoch(config: &ProtocolConfig, epoch: &Epoch) -> Result<()> {
-    require!(epoch.id == config.current_epoch_id, HexVaultError::InactiveEpoch);
+    require!(
+        epoch.id == config.current_epoch_id,
+        HexVaultError::InactiveEpoch
+    );
     require!(epoch.status == EPOCH_OPEN, HexVaultError::EpochNotOpen);
     Ok(())
 }
 
 pub fn validate_epoch_timing(timing: &crate::state::EpochTiming) -> Result<()> {
-    require!(timing.starts_at < timing.ends_at, HexVaultError::InvalidTimeWindow);
     require!(
-        timing.prize_snapshot_at >= timing.ends_at && timing.prize_snapshot_at <= timing.claim_deadline,
+        timing.starts_at < timing.ends_at,
+        HexVaultError::InvalidTimeWindow
+    );
+    require!(
+        timing.prize_snapshot_at >= timing.ends_at
+            && timing.prize_snapshot_at <= timing.claim_deadline,
         HexVaultError::InvalidTimeWindow
     );
     Ok(())
 }
 
 pub fn tile_count(mask: u64) -> Result<u32> {
-    require!(mask != 0 && mask & !TILE_MASK == 0, HexVaultError::InvalidTileSelection);
+    require!(
+        mask != 0 && mask & !TILE_MASK == 0,
+        HexVaultError::InvalidTileSelection
+    );
     Ok(mask.count_ones())
 }
 
@@ -80,7 +90,10 @@ pub fn verify_prize_proof(
     weight: u64,
     proof: &[MerkleProofNode],
 ) -> Result<u64> {
-    require!(weight > 0 && proof.len() <= MAX_MERKLE_DEPTH, HexVaultError::InvalidMerkleProof);
+    require!(
+        weight > 0 && proof.len() <= MAX_MERKLE_DEPTH,
+        HexVaultError::InvalidMerkleProof
+    );
 
     let mut hash = prize_leaf_hash(owner, weight);
     let mut sum = weight;
@@ -102,7 +115,10 @@ pub fn verify_prize_proof(
         sum = combined_sum;
     }
 
-    require!(sum == expected_total && hash == root, HexVaultError::InvalidMerkleProof);
+    require!(
+        sum == expected_total && hash == root,
+        HexVaultError::InvalidMerkleProof
+    );
     Ok(prefix)
 }
 
@@ -110,7 +126,10 @@ pub fn assert_winning_interval(prefix: u64, weight: u64, target: u64) -> Result<
     let end = prefix
         .checked_add(weight)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
-    require!(target >= prefix && target < end, HexVaultError::NonWinningPrizeProof);
+    require!(
+        target >= prefix && target < end,
+        HexVaultError::NonWinningPrizeProof
+    );
     Ok(())
 }
 

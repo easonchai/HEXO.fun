@@ -6,7 +6,7 @@ import {
   type AtomicAmount,
   type Cursor,
   type EventEnvelope,
-} from './events.js';
+} from "./events.js";
 
 export interface PlayerView {
   owner: string;
@@ -52,8 +52,8 @@ export class HexVaultProjection {
   }
 
   apply(event: EventEnvelope): boolean {
-    if (event.finality !== 'finalized') {
-      throw new Error('indexer accepts finalized events only');
+    if (event.finality !== "finalized") {
+      throw new Error("indexer accepts finalized events only");
     }
 
     const key = cursorKey(event.cursor);
@@ -99,30 +99,30 @@ export class HexVaultProjection {
   private reduce(event: EventEnvelope): void {
     const data = event.data;
     switch (event.name) {
-      case 'DepositRecorded': {
-        const player = this.player(asPublicKey(data.owner, 'owner'));
-        const amount = asAtomicAmount(data.amount, 'amount');
+      case "DepositRecorded": {
+        const player = this.player(asPublicKey(data.owner, "owner"));
+        const amount = asAtomicAmount(data.amount, "amount");
         player.principalMinted += amount;
         player.entriesMinted += amount;
         return;
       }
-      case 'WithdrawalRecorded': {
-        const player = this.player(asPublicKey(data.owner, 'owner'));
-        player.principalWithdrawn += asAtomicAmount(data.amount, 'amount');
+      case "WithdrawalRecorded": {
+        const player = this.player(asPublicKey(data.owner, "owner"));
+        player.principalWithdrawn += asAtomicAmount(data.amount, "amount");
         return;
       }
-      case 'EntriesRefreshed': {
-        const player = this.player(asPublicKey(data.owner, 'owner'));
-        const epochId = asAtomicAmount(data.epochId, 'epochId');
+      case "EntriesRefreshed": {
+        const player = this.player(asPublicKey(data.owner, "owner"));
+        const epochId = asAtomicAmount(data.epochId, "epochId");
         player.lastEntryEpoch = epochId;
         return;
       }
-      case 'PositionPurchased': {
-        const owner = asPublicKey(data.owner, 'owner');
-        const round = asPublicKey(data.round, 'round');
-        const epochId = asAtomicAmount(data.epochId, 'epochId');
-        const roundId = asAtomicAmount(data.roundId, 'roundId');
-        const totalStake = asAtomicAmount(data.totalStake, 'totalStake');
+      case "PositionPurchased": {
+        const owner = asPublicKey(data.owner, "owner");
+        const round = asPublicKey(data.round, "round");
+        const epochId = asAtomicAmount(data.epochId, "epochId");
+        const roundId = asAtomicAmount(data.roundId, "roundId");
+        const totalStake = asAtomicAmount(data.totalStake, "totalStake");
         const player = this.player(owner);
         player.entriesSpent += totalStake;
         const current = this.rounds.get(round) ?? {
@@ -136,45 +136,56 @@ export class HexVaultProjection {
         this.rounds.set(round, current);
         return;
       }
-      case 'RoundSettled': {
-        const round = asPublicKey(data.round, 'round');
+      case "RoundSettled": {
+        const round = asPublicKey(data.round, "round");
         const existing = this.rounds.get(round);
-        if (!existing) throw new Error(`round ${round} settled before purchase projection`);
-        const winningTile = Number(asAtomicAmount(data.winningTile, 'winningTile'));
-        if (!Number.isInteger(winningTile) || winningTile < 0 || winningTile >= 36) {
-          throw new Error('winningTile must be in [0, 35]');
+        if (!existing)
+          throw new Error(`round ${round} settled before purchase projection`);
+        const winningTile = Number(
+          asAtomicAmount(data.winningTile, "winningTile"),
+        );
+        if (
+          !Number.isInteger(winningTile) ||
+          winningTile < 0 ||
+          winningTile >= 36
+        ) {
+          throw new Error("winningTile must be in [0, 35]");
         }
         existing.winningTile = winningTile;
         existing.settled = true;
         return;
       }
-      case 'RoundRewardClaimed': {
-        const player = this.player(asPublicKey(data.owner, 'owner'));
-        player.entriesMinted += asAtomicAmount(data.reward, 'reward');
+      case "RoundRewardClaimed": {
+        const player = this.player(asPublicKey(data.owner, "owner"));
+        player.entriesMinted += asAtomicAmount(data.reward, "reward");
         return;
       }
-      case 'PrizeSnapshotCommitted': {
-        const epoch = this.epoch(asAtomicAmount(data.epochId, 'epochId'));
-        epoch.prizeAmount = asAtomicAmount(data.prizeAmount, 'prizeAmount');
-        epoch.totalEntryWeight = asAtomicAmount(data.totalEntryWeight, 'totalEntryWeight');
+      case "PrizeSnapshotCommitted": {
+        const epoch = this.epoch(asAtomicAmount(data.epochId, "epochId"));
+        epoch.prizeAmount = asAtomicAmount(data.prizeAmount, "prizeAmount");
+        epoch.totalEntryWeight = asAtomicAmount(
+          data.totalEntryWeight,
+          "totalEntryWeight",
+        );
         return;
       }
-      case 'PrizeDrawn': {
-        const epoch = this.epoch(asAtomicAmount(data.epochId, 'epochId'));
-        epoch.prizeTarget = asAtomicAmount(data.target, 'target');
+      case "PrizeDrawn": {
+        const epoch = this.epoch(asAtomicAmount(data.epochId, "epochId"));
+        epoch.prizeTarget = asAtomicAmount(data.target, "target");
         return;
       }
-      case 'PrizeClaimed': {
-        const epoch = this.epoch(asAtomicAmount(data.epochId, 'epochId'));
-        if (epoch.claimed) throw new Error(`epoch ${epoch.epochId} prize claimed twice`);
-        epoch.winner = asPublicKey(data.winner, 'winner');
+      case "PrizeClaimed": {
+        const epoch = this.epoch(asAtomicAmount(data.epochId, "epochId"));
+        if (epoch.claimed)
+          throw new Error(`epoch ${epoch.epochId} prize claimed twice`);
+        epoch.winner = asPublicKey(data.winner, "winner");
         epoch.claimed = true;
         return;
       }
-      case 'RoundRandomnessRequested':
-      case 'PrizeFunded':
-      case 'PrizeRandomnessRequested':
-      case 'ProtocolPauseChanged':
+      case "RoundRandomnessRequested":
+      case "PrizeFunded":
+      case "PrizeRandomnessRequested":
+      case "ProtocolPauseChanged":
         return;
       default: {
         const exhaustive: never = event.name;
