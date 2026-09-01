@@ -10,7 +10,7 @@
 6. **Randomness authenticity:** only the configured provider can fulfill a request; a request is domain-bound, subject-bound, and consumed once.
 7. **Settlement correctness:** a round is final only after its close; bonus allocation cannot exceed configuration or be settled twice.
 8. **Prize safety:** a prize is capped by the committed prize value and escrow balance, has one winner/claim, and cannot be changed after randomness.
-9. **Authority minimization:** guardian pause cannot move funds; governance changes are delayed; test randomness is forbidden in production mode.
+9. **Authority minimization:** guardian pause cannot move funds; test randomness is forbidden in production mode. Timelocked governance changes are a required mainnet gate, not a current program feature.
 10. **Account validation:** all token accounts, mints, PDAs, programs, and sysvars are constrained to known identities. No caller-provided program/account is trusted merely because it deserializes.
 
 ## Solana-specific controls

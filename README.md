@@ -15,7 +15,7 @@ Within a weekly epoch, ET may be spent on one 36-tile Hex board position per rou
 
 The USDC principal vault, prize escrow, and yield adapter are separate. A lottery prize can only be paid from the prize escrow; it cannot draw down accounted principal.
 
-See [`docs/protocol.md`](docs/protocol.md) for the state machine and invariants, [`docs/security.md`](docs/security.md) for the threat model, and [`docs/research.md`](docs/research.md) for source research and integration status.
+See [`docs/protocol.md`](docs/protocol.md) for the state machine and invariants, [`docs/security.md`](docs/security.md) for the threat model, [`docs/research.md`](docs/research.md) for source research and integration status, and [`docs/maintenance.md`](docs/maintenance.md) for contributor, deployment, and incident-response guidance.
 
 ## Intended stack
 
@@ -36,6 +36,23 @@ tests/                  program and service tests
 docs/                   product, risk, and operational specifications
 ```
 
-## Development status
+## Development and validation
 
-The project is being bootstrapped with the current local Solana and Anchor toolchain. Use only the repository-native commands documented once the lockfiles and generated IDL land; no deployment key, RPC key, Privy App ID, or mainnet configuration is committed.
+The current scope is a **devnet protocol prototype**. The tested local-validator custody path initializes the protocol, deposits test USDC, mints 1:1 PT/ET, proves sponsor prize funding is isolated in `PrizeVault`, and performs matched PT/ET withdrawal. Rust unit tests additionally exercise unbiased randomness mapping and Merkle-sum interval verification; the web/indexer packages have focused unit tests.
+
+It is not a complete production application: production randomness, yield, durable indexing, multisig/timelock governance, a full web UI/wallet client, independent audit, and legal review are deliberately unfinished. See the [maintenance guide](docs/maintenance.md) for the precise coverage matrix and mainnet gates.
+
+### Verify locally
+
+```sh
+pnpm install --frozen-lockfile
+pnpm run check
+pnpm run test:unit
+pnpm run test:program
+pnpm run format:check
+cargo fmt --all -- --check
+cargo test -p hex_vault --lib
+git diff --check
+```
+
+`pnpm run test:program` starts an isolated local validator, deploys the built program, and runs the custody integration suite. It requires only a fresh local test key at `~/.config/solana/id.json`; no deployment key, RPC key, Privy App ID, or mainnet configuration is committed.
