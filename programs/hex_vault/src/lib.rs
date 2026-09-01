@@ -10,6 +10,7 @@ use anchor_spl::{
     token_interface::{self, Burn, Mint, MintTo, TokenAccount, TokenInterface, TransferChecked},
 };
 
+use crate::program::HexVault;
 use constants::*;
 use errors::HexVaultError;
 use state::*;
@@ -959,6 +960,10 @@ pub struct Initialize<'info> {
     pub authority: Signer<'info>,
     #[account(init, payer = authority, seeds = [b"config".as_ref()], bump, space = 8 + ProtocolConfig::INIT_SPACE)]
     pub config: Box<Account<'info, ProtocolConfig>>,
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ HexVaultError::UnauthorizedAuthority)]
+    pub program: Program<'info, HexVault>,
+    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ HexVaultError::UnauthorizedAuthority)]
+    pub program_data: Account<'info, ProgramData>,
     pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = token::ID)]
     pub usdc_token_program: Interface<'info, TokenInterface>,

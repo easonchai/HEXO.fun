@@ -16,6 +16,13 @@ import idl from "../target/idl/hex_vault.json" with { type: "json" };
 
 const programId = new PublicKey(idl.address);
 const amount = 1_000_000n;
+const upgradeableLoader = new PublicKey(
+  "BPFLoaderUpgradeab1e11111111111111111111111",
+);
+const programData = PublicKey.findProgramAddressSync(
+  [programId.toBuffer()],
+  upgradeableLoader,
+)[0];
 
 const pda = (seed: string, extra: Buffer[] = []): PublicKey =>
   PublicKey.findProgramAddressSync([Buffer.from(seed), ...extra], programId)[0];
@@ -31,6 +38,12 @@ describe("HexVault custody flow", () => {
   const epochId = new BN(1);
   const epoch = pda("epoch", [epochId.toArrayLike(Buffer, "le", 8)]);
   const player = pda("player", [authority.toBuffer()]);
+  const roundId = new BN(1);
+  const round = pda("round", [
+    epoch.toBuffer(),
+    roundId.toArrayLike(Buffer, "le", 8),
+  ]);
+  const position = pda("position", [round.toBuffer(), authority.toBuffer()]);
 
   let usdcMint: PublicKey;
   let ownerUsdc: PublicKey;
@@ -64,11 +77,47 @@ describe("HexVault custody flow", () => {
       usdcMint,
       ownerUsdc,
       authority,
-      amount * 2n,
+      amount * 3n,
     );
 
     principalVault = pda("principal-vault");
     prizeVault = pda("prize-vault");
+
+    const attacker = Keypair.generate();
+    const attackerPrincipalMint = Keypair.generate();
+    const attackerEntryMint = Keypair.generate();
+    const airdrop = await provider.connection.requestAirdrop(
+      attacker.publicKey,
+      2_000_000_000,
+    );
+    await provider.connection.confirmTransaction(airdrop, "confirmed");
+    await expect(
+      program.methods
+        .initialize({
+          guardian: attacker.publicKey,
+          snapshotAuthority: attacker.publicKey,
+          mockRandomnessAuthority: attacker.publicKey,
+          minDeposit: new BN(1),
+          maxStakePerTile: new BN(amount.toString()),
+          roundCloseBufferSeconds: new BN(0),
+        })
+        .accounts({
+          authority: attacker.publicKey,
+          config,
+          program: programId,
+          programData,
+          usdcMint,
+          usdcTokenProgram: TOKEN_PROGRAM_ID,
+          receiptTokenProgram: TOKEN_2022_PROGRAM_ID,
+          principalMint: attackerPrincipalMint.publicKey,
+          entryMint: attackerEntryMint.publicKey,
+          principalVault,
+          prizeVault,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([attacker, attackerPrincipalMint, attackerEntryMint])
+        .rpc(),
+    ).rejects.toThrow("UnauthorizedAuthority");
 
     await program.methods
       .initialize({
@@ -82,6 +131,8 @@ describe("HexVault custody flow", () => {
       .accounts({
         authority,
         config,
+        program: programId,
+        programData,
         usdcMint,
         usdcTokenProgram: TOKEN_PROGRAM_ID,
         receiptTokenProgram: TOKEN_2022_PROGRAM_ID,
@@ -123,6 +174,18 @@ describe("HexVault custody flow", () => {
       false,
       TOKEN_2022_PROGRAM_ID,
     );
+  });
+
+  it("rejects an unconfigured guardian without changing protocol state", async () => {
+    const attacker = Keypair.generate();
+
+    await expect(
+      program.methods
+        .setPause(true)
+        .accounts({ guardian: attacker.publicKey, config })
+        .signers([attacker])
+        .rpc(),
+    ).rejects.toThrow("UnauthorizedGuardian");
   });
 
   it("mints matched PT/ET only after USDC enters the principal vault", async () => {
@@ -193,6 +256,100 @@ describe("HexVault custody flow", () => {
     );
   });
 
+  it("blocks withdrawals after ET is spent on a position", async () => {
+    await program.methods
+      .deposit(new BN(amount.toString()))
+      .accounts({
+        owner: authority,
+        config,
+        epoch,
+        player,
+        usdcMint,
+        ownerUsdc,
+        principalVault,
+        principalMint: principalMint.publicKey,
+        entryMint: entryMint.publicKey,
+        ownerPrincipal,
+        ownerEntry,
+        usdcTokenProgram: TOKEN_PROGRAM_ID,
+        receiptTokenProgram: TOKEN_2022_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const now = Math.floor(Date.now() / 1000);
+    await program.methods
+      .createRound(roundId, new BN(now - 10), new BN(now + 60), new BN(0))
+      .accounts({
+        authority,
+        config,
+        epoch,
+        round,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+    await program.methods
+      .buyPosition(new BN(1), new BN(amount.toString()))
+      .accounts({
+        owner: authority,
+        config,
+        epoch,
+        player,
+        round,
+        position,
+        principalMint: principalMint.publicKey,
+        entryMint: entryMint.publicKey,
+        ownerEntry,
+        receiptTokenProgram: TOKEN_2022_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    await expect(
+      program.methods
+        .withdraw(new BN((amount * 2n).toString()))
+        .accounts({
+          owner: authority,
+          config,
+          usdcMint,
+          ownerUsdc,
+          principalVault,
+          principalMint: principalMint.publicKey,
+          entryMint: entryMint.publicKey,
+          ownerPrincipal,
+          ownerEntry,
+          usdcTokenProgram: TOKEN_PROGRAM_ID,
+          receiptTokenProgram: TOKEN_2022_PROGRAM_ID,
+        })
+        .rpc(),
+    ).rejects.toThrow("InsufficientMatchedBalance");
+
+    expect((await getAccount(provider.connection, principalVault)).amount).toBe(
+      amount * 2n,
+    );
+    expect(
+      (
+        await getAccount(
+          provider.connection,
+          ownerPrincipal,
+          undefined,
+          TOKEN_2022_PROGRAM_ID,
+        )
+      ).amount,
+    ).toBe(amount * 2n);
+    expect(
+      (
+        await getAccount(
+          provider.connection,
+          ownerEntry,
+          undefined,
+          TOKEN_2022_PROGRAM_ID,
+        )
+      ).amount,
+    ).toBe(amount);
+  });
+
   it("requires matched PT and ET, then returns only backed principal", async () => {
     await program.methods
       .withdraw(new BN(amount.toString()))
@@ -212,7 +369,7 @@ describe("HexVault custody flow", () => {
       .rpc();
 
     expect((await getAccount(provider.connection, principalVault)).amount).toBe(
-      0n,
+      amount,
     );
     expect((await getAccount(provider.connection, ownerUsdc)).amount).toBe(
       amount,
@@ -226,7 +383,7 @@ describe("HexVault custody flow", () => {
           TOKEN_2022_PROGRAM_ID,
         )
       ).amount,
-    ).toBe(0n);
+    ).toBe(amount);
     expect(
       (
         await getAccount(
@@ -237,5 +394,8 @@ describe("HexVault custody flow", () => {
         )
       ).amount,
     ).toBe(0n);
+    expect((await getAccount(provider.connection, prizeVault)).amount).toBe(
+      amount,
+    );
   });
 });

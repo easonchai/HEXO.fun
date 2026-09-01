@@ -15,14 +15,14 @@ Within a weekly epoch, ET may be spent on one 36-tile Hex board position per rou
 
 The USDC principal vault, prize escrow, and yield adapter are separate. A lottery prize can only be paid from the prize escrow; it cannot draw down accounted principal.
 
-See [`docs/protocol.md`](docs/protocol.md) for the state machine and invariants, [`docs/security.md`](docs/security.md) for the threat model, [`docs/research.md`](docs/research.md) for source research and integration status, and [`docs/maintenance.md`](docs/maintenance.md) for contributor, deployment, and incident-response guidance.
+See [`docs/protocol.md`](docs/protocol.md) for the state machine and invariants, [`docs/security.md`](docs/security.md) for the threat model, [`docs/preliminary-security-review.md`](docs/preliminary-security-review.md) for open security findings and required remediation, [`docs/research.md`](docs/research.md) for source research and integration status, and [`docs/maintenance.md`](docs/maintenance.md) for contributor, deployment, and incident-response guidance.
 
 ## Intended stack
 
 - **On-chain:** Rust with Anchor, Solana/Agave, Token-2022 non-transferable receipt/accounting tokens.
 - **Clients/services:** TypeScript with `@solana/kit`/Anchor client APIs.
 - **Wallets:** Privy Solana embedded/external wallet adapter when `VITE_PRIVY_APP_ID` is supplied, plus standard Solana-wallet-adapter connections.
-- **Randomness:** provider interface. Pyth Entropy’s current public docs are EVM-only, so the production SVM provider must be selected before mainnet (ORAO/Switchboard are candidates); test-only mock randomness is rejected by production configuration.
+- **Randomness:** test-only mock provider interface. Pyth Entropy’s current public docs are EVM-only, so the production SVM provider must be selected before mainnet (ORAO/Switchboard are candidates); no production randomness configuration or callback exists yet.
 - **Indexer:** an idempotent event consumer, checkpointed by slot/signature, designed for a managed RPC/webhook source and PostgreSQL in production.
 - **Yield:** an adapter boundary designed for a Kamino USDC lending-vault integration. It is deliberately disabled in the initial devnet contract; prizes are sponsor-funded until adapter risk controls are implemented and audited.
 
