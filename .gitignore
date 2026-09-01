@@ -1,0 +1,17 @@
+# Dependencies and builds
+node_modules/
+dist/
+coverage/
+.target/
+target/
+
+# Local secrets and deployment authority
+.env
+.env.*
+!.env.example
+*.keypair.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
