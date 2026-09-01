@@ -18,4 +18,4 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "pnpm run test:unit"
+test = "pnpm run test:unit && pnpm exec vitest run tests"

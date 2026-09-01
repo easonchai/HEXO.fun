@@ -971,20 +971,23 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = authority,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = config,
-        associated_token::token_program = usdc_token_program
+        seeds = [b"principal-vault"],
+        bump,
+        token::mint = usdc_mint,
+        token::authority = config,
+        token::token_program = usdc_token_program
     )]
     pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init,
         payer = authority,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = config,
-        associated_token::token_program = usdc_token_program
+        seeds = [b"prize-vault"],
+        bump,
+        token::mint = usdc_mint,
+        token::authority = config,
+        token::token_program = usdc_token_program
     )]
     pub prize_vault: Box<InterfaceAccount<'info, TokenAccount>>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1037,9 +1040,9 @@ pub struct Deposit<'info> {
     pub owner_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = config.principal_vault @ HexVaultError::UsdcConfigurationMismatch, token::mint = usdc_mint, token::authority = config, token::token_program = usdc_token_program)]
     pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
-    #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(init_if_needed, payer = owner, associated_token::mint = principal_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
     pub owner_principal: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -1063,9 +1066,9 @@ pub struct RefreshEntries<'info> {
     pub epoch: Box<Account<'info, Epoch>>,
     #[account(mut, seeds = [b"player".as_ref(), owner.key().as_ref()], bump = player.bump)]
     pub player: Box<Account<'info, Player>>,
-    #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
-    #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, associated_token::mint = principal_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
     pub owner_principal: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -1087,9 +1090,9 @@ pub struct Withdraw<'info> {
     pub owner_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = config.principal_vault @ HexVaultError::UsdcConfigurationMismatch, token::mint = usdc_mint, token::authority = config, token::token_program = usdc_token_program)]
     pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
-    #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, associated_token::mint = principal_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
     pub owner_principal: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -1145,9 +1148,9 @@ pub struct BuyPosition<'info> {
     pub round: Box<Account<'info, Round>>,
     #[account(init, payer = owner, seeds = [b"position".as_ref(), round.key().as_ref(), owner.key().as_ref()], bump, space = 8 + Position::INIT_SPACE)]
     pub position: Box<Account<'info, Position>>,
-    #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
-    #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, associated_token::mint = entry_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
     pub owner_entry: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -1188,9 +1191,9 @@ pub struct ClaimRoundReward<'info> {
     pub round: Box<Account<'info, Round>>,
     #[account(mut, seeds = [b"position".as_ref(), round.key().as_ref(), owner.key().as_ref()], bump = position.bump)]
     pub position: Box<Account<'info, Position>>,
-    #[account(address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.principal_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub principal_mint: Box<InterfaceAccount<'info, Mint>>,
-    #[account(address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
+    #[account(mut, address = config.entry_mint @ HexVaultError::ReceiptConfigurationMismatch)]
     pub entry_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, associated_token::mint = entry_mint, associated_token::authority = owner, associated_token::token_program = receipt_token_program)]
     pub owner_entry: Box<InterfaceAccount<'info, TokenAccount>>,
