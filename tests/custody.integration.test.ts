@@ -64,7 +64,7 @@ describe("HexVault custody flow", () => {
       usdcMint,
       ownerUsdc,
       authority,
-      amount,
+      amount * 2n,
     );
 
     principalVault = pda("principal-vault");
@@ -170,6 +170,27 @@ describe("HexVault custody flow", () => {
         )
       ).amount,
     ).toBe(amount);
+  });
+
+  it("keeps sponsor prize funding segregated from principal", async () => {
+    await program.methods
+      .fundPrize(new BN(amount.toString()))
+      .accounts({
+        funder: authority,
+        config,
+        usdcMint,
+        funderUsdc: ownerUsdc,
+        prizeVault,
+        usdcTokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    expect((await getAccount(provider.connection, principalVault)).amount).toBe(
+      amount,
+    );
+    expect((await getAccount(provider.connection, prizeVault)).amount).toBe(
+      amount,
+    );
   });
 
   it("requires matched PT and ET, then returns only backed principal", async () => {
