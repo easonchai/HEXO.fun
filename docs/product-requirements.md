@@ -361,5 +361,6 @@ The following must be decided by product, legal/compliance, risk, and engineerin
 - `docs/protocol.md` — technical state machine and accounting invariants.
 - `docs/security.md` — security controls and mainnet gates.
 - `docs/research.md` — product references and integration research.
+- `docs/tokenomics-proposal.md` — proposed fee, jackpot, buyback, and HEX value flows; not an approved token launch.
 - `docs/preliminary-security-review.md` — current internal review findings; not an external audit.
 - `docs/maintenance.md` — contributor and operational workflow.
