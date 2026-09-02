@@ -15,7 +15,7 @@ Within a weekly epoch, ET may be spent on one 36-tile Hex board position per rou
 
 The USDC principal vault, prize escrow, and yield adapter are separate. A lottery prize can only be paid from the prize escrow; it cannot draw down accounted principal.
 
-See [`docs/protocol.md`](docs/protocol.md) for the state machine and invariants, [`docs/security.md`](docs/security.md) for the threat model, [`docs/preliminary-security-review.md`](docs/preliminary-security-review.md) for open security findings and required remediation, [`docs/research.md`](docs/research.md) for source research and integration status, and [`docs/maintenance.md`](docs/maintenance.md) for contributor, deployment, and incident-response guidance.
+See [`docs/product-requirements.md`](docs/product-requirements.md) for the product requirements, [`docs/protocol.md`](docs/protocol.md) for the state machine and invariants, [`docs/security.md`](docs/security.md) for the threat model, [`docs/preliminary-security-review.md`](docs/preliminary-security-review.md) for open security findings and required remediation, [`docs/research.md`](docs/research.md) for source research and integration status, and [`docs/maintenance.md`](docs/maintenance.md) for contributor, deployment, and incident-response guidance.
 
 ## Intended stack
 
