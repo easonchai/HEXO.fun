@@ -3,68 +3,78 @@ import {
   asPublicKey,
   compareCursor,
   cursorKey,
-  type AtomicAmount,
   type Cursor,
   type EventEnvelope,
-} from "./events.js";
+} from "./events.ts";
 
 export interface PlayerView {
-  owner: string;
-  principalMinted: AtomicAmount;
-  principalWithdrawn: AtomicAmount;
-  entriesMinted: AtomicAmount;
-  entriesSpent: AtomicAmount;
-  lastEntryEpoch?: bigint;
-}
-
-export interface RoundView {
-  address: string;
-  epochId: bigint;
-  roundId: bigint;
-  winningTile?: number;
-  totalStaked: AtomicAmount;
-  settled: boolean;
-}
-
-export interface EpochView {
-  epochId: bigint;
-  prizeAmount?: AtomicAmount;
-  totalEntryWeight?: AtomicAmount;
-  prizeTarget?: AtomicAmount;
-  winner?: string;
-  claimed: boolean;
+  readonly pool: string;
+  readonly owner: string;
+  principal: bigint;
+  entriesSpentSinceRefresh: bigint;
+  entriesRewardedSinceRefresh: bigint;
+  lastRefreshEpoch: bigint;
 }
 
 /**
- * In-memory reference reducer. The production adapter persists all maps and the
- * cursor in one database transaction; this pure implementation makes replay
- * and idempotency behavior independently testable.
+ * Canonical entries accounting.
+ *
+ *   ET = principal - entriesSpentSinceRefresh + entriesRewardedSinceRefresh
+ *
+ * A deposit mints principal and ET one-for-one; buying a position burns ET, so
+ * `spent` rises; a round reward mints ET, so `rewarded` rises; a refresh burns
+ * and remints the whole balance, which zeroes both accumulators.
  */
+export const entriesBalance = (player: PlayerView): bigint =>
+  player.principal -
+  player.entriesSpentSinceRefresh +
+  player.entriesRewardedSinceRefresh;
+
+/** Withdrawable = what can actually leave the principal vault: min(principal, ET). */
+export const withdrawable = (player: PlayerView): bigint => {
+  const et = entriesBalance(player);
+  return player.principal < et ? player.principal : et;
+};
+
 export class HexVaultProjection {
   readonly players = new Map<string, PlayerView>();
-  readonly rounds = new Map<string, RoundView>();
-  readonly epochs = new Map<bigint, EpochView>();
-  private readonly processed = new Set<string>();
+  readonly processed = new Set<string>();
   private checkpoint?: Cursor;
 
   getCheckpoint(): Cursor | undefined {
     return this.checkpoint;
   }
 
-  apply(event: EventEnvelope): boolean {
-    if (event.finality !== "finalized") {
-      throw new Error("indexer accepts finalized events only");
-    }
+  player(pool: string, owner: string): PlayerView {
+    const key = `${pool}:${owner}`;
+    const existing = this.players.get(key);
+    if (existing) return existing;
+    const created: PlayerView = {
+      pool,
+      owner,
+      principal: 0n,
+      entriesSpentSinceRefresh: 0n,
+      entriesRewardedSinceRefresh: 0n,
+      lastRefreshEpoch: 0n,
+    };
+    this.players.set(key, created);
+    return created;
+  }
 
+  /**
+   * Applies one event. Returns false for a duplicate cursor (idempotent replay),
+   * throws on a rewind — a re-applied event would double-count money. Callers
+   * must hand events over in ascending (slot, signature, eventIndex) order;
+   * equal slots are fine as long as the tuple increases.
+   */
+  apply(event: EventEnvelope): boolean {
     const key = cursorKey(event.cursor);
     if (this.processed.has(key)) return false;
-
     if (this.checkpoint && compareCursor(event.cursor, this.checkpoint) < 0) {
       throw new Error(
-        `out-of-order finalized event ${key}; replay from a durable checkpoint`,
+        `out-of-order finalized event ${key}; durable checkpoint ${cursorKey(this.checkpoint)}`,
       );
     }
-
     this.reduce(event);
     this.processed.add(key);
     if (!this.checkpoint || compareCursor(event.cursor, this.checkpoint) > 0) {
@@ -73,119 +83,58 @@ export class HexVaultProjection {
     return true;
   }
 
-  private player(owner: string): PlayerView {
-    const existing = this.players.get(owner);
-    if (existing) return existing;
-
-    const created: PlayerView = {
-      owner,
-      principalMinted: 0n,
-      principalWithdrawn: 0n,
-      entriesMinted: 0n,
-      entriesSpent: 0n,
-    };
-    this.players.set(owner, created);
-    return created;
-  }
-
-  private epoch(epochId: bigint): EpochView {
-    const existing = this.epochs.get(epochId);
-    if (existing) return existing;
-    const created: EpochView = { epochId, claimed: false };
-    this.epochs.set(epochId, created);
-    return created;
-  }
-
   private reduce(event: EventEnvelope): void {
     const data = event.data;
+    const pool = event.pool;
+    const owner = () => asPublicKey(data.owner, "owner");
+
     switch (event.name) {
-      case "DepositRecorded": {
-        const player = this.player(asPublicKey(data.owner, "owner"));
-        const amount = asAtomicAmount(data.amount, "amount");
-        player.principalMinted += amount;
-        player.entriesMinted += amount;
+      case "DepositRecorded":
+        this.player(pool, owner()).principal += asAtomicAmount(
+          data.amount,
+          "amount",
+        );
         return;
-      }
-      case "WithdrawalRecorded": {
-        const player = this.player(asPublicKey(data.owner, "owner"));
-        player.principalWithdrawn += asAtomicAmount(data.amount, "amount");
+      case "WithdrawalRecorded":
+        this.player(pool, owner()).principal -= asAtomicAmount(
+          data.amount,
+          "amount",
+        );
         return;
-      }
       case "EntriesRefreshed": {
-        const player = this.player(asPublicKey(data.owner, "owner"));
-        const epochId = asAtomicAmount(data.epochId, "epochId");
-        player.lastEntryEpoch = epochId;
+        const player = this.player(pool, owner());
+        player.entriesSpentSinceRefresh = 0n;
+        player.entriesRewardedSinceRefresh = 0n;
+        player.lastRefreshEpoch = asAtomicAmount(data.epoch_id, "epoch_id");
         return;
       }
-      case "PositionPurchased": {
-        const owner = asPublicKey(data.owner, "owner");
-        const round = asPublicKey(data.round, "round");
-        const epochId = asAtomicAmount(data.epochId, "epochId");
-        const roundId = asAtomicAmount(data.roundId, "roundId");
-        const totalStake = asAtomicAmount(data.totalStake, "totalStake");
-        const player = this.player(owner);
-        player.entriesSpent += totalStake;
-        const current = this.rounds.get(round) ?? {
-          address: round,
-          epochId,
-          roundId,
-          totalStaked: 0n,
-          settled: false,
-        };
-        current.totalStaked += totalStake;
-        this.rounds.set(round, current);
-        return;
-      }
-      case "RoundSettled": {
-        const round = asPublicKey(data.round, "round");
-        const existing = this.rounds.get(round);
-        if (!existing)
-          throw new Error(`round ${round} settled before purchase projection`);
-        const winningTile = Number(
-          asAtomicAmount(data.winningTile, "winningTile"),
-        );
-        if (
-          !Number.isInteger(winningTile) ||
-          winningTile < 0 ||
-          winningTile >= 36
-        ) {
-          throw new Error("winningTile must be in [0, 35]");
-        }
-        existing.winningTile = winningTile;
-        existing.settled = true;
-        return;
-      }
-      case "RoundRewardClaimed": {
-        const player = this.player(asPublicKey(data.owner, "owner"));
-        player.entriesMinted += asAtomicAmount(data.reward, "reward");
-        return;
-      }
-      case "PrizeSnapshotCommitted": {
-        const epoch = this.epoch(asAtomicAmount(data.epochId, "epochId"));
-        epoch.prizeAmount = asAtomicAmount(data.prizeAmount, "prizeAmount");
-        epoch.totalEntryWeight = asAtomicAmount(
-          data.totalEntryWeight,
-          "totalEntryWeight",
+      case "PositionPurchased":
+        this.player(pool, owner()).entriesSpentSinceRefresh += asAtomicAmount(
+          data.total_stake,
+          "total_stake",
         );
         return;
-      }
-      case "PrizeDrawn": {
-        const epoch = this.epoch(asAtomicAmount(data.epochId, "epochId"));
-        epoch.prizeTarget = asAtomicAmount(data.target, "target");
+      case "RoundRewardClaimed":
+        this.player(pool, owner()).entriesRewardedSinceRefresh +=
+          asAtomicAmount(data.reward, "reward");
         return;
-      }
-      case "PrizeClaimed": {
-        const epoch = this.epoch(asAtomicAmount(data.epochId, "epochId"));
-        if (epoch.claimed)
-          throw new Error(`epoch ${epoch.epochId} prize claimed twice`);
-        epoch.winner = asPublicKey(data.winner, "winner");
-        epoch.claimed = true;
-        return;
-      }
-      case "RoundRandomnessRequested":
-      case "PrizeFunded":
-      case "PrizeRandomnessRequested":
+      case "PoolCreated":
       case "ProtocolPauseChanged":
+      case "EpochCreated":
+      case "PrizeFunded":
+      case "JackpotFunded":
+      case "PrizeSnapshotCommitted":
+      case "JackpotCommitted":
+      case "PrizeRandomnessRequested":
+      case "JackpotRandomnessRequested":
+      case "PrizeDrawn":
+      case "JackpotDrawn":
+      case "PrizeClaimed":
+      case "JackpotClaimed":
+      case "PrizeExpired":
+      case "JackpotExpired":
+      case "RoundRandomnessRequested":
+      case "RoundSettled":
         return;
       default: {
         const exhaustive: never = event.name;
@@ -194,3 +143,5 @@ export class HexVaultProjection {
     }
   }
 }
+
+export { compareCursor, cursorKey };
