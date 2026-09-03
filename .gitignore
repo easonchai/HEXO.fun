@@ -5,6 +5,10 @@ coverage/
 .target/
 target/
 
+# Local protocol runtime and generated E2E output
+.hexvault/
+screenshots/e2e-web-*.png
+
 # Local secrets and deployment authority
 .env
 .env.*
@@ -15,3 +19,4 @@ target/
 .DS_Store
 .idea/
 .vscode/
+.gstack/
