@@ -26,6 +26,14 @@ A global config PDA can only be created once. Previously, any signer could call 
 
 `initialize` sets `production_mode` false and no instruction enables it. The configured mock signer selects the accepted sample for both round and prize fulfillment. This is acceptable only for local/devnet testing. A production authenticated SVM randomness callback, key rotation, timeout, retry, monitoring, and end-to-end tests must be implemented and independently reviewed before mainnet.
 
+**Update 2026-09-03:** an authenticated randomness path is implemented — ORAO
+VRF v2, pull model (`docs/vrf-randomness.md`): slot-hash-mixed request seeds,
+program-bound ORAO request accounts, fulfilled-only settlement, and in-program
+rejection-tail re-derivation. Mock fulfillment remains available for localnet
+and stays hard-gated by `production_mode`. Residual: the ORAO fulfillment
+authority quorum is a multi-party trust assumption, and B6 (independent review
+of the integration) remains open before mainnet.
+
 ### I-03 — snapshot authority is a custody-grade trusted role — high
 
 The snapshot authority supplies the Merkle-sum root, total entry weight, and committed prize value. The program validates membership against that root but does not derive it from on-chain balances. A malicious or compromised snapshot authority can create a root that favors itself. Mainnet needs a durable/reproducible indexer, multisig/timelock root publication, an observability/challenge process, and explicit user disclosure of this trust boundary.
@@ -33,6 +41,14 @@ The snapshot authority supplies the Merkle-sum root, total entry weight, and com
 ### I-04 — rejected randomness has no new-request lifecycle — high
 
 The unbiased mapping deliberately rejects tail samples to prevent modulo bias. A production one-shot VRF callback cannot currently obtain a fresh on-chain request ID after such rejection, potentially stranding a round or prize epoch. Add timeout, cancellation, and re-request semantics before integrating a provider.
+
+**Update 2026-09-03:** the VRF settle path closes the stranding case —
+`vrf::unbiased_from_randomness` re-derives tail samples in-program
+(`sha256(randomness ‖ counter)` chain) instead of reverting, so a fulfilled
+ORAO account always settles; each re-derivation step has probability
+`range / 2^64`, so the counter practically never advances. The mock path keeps
+the revert-and-retry behavior (the operator supplies a fresh sample there).
+B6 review must cover this mapping.
 
 ### I-05 — round bonus has no configured cap — medium
 

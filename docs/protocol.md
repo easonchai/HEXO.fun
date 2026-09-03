@@ -4,37 +4,55 @@
 
 ## Scope and non-goals
 
-HexVault is an active savings-lottery prototype. The initial deployment accepts only devnet USDC. It provides deterministic accounting, a 36-tile entry game, an asynchronous randomness boundary, and a sponsor-funded prize vault.
+HexVault is an active savings-lottery prototype. Each pool accepts one immutable asset
+(test USDC on devnet). It provides deterministic accounting, a 36-tile entry game, an
+asynchronous randomness boundary, a sponsor-funded prize vault, and a sponsor-funded
+jackpot vault with rollover.
 
-It does **not** deploy user principal into a third-party lending market, issue a return guarantee, permit mainnet deposits, or claim regulatory clearance. A yield integration changes the risk profile: neither a stablecoin nor a lending protocol makes principal economically risk-free.
+It does **not** deploy user principal into a third-party lending market, issue a return
+guarantee, permit mainnet deposits, charge any fee, or claim regulatory clearance. A yield
+integration changes the risk profile: neither a stablecoin nor a lending protocol makes
+principal economically risk-free.
 
 ## Units
 
-All token values are unsigned `u64` atomic USDC units (six decimals). `1_000_000` units represents `$1.00`. PT and ET use the same unit scale.
+All token values are unsigned `u64` atomic units at the pool asset's decimals (six for
+USDC). `1_000_000` units represents `$1.00`. PT and ET use the same scale.
 
 ## Account model
 
-| Account             | Owner / PDA seed              | Purpose                                                                      |
-| ------------------- | ----------------------------- | ---------------------------------------------------------------------------- |
-| `ProtocolConfig`    | `config`                      | immutable mint identities; authority, guardian, status, timing, and limits   |
-| `PrincipalVault`    | `principal-vault`             | segregated USDC that backs aggregate PT exactly                              |
-| `PrizeVault`        | `prize-vault`                 | USDC funded by sponsor/yield adapter; only source of prize claims            |
-| `Epoch`             | `epoch`, epoch ID             | weekly lifecycle, prize snapshot, selected winner, and remaining prize claim |
-| `Round`             | `round`, epoch ID, round ID   | game time bounds, selected tile, total ET placed by tile, finalization state |
-| `Player`            | `player`, owner               | canonical PT/ET accounting, last refreshed epoch, round-position nonce       |
-| `Position`          | `position`, round, player     | exactly one immutable board purchase for the player and round                |
-| `RandomnessRequest` | `randomness`, domain, subject | binds a provider request to a particular round or epoch and prevents replay  |
+| Account             | PDA seed                          | Purpose                                                                          |
+| ------------------- | --------------------------------- | -------------------------------------------------------------------------------- |
+| `ProtocolConfig`    | `config`                          | program-global roles: authority, guardian, snapshot authority, mock randomness   |
+| `Pool`              | `pool`, pool id                   | immutable asset identity, receipt mints, three vaults, limits, `latest_epoch_id` |
+| `Epoch`             | `epoch`, pool, epoch id           | immutable schedule, prize snapshot, jackpot state, remaining prize claim         |
+| `Round`             | `round`, pool, epoch id, round id | game window, selected tile, per-tile ET totals, finalization state               |
+| `Player`            | `player`, pool, owner             | canonical per-pool entry-refresh pointer                                         |
+| `Position`          | `position`, pool, round, owner    | exactly one immutable board purchase per player and round                        |
+| `RandomnessRequest` | `randomness`, pool, subject, kind | binds a provider request to round / prize / jackpot; prevents replay             |
 
-PT and ET are represented by non-transferable Token-2022 mints held in owner-associated token accounts. Their constrained Token-2022 balances are the authoritative PT/ET balance record; `Player` records only the owner and the epoch in which entries were last refreshed. No user-controlled account may become a vault, mint authority, or randomness request.
+PT and ET are non-transferable Token-2022 mints created per pool with the pool PDA as mint
+authority; their constrained Token-2022 balances are the authoritative balance record.
+Principal, prize, and jackpot vaults are per-pool PDAs with the pool PDA as authority.
+No user-controlled account can become a vault, mint authority, or randomness request, and
+no account from one pool can be substituted into another pool's instruction: every
+subordinate PDA is derived from the pool PDA and re-validated by seed.
+
+### Pool creation and immutability
+
+`create_pool` (authority only) freezes, for the pool's lifetime: the accepted mint, its
+token program (validated against the mint's on-chain owner at creation), decimals, both
+receipt mints, the three vault addresses, and all limits (`min_deposit`,
+`max_stake_per_tile`, `max_round_bonus_entries`, epoch duration bounds, round close
+buffer). There is no update instruction; changing any of these means deploying a new pool.
 
 ## Deposit and withdrawal
 
 ### Deposit
 
-1. User transfers devnet USDC from a token account constrained to the configured USDC mint into `PrincipalVault`.
-2. Program mints equal PT to the user.
-3. Program mints equal ET to the user if the current epoch is open; otherwise the next epoch refresh produces it.
-4. The user’s constrained PT and ET associated-token-account balances increase equally.
+1. User transfers the accepted asset into the pool's `principal_vault`.
+2. Program mints equal PT and ET to the user's receipt ATAs.
+3. Blocked when the pool is paused, or at/after the epoch's `entry_cutoff_at`.
 
 Invariant after a successful deposit:
 
@@ -45,49 +63,95 @@ user PT amount and ET amount each increase by the deposited amount
 
 ### Withdraw
 
-A withdrawal for `x` requires `x > 0`, `PT >= x`, and `ET >= x` for the same owner. It atomically burns `x` PT and `x` ET from the constrained associated token accounts, then transfers exactly `x` USDC from `PrincipalVault` to the owner’s USDC token account. Prize escrow is never an alternate liquidity source.
+A withdrawal for `x` requires `x > 0`, `PT >= x`, and `ET >= x` for the same owner. It
+atomically burns `x` PT and `x` ET, then transfers exactly `x` from `principal_vault` to
+the owner's token account. It is never blocked by pause, epoch state, or rollover, and
+prize/jackpot escrow is never an alternate liquidity source.
 
-A player who has spent ET can withdraw only the matched portion of principal. The remaining principal becomes withdrawable only when ET is replenished at rollover (or if a game reward increases ET). This is intentional and must be disclosed in product UI.
+A player who has spent ET can withdraw only the matched portion of principal. The
+remainder becomes withdrawable when entries are refreshed to match principal — refresh is
+**allowed while paused** because it only restores the matched-withdrawal route (PRD
+principle 6): it moves no custody asset and creates no exposure.
 
 ## Epoch lifecycle
 
-An epoch is one UTC week in production (short durations are configured only for local/devnet tests).
+An epoch's full schedule is committed at creation and immutable:
 
-1. **Open:** deposits, positions, and games are accepted until configured cutoffs.
-2. **Prize snapshot:** the configured snapshot authority commits a Merkle-sum root, total eligible ET weight, and prize amount. The indexer produces the weighted snapshot; claimants later prove their interval against the committed root. New deposits and positions cannot alter this snapshot.
-3. **Randomness request:** a permissionless relayer creates a provider-bound request after snapshot finality.
-4. **Randomness fulfill:** only the configured, authenticated provider callback can write the result, exactly once. The winner selection uses unbiased rejection sampling over total snapshot ET weight; modulo reduction alone is forbidden.
-5. **Claim:** the selected owner may claim up to the prize amount already reserved in `PrizeVault`. A claim cannot exceed the prize escrow balance or be paid twice.
-6. **Rollover:** after the prize state is final, each player may permissionlessly refresh. ET is adjusted to exactly current PT (mint if lower; burn if higher), and `last_refreshed_epoch` advances. This expires in-epoch game advantages after the prize snapshot while restoring withdrawal capacity.
+```text
+starts_at < entry_cutoff_at <= ends_at <= prize_snapshot_at <= claim_deadline
+ends_at - starts_at within the pool's [min_epoch_seconds, max_epoch_seconds]
+```
+
+`entry_cutoff_at` stops deposits (rounds may settle afterwards); `prize_snapshot_at` opens
+the snapshot window; `claim_deadline` closes prize and jackpot claims. Only a future epoch
+can have a different schedule — there is no edit instruction at all.
+
+1. **Open:** deposits and positions accepted until their cutoffs.
+2. **Prize snapshot:** the snapshot authority commits a Merkle-sum root of entry weights,
+   the total weight, and the prize amount (bounded by the prize vault balance), exactly
+   once, at/after `prize_snapshot_at`, only while the epoch is open and the pool is not
+   paused. The indexer independently recomputes the canonical root at the commit slot and
+   reconciliation compares the two (see the snapshot trust note in
+   `docs/preliminary-security-review.md`).
+3. **Jackpot commit:** while the epoch is snapshot-committed, the authority may commit the
+   current jackpot vault balance as the epoch's jackpot (`docs/jackpot-design.md`). The
+   cohort is the committed snapshot; unclaimed jackpots roll over by remaining in the
+   vault.
+4. **Randomness:** permissionless requests create domain-bound request PDAs (kind 0 round,
+   1 prize, 2 jackpot); only the configured authority fulfills, exactly once per request.
+   Winner selection uses unbiased rejection sampling over total snapshot weight; modulo
+   reduction alone is forbidden. A request that is never fulfilled does not strand the
+   epoch: expiry (below) also cancels stuck draws.
+5. **Claim:** the selected owner claims the committed prize from the prize vault, or the
+   committed jackpot from the jackpot vault, by proving their snapshot interval (Merkle
+   proof + winning interval). Both are deadline-enforced, one-time, and cannot touch any
+   other escrow.
+6. **Expiry:** after the claim deadline, an unclaimed prize is marked expired (events
+   emitted), and a stuck or unclaimed jackpot draw likewise expires with **no funds
+   moved** — the balance remains escrowed for future epochs.
+7. **Rollover:** `begin_next_epoch` requires the prior epoch's prize to be claimed/expired
+   **and** its jackpot (if any) claimed/expired, so two epochs can never hold overlapping
+   claims against the same vault. Each player may then permissionlessly refresh: ET is
+   adjusted to exactly current PT (mint if lower, burn if higher) and `last_refresh_epoch`
+   advances.
 
 ## Game rounds
 
-A board contains exactly **36** indexed hex tiles (`0..35`). A round must lie wholly inside its parent epoch and has a configured open window plus a closing buffer.
+A round contains exactly **36** indexed tiles (`0..35`) and must lie wholly inside its
+epoch.
 
-- A wallet makes **at most one** `buy_position` call per round.
-- That single call selects any non-empty subset of tiles and provides one ET stake amount for each selected tile. The total is checked with overflow-safe arithmetic and burned/escrowed atomically.
-- The position is immutable once created: no top-up, tile change, cancellation, or second purchase is permitted.
-- At close, anyone requests randomness. On callback, a selected tile is `randomness mod 36` only after a bias-resistant mapping; the program then calculates the winning tile’s ET aggregate.
-- If a player covered the winning tile, their allocation equals `round_bonus * player_stake_on_tile / total_stake_on_winning_tile`. If nobody covered it, bonus ET remains unminted. The losing ET is permanently spent for the current epoch.
-- The bonus is an ET-only in-epoch game reward; it is not prize USDC and it does not alter PT.
-
-The exact game bonus is a bounded protocol configuration set through the governance path. It is zero by default in security tests, which demonstrates that no unbounded minting or prize transfer is hidden in game settlement.
+- A wallet makes **at most one** `buy_position` per round; the position is immutable.
+- That single call selects any non-empty tile subset with one stake amount per tile,
+  overflow-checked; the total ET is burned atomically.
+- Buys stop at the round's close (`ends_at - pool.round_close_buffer_seconds`).
+- At close, anyone requests randomness; on fulfillment the winning tile is chosen by
+  unbiased mapping, and a covering position earns `bonus * stake_on_tile / total_on_tile`
+  additional ET. The bonus is bounded by the pool's `max_round_bonus_entries` at
+  `create_round`, is ET-only, and multi-player settlement conserves: Σ rewards ≤ bonus.
+- The bonus never mints PT, never transfers the accepted asset, and never touches any
+  vault. Losing ET is permanently spent for the current epoch.
 
 ## Randomness provider boundary
 
-The current devnet MVP has an explicit mock asynchronous randomness authority and rejects mock fulfillment whenever `ProtocolConfig.production_mode` is enabled. A production provider integration is not yet implemented; it must bind domain, subject, provider program ID, request ID, fulfillment status, and one-time consumption.
-
-The test provider cannot be selected once `ProtocolConfig.production_mode` is true. Public Pyth Entropy documentation currently describes Ethereum contracts and does not list Solana. Pyth must not be asserted as the live provider until it offers an authenticated SVM callback. The design prevents this vendor fact from weakening the custody or accounting invariants.
+The devnet MVP has an explicit mock asynchronous randomness authority, rejected whenever
+`ProtocolConfig.production_mode` is enabled (no instruction sets it today). Request PDAs
+are domain-separated per kind and per subject, so a round draw cannot be replayed against
+a prize and vice versa. A production provider integration with timeout, retry,
+cancellation, and key rotation is a mainnet gate (I-02, I-04).
 
 ## Governance and emergency controls
 
-- The devnet config authority initializes protocol parameters and creates epochs. No timelocked configuration-update instruction is implemented yet.
-- A guardian may pause deposits and positions, but cannot transfer principal, mint PT/ET, choose winners, or claim prizes.
-- Withdrawals remain live while paused except where an explicitly documented external-adapter unwind is required. A pause must not create an arbitrary custody lock.
-- Mainnet requires a named 2-of-3 Squads multisig to hold authority and guardian roles, a timelock, a verified build, and a completed independent audit.
+- The devnet config authority initializes the protocol, creates pools, epochs, and rounds.
+  No timelocked parameter-update instruction exists yet.
+- A guardian may pause a single pool, which stops deposits, round creation, position
+  purchases, and snapshot/jackpot commits — but never withdrawals, entry refresh, reward
+  claims, prize/jackpot claims, or expiries.
+- Withdrawals remain live in every state. A pause must not create a custody lock.
+- Mainnet requires a named 2-of-3 Squads multisig for all roles, a timelock, a verified
+  build, and a completed independent audit (`docs/launch-checklist.md`).
 
 ## Yield adapter boundary
 
-The `YieldAdapter` may move only a configured, capped surplus out of a strategy allocation and into `PrizeVault`; it may never pay a prize from `PrincipalVault`. Before activating any adapter, the program must verify its program ID, USDC mint, share mint, slippage bound, per-epoch cap, cooldown, and emergency unwind semantics.
-
-For orientation only, an annualized 4–6% variable USDC lending rate would produce roughly `$400–$600/year` (`$7.69–$11.54/week`) per `$10,000` of deployed capital before strategy fees, failed-utilization periods, and losses. It is neither a prediction nor a promised prize budget.
+No yield path exists in the current program. A future `YieldAdapter` may move only a
+capped, verified surplus into a prize vault — never the reverse, and never from
+`PrincipalVault` — and requires separate approval per `docs/product-requirements.md` §9.

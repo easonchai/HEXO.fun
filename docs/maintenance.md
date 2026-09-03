@@ -4,17 +4,25 @@ This is a **devnet prototype**. The repository is useful for protocol developmen
 
 ## What is implemented and tested
 
-| Area              | Current implementation                                                                  | Automated evidence                                                                             |
-| ----------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Principal custody | Distinct PDA-owned `PrincipalVault` and `PrizeVault`; the config PDA is token authority | Local validator: deposit, prize funding, matched withdrawal                                    |
-| Receipts          | Non-transferable Token-2022 PT and ET; program-only mint/burn paths                     | Local-validator deposit/withdraw plus Rust unit tests                                          |
-| Entry/game core   | 36-tile, one-position-per-wallet round mechanics with ET burns/rewards                  | Rust unit tests cover tile mapping; transaction integration remains incomplete                 |
-| Prize core        | Authority-committed Merkle-sum snapshot and one-time claim state                        | Rust unit tests cover Merkle interval verification; transaction integration remains incomplete |
-| Randomness        | Explicit mock asynchronous devnet boundary                                              | Unit-tested range mapping only; no production provider                                         |
-| Indexer           | In-memory finalized-event projection                                                    | Six TypeScript unit tests; no database or RPC consumer                                         |
-| Wallet boundary   | Standard Solana-wallet default; optional Privy configuration policy                     | Three TypeScript unit tests; no rendered wallet UI                                             |
+| Area              | Current implementation                                                                                         | Automated evidence                                                                                 |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Principal custody | Per-pool PDA vaults (principal / prize / jackpot) with the pool PDA as authority                               | 51-test integration suite: deposit, matched withdrawal, segregation                                |
+| Receipts          | Non-transferable Token-2022 PT and ET per pool; program-only mint/burn paths                                   | Integration suite + Rust unit tests                                                                |
+| Multi-pool        | Isolated `Pool` accounts; immutable asset identity, vaults, and limits; per-pool pause                         | Integration suite: pool create guards, cross-pool substitution rejections                          |
+| Entry/game core   | 36-tile rounds, one immutable position per wallet, bonus cap, proportional ET rewards with conservation        | Integration suite: multi-player settlement, replay/duplicate rejection                             |
+| Prize core        | Authority-committed Merkle-sum snapshot, deadline-enforced claims, expiry events                               | Integration suite: full prize lifecycle incl. forged proofs and deadline rejection                 |
+| Jackpot core      | Separate escrow, domain-separated draw, zero-movement rollover, unresolved-draw rollover block                 | Integration suite: full jackpot lifecycle                                                          |
+| Epoch lifecycle   | Immutable schedules with entry cutoff + duration bounds; refresh live during pause; withdrawals always live    | Integration suite: pause matrix, cutoff and ordering tests                                         |
+| Randomness        | Mock authority, domain-bound requests, rejection-sampled mapping                                               | Integration suite: replay + bias tests; Rust unit tests for mapping                                |
+| Indexer           | Durable Postgres ingest (finalized-only, transactional cursor), canonical snapshot, five reconciliation checks | 28 unit tests + 9 Postgres integration tests; live compose run matched a real on-chain commit root |
+| API               | Fastify read API (pools/epochs/rounds/players/prizes/jackpots/snapshot/reconciliations/health/metrics)         | 7 unit tests + live compose smoke                                                                  |
+| CLI               | Full lifecycle, snapshot export (DB or chain source), on-chain reconcile                                       | 22 unit tests + 31-command offline dry-run + scripted e2e (`scripts/e2e.sh`)                       |
+| Web               | Minimal functional localnet app (wallet, custody, board, prize/jackpot claims); designed UI pending            | 21 unit tests + browser smoke against a live validator                                             |
+| End-to-end        | `scripts/e2e.sh`: full lifecycle incl. indexer parity, canonical-root equality, and vault solvency checks      | Run logged green: 16 event types indexed, all reconciliation checks true                           |
 
-A passing test suite proves only the rows and cases above. It does **not** prove economic safety under all sequences, provider security, regulatory compliance, or mainnet readiness.
+A passing test suite proves only the rows and cases above. It does **not** prove economic
+safety under all sequences, provider security, regulatory compliance, or mainnet
+readiness.
 
 ## Prerequisites
 
@@ -47,7 +55,15 @@ cargo test -p hex_vault --lib
 git diff --check
 ```
 
-`pnpm run test:program` starts a fresh, temporary `solana-test-validator`, builds and deploys the program, runs package tests, and runs `tests/custody.integration.test.ts`. The runner cleans up its temporary ledger and validator process. It needs the configured local test wallet at `~/.config/solana/id.json`; create a new local-only keypair if it does not exist:
+Optional deeper validation (Docker + end-to-end):
+
+```sh
+docker compose up -d db          # Postgres for the indexer's integration tests
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/hexvault pnpm --filter @hexvault/indexer test
+HEXVAULT_E2E_KEEP=1 sh scripts/e2e.sh   # full lifecycle incl. indexer + API verification
+```
+
+`pnpm run test:program` builds the program, starts a temporary `solana-test-validator`, deploys it, and runs the 51-test suite in `tests/`. The runner cleans up its temporary ledger and validator process. It needs the configured local test wallet at `~/.config/solana/id.json`; create a new local-only keypair if it does not exist:
 
 ```sh
 solana-keygen new --no-bip39-passphrase --outfile ~/.config/solana/id.json
