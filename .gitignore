@@ -7,7 +7,7 @@ target/
 
 # Local protocol runtime and generated E2E output
 .hexvault/
-screenshots/e2e-web-*.png
+screenshots/
 
 # Local secrets and deployment authority
 .env
