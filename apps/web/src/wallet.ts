@@ -1,9 +1,14 @@
 export type WalletMode = "privy" | "standard-solana";
 
+export type Cluster = "localnet" | "devnet";
+
 export interface WalletConfiguration {
   readonly mode: WalletMode;
   readonly privyAppId?: string;
 }
+
+/** Clusters this app will ever talk to. Mainnet is out of scope by policy. */
+export const SUPPORTED_CLUSTERS: readonly Cluster[] = ["localnet", "devnet"];
 
 /**
  * Privy is opt-in until the project supplies an App ID. This ensures a missing
@@ -19,10 +24,29 @@ export const walletConfiguration = (
     : { mode: "standard-solana" };
 };
 
+/**
+ * Cluster guard: refuse anything but localnet/devnet. Used both for the wallet
+ * connection and for the RPC endpoint chosen at boot.
+ */
 export const assertSupportedWallet = (cluster: string): void => {
-  if (cluster !== "devnet" && cluster !== "mainnet-beta") {
+  if (!SUPPORTED_CLUSTERS.includes(cluster as Cluster)) {
     throw new Error(
       `Refusing wallet connection for unsupported cluster: ${cluster}`,
     );
   }
 };
+
+/** Pick the active cluster from the environment, defaulting to localnet. */
+export const clusterFromEnv = (
+  environment: Record<string, string | undefined>,
+): Cluster => {
+  const raw = environment.VITE_CLUSTER?.trim();
+  if (!raw) return "localnet";
+  assertSupportedWallet(raw);
+  return raw as Cluster;
+};
+
+export const clusterEndpoint = (cluster: Cluster): string =>
+  cluster === "devnet"
+    ? "https://api.devnet.solana.com"
+    : "http://127.0.0.1:8899";

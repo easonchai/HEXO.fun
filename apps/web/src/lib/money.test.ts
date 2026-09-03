@@ -1,0 +1,71 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  formatAddress,
+  formatAtomic,
+  parseAtomic,
+  previewBuy,
+  withdrawable,
+} from "./money.js";
+
+describe("atomic formatting", () => {
+  it("renders atomic units with pool decimals and never uses floats", () => {
+    expect(formatAtomic(1_000_000n, 6)).toBe("1.000000");
+    expect(formatAtomic(1_500_000n, 6)).toBe("1.500000");
+    expect(formatAtomic(1n, 6)).toBe("0.000001");
+    expect(formatAtomic(0n, 6)).toBe("0.000000");
+    expect(formatAtomic(123n, 0)).toBe("123");
+    expect(formatAtomic(-2_500_000n, 6)).toBe("-2.500000");
+  });
+
+  it("parses decimal text into atomic units exactly", () => {
+    expect(parseAtomic("1.5", 6)).toBe(1_500_000n);
+    expect(parseAtomic("12", 6)).toBe(12_000_000n);
+    expect(parseAtomic(" 0.000001 ", 6)).toBe(1n);
+    expect(parseAtomic("1.0000001", 6)).toBeNull();
+    expect(parseAtomic("abc", 6)).toBeNull();
+    expect(parseAtomic("-1", 6)).toBeNull();
+    expect(parseAtomic("1.2.3", 6)).toBeNull();
+    expect(parseAtomic("", 6)).toBeNull();
+  });
+
+  it("round-trips atomic -> text -> atomic", () => {
+    for (const value of [0n, 1n, 999n, 1_000_000n, 123456789n]) {
+      expect(parseAtomic(formatAtomic(value, 6), 6)).toBe(value);
+    }
+  });
+});
+
+describe("withdrawable math", () => {
+  it("is the matched minimum of principal and entries", () => {
+    expect(withdrawable(10n, 4n)).toBe(4n);
+    expect(withdrawable(4n, 10n)).toBe(4n);
+    expect(withdrawable(0n, 10n)).toBe(0n);
+    expect(withdrawable(10n, 0n)).toBe(0n);
+  });
+
+  it("previews a board purchase before confirmation", () => {
+    // 3 tiles at 1.000000 each against 5.000000 principal / 4.000000 entries.
+    expect(previewBuy(5_000_000n, 4_000_000n, 3, 1_000_000n)).toEqual({
+      spend: 3_000_000n,
+      entriesAfter: 1_000_000n,
+      withdrawableAfter: 1_000_000n,
+      affordable: true,
+    });
+  });
+
+  it("flags purchases that would overdraw entries", () => {
+    const preview = previewBuy(5_000_000n, 2_000_000n, 3, 1_000_000n);
+    expect(preview.affordable).toBe(false);
+    expect(preview.entriesAfter).toBe(-1_000_000n);
+    // Negative is shown on purpose: the buy would be rejected on-chain.
+    expect(preview.withdrawableAfter).toBe(-1_000_000n);
+  });
+
+  it("keeps addresses short for display", () => {
+    expect(formatAddress("6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB")).toBe(
+      "6aDF…SGvB",
+    );
+    expect(formatAddress("short")).toBe("short");
+  });
+});

@@ -1,0 +1,5235 @@
+{
+  "address": "6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB",
+  "metadata": {
+    "name": "hex_vault",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "HexVault active prize-linked savings program"
+  },
+  "instructions": [
+    {
+      "name": "begin_next_epoch",
+      "discriminator": [
+        179,
+        149,
+        193,
+        184,
+        172,
+        31,
+        237,
+        183
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "prior_epoch",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "prior_epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "timing.id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "timing",
+          "type": {
+            "defined": {
+              "name": "EpochTiming"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "buy_position",
+      "discriminator": [
+        210,
+        108,
+        108,
+        28,
+        10,
+        46,
+        226,
+        137
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              },
+              {
+                "kind": "account",
+                "path": "round.id",
+                "account": "Round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "entry_mint",
+          "writable": true
+        },
+        {
+          "name": "owner_entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "receipt_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "entry_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "receipt_token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "tiles",
+          "type": "u64"
+        },
+        {
+          "name": "stake_per_tile",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "claim_jackpot",
+      "docs": [
+        "Pays the committed jackpot to the snapshot-proven winner of the jackpot",
+        "target interval. One claim; never falls back to any other escrow."
+      ],
+      "discriminator": [
+        28,
+        214,
+        134,
+        248,
+        249,
+        81,
+        206,
+        198
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "winner"
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "winner_accepted",
+          "writable": true
+        },
+        {
+          "name": "jackpot_vault",
+          "writable": true
+        },
+        {
+          "name": "accepted_token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "weight",
+          "type": "u64"
+        },
+        {
+          "name": "proof",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "MerkleProofNode"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "claim_prize",
+      "discriminator": [
+        157,
+        233,
+        139,
+        121,
+        246,
+        62,
+        234,
+        235
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "winner"
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "winner_accepted",
+          "writable": true
+        },
+        {
+          "name": "prize_vault",
+          "writable": true
+        },
+        {
+          "name": "accepted_token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "weight",
+          "type": "u64"
+        },
+        {
+          "name": "proof",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "MerkleProofNode"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "claim_round_reward",
+      "docs": [
+        "ET-only in-epoch reward. Proportional to stake on the winning tile;",
+        "bounded by the pool bonus cap; never touches PT or any custody asset."
+      ],
+      "discriminator": [
+        166,
+        41,
+        202,
+        10,
+        107,
+        80,
+        209,
+        201
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "round.epoch_id",
+                "account": "Round"
+              },
+              {
+                "kind": "account",
+                "path": "round.id",
+                "account": "Round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "round"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "entry_mint",
+          "writable": true
+        },
+        {
+          "name": "owner_entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "receipt_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "entry_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "receipt_token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "commit_jackpot",
+      "docs": [
+        "Commits the current jackpot vault balance for this epoch's draw. The",
+        "cohort is the committed prize snapshot; nothing about eligibility can",
+        "change after this. Unclaimed jackpots roll over by simply remaining in",
+        "the vault — expiry moves no funds."
+      ],
+      "discriminator": [
+        131,
+        196,
+        168,
+        1,
+        45,
+        138,
+        169,
+        63
+      ],
+      "accounts": [
+        {
+          "name": "snapshot_authority",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "jackpot_vault"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "commit_prize_snapshot",
+      "discriminator": [
+        212,
+        42,
+        1,
+        187,
+        5,
+        187,
+        107,
+        9
+      ],
+      "accounts": [
+        {
+          "name": "snapshot_authority",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "prize_vault",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "total_entry_weight",
+          "type": "u64"
+        },
+        {
+          "name": "prize_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "create_first_epoch",
+      "discriminator": [
+        7,
+        18,
+        33,
+        71,
+        86,
+        113,
+        222,
+        252
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "arg",
+                "path": "timing.id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "timing",
+          "type": {
+            "defined": {
+              "name": "EpochTiming"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_pool",
+      "docs": [
+        "Creates one isolated pool instance: immutable accepted asset identity,",
+        "receipt mints, and the three segregated vaults."
+      ],
+      "discriminator": [
+        233,
+        146,
+        209,
+        142,
+        207,
+        104,
+        64,
+        188
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "params.pool_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint",
+          "docs": [
+            "Any SPL/Token-2022 mint may be recorded at pool creation; asset",
+            "selection is a policy decision enforced at the authority, and the",
+            "identity below is immutable afterwards."
+          ]
+        },
+        {
+          "name": "accepted_token_program"
+        },
+        {
+          "name": "principal_mint",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "entry_mint",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108,
+                  45,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "prize_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  122,
+                  101,
+                  45,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "jackpot_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  97,
+                  99,
+                  107,
+                  112,
+                  111,
+                  116,
+                  45,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "receipt_token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "CreatePoolParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_round",
+      "discriminator": [
+        229,
+        218,
+        236,
+        169,
+        231,
+        80,
+        134,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              },
+              {
+                "kind": "arg",
+                "path": "round_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "round_id",
+          "type": "u64"
+        },
+        {
+          "name": "starts_at",
+          "type": "i64"
+        },
+        {
+          "name": "ends_at",
+          "type": "i64"
+        },
+        {
+          "name": "bonus_entries",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "deposit",
+      "discriminator": [
+        242,
+        35,
+        198,
+        137,
+        82,
+        225,
+        242,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "owner_accepted",
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true
+        },
+        {
+          "name": "principal_mint",
+          "writable": true
+        },
+        {
+          "name": "entry_mint",
+          "writable": true
+        },
+        {
+          "name": "owner_principal",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "receipt_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "principal_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "owner_entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "receipt_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "entry_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "accepted_token_program"
+        },
+        {
+          "name": "receipt_token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "expire_jackpot",
+      "docs": [
+        "Unclaimed jackpots move no funds: the balance simply remains in the",
+        "vault and rolls into a future epoch's commit. Accepts COMMITTED so a",
+        "never-fulfilled jackpot draw cannot block rollover either."
+      ],
+      "discriminator": [
+        250,
+        144,
+        105,
+        133,
+        93,
+        87,
+        197,
+        238
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "expire_unclaimed_prize",
+      "docs": [
+        "Expiry also cancels a stuck randomness request (requested but never",
+        "fulfilled): without this a stalled authority could block rollover for",
+        "the pool forever. A late fulfillment is rejected by the status change."
+      ],
+      "discriminator": [
+        23,
+        35,
+        95,
+        66,
+        161,
+        213,
+        242,
+        63
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "fulfill_jackpot_with_mock",
+      "discriminator": [
+        113,
+        105,
+        89,
+        177,
+        19,
+        229,
+        19,
+        32
+      ],
+      "accounts": [
+        {
+          "name": "mock_randomness_authority",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "sample",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "fulfill_jackpot_with_vrf",
+      "docs": [
+        "Permissionless jackpot draw from the ORAO VRF (see",
+        "`fulfill_round_with_vrf` for the trust model)."
+      ],
+      "discriminator": [
+        46,
+        11,
+        226,
+        55,
+        40,
+        24,
+        183,
+        16
+      ],
+      "accounts": [
+        {
+          "name": "requester",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        },
+        {
+          "name": "orao_network_state",
+          "docs": [
+            "is owned by the ORAO program (constraint below)."
+          ]
+        },
+        {
+          "name": "orao_request",
+          "docs": [
+            "the handler verifies the exact derivation; bytes are parsed by",
+            "`crate::vrf::parse_fulfilled` (discriminator + fulfilled tag only)."
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "fulfill_prize_with_mock",
+      "discriminator": [
+        37,
+        48,
+        194,
+        142,
+        171,
+        150,
+        158,
+        123
+      ],
+      "accounts": [
+        {
+          "name": "mock_randomness_authority",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "sample",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "fulfill_prize_with_vrf",
+      "docs": [
+        "Permissionless prize draw from the ORAO VRF (see",
+        "`fulfill_round_with_vrf` for the trust model)."
+      ],
+      "discriminator": [
+        207,
+        118,
+        51,
+        91,
+        71,
+        230,
+        169,
+        35
+      ],
+      "accounts": [
+        {
+          "name": "requester",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        },
+        {
+          "name": "orao_network_state",
+          "docs": [
+            "is owned by the ORAO program (constraint below)."
+          ]
+        },
+        {
+          "name": "orao_request",
+          "docs": [
+            "the handler verifies the exact derivation; bytes are parsed by",
+            "`crate::vrf::parse_fulfilled` (discriminator + fulfilled tag only)."
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "fulfill_round_with_mock",
+      "discriminator": [
+        236,
+        100,
+        87,
+        209,
+        49,
+        125,
+        247,
+        138
+      ],
+      "accounts": [
+        {
+          "name": "mock_randomness_authority",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "round.epoch_id",
+                "account": "Round"
+              },
+              {
+                "kind": "account",
+                "path": "round.id",
+                "account": "Round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "sample",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "fulfill_round_with_vrf",
+      "docs": [
+        "Permissionless round settle from the ORAO VRF (pull model). Anyone may",
+        "submit once the oracle network has fulfilled the request bound to this",
+        "round's stored seed; the winning tile derives from oracle-signed",
+        "randomness, never from the submitter."
+      ],
+      "discriminator": [
+        233,
+        242,
+        226,
+        239,
+        103,
+        219,
+        186,
+        242
+      ],
+      "accounts": [
+        {
+          "name": "requester",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "round.epoch_id",
+                "account": "Round"
+              },
+              {
+                "kind": "account",
+                "path": "round.id",
+                "account": "Round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        },
+        {
+          "name": "orao_network_state",
+          "docs": [
+            "is owned by the ORAO program (constraint below)."
+          ]
+        },
+        {
+          "name": "orao_request",
+          "docs": [
+            "the handler verifies the exact derivation; bytes are parsed by",
+            "`crate::vrf::parse_fulfilled` (discriminator + fulfilled tag only)."
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "fund_jackpot",
+      "docs": [
+        "Sponsor/operations jackpot funding. The only inflow to the jackpot",
+        "vault; no instruction can route principal or prize assets here."
+      ],
+      "discriminator": [
+        9,
+        151,
+        50,
+        205,
+        163,
+        112,
+        112,
+        6
+      ],
+      "accounts": [
+        {
+          "name": "funder",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "funder_accepted",
+          "writable": true
+        },
+        {
+          "name": "jackpot_vault",
+          "writable": true
+        },
+        {
+          "name": "accepted_token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "fund_prize",
+      "docs": [
+        "Sponsor/operations prize funding. The only inflow to the prize vault."
+      ],
+      "discriminator": [
+        243,
+        117,
+        119,
+        184,
+        213,
+        156,
+        93,
+        153
+      ],
+      "accounts": [
+        {
+          "name": "funder",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "funder_accepted",
+          "writable": true
+        },
+        {
+          "name": "prize_vault",
+          "writable": true
+        },
+        {
+          "name": "accepted_token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "docs": [
+        "Program-global initialization. Requires the deployed program's upgrade",
+        "authority so the first caller cannot seize the protocol (finding I-01)."
+      ],
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program",
+          "address": "6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB"
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "InitializeParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "refresh_entries",
+      "docs": [
+        "Deliberately allowed while paused: refreshing entries only restores the",
+        "documented matched-withdrawal route (PRD principle 6). It moves no",
+        "custody asset and creates no new exposure."
+      ],
+      "discriminator": [
+        213,
+        241,
+        74,
+        96,
+        196,
+        49,
+        57,
+        126
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "principal_mint",
+          "writable": true
+        },
+        {
+          "name": "entry_mint",
+          "writable": true
+        },
+        {
+          "name": "owner_principal",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "receipt_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "principal_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "owner_entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "receipt_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "entry_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "receipt_token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "request_jackpot_randomness",
+      "discriminator": [
+        55,
+        101,
+        178,
+        58,
+        46,
+        235,
+        105,
+        22
+      ],
+      "accounts": [
+        {
+          "name": "requester",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        },
+        {
+          "name": "recent_slothaves",
+          "docs": [
+            "mixing so the final seed is unknowable before this transaction lands."
+          ],
+          "address": "SysvarS1otHashes111111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "client_seed",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "request_prize_randomness",
+      "discriminator": [
+        114,
+        247,
+        53,
+        177,
+        107,
+        188,
+        50,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "requester",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "epoch.id",
+                "account": "Epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        },
+        {
+          "name": "recent_slothaves",
+          "docs": [
+            "mixing so the final seed is unknowable before this transaction lands."
+          ],
+          "address": "SysvarS1otHashes111111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "client_seed",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "request_round_randomness",
+      "discriminator": [
+        236,
+        68,
+        70,
+        194,
+        98,
+        157,
+        112,
+        82
+      ],
+      "accounts": [
+        {
+          "name": "requester",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "round.epoch_id",
+                "account": "Round"
+              },
+              {
+                "kind": "account",
+                "path": "round.id",
+                "account": "Round"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "writable": true
+        },
+        {
+          "name": "recent_slothaves",
+          "docs": [
+            "mixing so the final seed is unknowable before this transaction lands."
+          ],
+          "address": "SysvarS1otHashes111111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "client_seed",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_pause",
+      "docs": [
+        "Guardian pause is per pool. Refresh and withdrawal stay live by design."
+      ],
+      "discriminator": [
+        63,
+        32,
+        154,
+        2,
+        56,
+        103,
+        79,
+        45
+      ],
+      "accounts": [
+        {
+          "name": "guardian",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "withdraw",
+      "docs": [
+        "Withdrawal is never blocked by pause, epoch state, or rollover."
+      ],
+      "discriminator": [
+        183,
+        18,
+        70,
+        156,
+        148,
+        109,
+        161,
+        34
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "owner_accepted",
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true
+        },
+        {
+          "name": "principal_mint",
+          "writable": true
+        },
+        {
+          "name": "entry_mint",
+          "writable": true
+        },
+        {
+          "name": "owner_principal",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "receipt_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "principal_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "owner_entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "receipt_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "entry_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "accepted_token_program"
+        },
+        {
+          "name": "receipt_token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Epoch",
+      "discriminator": [
+        93,
+        83,
+        120,
+        89,
+        151,
+        138,
+        152,
+        108
+      ]
+    },
+    {
+      "name": "Player",
+      "discriminator": [
+        205,
+        222,
+        112,
+        7,
+        165,
+        155,
+        206,
+        218
+      ]
+    },
+    {
+      "name": "Pool",
+      "discriminator": [
+        241,
+        154,
+        109,
+        4,
+        17,
+        177,
+        109,
+        188
+      ]
+    },
+    {
+      "name": "Position",
+      "discriminator": [
+        170,
+        188,
+        143,
+        228,
+        122,
+        64,
+        247,
+        208
+      ]
+    },
+    {
+      "name": "ProtocolConfig",
+      "discriminator": [
+        207,
+        91,
+        250,
+        28,
+        152,
+        179,
+        215,
+        209
+      ]
+    },
+    {
+      "name": "RandomnessRequest",
+      "discriminator": [
+        244,
+        231,
+        228,
+        160,
+        148,
+        28,
+        17,
+        184
+      ]
+    },
+    {
+      "name": "Round",
+      "discriminator": [
+        87,
+        127,
+        165,
+        51,
+        73,
+        78,
+        116,
+        174
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "DepositRecorded",
+      "discriminator": [
+        0,
+        223,
+        90,
+        235,
+        183,
+        248,
+        79,
+        67
+      ]
+    },
+    {
+      "name": "EntriesRefreshed",
+      "discriminator": [
+        186,
+        250,
+        198,
+        244,
+        122,
+        103,
+        209,
+        17
+      ]
+    },
+    {
+      "name": "EpochCreated",
+      "discriminator": [
+        191,
+        150,
+        240,
+        63,
+        59,
+        212,
+        233,
+        124
+      ]
+    },
+    {
+      "name": "JackpotClaimed",
+      "discriminator": [
+        141,
+        206,
+        247,
+        184,
+        235,
+        71,
+        241,
+        231
+      ]
+    },
+    {
+      "name": "JackpotCommitted",
+      "discriminator": [
+        152,
+        67,
+        172,
+        103,
+        66,
+        214,
+        207,
+        228
+      ]
+    },
+    {
+      "name": "JackpotDrawn",
+      "discriminator": [
+        246,
+        144,
+        205,
+        193,
+        154,
+        242,
+        242,
+        227
+      ]
+    },
+    {
+      "name": "JackpotExpired",
+      "discriminator": [
+        214,
+        230,
+        72,
+        167,
+        214,
+        241,
+        5,
+        169
+      ]
+    },
+    {
+      "name": "JackpotFunded",
+      "discriminator": [
+        120,
+        124,
+        209,
+        77,
+        60,
+        100,
+        17,
+        179
+      ]
+    },
+    {
+      "name": "JackpotRandomnessRequested",
+      "discriminator": [
+        52,
+        31,
+        180,
+        27,
+        178,
+        97,
+        187,
+        17
+      ]
+    },
+    {
+      "name": "PoolCreated",
+      "discriminator": [
+        202,
+        44,
+        41,
+        88,
+        104,
+        220,
+        157,
+        82
+      ]
+    },
+    {
+      "name": "PositionPurchased",
+      "discriminator": [
+        1,
+        2,
+        222,
+        10,
+        69,
+        24,
+        127,
+        80
+      ]
+    },
+    {
+      "name": "PrizeClaimed",
+      "discriminator": [
+        213,
+        150,
+        192,
+        76,
+        199,
+        33,
+        212,
+        38
+      ]
+    },
+    {
+      "name": "PrizeDrawn",
+      "discriminator": [
+        71,
+        145,
+        221,
+        1,
+        209,
+        129,
+        143,
+        215
+      ]
+    },
+    {
+      "name": "PrizeExpired",
+      "discriminator": [
+        151,
+        49,
+        128,
+        81,
+        92,
+        137,
+        229,
+        188
+      ]
+    },
+    {
+      "name": "PrizeFunded",
+      "discriminator": [
+        121,
+        155,
+        24,
+        51,
+        96,
+        29,
+        92,
+        153
+      ]
+    },
+    {
+      "name": "PrizeRandomnessRequested",
+      "discriminator": [
+        253,
+        197,
+        153,
+        47,
+        80,
+        65,
+        13,
+        159
+      ]
+    },
+    {
+      "name": "PrizeSnapshotCommitted",
+      "discriminator": [
+        169,
+        52,
+        142,
+        90,
+        34,
+        222,
+        57,
+        162
+      ]
+    },
+    {
+      "name": "ProtocolPauseChanged",
+      "discriminator": [
+        67,
+        33,
+        235,
+        73,
+        71,
+        124,
+        172,
+        110
+      ]
+    },
+    {
+      "name": "RoundRandomnessRequested",
+      "discriminator": [
+        42,
+        228,
+        134,
+        81,
+        26,
+        167,
+        187,
+        56
+      ]
+    },
+    {
+      "name": "RoundRewardClaimed",
+      "discriminator": [
+        242,
+        184,
+        231,
+        9,
+        22,
+        191,
+        234,
+        93
+      ]
+    },
+    {
+      "name": "RoundSettled",
+      "discriminator": [
+        249,
+        225,
+        66,
+        54,
+        157,
+        200,
+        234,
+        222
+      ]
+    },
+    {
+      "name": "WithdrawalRecorded",
+      "discriminator": [
+        36,
+        120,
+        194,
+        8,
+        111,
+        36,
+        172,
+        207
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "ProtocolPaused",
+      "msg": "protocol is paused"
+    },
+    {
+      "code": 6001,
+      "name": "UnauthorizedAuthority",
+      "msg": "only the configured protocol authority may perform this action"
+    },
+    {
+      "code": 6002,
+      "name": "UnauthorizedGuardian",
+      "msg": "only the configured guardian may perform this action"
+    },
+    {
+      "code": 6003,
+      "name": "UnauthorizedSnapshotAuthority",
+      "msg": "only the configured snapshot authority may perform this action"
+    },
+    {
+      "code": 6004,
+      "name": "UnauthorizedMockRandomnessAuthority",
+      "msg": "only the configured mock randomness authority may perform this action"
+    },
+    {
+      "code": 6005,
+      "name": "MockRandomnessDisabled",
+      "msg": "mock randomness is disabled in production mode"
+    },
+    {
+      "code": 6006,
+      "name": "InactiveEpoch",
+      "msg": "the supplied epoch is not the active epoch"
+    },
+    {
+      "code": 6007,
+      "name": "EpochNotOpen",
+      "msg": "epoch is not open"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidEpochState",
+      "msg": "epoch state does not allow this action"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidRoundState",
+      "msg": "round state does not allow this action"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidRandomnessRequest",
+      "msg": "randomness request state does not allow this action"
+    },
+    {
+      "code": 6011,
+      "name": "RandomnessSubjectMismatch",
+      "msg": "randomness request is not bound to this subject"
+    },
+    {
+      "code": 6012,
+      "name": "RandomnessRejection",
+      "msg": "randomness sample must be retried to avoid modulo bias"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidTimeWindow",
+      "msg": "time window is invalid"
+    },
+    {
+      "code": 6014,
+      "name": "RoundClosed",
+      "msg": "round is not accepting positions"
+    },
+    {
+      "code": 6015,
+      "name": "InvalidTileSelection",
+      "msg": "position tiles are invalid"
+    },
+    {
+      "code": 6016,
+      "name": "InvalidStakeAmount",
+      "msg": "stake amount is invalid"
+    },
+    {
+      "code": 6017,
+      "name": "InsufficientEntries",
+      "msg": "entry balance is insufficient"
+    },
+    {
+      "code": 6018,
+      "name": "InsufficientMatchedBalance",
+      "msg": "principal and entry balances must both cover a withdrawal"
+    },
+    {
+      "code": 6019,
+      "name": "ZeroAmount",
+      "msg": "amount must be non-zero"
+    },
+    {
+      "code": 6020,
+      "name": "DepositTooSmall",
+      "msg": "amount is below the configured minimum deposit"
+    },
+    {
+      "code": 6021,
+      "name": "ArithmeticOverflow",
+      "msg": "arithmetic overflow"
+    },
+    {
+      "code": 6022,
+      "name": "ReceiptConfigurationMismatch",
+      "msg": "receipt mint or token program does not match configuration"
+    },
+    {
+      "code": 6023,
+      "name": "UsdcConfigurationMismatch",
+      "msg": "USDC mint or token program does not match configuration"
+    },
+    {
+      "code": 6024,
+      "name": "PlayerOwnerMismatch",
+      "msg": "player account does not belong to signer"
+    },
+    {
+      "code": 6025,
+      "name": "EntriesNeedRefresh",
+      "msg": "player has not refreshed entries for the active epoch"
+    },
+    {
+      "code": 6026,
+      "name": "EntriesAlreadyRefreshed",
+      "msg": "player has already refreshed entries for the active epoch"
+    },
+    {
+      "code": 6027,
+      "name": "NonWinningPosition",
+      "msg": "position did not cover the winning tile"
+    },
+    {
+      "code": 6028,
+      "name": "RoundRewardAlreadyClaimed",
+      "msg": "round reward has already been claimed"
+    },
+    {
+      "code": 6029,
+      "name": "PrizeUnderfunded",
+      "msg": "prize amount exceeds the segregated prize vault balance"
+    },
+    {
+      "code": 6030,
+      "name": "EmptyPrizeSnapshot",
+      "msg": "prize snapshot must contain non-zero entry weight"
+    },
+    {
+      "code": 6031,
+      "name": "PrizeClaimStillOpen",
+      "msg": "prize claim deadline has not passed"
+    },
+    {
+      "code": 6032,
+      "name": "PrizeAlreadyResolved",
+      "msg": "prize has already been claimed or expired"
+    },
+    {
+      "code": 6033,
+      "name": "InvalidMerkleProof",
+      "msg": "Merkle-sum proof is invalid"
+    },
+    {
+      "code": 6034,
+      "name": "NonWinningPrizeProof",
+      "msg": "Merkle proof leaf is not the selected prize interval"
+    },
+    {
+      "code": 6035,
+      "name": "NonSequentialEpoch",
+      "msg": "epoch ID is not sequential"
+    },
+    {
+      "code": 6036,
+      "name": "PriorEpochUnresolved",
+      "msg": "prior epoch must be resolved before rollover"
+    },
+    {
+      "code": 6037,
+      "name": "FirstEpochAlreadyCreated",
+      "msg": "first epoch has already been created"
+    },
+    {
+      "code": 6038,
+      "name": "BonusEntriesExceedCap",
+      "msg": "round bonus entries exceed the pool cap"
+    },
+    {
+      "code": 6039,
+      "name": "InvalidJackpotState",
+      "msg": "jackpot state does not allow this action"
+    },
+    {
+      "code": 6040,
+      "name": "JackpotAlreadyCommitted",
+      "msg": "jackpot has already been committed for this epoch"
+    },
+    {
+      "code": 6041,
+      "name": "NonWinningJackpotProof",
+      "msg": "jackpot proof is not the selected interval"
+    },
+    {
+      "code": 6042,
+      "name": "InvalidPoolConfiguration",
+      "msg": "pool configuration is invalid"
+    },
+    {
+      "code": 6043,
+      "name": "PoolMismatch",
+      "msg": "pool does not match the instruction context"
+    },
+    {
+      "code": 6044,
+      "name": "MintTokenProgramMismatch",
+      "msg": "accepted mint is not owned by the declared accepted token program"
+    },
+    {
+      "code": 6045,
+      "name": "VrfRandomnessDisabled",
+      "msg": "VRF randomness is not configured for this protocol"
+    },
+    {
+      "code": 6046,
+      "name": "RandomnessNotFulfilled",
+      "msg": "the VRF randomness request is not yet fulfilled"
+    },
+    {
+      "code": 6047,
+      "name": "InvalidRandomnessAccount",
+      "msg": "the supplied VRF randomness account is not valid"
+    }
+  ],
+  "types": [
+    {
+      "name": "CreatePoolParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool_id",
+            "type": "u64"
+          },
+          {
+            "name": "min_deposit",
+            "type": "u64"
+          },
+          {
+            "name": "max_stake_per_tile",
+            "type": "u64"
+          },
+          {
+            "name": "max_round_bonus_entries",
+            "type": "u64"
+          },
+          {
+            "name": "min_epoch_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "max_epoch_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "round_close_buffer_seconds",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DepositRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EntriesRefreshed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "principal_entries",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Epoch",
+      "docs": [
+        "One epoch's schedule is fully committed at creation and has no edit path.",
+        "Ordering is enforced at creation: starts_at < entry_cutoff_at <= ends_at",
+        "<= prize_snapshot_at <= claim_deadline, within the pool's duration bounds."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "starts_at",
+            "type": "i64"
+          },
+          {
+            "name": "entry_cutoff_at",
+            "type": "i64"
+          },
+          {
+            "name": "ends_at",
+            "type": "i64"
+          },
+          {
+            "name": "prize_snapshot_at",
+            "type": "i64"
+          },
+          {
+            "name": "claim_deadline",
+            "type": "i64"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "prize_snapshot_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "total_entry_weight",
+            "type": "u64"
+          },
+          {
+            "name": "prize_amount",
+            "type": "u64"
+          },
+          {
+            "name": "prize_target",
+            "type": "u64"
+          },
+          {
+            "name": "jackpot_status",
+            "docs": [
+              "0 = no jackpot this epoch; see JACKPOT_* states."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "jackpot_amount",
+            "type": "u64"
+          },
+          {
+            "name": "jackpot_target",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EpochCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "starts_at",
+            "type": "i64"
+          },
+          {
+            "name": "entry_cutoff_at",
+            "type": "i64"
+          },
+          {
+            "name": "ends_at",
+            "type": "i64"
+          },
+          {
+            "name": "prize_snapshot_at",
+            "type": "i64"
+          },
+          {
+            "name": "claim_deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EpochTiming",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "starts_at",
+            "type": "i64"
+          },
+          {
+            "name": "entry_cutoff_at",
+            "type": "i64"
+          },
+          {
+            "name": "ends_at",
+            "type": "i64"
+          },
+          {
+            "name": "prize_snapshot_at",
+            "type": "i64"
+          },
+          {
+            "name": "claim_deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "snapshot_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "mock_randomness_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "vrf_randomness_state",
+            "docs": [
+              "ORAO VRF network-state account, or zero to run mock-only."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JackpotClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "winner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JackpotCommitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "jackpot_amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JackpotDrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "target",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JackpotExpired",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JackpotFunded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "funder",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JackpotRandomnessRequested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MerkleProofNode",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sibling_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "sibling_sum",
+            "type": "u64"
+          },
+          {
+            "name": "sibling_is_left",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Player",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "last_entry_epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Pool",
+      "docs": [
+        "One isolated pool instance. The accepted asset, its token program, the",
+        "receipt mints, and all vault identities are set here exactly once, at",
+        "creation, and have no update path. Limits are equally immutable in v1",
+        "(a timelocked `set_pool_limits` is a documented future upgrade)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool_id",
+            "type": "u64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "accepted_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "accepted_token_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "accepted_decimals",
+            "type": "u8"
+          },
+          {
+            "name": "principal_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "entry_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "principal_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "prize_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "jackpot_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "min_deposit",
+            "type": "u64"
+          },
+          {
+            "name": "max_stake_per_tile",
+            "type": "u64"
+          },
+          {
+            "name": "max_round_bonus_entries",
+            "type": "u64"
+          },
+          {
+            "name": "min_epoch_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "max_epoch_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "round_close_buffer_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "latest_epoch_id",
+            "docs": [
+              "Set to the newest epoch when it is created; used to prove a supplied",
+              "epoch account is the active one rather than a stale open epoch."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_id",
+            "type": "u64"
+          },
+          {
+            "name": "accepted_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Position",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "pubkey"
+          },
+          {
+            "name": "round_id",
+            "type": "u64"
+          },
+          {
+            "name": "tiles",
+            "type": "u64"
+          },
+          {
+            "name": "stake_per_tile",
+            "type": "u64"
+          },
+          {
+            "name": "reward_claimed",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PositionPurchased",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "round_id",
+            "type": "u64"
+          },
+          {
+            "name": "tiles",
+            "type": "u64"
+          },
+          {
+            "name": "total_stake",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PrizeClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "winner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PrizeDrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "target",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PrizeExpired",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PrizeFunded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "funder",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PrizeRandomnessRequested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PrizeSnapshotCommitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "prize_amount",
+            "type": "u64"
+          },
+          {
+            "name": "total_entry_weight",
+            "type": "u64"
+          },
+          {
+            "name": "root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolConfig",
+      "docs": [
+        "Program-global roles and mode. Holds no custody and no asset identity."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "snapshot_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "mock_randomness_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "vrf_randomness_state",
+            "docs": [
+              "ORAO VRF network-state account; zero disables `*_with_vrf` settle",
+              "(mock-only deployments). Mock fulfillment additionally requires",
+              "`production_mode == false`, so a VRF-configured production pool can",
+              "never fall back to the operator-supplied path."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "production_mode",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolPauseChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RandomnessRequest",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "subject",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "round_id",
+            "type": "u64"
+          },
+          {
+            "name": "seed",
+            "docs": [
+              "Final VRF seed: the requester's client seed mixed with the slot hash",
+              "of the request slot, so it is unknowable before the request lands."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Round",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "starts_at",
+            "type": "i64"
+          },
+          {
+            "name": "ends_at",
+            "type": "i64"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "winning_tile",
+            "type": "u8"
+          },
+          {
+            "name": "bonus_entries",
+            "type": "u64"
+          },
+          {
+            "name": "total_stake",
+            "type": "u64"
+          },
+          {
+            "name": "tile_stakes",
+            "type": {
+              "array": [
+                "u64",
+                36
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoundRandomnessRequested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "round_id",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoundRewardClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "pubkey"
+          },
+          {
+            "name": "reward",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoundSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "round_id",
+            "type": "u64"
+          },
+          {
+            "name": "winning_tile",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WithdrawalRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}
