@@ -135,11 +135,10 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
   const revealDots = reveal?.laser.activeDotTimes ?? {};
   const flyMap = reveal?.flyMap ?? {};
   const seconds = Number(secondsLeft);
-  const danger = phase === "mine" && seconds <= 2;
   const showTimer = phase === "mine" || phase === "settling";
   const timerText =
     phase === "mine"
-      ? `00:${String(Math.min(59, seconds)).padStart(2, "0")}`
+      ? `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
       : "00:00";
 
   const shake =
@@ -154,36 +153,23 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
       <div className="hex-stage-container">
         {/* Timer / win banner above the hexagon */}
         {showTimer && !banner ? (
-          <div
-            className={`arena-timer${danger ? " danger" : ""}`}
-            data-testid="round-timer"
-          >
+          <div className="stage-timer" data-testid="round-timer">
             {timerText}
           </div>
         ) : null}
         {banner ? (
-          <div className="arena-banner" data-testid="win-banner">
+          <div className="win-banner" data-testid="win-banner">
             <span>{banner}</span>
-          </div>
-        ) : null}
-        {phase === "awaiting" && !banner ? (
-          <div className="arena-awaiting" data-testid="awaiting-note">
-            AWAITING NEXT ROUND
           </div>
         ) : null}
 
         {/* Static hexagon body */}
-        <div className="hex-body">
-          <svg
-            width={620}
-            height={600}
-            className="hex-outline"
-            aria-hidden="true"
-          >
+        <div className="stage-hex">
+          <svg width={620} height={600} aria-hidden="true">
             <polygon
               points={GEO.hexPts}
               fill="none"
-              stroke="var(--tHexStroke)"
+              stroke="var(--hex-stroke)"
               strokeWidth="1.6"
             />
           </svg>
@@ -202,7 +188,7 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
             return (
               <div
                 key={dot.key}
-                className="lattice-dot"
+                className="dot-cell"
                 style={{ left: dot.x, top: dot.y }}
               >
                 {info ? (
@@ -210,39 +196,34 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
                     <Textile sym={info.sym} />
                   </div>
                 ) : (
-                  <div className="dot-plain" />
+                  <div className="dot-untouched" />
                 )}
               </div>
             );
           })}
 
-          {/* Center cog core during live mining */}
-          {phase === "mine" ? (
+          {/* Central honeycomb core while the round is live */}
+          {phase === "mine" || phase === "settling" ? (
             <div
-              className="core"
-              style={{ left: GEO.cx, top: GEO.cy, animation: shake }}
+              className="stage-core"
+              style={{
+                left: GEO.cx,
+                top: GEO.cy,
+                animation: phase === "mine" ? shake : "none",
+              }}
             >
-              <div className="core-intro">
-                <div
-                  className="core-scale"
-                  style={{
-                    transform: `scale(${seconds <= 5 ? (1 + (5 - Math.min(5, seconds)) * 0.25).toFixed(3) : 1})`,
-                  }}
-                >
-                  <div className="core-spin">
-                    <LogoCog size={72} />
-                  </div>
-                </div>
+              <div
+                style={{
+                  transform: `scale(${phase === "mine" && seconds <= 5 ? (1 + (5 - Math.min(5, seconds)) * 0.25).toFixed(3) : 1})`,
+                  transformOrigin: "center center",
+                  transition: "transform .18s linear",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <LogoCog size={60} />
               </div>
-            </div>
-          ) : null}
-          {phase === "settling" ? (
-            <div
-              className="core-await"
-              style={{ left: GEO.cx, top: GEO.cy }}
-              data-testid="draw-pending"
-            >
-              <span>DRAW PENDING</span>
             </div>
           ) : null}
 
@@ -251,7 +232,7 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
             <svg
               width={620}
               height={600}
-              className="hex-outline"
+              className="stage-laser"
               aria-hidden="true"
             >
               <path
@@ -262,18 +243,8 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
                 strokeWidth="3.6"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                style={{
-                  strokeDasharray: "26 100",
-                  strokeDashoffset: 26,
-                  animation:
-                    "fixedLineTravel .9s cubic-bezier(.2,.85,.2,1) forwards",
-                }}
               />
-              <circle
-                r={4.5}
-                fill="var(--primary)"
-                style={{ animation: "laserNodeFade .9s forwards" }}
-              >
+              <circle r={4.5} fill="var(--primary)">
                 <animateMotion
                   dur="0.9s"
                   fill="freeze"
@@ -289,9 +260,8 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
             const isSel = selectedSet.has(tile.n);
             const cls = [
               "tile-cell",
-              isWin ? "win" : "",
-              isSel ? "selected" : "",
-              canPick ? "pickable" : "",
+              isWin ? "tile-winner" : "",
+              isSel ? "tile-selected" : "",
             ]
               .filter(Boolean)
               .join(" ");
@@ -301,14 +271,20 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
                 className={cls}
                 data-testid={`tile-${tile.n - 1}`}
                 data-selected={isSel ? "1" : "0"}
-                style={{ left: tile.x, top: tile.y }}
+                style={{
+                  left: tile.x,
+                  top: tile.y,
+                  transform: `rotate(${tile.rot}deg)`,
+                }}
                 onClick={() => canPick && onToggleTile(tile.n)}
               >
-                <div
-                  className="tile-face"
-                  style={{ transform: `rotate(${tile.rot}deg)` }}
-                >
-                  <span style={{ transform: `rotate(${-tile.rot}deg)` }}>
+                <div className="tile-face">
+                  <span
+                    style={{
+                      transform: `rotate(${-tile.rot}deg)`,
+                      display: "block",
+                    }}
+                  >
                     {tile.n}
                   </span>
                 </div>
@@ -320,14 +296,14 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
           {reveal && reveal.boom ? (
             <>
               <div
-                className="shock blue"
+                className="shock-ring"
                 style={{
                   left: GEO.tiles[reveal.winningTile]!.x,
                   top: GEO.tiles[reveal.winningTile]!.y,
                 }}
               />
               <div
-                className="shock red"
+                className="shock-ring alt"
                 style={{
                   left: GEO.tiles[reveal.winningTile]!.x,
                   top: GEO.tiles[reveal.winningTile]!.y,

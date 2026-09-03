@@ -65,7 +65,7 @@ async function main() {
   await waitFor(
     () =>
       page
-        .locator('[data-testid="wallet-address"]')
+        .locator('[data-testid="connect-button"]')
         .filter({ hasText: burner.slice(0, 4) })
         .isVisible(),
     20000,
@@ -83,7 +83,7 @@ async function main() {
   await waitFor(
     () =>
       page
-        .locator('[data-testid="wallet-address"]')
+        .locator('[data-testid="vault-balances"]')
         .filter({ hasText: /ET 10/ })
         .isVisible(),
     60000,

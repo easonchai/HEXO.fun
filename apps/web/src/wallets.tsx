@@ -34,9 +34,22 @@ export interface GameSigner {
     | undefined;
 }
 
+/**
+ * Public Privy application id. Privy app ids are publishable client
+ * identifiers (they ship in the bundle by design), so this fallback is safe
+ * to keep in source. Set VITE_PRIVY_APP_ID="" (or "off") to explicitly
+ * disable Privy — the localnet e2e does exactly that so the funded dev
+ * burner is the one-click connection.
+ */
+const PRIVY_APP_ID_FALLBACK = "cmtlbhuh402u30cjv957bvump";
+
 const privyAppIdFrom = (
   env: Record<string, string | undefined>,
-): string | undefined => env.VITE_PRIVY_APP_ID?.trim() || undefined;
+): string | undefined => {
+  const raw = env.VITE_PRIVY_APP_ID?.trim();
+  if (raw === "" || raw?.toLowerCase() === "off") return undefined;
+  return raw || PRIVY_APP_ID_FALLBACK;
+};
 
 export interface WalletEnvironment extends Record<string, string | undefined> {
   VITE_PRIVY_APP_ID?: string;
@@ -64,7 +77,7 @@ export function WalletLayer({
         appId={appId}
         {...(clientId ? { clientId } : {})}
         config={{
-          appearance: { theme: "light", accentColor: "#0022ff" },
+          appearance: { theme: "dark", accentColor: "#ffd720" },
           externalWallets: {
             solana: {
               connectors: toSolanaWalletConnectors({ shouldAutoConnect: true }),

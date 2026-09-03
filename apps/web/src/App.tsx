@@ -449,18 +449,6 @@ export function App() {
           {state.error}
         </div>
       ) : null}
-      {!publicKey ? (
-        <div className="connect-hint" data-testid="connect-hint">
-          Connect a standard Solana wallet to sign transactions. On localnet you
-          can enable the dev burner with VITE_BURNER_WALLET=1.
-        </div>
-      ) : (
-        <div className="connect-hint" data-testid="wallet-address">
-          {formatAddress(publicKey.toBase58())} · USDC{" "}
-          {fmt(state.balances.accepted)} · PT {fmt(state.balances.principal)} ·
-          ET {fmt(state.balances.entries)}
-        </div>
-      )}
 
       <main className="main-content-split">
         {tab === "MINE" ? (

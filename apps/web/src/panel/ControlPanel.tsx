@@ -4,6 +4,8 @@
  * fourth tier adds the protocol's deposit surface in the same visual
  * language (the prototype predates custody wiring).
  */
+import { useState } from "react";
+
 import { Textile } from "../arena/Textile.js";
 import { formatAtomic, parseAtomic, previewBuy } from "../lib/money.js";
 import type { Balances } from "../state.js";
@@ -124,6 +126,16 @@ export function ControlPanel(props: ControlPanelProps) {
   const ready = canDeploy && tiles > 0 && stake > 0n && !locked && !deployBusy;
   const showScan = ready && !locked;
   const showLocked = locked && !deployBusy;
+  const settling = engine.phase === "settling" && !deployBusy;
+
+  /** Prototype deploy burst: six symbols radiating out for 0.65s. */
+  const [burst, setBurst] = useState(false);
+  const fireDeploy = (): void => {
+    if (!ready) return;
+    setBurst(true);
+    window.setTimeout(() => setBurst(false), 650);
+    onDeploy();
+  };
 
   return (
     <aside className="control-panel" data-testid="control-panel">
@@ -315,11 +327,25 @@ export function ControlPanel(props: ControlPanelProps) {
 
         <button
           type="button"
-          className={`btn-deploy${locked ? " locked" : ""}${!canDeploy || tiles === 0 || stake === 0n ? " dim" : ""}`}
+          className={`btn-deploy${locked ? " locked" : ""}${settling ? " settling" : ""}${!canDeploy || tiles === 0 || stake === 0n ? " dim" : ""}`}
           data-testid="deploy"
           disabled={!ready}
-          onClick={onDeploy}
+          onClick={fireDeploy}
         >
+          {burst ? (
+            <div className="deploy-burst">
+              {SYMBOL_ROW.map((sym) => (
+                <div
+                  key={sym}
+                  style={{
+                    animation: `burst${sym} .6s cubic-bezier(.15,.85,.25,1) forwards`,
+                  }}
+                >
+                  <Textile sym={sym} size={14} />
+                </div>
+              ))}
+            </div>
+          ) : null}
           {deployBusy ? (
             <span>SIGNING…</span>
           ) : showLocked ? (
@@ -346,7 +372,7 @@ export function ControlPanel(props: ControlPanelProps) {
             </span>
           ) : (
             <span>
-              {engine.phase === "settling"
+              {settling
                 ? "SETTLING…"
                 : tiles === 0
                   ? "SELECT TILES"
