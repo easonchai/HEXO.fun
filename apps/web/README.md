@@ -14,11 +14,12 @@ pnpm --filter @hexvault/web sync-idl   # after every `anchor build`
 pnpm --filter @hexvault/web dev        # Vite dev server
 ```
 
-Defaults (override with `.env` / `.env.local`): `VITE_CLUSTER=localnet`
-(`http://127.0.0.1:8899`), `VITE_API_URL=http://localhost:8081`,
-`VITE_PRIVY_APP_ID` (enables the Privy wallet layer; without it the app falls
-back to standard wallets), `VITE_BURNER_WALLET=1` (localnet dev burner).
-`localnet` and `devnet` are the only clusters the app will boot against.
+Defaults (override with `.env` / `.env.local`): `VITE_CLUSTER=devnet`
+(pass `localnet` for local development; `localnet` and `devnet` are the only
+clusters the app boots against), `VITE_API_URL=http://localhost:8081`,
+`VITE_PRIVY_APP_ID` (Privy is on by default via a publishable fallback id;
+set `VITE_PRIVY_APP_ID=off` to use standard wallets only),
+`VITE_BURNER_WALLET=1` (localnet dev burner).
 
 ## Scripts
 

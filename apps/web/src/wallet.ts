@@ -36,12 +36,16 @@ export const assertSupportedWallet = (cluster: string): void => {
   }
 };
 
-/** Pick the active cluster from the environment, defaulting to localnet. */
+/**
+ * Pick the active cluster from the environment, defaulting to devnet (the
+ * deployed product target). Local runs pass VITE_CLUSTER=localnet explicitly
+ * — the demo/e2e harnesses always do.
+ */
 export const clusterFromEnv = (
   environment: Record<string, string | undefined>,
 ): Cluster => {
   const raw = environment.VITE_CLUSTER?.trim();
-  if (!raw) return "localnet";
+  if (!raw) return "devnet";
   assertSupportedWallet(raw);
   return raw as Cluster;
 };
