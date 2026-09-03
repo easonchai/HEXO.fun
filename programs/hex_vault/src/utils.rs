@@ -4,30 +4,59 @@ use solana_keccak_hasher::hashv;
 use crate::{
     constants::{EPOCH_OPEN, MAX_MERKLE_DEPTH, TILE_COUNT, TILE_MASK},
     errors::HexVaultError,
-    state::{Epoch, MerkleProofNode, ProtocolConfig},
+    state::{Epoch, MerkleProofNode, Pool},
 };
 
 pub fn now() -> Result<i64> {
     Ok(Clock::get()?.unix_timestamp)
 }
 
-pub fn require_active_open_epoch(config: &ProtocolConfig, epoch: &Epoch) -> Result<()> {
+/// Mixes the requester's client seed with the newest slot hash so the final
+/// VRF seed is unknowable before the request transaction exists (kills both
+/// pre-computation and seed grinding).
+pub fn mix_client_seed(
+    recent_slothaves: &anchor_lang::prelude::AccountInfo,
+    client_seed: [u8; 32],
+) -> Result<[u8; 32]> {
+    let (slot, slot_hash) = crate::vrf::latest_slot_hash(&recent_slothaves.try_borrow_data()?)?;
+    Ok(crate::vrf::mix_seed(client_seed, slot_hash, slot))
+}
+
+/// At most one epoch per pool can be open (an epoch must resolve before the
+/// next is created); this also proves the supplied epoch is the newest via
+/// `latest_epoch_id`.
+pub fn require_active_open_epoch(pool: &Pool, epoch: &Epoch) -> Result<()> {
     require!(
-        epoch.id == config.current_epoch_id,
+        epoch.id == pool.latest_epoch_id,
         HexVaultError::InactiveEpoch
     );
     require!(epoch.status == EPOCH_OPEN, HexVaultError::EpochNotOpen);
     Ok(())
 }
 
-pub fn validate_epoch_timing(timing: &crate::state::EpochTiming) -> Result<()> {
+pub fn validate_epoch_timing(
+    timing: &crate::state::EpochTiming,
+    pool: &crate::state::Pool,
+) -> Result<()> {
     require!(
-        timing.starts_at < timing.ends_at,
+        timing.starts_at < timing.entry_cutoff_at,
+        HexVaultError::InvalidTimeWindow
+    );
+    require!(
+        timing.entry_cutoff_at <= timing.ends_at,
         HexVaultError::InvalidTimeWindow
     );
     require!(
         timing.prize_snapshot_at >= timing.ends_at
             && timing.prize_snapshot_at <= timing.claim_deadline,
+        HexVaultError::InvalidTimeWindow
+    );
+    let duration = timing
+        .ends_at
+        .checked_sub(timing.starts_at)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    require!(
+        duration >= pool.min_epoch_seconds && duration <= pool.max_epoch_seconds,
         HexVaultError::InvalidTimeWindow
     );
     Ok(())

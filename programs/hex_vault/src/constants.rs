@@ -1,4 +1,3 @@
-pub const USDC_DECIMALS: u8 = 6;
 pub const TILE_COUNT: u8 = 36;
 pub const TILE_MASK: u64 = (1u64 << TILE_COUNT) - 1;
 pub const MAX_MERKLE_DEPTH: usize = 32;
@@ -18,3 +17,10 @@ pub const REQUEST_PENDING: u8 = 0;
 pub const REQUEST_FULFILLED: u8 = 1;
 pub const REQUEST_ROUND: u8 = 0;
 pub const REQUEST_PRIZE: u8 = 1;
+pub const REQUEST_JACKPOT: u8 = 2;
+
+pub const JACKPOT_NONE: u8 = 0;
+pub const JACKPOT_COMMITTED: u8 = 1;
+pub const JACKPOT_DRAWN: u8 = 2;
+pub const JACKPOT_CLAIMED: u8 = 3;
+pub const JACKPOT_EXPIRED: u8 = 4;

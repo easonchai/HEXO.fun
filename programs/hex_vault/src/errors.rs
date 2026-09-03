@@ -78,4 +78,24 @@ pub enum HexVaultError {
     PriorEpochUnresolved,
     #[msg("first epoch has already been created")]
     FirstEpochAlreadyCreated,
+    #[msg("round bonus entries exceed the pool cap")]
+    BonusEntriesExceedCap,
+    #[msg("jackpot state does not allow this action")]
+    InvalidJackpotState,
+    #[msg("jackpot has already been committed for this epoch")]
+    JackpotAlreadyCommitted,
+    #[msg("jackpot proof is not the selected interval")]
+    NonWinningJackpotProof,
+    #[msg("pool configuration is invalid")]
+    InvalidPoolConfiguration,
+    #[msg("pool does not match the instruction context")]
+    PoolMismatch,
+    #[msg("accepted mint is not owned by the declared accepted token program")]
+    MintTokenProgramMismatch,
+    #[msg("VRF randomness is not configured for this protocol")]
+    VrfRandomnessDisabled,
+    #[msg("the VRF randomness request is not yet fulfilled")]
+    RandomnessNotFulfilled,
+    #[msg("the supplied VRF randomness account is not valid")]
+    InvalidRandomnessAccount,
 }
