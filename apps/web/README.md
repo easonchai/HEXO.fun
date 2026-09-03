@@ -1,7 +1,11 @@
-# @hexvault/web (localnet skeleton)
+# @hexvault/web
 
-Functional skeleton for driving the HexVault program from a browser. Plain
-styling on purpose; the designed UI is a later phase.
+The designed HexVault UI ("HEXO" — Dark Navy & Electric Gold edition) driving
+the program from the browser: hexagon arena with animated round settles,
+deposit/board/claim flows, and a browser e2e harness (`scripts/e2e-web.sh`).
+Dark theme is primary; light mode keeps the blue primary. All color flows
+through the token blocks at the top of `src/styles.css`, and screens compose
+the shared primitives in `src/ui.tsx`.
 
 ## Run
 
@@ -10,8 +14,10 @@ pnpm --filter @hexvault/web sync-idl   # after every `anchor build`
 pnpm --filter @hexvault/web dev        # Vite dev server
 ```
 
-Defaults (override with `.env`): `VITE_CLUSTER=localnet`
-(`http://127.0.0.1:8899`), `VITE_API_URL=http://localhost:8081`.
+Defaults (override with `.env` / `.env.local`): `VITE_CLUSTER=localnet`
+(`http://127.0.0.1:8899`), `VITE_API_URL=http://localhost:8081`,
+`VITE_PRIVY_APP_ID` (enables the Privy wallet layer; without it the app falls
+back to standard wallets), `VITE_BURNER_WALLET=1` (localnet dev burner).
 `localnet` and `devnet` are the only clusters the app will boot against.
 
 ## Scripts

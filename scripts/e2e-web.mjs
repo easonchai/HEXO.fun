@@ -105,7 +105,7 @@ async function main() {
 
   // 3. Cover every tile with the ALL preset so the round win is guaranteed
   //    and the reward-claim path is exercised deterministically.
-  await page.click('.preset:has-text("ALL")');
+  await page.click('.preset:has-text("1-36")');
   const count = (
     await page.locator('[data-testid="tile-count"]').textContent()
   )?.trim();
@@ -172,8 +172,8 @@ async function main() {
   );
   console.log("ok: round reward claimed from the UI");
 
-  // 7. Withdraw dust through the VAULT tab.
-  await page.click('[data-testid="tab-vault"]');
+  // 7. Withdraw dust through the STAKE tab (the vault screen).
+  await page.click('[data-testid="tab-stake"]');
   await page.fill('[data-testid="withdraw-input"]', "0.000001");
   await page.click('[data-testid="withdraw-submit"]');
   await waitFor(

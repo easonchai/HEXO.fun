@@ -120,7 +120,7 @@ WEB_ONLY="${HEXVAULT_E2E_WEB_ONLY:-}"
 if [ -z "$WEB_ONLY" ]; then
   # ---------------------------------------------------------------- browser flow
   say "browser flow (Playwright)"
-  VITE_BURNER_WALLET=1 VITE_CLUSTER=localnet \
+  VITE_BURNER_WALLET=1 VITE_CLUSTER=localnet VITE_PRIVY_APP_ID= \
     pnpm --filter @hexvault/web exec vite --port 5199 --strictPort >"$LEDGER.vite.log" 2>&1 &
   VITE_PID=$!
   for _ in $(seq 1 30); do
