@@ -1,0 +1,86 @@
+# HexVault local stack: Postgres + indexer + read API.
+#
+#   docker compose up -d db                       # database only
+#   docker compose up -d indexer api              # against a host validator
+#   docker compose --profile chain up -d          # + local solana-test-validator
+#
+# The indexer applies migrations on boot, so no separate migrate service.
+# Services run plain `node` with native type stripping: the repo's node_modules
+# carry host-specific (darwin) esbuild binaries, so tsx is not usable in Linux
+# containers and nothing is compiled or installed inside the image.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: hexvault
+    ports:
+      - "5432:5432"
+    volumes:
+      - hexvault-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hexvault"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  indexer:
+    image: node:22-alpine
+    working_dir: /app
+    command: node --experimental-strip-types packages/indexer/src/index.ts
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/hexvault
+      RPC_URL: ${RPC_URL:-http://host.docker.internal:8899}
+      PROGRAM_ID: ${PROGRAM_ID:-6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB}
+      IDL_PATH: target/idl/hex_vault.json
+      MIGRATIONS_DIR: packages/indexer/migrations
+      LOG_LEVEL: info
+    volumes:
+      - ./:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    image: node:22-alpine
+    working_dir: /app
+    command: node --experimental-strip-types packages/api/src/index.ts
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/hexvault
+      PORT: 8081
+      LOG_LEVEL: info
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional local chain. Building hex_vault.so happens on the HOST
+  # (`anchor build`); the container only mounts the artifact.
+  chain:
+    image: solanalabs/solana:v1.18.26
+    profiles: ["chain"]
+    command: >
+      solana-test-validator
+      --bpf-program 6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB
+      /app/target/deploy/hex_vault.so
+      --reset
+    ports:
+      - "8899:8899"
+      - "8900:8900"
+      - "1024:1024"
+    volumes:
+      - ./:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  hexvault-pg:

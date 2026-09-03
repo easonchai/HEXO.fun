@@ -1,0 +1,5 @@
+pnpm-lock.yaml
+target/
+node_modules/
+.hexvault/
+apps/web/src/idl/

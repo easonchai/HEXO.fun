@@ -2,7 +2,9 @@ packages:
   - apps/*
   - packages/*
 allowBuilds:
+  "@reown/appkit": true
   bigint-buffer: false
   bufferutil: false
   esbuild: true
+  keccak: true
   utf-8-validate: false

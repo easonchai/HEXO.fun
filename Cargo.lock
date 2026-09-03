@@ -733,6 +733,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "solana-keccak-hasher",
+ "solana-sha256-hasher 2.3.0",
 ]
 
 [[package]]
@@ -1272,7 +1273,7 @@ dependencies = [
  "solana-nullable",
  "solana-program-error",
  "solana-sanitize 3.0.1",
- "solana-sha256-hasher",
+ "solana-sha256-hasher 3.1.0",
  "wincode",
 ]
 
@@ -1724,6 +1725,17 @@ dependencies = [
 
 [[package]]
 name = "solana-sha256-hasher"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aa3feb32c28765f6aa1ce8f3feac30936f16c5c3f7eb73d63a5b8f6f8ecdc44"
+dependencies = [
+ "sha2 0.10.9",
+ "solana-define-syscall 2.3.0",
+ "solana-hash 2.3.0",
+]
+
+[[package]]
+name = "solana-sha256-hasher"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db7dc3011ea4c0334aaaa7e7128cb390ecf546b28d412e9bf2064680f57f588f"
@@ -1959,7 +1971,7 @@ checksum = "e597c5ff9ed7c74a54dbc47bae2f06e4db8c98f4356ad280200dc11878266db1"
 dependencies = [
  "bytemuck",
  "solana-program-error",
- "solana-sha256-hasher",
+ "solana-sha256-hasher 3.1.0",
  "spl-discriminator-derive",
 ]
 
