@@ -17,6 +17,7 @@ import {
 import { epochAddress } from "../chain.js";
 import type { EpochRow, PoolLike } from "../read.js";
 import type { Balances, PlayerRow } from "../state.js";
+import { PanelCard } from "../ui.js";
 
 export interface VaultScreenProps {
   program: HexVaultProgram;
@@ -88,14 +89,16 @@ export function Vault(props: VaultScreenProps) {
 
   return (
     <div className="screen-vault" data-testid="vault-screen">
-      <div className="panel-card wide">
-        <div className="panel-head">
-          <span className="panel-title">DEPOSIT</span>
+      <PanelCard
+        wide
+        title="DEPOSIT"
+        aside={
           <span className="dual-line-inline">
             wallet {pool.acceptedMint.toBase58().slice(0, 4)}…{" "}
             {fmt(balances.accepted)}
           </span>
-        </div>
+        }
+      >
         <p className="screen-copy">
           Deposit mints equal PT and ET 1:1. ET is the entry currency for
           rounds; PT stays matched to principal.
@@ -196,13 +199,13 @@ export function Vault(props: VaultScreenProps) {
         >
           <span>{busy === "Refresh" ? "SIGNING…" : "REFRESH ENTRIES"}</span>
         </button>
-      </div>
+      </PanelCard>
 
-      <div className="panel-card wide">
-        <div className="panel-head">
-          <span className="panel-title">WITHDRAW</span>
-          <span className="dual-line-inline">matched {fmt(matched)}</span>
-        </div>
+      <PanelCard
+        wide
+        title="WITHDRAW"
+        aside={<span className="dual-line-inline">matched {fmt(matched)}</span>}
+      >
         <p className="screen-copy">
           A withdrawal burns equal PT and ET and pays out principal. You can
           withdraw exactly your matched balance — spent ET lowers it until the
@@ -269,7 +272,7 @@ export function Vault(props: VaultScreenProps) {
             <span>{busy === "Withdraw" ? "SIGNING…" : "WITHDRAW"}</span>
           </button>
         </div>
-      </div>
+      </PanelCard>
 
       {note ? (
         <div className={`screen-note ${note.tone}`} data-testid="vault-note">

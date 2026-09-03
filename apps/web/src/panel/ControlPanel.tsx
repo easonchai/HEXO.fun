@@ -1,14 +1,15 @@
 /**
  * Right control panel — port of the prototype's three tiers: amount/tile
  * config, cost summary + kinetic DEPLOY CTA, and round telemetry/feed. A
- * fourth "VAULT" tier adds the protocol's deposit/withdraw surface in the
- * same visual language (the prototype predates custody wiring).
+ * fourth tier adds the protocol's deposit surface in the same visual
+ * language (the prototype predates custody wiring).
  */
 import { Textile } from "../arena/Textile.js";
 import { formatAtomic, parseAtomic, previewBuy } from "../lib/money.js";
 import type { Balances } from "../state.js";
 import type { EngineOutput } from "../useRoundEngine.js";
 import type { FeedRow } from "../engine.js";
+import { PanelCard } from "../ui.js";
 
 const SYMBOL_ROW = [0, 1, 2, 3, 4, 5];
 
@@ -127,9 +128,9 @@ export function ControlPanel(props: ControlPanelProps) {
   return (
     <aside className="control-panel" data-testid="control-panel">
       {/* TIER 1 — amount / tiles / auto-rounds */}
-      <section className="panel-card">
-        <div className="panel-head">
-          <span className="panel-title">AMOUNT / TILE</span>
+      <PanelCard
+        title="AMOUNT / TILE"
+        aside={
           <span
             className="panel-reset"
             role="button"
@@ -138,8 +139,8 @@ export function ControlPanel(props: ControlPanelProps) {
           >
             RESET
           </span>
-        </div>
-
+        }
+      >
         <div className="volt-banner">
           <input
             value={stakeText}
@@ -200,7 +201,7 @@ export function ControlPanel(props: ControlPanelProps) {
                 role="button"
                 onClick={() => togglePreset("all")}
               >
-                ALL
+                1-36
               </span>
             </div>
             <div className="stepper">
@@ -251,10 +252,10 @@ export function ControlPanel(props: ControlPanelProps) {
             </div>
           </div>
         </div>
-      </section>
+      </PanelCard>
 
       {/* TIER 2 — cost summary + deploy CTA */}
-      <section className="panel-card">
+      <PanelCard>
         <div className="cost-row">
           <span className="row-label">PER ROUND</span>
           <div>
@@ -325,11 +326,7 @@ export function ControlPanel(props: ControlPanelProps) {
             <span className="deploy-locked">
               <span className="slot-box">
                 {SYMBOL_ROW.map((sym) => (
-                  <span
-                    key={sym}
-                    className="slot"
-                    style={{ animationDelay: `${sym * 0.7}s` }}
-                  >
+                  <span key={sym} className="slot">
                     <Textile sym={sym} size={14} />
                   </span>
                 ))}
@@ -341,11 +338,7 @@ export function ControlPanel(props: ControlPanelProps) {
               <span>DEPLOY</span>
               <span className="cyc-row">
                 {SYMBOL_ROW.map((sym) => (
-                  <span
-                    key={sym}
-                    className="cyc"
-                    style={{ animationDelay: `${sym * 0.7}s` }}
-                  >
+                  <span key={sym} className="cyc">
                     <Textile sym={sym} size={10} />
                   </span>
                 ))}
@@ -410,10 +403,10 @@ export function ControlPanel(props: ControlPanelProps) {
             </div>
           ) : null}
         </div>
-      </section>
+      </PanelCard>
 
       {/* TIER 3 — telemetry + feed */}
-      <section className="panel-card">
+      <PanelCard>
         <div className="lastwin-banner">
           <div className="lastwin-left">
             <span className="row-label">LAST WIN</span>
@@ -443,7 +436,7 @@ export function ControlPanel(props: ControlPanelProps) {
             ))
           )}
         </div>
-      </section>
+      </PanelCard>
     </aside>
   );
 }

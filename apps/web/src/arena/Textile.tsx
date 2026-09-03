@@ -76,7 +76,7 @@ export const TEXTILE_SYMBOLS: {
           rx="2.2"
           fill="currentColor"
         />
-        <circle cx="10" cy="10" r="2" fill="#E8E9ED" />
+        <circle cx="10" cy="10" r="2" fill="var(--accent-on-volt)" />
       </>
     ),
   },

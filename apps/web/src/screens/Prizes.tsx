@@ -19,6 +19,7 @@ import { labelEpochStatus, labelJackpotStatus } from "../lib/protocol.js";
 import type { EpochRow, PoolLike, RandomnessRow } from "../read.js";
 import type { VaultBalances } from "../state.js";
 import type { Takeover } from "../useRoundEngine.js";
+import { PanelCard, Stat, StatGrid } from "../ui.js";
 
 const ENV: Record<string, string | undefined> = {
   VITE_API_URL: import.meta.env.VITE_API_URL as string | undefined,
@@ -181,9 +182,10 @@ export function Prizes(props: PrizesProps) {
 
   return (
     <div className="screen-vault" data-testid="prizes-screen">
-      <div className="panel-card wide">
-        <div className="panel-head">
-          <span className="panel-title">EPOCH</span>
+      <PanelCard
+        wide
+        title="EPOCH"
+        aside={
           <select
             value={epoch?.id.toString() ?? ""}
             onChange={(event) => setEpochIdText(event.target.value)}
@@ -200,46 +202,45 @@ export function Prizes(props: PrizesProps) {
               </option>
             ))}
           </select>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="panel-card wide">
-        <div className="panel-head">
-          <span className="panel-title">EPOCH PRIZE</span>
+      <PanelCard
+        wide
+        title="EPOCH PRIZE"
+        aside={
           <span className="dual-line-inline">
             {labelEpochStatus(epoch?.status ?? 0)}
           </span>
-        </div>
-        <div className="stat-grid">
-          <div className="stat">
-            <span className="stat-label">Amount</span>
-            <span className="stat-value" data-testid="prize-amount">
-              {fmt(epoch?.prizeAmount ?? 0n)}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Total weight</span>
-            <span className="stat-value" data-testid="prize-total-weight">
-              {epoch?.totalEntryWeight.toString() ?? "—"}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Draw target</span>
-            <span className="stat-value">
-              {epoch ? epoch.prizeTarget.toString() : "—"}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Draw</span>
-            <span className="stat-value" data-testid="prize-draw-status">
-              {prizeRequest
+        }
+      >
+        <StatGrid>
+          <Stat
+            label="Amount"
+            value={fmt(epoch?.prizeAmount ?? 0n)}
+            testid="prize-amount"
+          />
+          <Stat
+            label="Total weight"
+            value={epoch?.totalEntryWeight.toString() ?? "—"}
+            testid="prize-total-weight"
+          />
+          <Stat
+            label="Draw target"
+            value={epoch ? epoch.prizeTarget.toString() : "—"}
+          />
+          <Stat
+            label="Draw"
+            value={
+              prizeRequest
                 ? prizeRequest.status === 1
                   ? "fulfilled"
                   : "pending"
-                : "not requested"}
-            </span>
-          </div>
-        </div>
+                : "not requested"
+            }
+            testid="prize-draw-status"
+          />
+        </StatGrid>
         {epoch && epoch.status === 1 ? (
           <button
             type="button"
@@ -266,45 +267,44 @@ export function Prizes(props: PrizesProps) {
             </span>
           </button>
         ) : null}
-      </div>
+      </PanelCard>
 
-      <div className="panel-card wide">
-        <div className="panel-head">
-          <span className="panel-title">HEXPOT JACKPOT</span>
+      <PanelCard
+        wide
+        title="HEXPOT JACKPOT"
+        aside={
           <span className="dual-line-inline">
             {labelJackpotStatus(epoch?.jackpotStatus ?? 0)}
           </span>
-        </div>
-        <div className="stat-grid">
-          <div className="stat">
-            <span className="stat-label">Vault</span>
-            <span className="stat-value" data-testid="jackpot-vault">
-              {fmt(vaults.jackpotVault)}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Committed</span>
-            <span className="stat-value" data-testid="jackpot-amount">
-              {fmt(epoch?.jackpotAmount ?? 0n)}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Draw target</span>
-            <span className="stat-value">
-              {epoch ? epoch.jackpotTarget.toString() : "—"}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Draw</span>
-            <span className="stat-value" data-testid="jackpot-draw-status">
-              {jackpotRequest
+        }
+      >
+        <StatGrid>
+          <Stat
+            label="Vault"
+            value={fmt(vaults.jackpotVault)}
+            testid="jackpot-vault"
+          />
+          <Stat
+            label="Committed"
+            value={fmt(epoch?.jackpotAmount ?? 0n)}
+            testid="jackpot-amount"
+          />
+          <Stat
+            label="Draw target"
+            value={epoch ? epoch.jackpotTarget.toString() : "—"}
+          />
+          <Stat
+            label="Draw"
+            value={
+              jackpotRequest
                 ? jackpotRequest.status === 1
                   ? "fulfilled"
                   : "pending"
-                : "not requested"}
-            </span>
-          </div>
-        </div>
+                : "not requested"
+            }
+            testid="jackpot-draw-status"
+          />
+        </StatGrid>
         {epoch && epoch.jackpotStatus === 1 ? (
           <button
             type="button"
@@ -331,7 +331,7 @@ export function Prizes(props: PrizesProps) {
             </span>
           </button>
         ) : null}
-      </div>
+      </PanelCard>
 
       {proofNote ? (
         <div className="panel-note" data-testid="proof-note">

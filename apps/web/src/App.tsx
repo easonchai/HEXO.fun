@@ -36,7 +36,7 @@ import { useRoundEngine, type Takeover } from "./useRoundEngine.js";
 import { anchorWalletOf, useGameSigner } from "./wallets.js";
 import { clusterFromEnv, type Cluster } from "./wallet.js";
 
-const TABS = ["MINE", "VAULT", "PRIZES", "ABOUT"] as const;
+const TABS = ["MINE", "STAKE", "EXPLORE", "ABOUT"] as const;
 type Tab = (typeof TABS)[number];
 
 const ENV: Record<string, string | undefined> = {
@@ -53,7 +53,8 @@ export function App() {
   const { publicKey, connected } = signer;
   const [tab, setTab] = useState<Tab>("MINE");
   const [soundOn, setSoundOnState] = useState(isSoundOn());
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  // The prototype ships dark-first ("Dark Gold Midnight"); light keeps the blue primary.
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [stakeText, setStakeText] = useState("0.01");
   const [autoRounds, setAutoRounds] = useState(0);
   const [deployBusy, setDeployBusy] = useState(false);
@@ -350,7 +351,7 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <LogoCog size={28} />
-          <span className="brand-logo">HEX.</span>
+          <span className="brand-logo">HEXO</span>
         </div>
         <nav className="nav" aria-label="Sections">
           {TABS.map((candidate) => (
@@ -504,7 +505,7 @@ export function App() {
             />
           </>
         ) : null}
-        {tab === "VAULT" && publicKey && pool ? (
+        {tab === "STAKE" && publicKey && pool ? (
           <Vault
             program={program!}
             owner={publicKey}
@@ -516,7 +517,7 @@ export function App() {
             onDone={refresh}
           />
         ) : null}
-        {tab === "PRIZES" && publicKey && pool ? (
+        {tab === "EXPLORE" && publicKey && pool ? (
           <Prizes
             program={program!}
             owner={publicKey}
@@ -529,12 +530,12 @@ export function App() {
             key={pool.address.toBase58()}
           />
         ) : null}
-        {tab === "PRIZES" && (!publicKey || !pool) ? (
+        {tab === "EXPLORE" && (!publicKey || !pool) ? (
           <div className="screen-note err">
             Connect a wallet with a live pool to view prizes.
           </div>
         ) : null}
-        {tab === "VAULT" && (!publicKey || !pool) ? (
+        {tab === "STAKE" && (!publicKey || !pool) ? (
           <div className="screen-note err">
             Connect a wallet with a live pool to manage custody.
           </div>
