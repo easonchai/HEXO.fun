@@ -117,26 +117,44 @@ sleep 4
 
 VITE_PID=""
 WEB_ONLY="${HEXVAULT_E2E_WEB_ONLY:-}"
+WEB_PORT="${HEXVAULT_WEB_PORT:-5199}"
 if [ -z "$WEB_ONLY" ]; then
   # ---------------------------------------------------------------- browser flow
   say "browser flow (Playwright)"
   VITE_BURNER_WALLET=1 VITE_CLUSTER=localnet VITE_PRIVY_APP_ID= \
-    pnpm --filter @hexvault/web exec vite --port 5199 --strictPort >"$LEDGER.vite.log" 2>&1 &
+    pnpm --filter @hexvault/web exec vite --port "$WEB_PORT" --strictPort >"$LEDGER.vite.log" 2>&1 &
   VITE_PID=$!
   for _ in $(seq 1 30); do
-    curl -sf http://localhost:5199/ >/dev/null 2>&1 && break
+    curl -sf "http://localhost:$WEB_PORT/" >/dev/null 2>&1 && break
     sleep 1
   done
-  curl -sf http://localhost:5199/ >/dev/null
+  curl -sf "http://localhost:$WEB_PORT/" >/dev/null
 
-  HEXVAULT_WEB_URL=http://localhost:5199 RPC_URL=http://127.0.0.1:8899 \
+  HEXVAULT_WEB_URL="http://localhost:$WEB_PORT" RPC_URL=http://127.0.0.1:8899 \
     HEXVAULT_E2E_USDC="$USDC" \
     pnpm exec tsx scripts/e2e-web.mjs
   say "browser flow passed"
 else
+  # Manual mode: start the web server ourselves (Privy cleared so the funded
+  # dev burner is the one-click connection) and pre-fund it for play.
+  say "web app"
+  VITE_BURNER_WALLET=1 VITE_CLUSTER=localnet VITE_PRIVY_APP_ID= \
+    pnpm --filter @hexvault/web exec vite --port "$WEB_PORT" --strictPort >"$LEDGER.vite.log" 2>&1 &
+  VITE_PID=$!
+  for _ in $(seq 1 30); do
+    curl -sf "http://localhost:$WEB_PORT/" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  curl -sf "http://localhost:$WEB_PORT/" >/dev/null
+  BURNER=$(pnpm --dir apps/web exec tsx -e \
+    'import {burnerKeypair} from "./src/dev-burner.ts"; console.log(burnerKeypair().publicKey.toBase58())' \
+    | /usr/bin/grep -v punycode | /usr/bin/grep -v bigint | tail -1)
+  RPC_URL=http://127.0.0.1:8899 pnpm exec tsx scripts/fund-wallet.ts "$BURNER" "$USDC" \
+    | /usr/bin/grep -v punycode | /usr/bin/grep -v bigint || true
   echo "HEXVAULT_E2E_WEB_ONLY=1 — stack is up:" >&2
-  echo "  web:   pnpm --filter @hexvault/web exec vite --port 5199   (VITE_BURNER_WALLET=1)" >&2
-  echo "  api:   http://127.0.0.1:8081" >&2
+  echo "  web:     http://localhost:$WEB_PORT   (burner $BURNER pre-funded)" >&2
+  echo "  api:     http://127.0.0.1:8081" >&2
+  echo "  rpc:     http://127.0.0.1:8899" >&2
   echo "  press Ctrl-C to tear down" >&2
   wait
 fi
