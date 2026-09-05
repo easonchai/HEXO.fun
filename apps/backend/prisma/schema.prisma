@@ -1,0 +1,108 @@
+// Mirrors the on-chain account layouts in programs/hex_vault/src/state.rs.
+// spec.md §3.2. On-chain u64 -> BigInt, u128 -> Decimal(40, 0). Addresses and
+// pubkeys are base58 strings; the API layer serializes BigInt/Decimal as
+// decimal strings.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Pool {
+  address         String  @id
+  poolId          BigInt
+  authority       String
+  mint            String
+  epochSeconds    BigInt
+  roundSeconds    BigInt
+  paused          Boolean
+  currentEpochId  BigInt
+  totalPrincipal  BigInt
+  carryPot        BigInt
+  updatedSlot     BigInt
+}
+
+model Epoch {
+  id                BigInt   @id
+  startsAt          BigInt
+  endsAt            BigInt
+  status            Int
+  registeredWeight  Decimal  @db.Decimal(40, 0)
+  registeredCount   Int
+  jackpotAmount     BigInt
+  target            Decimal  @db.Decimal(40, 0)
+  winner            String?
+}
+
+model Round {
+  id          BigInt  @id
+  epochId     BigInt
+  startsAt    BigInt
+  endsAt      BigInt
+  status      Int
+  pot         BigInt
+  winningTile Int?
+  tileTotals  Json
+}
+
+model Player {
+  owner        String  @id
+  principal    BigInt
+  entries      BigInt
+  weightAcc    Decimal @db.Decimal(40, 0)
+  lastUpdate   BigInt
+  epochId      BigInt
+  frozenWeight Decimal @db.Decimal(40, 0)
+  frozenEpoch  BigInt
+  regEpoch     BigInt
+  regStart     Decimal @db.Decimal(40, 0)
+  regEnd       Decimal @db.Decimal(40, 0)
+  isHouse      Boolean
+}
+
+model Position {
+  address      String  @id
+  owner        String
+  roundId      BigInt
+  tiles        BigInt
+  stakePerTile BigInt
+  settled      Boolean
+}
+
+// Finalized program events, decoded from `Program data:` logs.
+model Event {
+  slot      BigInt
+  signature String
+  index     Int
+  name      String
+  data      Json
+  blockTime BigInt?
+
+  @@id([slot, signature, index])
+}
+
+// Single row (id = 1): the indexer's signature-catch-up cursor.
+model Cursor {
+  id            Int     @id
+  lastSignature String?
+  lastSlot      BigInt?
+}
+
+model FaucetClaim {
+  owner       String @id
+  lastClaimAt BigInt
+}
+
+// Single row (id = 1): what the operator last did, for GET /status.
+model OperatorState {
+  id               Int     @id
+  lastTickAt       BigInt?
+  lastAction       String?
+  lastError        String?
+  registeredCount  Int?
+  registeredTotal  Int?
+}
