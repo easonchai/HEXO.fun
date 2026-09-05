@@ -4,8 +4,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   HexVault,
   buildSnapshot,
+  fakeOraoAccount,
   findEvent,
   longTimeouts,
+  oraoRequestAddress,
   ownerOfInterval,
   proofFor,
   type EpochWindow,
@@ -96,6 +98,26 @@ describe("prize lifecycle: snapshot commit, draw, merkle claim, rollover", () =>
   it("draws the prize target and rejects expiry and out-of-interval claims before the deadline", async () => {
     await pool.requestPrizeRandomness();
     await expect(pool.requestPrizeRandomness()).rejects.toThrow();
+
+    // Localnet is mock-only (vrf_randomness_state = zero): the VRF settle
+    // refuses any non-ORAO-owned account at the constraint layer.
+    const bystander = await hv.wallet();
+    await expect(
+      pool.fulfillPrizeWithVrf(bystander.publicKey, bystander.publicKey),
+    ).rejects.toThrow("InvalidRandomnessAccount");
+
+    // Even a network-state account ORAO genuinely owns is rejected unless it
+    // is the exact account pinned on config: the address constraint on
+    // `orao_network_state` fires before any request PDA is inspected.
+    const requested = await pool.requestAccount(1, pool.epoch());
+    const substituteNetworkState = await fakeOraoAccount(hv);
+    const derivedRequest = oraoRequestAddress(
+      substituteNetworkState,
+      requested.seed,
+    );
+    await expect(
+      pool.fulfillPrizeWithVrf(substituteNetworkState, derivedRequest),
+    ).rejects.toThrow("InvalidRandomnessAccount");
 
     await pool.fulfillPrize(0n);
     expect((await pool.epochAccount()).status).toBe(3);

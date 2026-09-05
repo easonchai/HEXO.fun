@@ -147,3 +147,63 @@ describe("expiry and rollover: deadlines, prize expiry, jackpot rollover", () =>
     expect(await pool.vaultBalance(pool.jackpotVault)).toBe(JACKPOT);
   });
 });
+
+describe("expiry from snapshot-committed: randomness never requested still expires and unblocks rollover", () => {
+  longTimeouts();
+
+  let hv: HexVault;
+  let pool: Pool;
+  let epoch1: EpochWindow;
+
+  beforeAll(async () => {
+    hv = await HexVault.create();
+    pool = await hv.createPool();
+    const now = await hv.chainNow();
+
+    epoch1 = {
+      id: 1n,
+      startsAt: now - 5,
+      entryCutoffAt: now + 20,
+      endsAt: now + 25,
+      prizeSnapshotAt: now + 25,
+      claimDeadline: now + 40,
+    };
+    await pool.createFirstEpoch(epoch1);
+    await pool.fundPrize(hv.payer, PRIZE);
+
+    const alice = await hv.wallet(AMT * 10n);
+    await pool.deposit(alice, AMT * 5n);
+
+    await hv.waitUntil(epoch1.prizeSnapshotAt + 1);
+    const snapshot = await pool.snapshotFromBalances([alice.publicKey]);
+    // snapshot committed, randomness never requested: status stays SNAPSHOT_COMMITTED
+    await pool.commitPrizeSnapshot(snapshot, PRIZE);
+  });
+
+  it("rejects expiry before the claim deadline from snapshot-committed", async () => {
+    expect((await pool.epochAccount()).status).toBe(1);
+    await expect(pool.expirePrize()).rejects.toThrow("PrizeClaimStillOpen");
+  });
+
+  it("expires the never-requested epoch once the deadline passes, unblocking rollover", async () => {
+    await hv.waitUntil(epoch1.claimDeadline + 1);
+
+    const events = await hv.events(await pool.expirePrize());
+    expect(findEvent(events, "PrizeExpired")?.data?.epochId?.toNumber()).toBe(
+      1,
+    );
+    expect((await pool.epochAccount()).status).toBe(5);
+    expect(await pool.vaultBalance(pool.prizeVault)).toBe(PRIZE);
+    await expect(pool.expirePrize()).rejects.toThrow("PrizeAlreadyResolved");
+
+    await pool.beginNextEpoch(1n, {
+      id: 2n,
+      startsAt: epoch1.endsAt + 2,
+      entryCutoffAt: epoch1.endsAt + 12,
+      endsAt: epoch1.endsAt + 17,
+      prizeSnapshotAt: epoch1.endsAt + 17,
+      claimDeadline: epoch1.endsAt + 32,
+    });
+    expect((await pool.poolAccount()).latestEpochId.toNumber()).toBe(2);
+  });
+});

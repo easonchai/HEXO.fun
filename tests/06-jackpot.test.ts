@@ -3,8 +3,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   HexVault,
+  fakeOraoAccount,
   findEvent,
   longTimeouts,
+  oraoRequestAddress,
   ownerOfInterval,
   proofFor,
   type EpochWindow,
@@ -99,6 +101,25 @@ describe("jackpot lifecycle: separate escrow, separate draw domain, single claim
     expect(request.status).toBe(0);
     // the prize request is a different account and is already fulfilled
     expect((await pool.requestAccount(1, pool.epoch())).kind).toBe(1);
+
+    // Localnet is mock-only (vrf_randomness_state = zero): the VRF settle
+    // refuses any non-ORAO-owned account at the constraint layer.
+    const bystander = await hv.wallet();
+    await expect(
+      pool.fulfillJackpotWithVrf(bystander.publicKey, bystander.publicKey),
+    ).rejects.toThrow("InvalidRandomnessAccount");
+
+    // Even a network-state account ORAO genuinely owns is rejected unless it
+    // is the exact account pinned on config: the address constraint on
+    // `orao_network_state` fires before any request PDA is inspected.
+    const substituteNetworkState = await fakeOraoAccount(hv);
+    const derivedRequest = oraoRequestAddress(
+      substituteNetworkState,
+      request.seed,
+    );
+    await expect(
+      pool.fulfillJackpotWithVrf(substituteNetworkState, derivedRequest),
+    ).rejects.toThrow("InvalidRandomnessAccount");
 
     await pool.fulfillJackpot(0n);
     const epoch = await pool.epochAccount();

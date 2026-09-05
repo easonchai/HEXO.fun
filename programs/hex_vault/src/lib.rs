@@ -1073,7 +1073,8 @@ pub mod hex_vault {
     /// the pool forever. A late fulfillment is rejected by the status change.
     pub fn expire_unclaimed_prize(ctx: Context<ExpireUnclaimedPrize>) -> Result<()> {
         require!(
-            ctx.accounts.epoch.status == EPOCH_RANDOMNESS_REQUESTED
+            ctx.accounts.epoch.status == EPOCH_SNAPSHOT_COMMITTED
+                || ctx.accounts.epoch.status == EPOCH_RANDOMNESS_REQUESTED
                 || ctx.accounts.epoch.status == EPOCH_PRIZE_DRAWN,
             HexVaultError::PrizeAlreadyResolved
         );
@@ -1748,9 +1749,13 @@ pub struct FulfillRoundWithVrf<'info> {
     pub round: Box<Account<'info, Round>>,
     #[account(mut, seeds = [b"randomness".as_ref(), pool.key().as_ref(), round.key().as_ref(), &[REQUEST_ROUND]], bump = request.bump)]
     pub request: Box<Account<'info, RandomnessRequest>>,
-    /// CHECK: must equal `config.vrf_randomness_state` (handler-checked) and
-    /// is owned by the ORAO program (constraint below).
-    #[account(owner = crate::vrf::ORAO_VRF_PROGRAM_ID @ HexVaultError::InvalidRandomnessAccount)]
+    /// CHECK: pinned to `config.vrf_randomness_state` and owned by the ORAO
+    /// program (both constraints below); no caller-supplied network state
+    /// can stand in, even one that ORAO genuinely owns.
+    #[account(
+        owner = crate::vrf::ORAO_VRF_PROGRAM_ID @ HexVaultError::InvalidRandomnessAccount,
+        address = config.vrf_randomness_state @ HexVaultError::InvalidRandomnessAccount
+    )]
     pub orao_network_state: UncheckedAccount<'info>,
     /// CHECK: ORAO-owned request PDA bound to this request's stored seed —
     /// the handler verifies the exact derivation; bytes are parsed by
@@ -1770,9 +1775,13 @@ pub struct FulfillPrizeWithVrf<'info> {
     pub epoch: Box<Account<'info, Epoch>>,
     #[account(mut, seeds = [b"randomness".as_ref(), pool.key().as_ref(), epoch.key().as_ref(), &[REQUEST_PRIZE]], bump = request.bump)]
     pub request: Box<Account<'info, RandomnessRequest>>,
-    /// CHECK: must equal `config.vrf_randomness_state` (handler-checked) and
-    /// is owned by the ORAO program (constraint below).
-    #[account(owner = crate::vrf::ORAO_VRF_PROGRAM_ID @ HexVaultError::InvalidRandomnessAccount)]
+    /// CHECK: pinned to `config.vrf_randomness_state` and owned by the ORAO
+    /// program (both constraints below); no caller-supplied network state
+    /// can stand in, even one that ORAO genuinely owns.
+    #[account(
+        owner = crate::vrf::ORAO_VRF_PROGRAM_ID @ HexVaultError::InvalidRandomnessAccount,
+        address = config.vrf_randomness_state @ HexVaultError::InvalidRandomnessAccount
+    )]
     pub orao_network_state: UncheckedAccount<'info>,
     /// CHECK: ORAO-owned request PDA bound to this request's stored seed —
     /// the handler verifies the exact derivation; bytes are parsed by
@@ -1792,9 +1801,13 @@ pub struct FulfillJackpotWithVrf<'info> {
     pub epoch: Box<Account<'info, Epoch>>,
     #[account(mut, seeds = [b"randomness".as_ref(), pool.key().as_ref(), epoch.key().as_ref(), &[REQUEST_JACKPOT]], bump = request.bump)]
     pub request: Box<Account<'info, RandomnessRequest>>,
-    /// CHECK: must equal `config.vrf_randomness_state` (handler-checked) and
-    /// is owned by the ORAO program (constraint below).
-    #[account(owner = crate::vrf::ORAO_VRF_PROGRAM_ID @ HexVaultError::InvalidRandomnessAccount)]
+    /// CHECK: pinned to `config.vrf_randomness_state` and owned by the ORAO
+    /// program (both constraints below); no caller-supplied network state
+    /// can stand in, even one that ORAO genuinely owns.
+    #[account(
+        owner = crate::vrf::ORAO_VRF_PROGRAM_ID @ HexVaultError::InvalidRandomnessAccount,
+        address = config.vrf_randomness_state @ HexVaultError::InvalidRandomnessAccount
+    )]
     pub orao_network_state: UncheckedAccount<'info>,
     /// CHECK: ORAO-owned request PDA bound to this request's stored seed —
     /// the handler verifies the exact derivation; bytes are parsed by

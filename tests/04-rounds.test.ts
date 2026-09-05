@@ -4,9 +4,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   HexVault,
   bn,
+  fakeOraoAccount,
   findEvent,
   longTimeouts,
   longWindow,
+  oraoRequestAddress,
   tilesOf,
   type Pool,
 } from "./helpers/hx.ts";
@@ -149,6 +151,22 @@ describe("round lifecycle: creation guards, position guards, settlement and rewa
         roundId,
         bystander.publicKey,
         bystander.publicKey,
+      ),
+    ).rejects.toThrow("InvalidRandomnessAccount");
+
+    // Even a network-state account ORAO genuinely owns is rejected unless it
+    // is the exact account pinned on config: the address constraint on
+    // `orao_network_state` fires before any request PDA is inspected.
+    const substituteNetworkState = await fakeOraoAccount(hv);
+    const derivedRequest = oraoRequestAddress(
+      substituteNetworkState,
+      requested.seed,
+    );
+    await expect(
+      pool.fulfillRoundWithVrf(
+        roundId,
+        substituteNetworkState,
+        derivedRequest,
       ),
     ).rejects.toThrow("InvalidRandomnessAccount");
 

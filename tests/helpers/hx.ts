@@ -631,6 +631,28 @@ export class Pool {
       .rpc();
   }
 
+  /** VRF settle with explicit ORAO accounts (tests pass fakes to assert gating). */
+  async fulfillPrizeWithVrf(
+    oraoNetworkState: PublicKey,
+    oraoRequest: PublicKey,
+    requester: Keypair = this.hv.payer,
+  ): Promise<string> {
+    const subject = this.epoch();
+    return await this.program.methods
+      .fulfillPrizeWithVrf()
+      .accounts({
+        requester: requester.publicKey,
+        config: this.hv.config,
+        pool: this.address,
+        epoch: subject,
+        request: this.request(1, subject),
+        oraoNetworkState,
+        oraoRequest,
+      })
+      .signers([requester])
+      .rpc();
+  }
+
   async requestJackpotRandomness(
     requester: Keypair = this.hv.payer,
   ): Promise<string> {
@@ -661,6 +683,28 @@ export class Pool {
         epoch: subject,
         request: this.request(2, subject),
       })
+      .rpc();
+  }
+
+  /** VRF settle with explicit ORAO accounts (tests pass fakes to assert gating). */
+  async fulfillJackpotWithVrf(
+    oraoNetworkState: PublicKey,
+    oraoRequest: PublicKey,
+    requester: Keypair = this.hv.payer,
+  ): Promise<string> {
+    const subject = this.epoch();
+    return await this.program.methods
+      .fulfillJackpotWithVrf()
+      .accounts({
+        requester: requester.publicKey,
+        config: this.hv.config,
+        pool: this.address,
+        epoch: subject,
+        request: this.request(2, subject),
+        oraoNetworkState,
+        oraoRequest,
+      })
+      .signers([requester])
       .rpc();
   }
 
@@ -1005,6 +1049,47 @@ export class HexVault {
     }
   }
 }
+
+export const ORAO_VRF_PROGRAM_ID = new PublicKey(
+  "VRFzZoJdhFWL8rkvu87LpKM3RbcVezpMEc6X5GVDr7y",
+);
+const ORAO_REQUEST_SEED = Buffer.from("orao-vrf-randomness-request");
+
+/**
+ * A fresh account genuinely owned by the ORAO VRF program id, with no other
+ * relationship to the protocol's pinned `config.vrf_randomness_state`.
+ * Stands in for "any ORAO-owned account" in network-state pin tests: no real
+ * ORAO program runs on localnet, but `SystemProgram.createAccount` can set
+ * an arbitrary owner directly, which is all the `owner` constraint checks.
+ */
+export async function fakeOraoAccount(hv: HexVault): Promise<PublicKey> {
+  const account = Keypair.generate();
+  const lamports = await hv.connection.getMinimumBalanceForRentExemption(0);
+  await sendAndConfirmTransaction(
+    hv.connection,
+    new Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: hv.authority,
+        newAccountPubkey: account.publicKey,
+        lamports,
+        space: 0,
+        programId: ORAO_VRF_PROGRAM_ID,
+      }),
+    ),
+    [hv.payer, account],
+  );
+  return account.publicKey;
+}
+
+/** Mirrors `crate::vrf::orao_request_address`: the ORAO request PDA for one (network state, seed) pair. */
+export const oraoRequestAddress = (
+  networkState: PublicKey,
+  seed: Uint8Array | number[],
+): PublicKey =>
+  PublicKey.findProgramAddressSync(
+    [ORAO_REQUEST_SEED, networkState.toBuffer(), Buffer.from(seed)],
+    ORAO_VRF_PROGRAM_ID,
+  )[0];
 
 /** Anchor's borsh coder wants BN sums; the merkle helper speaks plain bigints. */
 const encodeProof = (proof: ProofNode[]): unknown[] =>
