@@ -148,3 +148,54 @@ describe("buildTree", () => {
     expect(() => buildTree([])).toThrow(/no players/);
   });
 });
+
+describe("cross-package root parity", () => {
+  // Real base58 pubkeys (Keypair.fromSeed-free, randomly sampled) where
+  // base58 string order and raw 32-byte order disagree — sorting this exact
+  // set by string vs. by bytes produces different orderings, so this catches
+  // a regression back to a string sort even though most random sets happen
+  // to agree by chance.
+  const DIVERGING_OWNERS = [
+    "8kVu2U35bXih1nyKAPuC7hXKcqntfFtWb5cQBKxgXYDH",
+    "9bxJRVC9P46j7snshLDUztLS4jYtyegSQhjTpK6c6tek",
+    "uMT1AjyUZNxWTVEAeLFHwbkqqDwF2esgSeekvxZhW8o",
+    "EnpTVAQFyNkYTJ4N3UabizgqxXWrNaxRom2HmtjgVeUc",
+    "AsFTGLN4zXGYUGDPH6SK8fK82SxyyaTFN3pCavKAW2xk",
+    "HZKiwuHhDjDHdWJF35Zmvknt1zm857dKyEVzwXKvGUR4",
+  ];
+
+  it("string-sorts and byte-sorts this owner set differently (sanity check on the fixture)", () => {
+    const byString = [...DIVERGING_OWNERS].sort((a, b) => a.localeCompare(b));
+    const byBytes = [...DIVERGING_OWNERS].sort((a, b) =>
+      Buffer.compare(new PublicKey(a).toBytes(), new PublicKey(b).toBytes()),
+    );
+    expect(byString).not.toEqual(byBytes);
+  });
+
+  it("matches the indexer's root for the same leaf set", async () => {
+    const entries = DIVERGING_OWNERS.map((owner, i) => ({
+      owner,
+      weight: BigInt((i + 1) * 7),
+    }));
+    const cliTree = buildTree(entries);
+
+    // Imported through a variable path, not a literal: a static import would
+    // pull the indexer's merkle.ts into this package's stricter tsc program
+    // (exactOptionalPropertyTypes) and fail `check` on that file's own
+    // pre-existing errors. The cast below is the price.
+    const indexerMerklePath = "../../indexer/src/merkle.ts";
+    const indexerMerkle = (await import(indexerMerklePath)) as {
+      buildPrizeTree: (leaves: { owner: Uint8Array; weight: bigint }[]) => {
+        root: Buffer;
+      };
+    };
+    const indexerTree = indexerMerkle.buildPrizeTree(
+      entries.map((e) => ({
+        owner: new PublicKey(e.owner).toBytes(),
+        weight: e.weight,
+      })),
+    );
+
+    expect(cliTree.root).toBe(indexerTree.root.toString("hex"));
+  });
+});

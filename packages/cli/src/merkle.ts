@@ -74,10 +74,20 @@ interface TreeNode {
   owners: string[];
 }
 
-/** Builds the tree the program verifies against; odd nodes are promoted, never duplicated. */
+/**
+ * Builds the tree the program verifies against; odd nodes are promoted, never
+ * duplicated. Leaves sort by raw 32-byte public key ascending, not base58
+ * string order, matching packages/indexer/src/merkle.ts exactly — the two
+ * orders disagree, so a string sort here would produce a different root.
+ */
 export function buildTree(entries: SnapshotEntry[]): SnapshotTree {
   if (entries.length === 0) throw usage("snapshot has no players");
-  const sorted = [...entries].sort((a, b) => a.owner.localeCompare(b.owner));
+  const sorted = [...entries].sort((a, b) =>
+    Buffer.compare(
+      new PublicKey(a.owner).toBytes(),
+      new PublicKey(b.owner).toBytes(),
+    ),
+  );
 
   let level: TreeNode[] = sorted.map((e) => {
     const owner = new PublicKey(e.owner).toBytes();
