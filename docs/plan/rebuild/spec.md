@@ -153,7 +153,7 @@ Authority-only unless marked permissionless. All amount math is checked; any ove
 ### 2.4 Invariants (each has a test)
 
 1. `principal_vault.amount == pool.total_principal == Σ player.principal`.
-2. `Σ player.entries + Σ open-round pot + carry_pot == total_principal + house.entries`, evaluated after touching every player at one instant.
+2. `Σ player.entries + Σ unsettled round pot + carry_pot == total_principal`, summing every Player including the House, evaluated after touching all of them at one instant. Settlement dust from integer division is the only slack. (This line previously read `== total_principal + house.entries`, which double-counts the House: Entries are created only by `deposit` and destroyed only by `withdraw`, and everything the game does just moves them between Players and pots. Corrected in ticket 04, where the sweep is checked against a real forfeited pot.)
 3. `withdraw(x)` succeeds iff `principal >= x && entries >= x`, in every pool and epoch state including paused.
 4. No instruction transfers from `principal_vault` except `withdraw`, and only to the Player's owner.
 5. `Σ settle_position rewards for a round <= round.pot`.

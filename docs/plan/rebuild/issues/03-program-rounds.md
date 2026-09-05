@@ -1,6 +1,6 @@
 # 03 Program: rounds
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: 02
 
@@ -26,3 +26,21 @@ Implement the round instructions from spec §2.3: `create_round`, `buy_position`
 - Void after `vrf_timeout`: `carry_pot` equals the pot; next round starts with that pot.
 - `settle_position` closes the account and refunds rent to the owner for winners, losers, and voided rounds.
 - `create_round` fails while paused, while another round is open, and when it would end after the epoch (requires a stub `begin_epoch` or a test helper that sets epoch fields; coordinate with 04 if simpler to land together).
+
+## Comments
+
+Done in `3cbbf6e`. `tests/02-rounds.test.ts`: 8 passed. Every acceptance case
+ran, including the epoch-bound `create_round` case, because ticket 04's
+`begin_epoch` landed while this was in flight.
+
+`settle_position` gained a constraint tying `position.owner` to `player.owner`.
+Without it a caller could pass their own Player account alongside someone else's
+Position, take that position's reward, and still close the real owner's account
+and refund them the rent. Found while implementing, not in the ticket.
+
+Round timing in the suite comes from the validator's own clock, not `Date.now()`.
+A test validator's slot-derived clock lags wall time under load, which made
+settlement look early.
+
+The real ORAO CPI is still `todo!()`. See `../progress.md` for the three linked
+problems in that path and what was verified about each.

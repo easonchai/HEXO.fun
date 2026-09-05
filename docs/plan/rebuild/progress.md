@@ -53,9 +53,22 @@ Reserved while 03 and 04 are in flight: 8899 for rounds, 9099 for epochs.
 
 ## Open, and needed before ticket 12
 
-- The real ORAO `request_v2` CPI in `vrf.rs` is a `todo!()`. Nothing in the test
-  suite covers it, because `test-vrf` bypasses ORAO entirely. It has to be
-  verified against a devnet request before the demo goes up.
+- **The whole real ORAO path is unfinished and untested.** `test-vrf` bypasses
+  ORAO entirely, so nothing in the suite touches any of this. Three pieces, and
+  they have to land together because they cut across `vrf.rs`, `rounds.rs` and
+  `epochs.rs`:
+  1. `vrf::request_randomness` is a `todo!()`. Ticket 03 verified the shape
+     against ORAO's generated IDL and CPI example: discriminator
+     `[38,151,209,6,195,102,28,217]`, accounts `payer, network_state, treasury,
+     request, system_program` in that order.
+  2. That CPI needs a `treasury` account, which `request_randomness` does not
+     take and neither request context passes.
+  3. `vrf::orao_request_address` looks wrong. It derives the request PDA from
+     `[prefix, network_state, seed]`, but ORAO's SDK uses `[prefix, seed]` with
+     no network state. If that holds, every real request and settle would look
+     for an account ORAO never creates. Carried over from the pre-rebuild code,
+     so it was never right. Confirm against a live devnet request before
+     changing it, then fix all three at once.
 - `apps/backend/src/idl/hex_vault.json` is a snapshot and goes stale every time
   the program changes. Re-run the sync script once the program is final.
   `ChainService` overrides the IDL's own `address` with the env `PROGRAM_ID`, so
