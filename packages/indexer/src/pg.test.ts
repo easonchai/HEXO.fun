@@ -29,6 +29,15 @@ const ROUND_1 = key58("round-1");
 const ROUND_2 = key58("round-2");
 const MINT = key58("accepted-mint");
 
+// A second pool, scoped to the epoch-keying test below so its events don't
+// leak into the snapshot/reconciliation tests, which replay every event
+// stored for POOL_A.
+const POOL_B = key58("pool-b");
+const OWNER_3 = key58("owner-3");
+// Round PDAs are seeded by [pool, epoch_id, round_id], so round id 1 of
+// epoch 2 is a distinct on-chain address from round id 1 of epoch 1.
+const ROUND_1_EPOCH_2 = key58("round-1-epoch-2");
+
 const migrationDir = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../migrations",
@@ -161,6 +170,41 @@ d("postgres projection", () => {
     expect(rows).toEqual([
       { round: ROUND_1, claimed: true },
       { round: ROUND_2, claimed: false },
+    ]);
+  });
+
+  it("keeps positions separate across epochs even with the same round id", async () => {
+    await store.applyBatch([
+      row("PositionPurchased", POOL_B, {
+        owner: OWNER_3,
+        round: ROUND_1,
+        epoch_id: 1n,
+        round_id: 1n,
+        tiles: 0b1n,
+        total_stake: 100n,
+      }),
+      row("PositionPurchased", POOL_B, {
+        owner: OWNER_3,
+        round: ROUND_1_EPOCH_2,
+        epoch_id: 2n,
+        round_id: 1n,
+        tiles: 0b11n,
+        total_stake: 300n,
+      }),
+    ]);
+
+    const { rows } = await pool.query<{
+      epoch_id: string;
+      round_id: string;
+      tiles: string;
+      total_stake: string;
+    }>(
+      "SELECT epoch_id, round_id, tiles, total_stake FROM positions WHERE pool = $1 AND owner = $2 ORDER BY epoch_id",
+      [POOL_B, OWNER_3],
+    );
+    expect(rows).toEqual([
+      { epoch_id: "1", round_id: "1", tiles: "1", total_stake: "100" },
+      { epoch_id: "2", round_id: "1", tiles: "3", total_stake: "300" },
     ]);
   });
 

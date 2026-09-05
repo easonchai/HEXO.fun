@@ -2,7 +2,11 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import pino from "pino";
 import type { Idl } from "@anchor-lang/core";
-import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  type ConfirmedSignatureInfo,
+} from "@solana/web3.js";
 import { Pool as PgPool } from "pg";
 import {
   createEventDecoder,
@@ -68,14 +72,16 @@ export class Indexer {
   private pending: RawLog[] = [];
   private busy = false;
 
-  constructor(config: IndexerConfig, pg: PgPool) {
+  constructor(config: IndexerConfig, pg: PgPool, connection?: Connection) {
     this.config = config;
     this.pg = pg;
     this.store = new Store(pg, (obj, msg) => log.info(obj, msg));
     this.snapshots = new SnapshotService(pg, (obj, msg) => log.info(obj, msg));
-    this.connection = new Connection(config.rpcUrl, {
-      commitment: "finalized",
-    });
+    this.connection =
+      connection ??
+      new Connection(config.rpcUrl, {
+        commitment: "finalized",
+      });
     this.idl = loadIdl(config.idlPath);
     this.decode = createEventDecoder(this.idl);
     this.programKey = new PublicKey(config.programId);
@@ -168,14 +174,30 @@ export class Indexer {
   /** Polls for anything the subscription missed (restart, dropped socket). */
   async catchUp(): Promise<void> {
     const cursor = await this.store.getCursor();
-    const signatures = await this.connection.getSignaturesForAddress(
-      this.programKey,
-      {
-        until: cursor?.signature,
-        limit: 1000,
-      },
-    );
-    const finalized = signatures.filter(
+    const collected: ConfirmedSignatureInfo[] = [];
+    let before: string | undefined;
+    // getSignaturesForAddress caps at 1000 per call; page backwards with
+    // `before` until the stored cursor turns up or the chain runs out, so a
+    // long outage never leaves a gap between the cursor and the newest 1000.
+    for (;;) {
+      const page = await this.connection.getSignaturesForAddress(
+        this.programKey,
+        { before, until: cursor?.signature, limit: 1000 },
+      );
+      if (page.length === 0) break;
+      const cursorIndex = cursor
+        ? page.findIndex((entry) => entry.signature === cursor.signature)
+        : -1;
+      if (cursorIndex === -1) {
+        collected.push(...page);
+        before = page[page.length - 1]!.signature;
+      } else {
+        collected.push(...page.slice(0, cursorIndex));
+        break;
+      }
+    }
+
+    const finalized = collected.filter(
       (entry) => entry.confirmationStatus === "finalized",
     );
     if (finalized.length === 0) return;

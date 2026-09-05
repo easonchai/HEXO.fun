@@ -303,7 +303,7 @@ export class Store {
         await client.query(
           `INSERT INTO positions (pool, round_id, epoch_id, owner, round, tiles, stake_per_tile, total_stake)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-           ON CONFLICT (pool, round_id, owner) DO UPDATE SET tiles = EXCLUDED.tiles,
+           ON CONFLICT (pool, epoch_id, round_id, owner) DO UPDATE SET tiles = EXCLUDED.tiles,
              stake_per_tile = EXCLUDED.stake_per_tile, total_stake = EXCLUDED.total_stake`,
           [
             pool,
