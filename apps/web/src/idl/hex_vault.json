@@ -1,5 +1,5 @@
 {
-  "address": "6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB",
+  "address": "b8Lc52r3Mwz57FtVWQwM7k22kzTsGkUPZrt4K6ahQ5Z",
   "metadata": {
     "name": "hex_vault",
     "version": "0.1.0",
@@ -2076,7 +2076,8 @@
         {
           "name": "orao_network_state",
           "docs": [
-            "is owned by the ORAO program (constraint below)."
+            "program (both constraints below); no caller-supplied network state",
+            "can stand in, even one that ORAO genuinely owns."
           ]
         },
         {
@@ -2278,7 +2279,8 @@
         {
           "name": "orao_network_state",
           "docs": [
-            "is owned by the ORAO program (constraint below)."
+            "program (both constraints below); no caller-supplied network state",
+            "can stand in, even one that ORAO genuinely owns."
           ]
         },
         {
@@ -2492,7 +2494,8 @@
         {
           "name": "orao_network_state",
           "docs": [
-            "is owned by the ORAO program (constraint below)."
+            "program (both constraints below); no caller-supplied network state",
+            "can stand in, even one that ORAO genuinely owns."
           ]
         },
         {
@@ -2713,7 +2716,7 @@
         },
         {
           "name": "program",
-          "address": "6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB"
+          "address": "b8Lc52r3Mwz57FtVWQwM7k22kzTsGkUPZrt4K6ahQ5Z"
         },
         {
           "name": "program_data"

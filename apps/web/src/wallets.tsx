@@ -253,17 +253,4 @@ const safePubkey = (address: string): PubkeyType | undefined => {
   }
 };
 
-/** AnchorProvider-compatible wallet view of a GameSigner. */
-export const anchorWalletOf = (
-  signer: GameSigner,
-): {
-  publicKey: PubkeyType;
-  signTransaction: <T extends Transaction | VersionedTransaction>(
-    tx: T,
-  ) => Promise<T>;
-} | null =>
-  signer.publicKey && signer.signTransaction
-    ? { publicKey: signer.publicKey, signTransaction: signer.signTransaction }
-    : null;
-
 /** Convenience: `useConnection` re-export so App imports one wallet module. */

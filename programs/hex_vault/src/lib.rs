@@ -17,7 +17,7 @@ use errors::HexVaultError;
 use state::*;
 use utils::*;
 
-declare_id!("6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB");
+declare_id!("b8Lc52r3Mwz57FtVWQwM7k22kzTsGkUPZrt4K6ahQ5Z");
 
 #[program]
 pub mod hex_vault {

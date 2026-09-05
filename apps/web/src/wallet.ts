@@ -50,7 +50,16 @@ export const clusterFromEnv = (
   return raw as Cluster;
 };
 
-export const clusterEndpoint = (cluster: Cluster): string =>
-  cluster === "devnet"
+/**
+ * RPC endpoint for the cluster. VITE_RPC_URL overrides the default because the
+ * public devnet endpoint rate-limits getProgramAccounts, which pool and round
+ * discovery both need (read.ts listPools/listRounds).
+ */
+export const clusterEndpoint = (
+  cluster: Cluster,
+  environment: Record<string, string | undefined> = {},
+): string =>
+  environment.VITE_RPC_URL?.trim() ||
+  (cluster === "devnet"
     ? "https://api.devnet.solana.com"
-    : "http://127.0.0.1:8899";
+    : "http://127.0.0.1:8899");

@@ -30,11 +30,12 @@ const ENV: Record<string, string | undefined> = {
     | string
     | undefined,
   VITE_BURNER_WALLET: import.meta.env.VITE_BURNER_WALLET as string | undefined,
+  VITE_RPC_URL: import.meta.env.VITE_RPC_URL as string | undefined,
 };
 
 // Cluster guard: refuse to boot anywhere but localnet/devnet.
 const cluster = clusterFromEnv(ENV);
-const endpoint = clusterEndpoint(cluster);
+const endpoint = clusterEndpoint(cluster, ENV);
 const mode = walletModeFor(ENV);
 
 // Dev-only burner wallet: opt-in via env, localnet only (see dev-burner.ts).

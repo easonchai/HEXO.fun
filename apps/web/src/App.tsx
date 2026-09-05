@@ -34,7 +34,7 @@ import { useVaultState, type VaultState } from "./state.js";
 import { useChainClock } from "./useChainClock.js";
 import { useProgramEvents } from "./useProgramEvents.js";
 import { useRoundEngine, type Takeover } from "./useRoundEngine.js";
-import { anchorWalletOf, useGameSigner } from "./wallets.js";
+import { useGameSigner } from "./wallets.js";
 import { clusterFromEnv, type Cluster } from "./wallet.js";
 
 const TABS = ["MINE", "STAKE", "EXPLORE", "ABOUT"] as const;
@@ -58,6 +58,7 @@ export function App() {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [stakeText, setStakeText] = useState("0.01");
   const [autoRounds, setAutoRounds] = useState(0);
+  const [addressCopied, setAddressCopied] = useState(false);
   const [deployBusy, setDeployBusy] = useState(false);
   const [deployNote, setDeployNote] = useState<string | null>(null);
   const [depositBusy, setDepositBusy] = useState(false);
@@ -68,18 +69,37 @@ export function App() {
   const cluster: Cluster = clusterFromEnv(ENV);
   const poolId = null; // auto-discover; multiple pools arrive later.
 
-  const anchorWallet = useMemo(() => anchorWalletOf(signer), [signer]);
+  // Privy and wallet-adapter hand back a fresh signer object on every render,
+  // so memoizing the provider on it rebuilt the Program every render — and the
+  // chain reads keyed off that Program write state, so the app looped:
+  // read → render → new Program → read, as fast as the RPC answered. Key the
+  // provider on the address and reach the live signer through a ref, so one
+  // Program survives across renders.
+  const signerRef = useRef(signer);
+  useEffect(() => {
+    signerRef.current = signer;
+  }, [signer]);
+  const ownerAddress = signer.publicKey?.toBase58();
   const provider = useMemo(() => {
-    const walletArg = anchorWallet ?? ({ publicKey: undefined } as never);
-    return new AnchorProvider(connection, walletArg as never, {
+    const sign = async <T,>(tx: T): Promise<T> => {
+      const signTransaction = signerRef.current.signTransaction;
+      if (!signTransaction) throw new Error("wallet cannot sign transactions");
+      return (await signTransaction(tx as never)) as T;
+    };
+    const wallet = {
+      get publicKey() {
+        return signerRef.current.publicKey;
+      },
+      signTransaction: sign,
+      signAllTransactions: <T,>(txs: T[]) => Promise.all(txs.map(sign)),
+    };
+    return new AnchorProvider(connection, wallet as never, {
       commitment: "confirmed",
     });
-  }, [connection, anchorWallet]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ownerAddress stands in for the signer, on purpose
+  }, [connection, ownerAddress]);
   const program = useMemo<HexVaultProgram | null>(
-    () =>
-      provider
-        ? (new Program(idl, provider) as unknown as HexVaultProgram)
-        : null,
+    () => new Program(idl, provider) as unknown as HexVaultProgram,
     [provider],
   );
 
@@ -104,9 +124,24 @@ export function App() {
 
   const refresh = state.refresh;
 
+  // Header chip copies the full address; the truncated form is unusable for
+  // funding. Clipboard needs a secure context, so fall back to a prompt.
+  const copyAddress = useCallback(async (address: string) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setAddressCopied(true);
+      window.setTimeout(() => setAddressCopied(false), 1200);
+    } catch {
+      window.prompt("Copy address", address);
+    }
+  }, []);
+
   // Poll fallback + resync after each live event (WS push is primary).
+  // A backgrounded tab sees nothing, so skip its polls entirely.
   useEffect(() => {
-    const id = window.setInterval(() => refresh(), 4000);
+    const id = window.setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 4000);
     return () => window.clearInterval(id);
   }, [refresh]);
 
@@ -427,20 +462,42 @@ export function App() {
             </span>
           </button>
           <span data-testid="wallet-connector">
-            <button
-              type="button"
-              className="btn-connect"
-              data-testid="connect-button"
-              onClick={() =>
-                signer.connected ? signer.disconnect() : signer.connect()
-              }
-            >
-              {!signer.connected
-                ? "CONNECT"
-                : signer.publicKey
-                  ? `${signer.publicKey.toBase58().slice(0, 4)}…${signer.publicKey.toBase58().slice(-4)}`
-                  : "DISCONNECT"}
-            </button>
+            {signer.connected && signer.publicKey ? (
+              <>
+                <button
+                  type="button"
+                  className="btn-connect"
+                  data-testid="connect-button"
+                  title={`Copy ${signer.publicKey.toBase58()}`}
+                  onClick={() => void copyAddress(signer.publicKey!.toBase58())}
+                >
+                  {addressCopied
+                    ? "COPIED"
+                    : `${signer.publicKey.toBase58().slice(0, 4)}…${signer.publicKey.toBase58().slice(-4)}`}
+                </button>
+                <button
+                  type="button"
+                  className="btn-disconnect"
+                  data-testid="disconnect-button"
+                  title="Disconnect"
+                  aria-label="Disconnect wallet"
+                  onClick={() => signer.disconnect()}
+                >
+                  ×
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn-connect"
+                data-testid="connect-button"
+                onClick={() =>
+                  signer.connected ? signer.disconnect() : signer.connect()
+                }
+              >
+                {signer.connected ? "DISCONNECT" : "CONNECT"}
+              </button>
+            )}
           </span>
         </div>
       </header>

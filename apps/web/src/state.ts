@@ -1,5 +1,5 @@
 /** Chain-backed app state. Re-read from chain after every transaction. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Connection, PublicKey } from "@solana/web3.js";
 
 import {
@@ -15,8 +15,8 @@ import {
 } from "./chain.js";
 import {
   fetchPool,
-  fetchRandomness,
   listEpochs,
+  listRandomness,
   listPositions,
   listPools,
   listRounds,
@@ -148,26 +148,10 @@ export function useVaultState(
           ? await listPositions(program, selected.address, owner, roundRows)
           : new Map<string, PositionRow>();
 
-        const requests = new Map<string, RandomnessRow>();
-        await Promise.all(
-          epochRows.flatMap((epoch, index) => {
-            const key = epoch.id.toString();
-            const subject = epochKeys[index]!;
-            return [1, 2].map(async (kind) => {
-              const request = await fetchRandomness(
-                program,
-                selected.address,
-                subject,
-                kind,
-              );
-              if (request) {
-                requests.set(
-                  `${kind === 1 ? "prize" : "jackpot"}:${key}`,
-                  request,
-                );
-              }
-            });
-          }),
+        const requests = await listRandomness(
+          program,
+          selected.address,
+          epochRows,
         );
 
         const [

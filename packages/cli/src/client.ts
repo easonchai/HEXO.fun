@@ -99,9 +99,13 @@ export function stateDirectory(opts: GlobalOptions): string {
 
 export function createContext(opts: GlobalOptions, json: boolean): Context {
   const wallet = loadKeypair(opts.keypair);
-  const connection = new Connection(opts.url, "finalized");
+  // "confirmed" (supermajority vote, ~1 slot) instead of "finalized": on
+  // devnet finalized trails by ~31 slots (12-13 s), and every send, preflight
+  // simulation and account read inherits this level. ORAO fulfills in ~1 s;
+  // at finalized the round settle stacked to 20-30 s.
+  const connection = new Connection(opts.url, "confirmed");
   const provider = new AnchorProvider(connection, new Wallet(wallet), {
-    commitment: "finalized",
+    commitment: "confirmed",
   });
   const idl = loadIdl();
   const programId = parsePubkey(idl.address as string, "idl.address");
@@ -189,7 +193,7 @@ export function programDataAddress(programId: PublicKey): PublicKey {
   return pda.programData(programId);
 }
 
-/** Sends, waits for `finalized`, and returns the signature. */
+/** Sends, waits for `confirmed`, and returns the signature. */
 export async function send(
   ctx: Context,
   instructions: TransactionInstructionLike[],
@@ -215,10 +219,10 @@ export async function send(
     throw chainError(await describeChainError(err));
   }
   try {
-    await ctx.connection.confirmTransaction(signature, "finalized");
+    await ctx.connection.confirmTransaction(signature, "confirmed");
   } catch (err) {
     throw chainError(
-      `transaction ${signature} not finalized: ${describeChainError(err)}`,
+      `transaction ${signature} not confirmed: ${describeChainError(err)}`,
     );
   }
   return signature;
@@ -332,8 +336,8 @@ export async function ensureAta(
     mint,
     owner,
     false,
-    "finalized",
-    { commitment: "finalized", preflightCommitment: "finalized" },
+    "confirmed",
+    { commitment: "confirmed", preflightCommitment: "confirmed" },
     programId,
   );
   return address;

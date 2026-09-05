@@ -27,7 +27,7 @@ pda.bind(ctx.programId);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function chainNow(): Promise<bigint> {
-  const slot = await ctx.connection.getSlot("finalized");
+  const slot = await ctx.connection.getSlot("confirmed");
   const blockTime = await ctx.connection.getBlockTime(slot);
   return BigInt(blockTime ?? 0);
 }

@@ -8,10 +8,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-hex_vault = "6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB"
+hex_vault = "b8Lc52r3Mwz57FtVWQwM7k22kzTsGkUPZrt4K6ahQ5Z"
 
 [programs.devnet]
-hex_vault = "6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB"
+hex_vault = "b8Lc52r3Mwz57FtVWQwM7k22kzTsGkUPZrt4K6ahQ5Z"
 
 [provider]
 cluster = "localnet"

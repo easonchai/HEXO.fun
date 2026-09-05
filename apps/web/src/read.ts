@@ -203,19 +203,33 @@ export async function listPositions(
 const roundAddressOf = (round: RoundRow): PublicKey =>
   roundAddress(round.pool, round.epochId, round.id);
 
-export async function fetchRandomness(
+/**
+ * Prize (kind 1) and jackpot (kind 2) requests for every epoch, keyed
+ * "prize:<id>" / "jackpot:<id>". One fetchMultiple instead of 2N single
+ * fetches — this ran on every refresh and dominated the RPC call count.
+ */
+export async function listRandomness(
   program: HexVaultProgram,
   pool: PublicKey,
-  subject: PublicKey,
-  kind: number,
-): Promise<RandomnessRow | null> {
-  try {
-    return decode<RandomnessRow>(
-      await accountOf(program, "randomnessRequest").fetch(
-        randomnessAddress(pool, subject, kind),
-      ),
+  epochs: EpochRow[],
+): Promise<Map<string, RandomnessRow>> {
+  const out = new Map<string, RandomnessRow>();
+  if (epochs.length === 0) return out;
+  const kinds = [1, 2] as const;
+  const keys = epochs.flatMap((epoch) =>
+    kinds.map((kind) =>
+      randomnessAddress(pool, epochAddress(pool, epoch.id), kind),
+    ),
+  );
+  const rows = await accountOf(program, "randomnessRequest").fetchMultiple(keys);
+  rows.forEach((row, index) => {
+    if (!row) return;
+    const epoch = epochs[Math.floor(index / kinds.length)]!;
+    const kind = kinds[index % kinds.length]!;
+    out.set(
+      `${kind === 1 ? "prize" : "jackpot"}:${epoch.id}`,
+      decode<RandomnessRow>(row),
     );
-  } catch {
-    return null;
-  }
+  });
+  return out;
 }
