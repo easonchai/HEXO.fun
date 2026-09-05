@@ -96,6 +96,41 @@ export function randomnessPda(seed: Uint8Array): PublicKey {
   )[0];
 }
 
+/**
+ * Fabricates a fulfilled randomness account for `seed` and returns its
+ * address, which the settle instruction expects to be handed.
+ *
+ * Read the seed off the account being settled (`round.vrfSeed`,
+ * `epoch.vrfSeed`) rather than recomputing the keccak here: the program is
+ * the authority on it, and tests then need no hash library.
+ */
+export async function fulfillRandomness(
+  seed: Uint8Array | number[],
+  randomness: Uint8Array | number[] = new Uint8Array(64).fill(7),
+): Promise<PublicKey> {
+  const seedBytes = Uint8Array.from(seed);
+  const account = randomnessPda(seedBytes);
+  await program.methods
+    .testFulfill(Array.from(seedBytes), Array.from(Uint8Array.from(randomness)))
+    .accountsPartial({
+      payer: provider.wallet.publicKey,
+      randomness: account,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+  return account;
+}
+
+/**
+ * 64 randomness bytes whose leading LE u64 is `value`, so a test can pick the
+ * winning tile or draw target instead of guessing what the oracle returns.
+ */
+export function randomnessFor(value: bigint | number): Uint8Array {
+  const bytes = new Uint8Array(64).fill(0);
+  new DataView(bytes.buffer).setBigUint64(0, BigInt(value), true);
+  return bytes;
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
