@@ -34,9 +34,26 @@ fn weight_of(entries: u64, seconds: u128) -> Result<u128> {
 /// the epoch ends to inflate last epoch's weight" hole.
 pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
     if player.epoch_id >= pool.current_epoch_id {
+        // Clamp accrual at the current epoch's `ends_at`: a late
+        // `begin_epoch` must never let the same seconds count towards two
+        // epochs (audit-fixes/01). `last_update` still advances to the real
+        // `now` so a later call accrues nothing further (`elapsed` clamps a
+        // negative span at zero) instead of re-adding the same tail.
+        //
+        // Before the first epoch (`current_epoch_id == 0`) there is no
+        // `ends_at` to speak of yet -- `current_epoch_start` is still its
+        // zero placeholder -- so nothing is clamped.
+        let accrue_until = if pool.current_epoch_id == 0 {
+            now
+        } else {
+            now.min(pool.current_epoch_start.saturating_add(pool.epoch_seconds))
+        };
         player.weight_acc = player
             .weight_acc
-            .checked_add(weight_of(player.entries, elapsed(player.last_update, now))?)
+            .checked_add(weight_of(
+                player.entries,
+                elapsed(player.last_update, accrue_until),
+            )?)
             .ok_or(HexVaultError::ArithmeticOverflow)?;
         player.last_update = now;
         return Ok(());
@@ -65,9 +82,13 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
     player.frozen_epoch = previous_epoch_id;
 
     player.entries = player.principal;
+    // Same clamp as the same-epoch branch above, against the *new* current
+    // epoch's `ends_at`: a late `begin_epoch` must not let this
+    // initialisation credit more than the new epoch's own length either.
+    let new_ends_at = pool.current_epoch_start.saturating_add(pool.epoch_seconds);
     player.weight_acc = weight_of(
         player.principal,
-        elapsed(pool.current_epoch_start, now),
+        elapsed(pool.current_epoch_start, now.min(new_ends_at)),
     )?;
     player.last_update = now;
     player.epoch_id = pool.current_epoch_id;
@@ -147,6 +168,28 @@ mod tests {
     }
 
     #[test]
+    fn a_late_touch_in_the_current_epoch_clamps_accrual_at_ends_at() {
+        // Epoch 3 started at 1_000 and, per epoch_seconds, ends at
+        // 1_000 + DAY. The operator's begin_epoch is late: `now` is 500s past
+        // that, but the pool is still on epoch 3, so this is the same-epoch
+        // branch, not a rollover. The clamp keeps those 500s from being
+        // credited here and then credited again once the epoch does roll.
+        let pool = pool_at(3, 1_000);
+        let mut p = player(100, 100, 3, 1_000);
+
+        touch(&mut p, &pool, 1_000 + DAY + 500).expect("touch");
+
+        assert_eq!(p.weight_acc, 100 * DAY as u128, "accrual stops at ends_at");
+        assert_eq!(p.last_update, 1_000 + DAY + 500, "the clock itself still advances");
+        assert_eq!(p.epoch_id, 3, "pool hasn't rolled over yet");
+
+        // A further late touch adds nothing more: `elapsed` from a
+        // last_update already past ends_at clamps at zero.
+        touch(&mut p, &pool, 1_000 + DAY + 900).expect("touch");
+        assert_eq!(p.weight_acc, 100 * DAY as u128);
+    }
+
+    #[test]
     fn freezes_the_previous_epoch_for_an_active_player() {
         // Epoch 3 ran [1_000, 1_000 + DAY). The player last acted 60 s in
         // holding 300 Entries after a game win, with 100 × 60 already
@@ -162,6 +205,26 @@ mod tests {
         assert_eq!(p.entries, 100, "entries reset to principal");
         assert_eq!(p.weight_acc, 100 * 10, "new epoch accrues from its start");
         assert_eq!(p.epoch_id, 4);
+    }
+
+    #[test]
+    fn a_late_rollover_touch_clamps_the_new_epochs_accrual_at_its_own_ends_at() {
+        // Epoch 4 starts where epoch 3 ended (1_000 + DAY) and, per
+        // epoch_seconds, itself ends a day after that. The player is touched
+        // two full epoch-lengths late (begin_epoch for epoch 5 never ran),
+        // so weight_acc's initialisation must not credit more than epoch 4's
+        // own length.
+        let pool = pool_at(4, 1_000 + DAY);
+        let mut p = player(250, 250, 3, 1_000);
+
+        touch(&mut p, &pool, 1_000 + 3 * DAY).expect("touch");
+
+        assert_eq!(p.epoch_id, 4);
+        assert_eq!(
+            p.weight_acc,
+            250 * DAY as u128,
+            "credited at most the new epoch's own length"
+        );
     }
 
     #[test]

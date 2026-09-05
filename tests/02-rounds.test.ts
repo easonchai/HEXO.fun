@@ -458,6 +458,46 @@ describe("rounds", () => {
   );
 
   it(
+    "settle_round rejects a house slot that is not pool.house",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 6);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
+
+      await waitUntil(endsAt);
+      const roundBefore = await program.account.round.fetch(round);
+      const seed = Uint8Array.from(roundBefore.vrfSeed);
+      await requestRandomness(pool, round, seed);
+      await fulfillRandomness(seed, randomnessFor(0));
+
+      // A real Player PDA, just not the House's.
+      const impostor = await pool.fundedWallet(1_000_000n);
+      await deposit(pool, impostor, 1_000_000n);
+
+      await expect(
+        program.methods
+          .settleRound()
+          .accountsPartial({
+            authority: pool.authority.publicKey,
+            pool: pool.pool,
+            round,
+            randomness: randomnessPda(seed),
+            house: playerPda(pool.pool, impostor.keypair.publicKey),
+          })
+          .signers([pool.authority])
+          .rpc(),
+      ).rejects.toThrow();
+
+      const roundAfter = await program.account.round.fetch(round);
+      expect(roundAfter.status).toBe(1); // still Requested
+    },
+    TIMEOUT,
+  );
+
+  it(
     "create_round rejects a round that would end after the current epoch",
     async (ctx) => {
       const pool = await setupPool({ epochSeconds: 30, roundSeconds: 6 });

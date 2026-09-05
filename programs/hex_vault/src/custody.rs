@@ -156,6 +156,7 @@ pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
     player.init_if_fresh(ctx.accounts.owner.key(), pool, now, ctx.bumps.player);
     touch(player, pool, now)?;
 
+    require!(!player.is_house, HexVaultError::HouseCannotDeposit);
     require!(!pool.paused, HexVaultError::PoolPaused);
     require!(amount >= pool.min_deposit, HexVaultError::BelowMinimumDeposit);
 

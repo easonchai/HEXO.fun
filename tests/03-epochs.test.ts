@@ -14,8 +14,10 @@ import {
   DEVNET_VRF_NETWORK_STATE,
   DEVNET_VRF_TREASURY,
   epochPda,
+  findEvent,
   fulfillRandomness,
   playerPda,
+  positionPda,
   program,
   randomnessFor,
   randomnessPda,
@@ -294,6 +296,31 @@ async function settleRound(pool: PoolCtx, roundId: bigint, randomness: PublicKey
       round: roundPda(pool.pool, roundId),
       randomness,
       house: pool.house,
+    })
+    .signers([pool.authority])
+    .rpc();
+}
+
+async function settlePosition(pool: PoolCtx, roundId: bigint, owner: PublicKey) {
+  return program.methods
+    .settlePosition()
+    .accountsPartial({
+      pool: pool.pool,
+      round: roundPda(pool.pool, roundId),
+      player: playerPda(pool.pool, owner),
+      owner,
+      position: positionPda(roundPda(pool.pool, roundId), owner),
+    })
+    .rpc();
+}
+
+async function voidRound(pool: PoolCtx, roundId: bigint) {
+  return program.methods
+    .voidRound()
+    .accountsPartial({
+      authority: pool.authority.publicKey,
+      pool: pool.pool,
+      round: roundPda(pool.pool, roundId),
     })
     .signers([pool.authority])
     .rpc();
@@ -672,6 +699,158 @@ describe("epochs", () => {
       const pool = await setupPool();
       await beginEpoch(pool, 0n);
       await expect(beginEpoch(pool, 1n)).rejects.toThrow();
+    },
+    TIMEOUT,
+  );
+
+  // --- Cross-epoch Round settlement (audit-fixes/01): the program's own
+  // guard against crediting a Round into an Epoch it didn't run in. `touch`
+  // has already reset Entries to Principal for anyone it sees by the time
+  // these settle, so the pot has to evaporate instead of paying out, or the
+  // invariant below would drift.
+
+  it(
+    "a Round settled after its Epoch rolls over pays nothing, but stays zero-sum",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 24, roundSeconds: 8, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      const bob = await pool.fundedWallet(10_000_000n);
+
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await deposit(pool, alice, 5_000_000n);
+      await deposit(pool, bob, 5_000_000n);
+
+      const epoch1 = await fetchEpoch(pool, 1n);
+      const endsAt = Number(epoch1.endsAt.toString());
+      const startsAt = endsAt - 8; // the Round ends exactly at the Epoch's ends_at
+
+      await sleepUntilOnChain(startsAt);
+      await createRound(pool, 1n, 1n, startsAt, endsAt);
+      await buyPosition(pool, alice, 1n, 1n << 0n, 1_000_000n); // tile 0
+      await buyPosition(pool, bob, 1n, 1n << 1n, 1_000_000n); // tile 1
+
+      await sleepUntilOnChain(endsAt);
+      // Roll the Epoch before the Round is ever settled: the program's own
+      // guard, not the operator's ordering, is what has to hold here.
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+
+      const round = await program.account.round.fetch(roundPda(pool.pool, 1n));
+      await retryUntilOk(() => requestRoundRandomness(pool, 1n, round.vrfSeed));
+      const randomness = await fulfillRandomness(Uint8Array.from(round.vrfSeed), randomnessFor(0)); // tile 0 wins
+      await settleRound(pool, 1n, randomness);
+
+      const settled = await program.account.round.fetch(roundPda(pool.pool, 1n));
+      expect(settled.status).toBe(round_status.SETTLED);
+
+      const alicePositionPda = positionPda(roundPda(pool.pool, 1n), alice.keypair.publicKey);
+      const bobPositionPda = positionPda(roundPda(pool.pool, 1n), bob.keypair.publicKey);
+      const aliceRentBefore = (await program.provider.connection.getAccountInfo(alicePositionPda))!.lamports;
+      const bobRentBefore = (await program.provider.connection.getAccountInfo(bobPositionPda))!.lamports;
+      const aliceBalBefore = await program.provider.connection.getBalance(alice.keypair.publicKey);
+      const bobBalBefore = await program.provider.connection.getBalance(bob.keypair.publicKey);
+
+      const aliceSig = await settlePosition(pool, 1n, alice.keypair.publicKey);
+      const bobSig = await settlePosition(pool, 1n, bob.keypair.publicKey);
+
+      const aliceEvent = await findEvent<{ reward: BN }>(aliceSig, "positionSettled");
+      const bobEvent = await findEvent<{ reward: BN }>(bobSig, "positionSettled");
+      expect(aliceEvent?.reward.toString()).toBe("0");
+      expect(bobEvent?.reward.toString()).toBe("0");
+
+      const playerA = await fetchPlayer(pool, alice.keypair.publicKey);
+      const playerB = await fetchPlayer(pool, bob.keypair.publicKey);
+      const house = await fetchPlayer(pool, pool.authority.publicKey);
+      const poolAfter = await program.account.pool.fetch(pool.pool);
+
+      const entriesSum =
+        BigInt(playerA.entries.toString()) + BigInt(playerB.entries.toString()) + BigInt(house.entries.toString());
+      expect(entriesSum).toBe(BigInt(poolAfter.totalPrincipal.toString()));
+
+      await expect(program.account.position.fetch(alicePositionPda)).rejects.toThrow();
+      await expect(program.account.position.fetch(bobPositionPda)).rejects.toThrow();
+      expect(await program.provider.connection.getBalance(alice.keypair.publicKey)).toBe(
+        aliceBalBefore + aliceRentBefore,
+      );
+      expect(await program.provider.connection.getBalance(bob.keypair.publicKey)).toBe(bobBalBefore + bobRentBefore);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a forfeited Round from an ended Epoch credits the House nothing",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 24, roundSeconds: 8, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+
+      await beginEpoch(pool, 0n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const epoch1 = await fetchEpoch(pool, 1n);
+      const endsAt = Number(epoch1.endsAt.toString());
+      const startsAt = endsAt - 8;
+
+      await sleepUntilOnChain(startsAt);
+      await createRound(pool, 1n, 1n, startsAt, endsAt);
+      await buyPosition(pool, alice, 1n, 1n << 0n, 1_000_000n); // tile 0 only
+
+      await sleepUntilOnChain(endsAt);
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+
+      const houseBefore = await fetchPlayer(pool, pool.authority.publicKey);
+
+      const round = await program.account.round.fetch(roundPda(pool.pool, 1n));
+      await retryUntilOk(() => requestRoundRandomness(pool, 1n, round.vrfSeed));
+      const randomness = await fulfillRandomness(Uint8Array.from(round.vrfSeed), randomnessFor(5)); // nobody on tile 5
+      await settleRound(pool, 1n, randomness);
+
+      const settled = await program.account.round.fetch(roundPda(pool.pool, 1n));
+      expect(settled.status).toBe(round_status.FORFEITED);
+
+      const houseAfter = await fetchPlayer(pool, pool.authority.publicKey);
+      expect(houseAfter.entries.toString()).toBe(houseBefore.entries.toString());
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "voiding a Round from an ended Epoch adds nothing to carry_pot",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 20, roundSeconds: 6, closeBuffer: 1, vrfTimeout: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+
+      await beginEpoch(pool, 0n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const epoch1 = await fetchEpoch(pool, 1n);
+      const endsAt = Number(epoch1.endsAt.toString());
+      const startsAt = endsAt - 6;
+
+      await sleepUntilOnChain(startsAt);
+      await createRound(pool, 1n, 1n, startsAt, endsAt);
+      await buyPosition(pool, alice, 1n, 1n << 0n, 1_000_000n);
+
+      await sleepUntilOnChain(endsAt);
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+
+      const round = await program.account.round.fetch(roundPda(pool.pool, 1n));
+      expect(round.pot.toString()).toBe("1000000");
+      await retryUntilOk(() => requestRoundRandomness(pool, 1n, round.vrfSeed));
+
+      const requested = await program.account.round.fetch(roundPda(pool.pool, 1n));
+      await sleepUntilOnChain(Number(requested.requestedAt.toString()) + 2 + 1); // past vrf_timeout
+
+      const poolBeforeVoid = await program.account.pool.fetch(pool.pool);
+      expect(poolBeforeVoid.carryPot.toString()).toBe("0");
+      const sig = await retryUntilOk(() => voidRound(pool, 1n));
+
+      const voided = await program.account.round.fetch(roundPda(pool.pool, 1n));
+      expect(voided.status).toBe(round_status.VOIDED);
+
+      const poolAfterVoid = await program.account.pool.fetch(pool.pool);
+      expect(poolAfterVoid.carryPot.toString()).toBe("0"); // the 1M pot evaporated, not carried
+
+      const event = await findEvent<{ carryPot: BN }>(sig, "roundVoided");
+      expect(event?.carryPot.toString()).toBe("0");
     },
     TIMEOUT,
   );

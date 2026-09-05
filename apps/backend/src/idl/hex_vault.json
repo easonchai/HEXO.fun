@@ -2186,121 +2186,126 @@
     },
     {
       "code": 6009,
+      "name": "HouseCannotDeposit",
+      "msg": "the House cannot hold Principal"
+    },
+    {
+      "code": 6010,
       "name": "RoundAlreadyOpen",
       "msg": "a round is already open for this pool"
     },
     {
-      "code": 6010,
+      "code": 6011,
       "name": "RoundNotOpen",
       "msg": "round is not open"
     },
     {
-      "code": 6011,
+      "code": 6012,
       "name": "RoundClosed",
       "msg": "round is closed to new positions"
     },
     {
-      "code": 6012,
+      "code": 6013,
       "name": "RoundNotEnded",
       "msg": "round has not ended yet"
     },
     {
-      "code": 6013,
+      "code": 6014,
       "name": "RoundNotRequested",
       "msg": "round randomness has not been requested"
     },
     {
-      "code": 6014,
+      "code": 6015,
       "name": "RoundNotSettled",
       "msg": "round is not settled"
     },
     {
-      "code": 6015,
+      "code": 6016,
       "name": "RoundOutsideEpoch",
       "msg": "round would end after the current epoch"
     },
     {
-      "code": 6016,
+      "code": 6017,
       "name": "InvalidRoundLength",
       "msg": "round length does not match the pool's round_seconds"
     },
     {
-      "code": 6017,
+      "code": 6018,
       "name": "InvalidTileSelection",
       "msg": "tile selection must be a non-empty mask over tiles 0..35"
     },
     {
-      "code": 6018,
+      "code": 6019,
       "name": "InvalidStake",
       "msg": "stake per tile must be at least one entry"
     },
     {
-      "code": 6019,
+      "code": 6020,
       "name": "EpochNotEnded",
       "msg": "the current epoch has not ended yet"
     },
     {
-      "code": 6020,
+      "code": 6021,
       "name": "EpochNotRegistering",
       "msg": "epoch is not accepting registrations"
     },
     {
-      "code": 6021,
+      "code": 6022,
       "name": "EpochNotDrawing",
       "msg": "epoch is not drawing"
     },
     {
-      "code": 6022,
+      "code": 6023,
       "name": "EpochNotDrawn",
       "msg": "epoch has not been drawn"
     },
     {
-      "code": 6023,
+      "code": 6024,
       "name": "NotPreviousEpoch",
       "msg": "only the epoch immediately before the current one may be registered"
     },
     {
-      "code": 6024,
+      "code": 6025,
       "name": "AlreadyRegistered",
       "msg": "player is already registered for this epoch"
     },
     {
-      "code": 6025,
+      "code": 6026,
       "name": "FrozenEpochMismatch",
       "msg": "player's frozen weight belongs to a different epoch"
     },
     {
-      "code": 6026,
+      "code": 6027,
       "name": "NotRegistered",
       "msg": "player is not registered for this epoch"
     },
     {
-      "code": 6027,
+      "code": 6028,
       "name": "NotTheWinner",
       "msg": "the drawn target is outside this player's registered interval"
     },
     {
-      "code": 6028,
+      "code": 6029,
       "name": "NothingRegistered",
       "msg": "no weight was registered for this epoch"
     },
     {
-      "code": 6029,
+      "code": 6030,
       "name": "InvalidRandomnessAccount",
       "msg": "randomness account does not match the request seed"
     },
     {
-      "code": 6030,
+      "code": 6031,
       "name": "RandomnessNotFulfilled",
       "msg": "randomness is not yet fulfilled"
     },
     {
-      "code": 6031,
+      "code": 6032,
       "name": "RandomnessRejection",
       "msg": "randomness sample fell in the rejected tail"
     },
     {
-      "code": 6032,
+      "code": 6033,
       "name": "VrfTimeoutNotElapsed",
       "msg": "the randomness timeout has not elapsed"
     }

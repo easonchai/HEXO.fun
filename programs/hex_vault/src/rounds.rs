@@ -204,12 +204,18 @@ pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
     let forfeited = tile_total == 0;
 
     if forfeited {
-        let house = &mut ctx.accounts.house;
-        touch(house, pool, now)?;
-        house.entries = house
-            .entries
-            .checked_add(pot)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        // A Round whose Epoch already rolled over already had its Entries
+        // returned to Principal by `touch`; crediting the House here would
+        // mint Entries the invariant doesn't allow (audit-fixes/01), so the
+        // pot just evaporates instead.
+        if round.epoch_id == pool.current_epoch_id {
+            let house = &mut ctx.accounts.house;
+            touch(house, pool, now)?;
+            house.entries = house
+                .entries
+                .checked_add(pot)
+                .ok_or(HexVaultError::ArithmeticOverflow)?;
+        }
         round.status = round_status::FORFEITED;
     } else {
         round.status = round_status::SETTLED;
@@ -244,7 +250,11 @@ pub fn settle_position(ctx: Context<SettlePosition>) -> Result<()> {
 
     let position = &ctx.accounts.position;
     let mut reward: u64 = 0;
-    if round.status == round_status::SETTLED
+    // Same evaporation rule as `settle_round`: once the Round's Epoch has
+    // rolled over, `touch` already returned this reward's Entries to
+    // Principal, so crediting it now would mint Entries (audit-fixes/01).
+    if round.epoch_id == pool.current_epoch_id
+        && round.status == round_status::SETTLED
         && utils::tile_is_covered(position.tiles, round.winning_tile)
     {
         // tile_total is > 0 here: settle_round only reaches Settled (rather
@@ -290,10 +300,15 @@ pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
         .ok_or(HexVaultError::ArithmeticOverflow)?;
     require!(now > timeout_at, HexVaultError::VrfTimeoutNotElapsed);
 
-    pool.carry_pot = pool
-        .carry_pot
-        .checked_add(round.pot)
-        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    // Same evaporation rule as `settle_round`: once the Round's Epoch has
+    // rolled over, the Entries that funded this pot are already back with
+    // their owners, so nothing carries forward (audit-fixes/01).
+    if round.epoch_id == pool.current_epoch_id {
+        pool.carry_pot = pool
+            .carry_pot
+            .checked_add(round.pot)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+    }
     round.status = round_status::VOIDED;
     pool.open_round_id = 0;
 
@@ -431,6 +446,7 @@ pub struct SettleRound<'info> {
         mut,
         seeds = [SEED_PLAYER, pool.key().as_ref(), house.owner.as_ref()],
         bump = house.bump,
+        constraint = house.key() == pool.house @ HexVaultError::InvalidParameter,
     )]
     pub house: Account<'info, Player>,
 }

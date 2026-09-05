@@ -22,6 +22,8 @@ pub enum HexVaultError {
     NotAuthorityOwned,
     #[msg("parameter is outside its allowed range")]
     InvalidParameter,
+    #[msg("the House cannot hold Principal")]
+    HouseCannotDeposit,
 
     // Rounds
     #[msg("a round is already open for this pool")]
