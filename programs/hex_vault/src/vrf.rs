@@ -2,11 +2,13 @@
 //!
 //! Settle instructions never trust a client-supplied sample: they read the
 //! fulfilled randomness account bound to this exact request and check its
-//! address against [`randomness_address`]. The `RandomnessV2` layout below is
-//! pinned to ORAO's Anchor account (program `VRFzZo…`, source verified
-//! 2026-09), so no dependency on ORAO's Anchor-0.30-era SDK is required.
+//! address against [`randomness_address`]. The `RandomnessV2` layout and the
+//! `request_v2` wire format below are pinned to ORAO's program (`VRFzZo…`),
+//! verified against its SDK source and two fulfilled devnet requests on
+//! 2026-09-05, so no dependency on ORAO's SDK crate is required.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use solana_sha256_hasher::hashv;
 
 use crate::errors::HexVaultError;
@@ -26,15 +28,13 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     hashv(&[bytes]).to_bytes()
 }
 
-/// PDA of ORAO's request account for one of our seeds. Fully determined by
-/// (network_state, seed), so a settle instruction can prove the account it
-/// reads is the one bound to this request.
-pub fn orao_request_address(network_state: &Pubkey, seed: &[u8; 32]) -> Pubkey {
-    Pubkey::find_program_address(
-        &[ORAO_REQUEST_SEED, network_state.as_ref(), seed.as_ref()],
-        &ORAO_VRF_PROGRAM_ID,
-    )
-    .0
+/// PDA of ORAO's request account for one of our seeds: `[prefix, seed]` under
+/// the ORAO program, nothing else. Fully determined by the seed, so a settle
+/// instruction can prove the account it reads is the one bound to this
+/// request. (ORAO's SDK `randomness_account_address`; the network state is
+/// not part of the derivation.)
+pub fn orao_request_address(seed: &[u8; 32]) -> Pubkey {
+    Pubkey::find_program_address(&[ORAO_REQUEST_SEED, seed.as_ref()], &ORAO_VRF_PROGRAM_ID).0
 }
 
 /// Address the settle path must be handed for `seed`.
@@ -43,14 +43,13 @@ pub fn orao_request_address(network_state: &Pubkey, seed: &[u8; 32]) -> Pubkey {
 /// that [`crate::test_vrf::test_fulfill`] can write, so localnet tests need
 /// no ORAO deployment. The two never coexist — the devnet build is compiled
 /// without the feature.
-pub fn randomness_address(network_state: &Pubkey, seed: &[u8; 32]) -> Pubkey {
+pub fn randomness_address(seed: &[u8; 32]) -> Pubkey {
     #[cfg(feature = "test-vrf")]
     {
-        let _ = network_state;
         return Pubkey::find_program_address(&[TEST_VRF_SEED, seed.as_ref()], &crate::ID).0;
     }
     #[cfg(not(feature = "test-vrf"))]
-    orao_request_address(network_state, seed)
+    orao_request_address(seed)
 }
 
 /// Anchor discriminator of ORAO's `RandomnessV2` account.
@@ -86,14 +85,10 @@ pub fn parse_fulfilled(data: &[u8]) -> Result<[u8; 64]> {
 
 /// Reads the randomness account for `seed`, proving it is the one bound to
 /// this request and that it has been fulfilled.
-pub fn read_fulfilled(
-    account: &AccountInfo,
-    network_state: &Pubkey,
-    seed: &[u8; 32],
-) -> Result<[u8; 64]> {
+pub fn read_fulfilled(account: &AccountInfo, seed: &[u8; 32]) -> Result<[u8; 64]> {
     require_keys_eq!(
         *account.key,
-        randomness_address(network_state, seed),
+        randomness_address(seed),
         HexVaultError::InvalidRandomnessAccount
     );
     parse_fulfilled(&account.try_borrow_data()?)
@@ -102,8 +97,40 @@ pub fn read_fulfilled(
 /// True when the account exists, matches the request, and is fulfilled.
 /// Used by the operator's fulfilled check, never as a substitute for
 /// [`read_fulfilled`] in an instruction.
-pub fn is_fulfilled(account: &AccountInfo, network_state: &Pubkey, seed: &[u8; 32]) -> bool {
-    read_fulfilled(account, network_state, seed).is_ok()
+pub fn is_fulfilled(account: &AccountInfo, seed: &[u8; 32]) -> bool {
+    read_fulfilled(account, seed).is_ok()
+}
+
+/// Anchor discriminator of ORAO's `request_v2` instruction.
+pub const REQUEST_V2_DISCRIMINATOR: [u8; 8] = [38, 151, 209, 6, 195, 102, 28, 217];
+
+/// ORAO `request_v2` instruction. Accounts in ORAO's order: payer (signer,
+/// mut), network_state (mut), treasury (mut), request (mut), system_program.
+/// Data is the discriminator followed by the raw 32-byte seed (Borsh writes a
+/// fixed-size array with no length prefix). ORAO creates the request account
+/// itself, and rejects a `treasury` that is not `network_state.config.treasury`,
+/// so this program only forwards both.
+pub fn request_v2_instruction(
+    payer: &Pubkey,
+    network_state: &Pubkey,
+    treasury: &Pubkey,
+    request: &Pubkey,
+    seed: &[u8; 32],
+) -> Instruction {
+    let mut data = Vec::with_capacity(40);
+    data.extend_from_slice(&REQUEST_V2_DISCRIMINATOR);
+    data.extend_from_slice(seed);
+    Instruction {
+        program_id: ORAO_VRF_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new(*network_state, false),
+            AccountMeta::new(*treasury, false),
+            AccountMeta::new(*request, false),
+            AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+        ],
+        data,
+    }
 }
 
 /// Requests randomness for one subject (a round's board or an epoch's draw).
@@ -117,6 +144,7 @@ pub fn is_fulfilled(account: &AccountInfo, network_state: &Pubkey, seed: &[u8; 3
 pub fn request_randomness<'info>(
     _payer: &AccountInfo<'info>,
     _network_state: &AccountInfo<'info>,
+    _treasury: &AccountInfo<'info>,
     _randomness: &AccountInfo<'info>,
     _vrf_program: &AccountInfo<'info>,
     _system_program: &AccountInfo<'info>,
@@ -125,45 +153,38 @@ pub fn request_randomness<'info>(
     Ok(())
 }
 
-/// Real builds CPI ORAO's `request_v2` with `seed`, funded by `payer`. Left
-/// as `todo!()`: ticket 03 owns verifying ORAO's exact account list and
-/// instruction discriminator against the deployed program before wiring
-/// this up for real.
+/// Real builds CPI ORAO's `request_v2` with `seed`. `payer` funds ORAO's fee
+/// and the request account's rent, so it must be a writable signer of the
+/// outer transaction.
 #[cfg(not(feature = "test-vrf"))]
 pub fn request_randomness<'info>(
-    _payer: &AccountInfo<'info>,
-    _network_state: &AccountInfo<'info>,
-    _randomness: &AccountInfo<'info>,
-    _vrf_program: &AccountInfo<'info>,
-    _system_program: &AccountInfo<'info>,
-    _seed: [u8; 32],
+    payer: &AccountInfo<'info>,
+    network_state: &AccountInfo<'info>,
+    treasury: &AccountInfo<'info>,
+    randomness: &AccountInfo<'info>,
+    vrf_program: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    seed: [u8; 32],
 ) -> Result<()> {
-    // Verified against ORAO's own generated Anchor IDL and CPI example on
-    // their GitHub master branch (orao-network/solana-vrf, fetched
-    // 2026-09-05): `js/src/types/orao_vrf.json` (instruction `request_v2`)
-    // and `rust/examples/cpi/programs/russian-roulette/src/lib.rs`.
-    //
-    //   discriminator: [38, 151, 209, 6, 195, 102, 28, 217]
-    //   accounts, in order:
-    //     payer          (signer, mut)
-    //     network_state  (mut) - PDA [CONFIG_ACCOUNT_SEED], ORAO program
-    //     treasury       (mut) - must equal network_state.config.treasury
-    //                    (or its token-fee treasury); ORAO enforces this
-    //                    itself, this program only forwards it
-    //     request        (mut) - PDA [RANDOMNESS_ACCOUNT_SEED, seed], ORAO
-    //                    program; created by ORAO's own `init` when it
-    //                    processes this CPI, not by us
-    //     system_program
-    //   data: discriminator ++ seed (32 raw bytes, Borsh's encoding of a
-    //   fixed-size array has no length prefix)
-    //
-    // This function's signature (fixed outside ticket 03's scope) has no
-    // `treasury` parameter, so the CPI cannot be assembled with the accounts
-    // it is given - `RequestRoundRandomness` would need a `treasury` field
-    // and this function a `_treasury: &AccountInfo<'info>` parameter. Left
-    // as `todo!()` rather than guessing an account list that would fail
-    // silently on devnet; see the ticket 03 report for detail.
-    todo!("ORAO request_v2 CPI - ticket 03: signature is missing the required `treasury` account, see comment above")
+    let ix = request_v2_instruction(
+        payer.key,
+        network_state.key,
+        treasury.key,
+        randomness.key,
+        &seed,
+    );
+    anchor_lang::solana_program::program::invoke(
+        &ix,
+        &[
+            payer.clone(),
+            network_state.clone(),
+            treasury.clone(),
+            randomness.clone(),
+            system_program.clone(),
+            vrf_program.clone(),
+        ],
+    )
+    .map_err(Into::into)
 }
 
 /// u64 sample from the first 8 bytes of the randomness (LE).
@@ -242,13 +263,48 @@ mod tests {
         data
     }
 
+    /// Seed and request account of a real fulfilled ORAO request on devnet
+    /// (tx 3nweeTqJrtoYQzZbVA751E4h9fKwyxMWSfSA8tjsh9vG4c3tUnmDStQ8XQgZLrmNEQEgWXeWUGukm3Xx4rqJaLV5,
+    /// 2026-09-05). If this derivation drifts from ORAO's, the settle path
+    /// looks for an account ORAO never creates.
+    const LIVE_SEED: [u8; 32] = [
+        0x95, 0x60, 0x99, 0x8e, 0x82, 0xe9, 0x2a, 0xe3, 0xc7, 0x61, 0xd5, 0xae, 0xcb, 0xac, 0x77,
+        0x81, 0x0e, 0x04, 0xe5, 0x2b, 0x1e, 0x2b, 0x77, 0xd9, 0xf1, 0x16, 0x9f, 0xbe, 0x01, 0x34,
+        0x4b, 0xe0,
+    ];
+    const LIVE_REQUEST: Pubkey = pubkey!("Dw16ayvEdpKNqbDSuweZ31NLGPzVhD2yX7z4qVDr8nTi");
+    const LIVE_NETWORK_STATE: Pubkey = pubkey!("5ER1oENnV4srxYdAynUfRzWeQCPQaqMiAp4VqyMbSqnK");
+
     #[test]
-    fn request_address_is_bound_to_seed_and_network() {
-        let state = Pubkey::new_from_array([7u8; 32]);
-        let a = orao_request_address(&state, &[1u8; 32]);
-        assert_ne!(a, orao_request_address(&state, &[2u8; 32]));
-        assert_ne!(a, orao_request_address(&Pubkey::new_unique(), &[1u8; 32]));
-        assert_eq!(a, orao_request_address(&state, &[1u8; 32]));
+    fn request_address_matches_a_live_orao_request() {
+        assert_eq!(orao_request_address(&LIVE_SEED), LIVE_REQUEST);
+        assert_ne!(orao_request_address(&[2u8; 32]), LIVE_REQUEST);
+        assert_eq!(
+            Pubkey::find_program_address(&[ORAO_NETWORK_STATE_SEED], &ORAO_VRF_PROGRAM_ID).0,
+            LIVE_NETWORK_STATE
+        );
+    }
+
+    #[test]
+    fn request_v2_instruction_matches_orao_wire_format() {
+        let payer = Pubkey::new_unique();
+        let treasury = Pubkey::new_unique();
+        let ix = request_v2_instruction(&payer, &LIVE_NETWORK_STATE, &treasury, &LIVE_REQUEST, &LIVE_SEED);
+
+        assert_eq!(ix.program_id, ORAO_VRF_PROGRAM_ID);
+        assert_eq!(ix.data.len(), 40);
+        assert_eq!(&ix.data[..8], &REQUEST_V2_DISCRIMINATOR);
+        assert_eq!(&ix.data[8..], &LIVE_SEED);
+
+        let keys: Vec<Pubkey> = ix.accounts.iter().map(|m| m.pubkey).collect();
+        assert_eq!(
+            keys,
+            vec![payer, LIVE_NETWORK_STATE, treasury, LIVE_REQUEST, anchor_lang::system_program::ID]
+        );
+        let writable: Vec<bool> = ix.accounts.iter().map(|m| m.is_writable).collect();
+        assert_eq!(writable, vec![true, true, true, true, false]);
+        let signer: Vec<bool> = ix.accounts.iter().map(|m| m.is_signer).collect();
+        assert_eq!(signer, vec![true, false, false, false, false]);
     }
 
     #[test]

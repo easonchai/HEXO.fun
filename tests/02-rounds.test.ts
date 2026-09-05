@@ -13,6 +13,7 @@ import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   DEVNET_VRF_NETWORK_STATE,
+  DEVNET_VRF_TREASURY,
   epochPda,
   fulfillRandomness,
   playerPda,
@@ -139,6 +140,7 @@ async function requestRandomness(pool: PoolCtx, round: PublicKey, seed: Uint8Arr
       round,
       randomness: randomnessPda(seed),
       vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
+      vrfTreasury: DEVNET_VRF_TREASURY,
       vrfProgram: ORAO_VRF_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })

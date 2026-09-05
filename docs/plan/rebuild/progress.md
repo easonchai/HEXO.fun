@@ -31,8 +31,8 @@ touches `lib.rs`, so neither can conflict with the other. Handler names and
 argument lists in those three modules are fixed by `lib.rs` and must not change.
 
 Shared and owned by nobody working a ticket: `state.rs`, `touch.rs`, `errors.rs`,
-`events.rs`, `constants.rs`, `vrf.rs` (except the one `request_randomness` body,
-which is ticket 03's), `tests/helpers/hx.ts`, `tests/run-local.sh`.
+`events.rs`, `constants.rs`, `vrf.rs`, `tests/helpers/hx.ts`,
+`tests/run-local.sh`.
 
 ## Running the localnet suite
 
@@ -66,24 +66,42 @@ an hour on ticket 02, because the wait itself ends the turn and nothing advances
   validator's slot-derived clock lags wall time under load, which made both the
   round and epoch suites fail on timing until they stopped trusting wall time.
 
+## ORAO path, wired up 2026-09-05
+
+The three linked gaps below were confirmed against ORAO's SDK source
+(`rust/sdk/src/lib.rs`, `js/src/types/orao_vrf.json`, master on 2026-09-05)
+and against two fulfilled devnet `request_v2` CPIs (tx `3nweeTq…` and
+`43pTZkE…`), then fixed together:
+
+1. `vrf::orao_request_address` derived `[prefix, network_state, seed]`. ORAO
+   derives `[prefix, seed]`; the network state is not part of it. Both live
+   requests created the `[prefix, seed]` account and no `[prefix,
+   network_state, seed]` account existed. Fixed; a unit test pins the live
+   seed/address pair so a drift fails `cargo test`.
+2. `vrf::request_randomness` was a `todo!()`. Now a hand-built `request_v2`
+   instruction plus `invoke` (discriminator `[38,151,209,6,195,102,28,217]`,
+   accounts `payer, network_state, treasury, request, system_program`, data =
+   discriminator ++ raw seed). No ORAO crate: its SDK pins an older
+   `anchor-lang`. A unit test asserts the wire format.
+3. `RequestRoundRandomness` and `CloseRegistration` gained `vrf_treasury`
+   (mut). Clients pass `network_state.config.treasury`
+   (`9ZTHWWZDpB36UFe1vszf2KEpt83vwi27jDqtHQ7NSXyR` on devnet, request fee
+   0.0003 SOL). ORAO rejects any other account, the program only forwards it.
+4. Not in the original note: `CloseRegistration.authority` was not `mut`, but
+   it is the payer ORAO debits. The CPI would have failed on writable
+   privilege even with 1 to 3 fixed. Now `mut`.
+
+`pool.vrf_network_state` stays. It is redundant (ORAO's network state is the
+fixed PDA `[b"orao-vrf-network-configuration"]`, verified by seeds inside the
+CPI) but dropping it would churn `Pool`, `CreatePoolParams`, the helpers and
+both IDL snapshots for no behaviour change. Settle and draw no longer read it.
+
+Not yet done: a real request → fulfil → settle round trip on devnet. The
+program is not deployed there. Ticket 13's smoke covers it; until then the
+live-pinned unit tests are the only check on the ORAO side.
+
 ## Open, and needed before ticket 12
 
-- **The whole real ORAO path is unfinished and untested.** `test-vrf` bypasses
-  ORAO entirely, so nothing in the suite touches any of this. Three pieces, and
-  they have to land together because they cut across `vrf.rs`, `rounds.rs` and
-  `epochs.rs`:
-  1. `vrf::request_randomness` is a `todo!()`. Ticket 03 verified the shape
-     against ORAO's generated IDL and CPI example: discriminator
-     `[38,151,209,6,195,102,28,217]`, accounts `payer, network_state, treasury,
-     request, system_program` in that order.
-  2. That CPI needs a `treasury` account, which `request_randomness` does not
-     take and neither request context passes.
-  3. `vrf::orao_request_address` looks wrong. It derives the request PDA from
-     `[prefix, network_state, seed]`, but ORAO's SDK uses `[prefix, seed]` with
-     no network state. If that holds, every real request and settle would look
-     for an account ORAO never creates. Carried over from the pre-rebuild code,
-     so it was never right. Confirm against a live devnet request before
-     changing it, then fix all three at once.
 - `apps/backend/src/idl/hex_vault.json` is a snapshot and goes stale every time
   the program changes. Re-run the sync script once the program is final.
   `ChainService` overrides the IDL's own `address` with the env `PROGRAM_ID`, so

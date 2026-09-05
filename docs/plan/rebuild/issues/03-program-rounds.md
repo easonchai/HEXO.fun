@@ -42,5 +42,5 @@ Round timing in the suite comes from the validator's own clock, not `Date.now()`
 A test validator's slot-derived clock lags wall time under load, which made
 settlement look early.
 
-The real ORAO CPI is still `todo!()`. See `../progress.md` for the three linked
-problems in that path and what was verified about each.
+The real ORAO CPI was `todo!()` when this ticket landed. It was wired up on
+2026-09-05; see "ORAO path" in `../progress.md` for what was verified and fixed.

@@ -38,6 +38,12 @@ export const PROGRAM_ID = program.programId;
 export const DEVNET_VRF_NETWORK_STATE = new PublicKey(
   "5ER1oENnV4srxYdAynUfRzWeQCPQaqMiAp4VqyMbSqnK",
 );
+// ORAO's fee treasury on devnet (`network_state.config.treasury`, read
+// 2026-09-05). Forwarded on every request; ORAO rejects any other account.
+// test-vrf never touches it either, any pubkey would do on localnet.
+export const DEVNET_VRF_TREASURY = new PublicKey(
+  "9ZTHWWZDpB36UFe1vszf2KEpt83vwi27jDqtHQ7NSXyR",
+);
 
 function u64le(n: bigint | number): Buffer {
   const buf = Buffer.alloc(8);

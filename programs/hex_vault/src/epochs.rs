@@ -214,6 +214,7 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
     vrf::request_randomness(
         &ctx.accounts.authority.to_account_info(),
         &ctx.accounts.vrf_network_state.to_account_info(),
+        &ctx.accounts.vrf_treasury.to_account_info(),
         &ctx.accounts.randomness.to_account_info(),
         &ctx.accounts.vrf_program.to_account_info(),
         &ctx.accounts.system_program.to_account_info(),
@@ -226,7 +227,6 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
 }
 
 pub fn draw(ctx: Context<Draw>) -> Result<()> {
-    let pool = &ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
 
     require!(
@@ -234,11 +234,7 @@ pub fn draw(ctx: Context<Draw>) -> Result<()> {
         HexVaultError::EpochNotDrawing
     );
 
-    let randomness = vrf::read_fulfilled(
-        &ctx.accounts.randomness.to_account_info(),
-        &pool.vrf_network_state,
-        &epoch.vrf_seed,
-    )?;
+    let randomness = vrf::read_fulfilled(&ctx.accounts.randomness.to_account_info(), &epoch.vrf_seed)?;
 
     epoch.target = vrf::unbiased_u128(&randomness, epoch.registered_weight)?;
     epoch.status = epoch_status::DRAWN;
@@ -445,6 +441,9 @@ pub struct FundJackpot<'info> {
 
 #[derive(Accounts)]
 pub struct CloseRegistration<'info> {
+    /// Pays ORAO's request fee and the request account's rent, so it must be
+    /// writable.
+    #[account(mut)]
     pub authority: Signer<'info>,
 
     #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = authority)]
@@ -473,6 +472,11 @@ pub struct CloseRegistration<'info> {
     /// CHECK: ORAO VRF network state, pinned on the pool at `create_pool`.
     #[account(address = pool.vrf_network_state @ HexVaultError::InvalidRandomnessAccount)]
     pub vrf_network_state: UncheckedAccount<'info>,
+
+    /// CHECK: ORAO's fee treasury (`network_state.config.treasury`). ORAO
+    /// rejects any other account, so it is only forwarded here.
+    #[account(mut)]
+    pub vrf_treasury: UncheckedAccount<'info>,
 
     /// CHECK: ORAO VRF program.
     #[account(address = vrf::ORAO_VRF_PROGRAM_ID)]

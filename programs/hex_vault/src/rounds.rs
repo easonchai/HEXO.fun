@@ -156,7 +156,6 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
 
 pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<()> {
     let now = utils::now()?;
-    let pool = &ctx.accounts.pool;
     let round = &mut ctx.accounts.round;
 
     require!(round.status == round_status::OPEN, HexVaultError::RoundNotOpen);
@@ -164,13 +163,14 @@ pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<
 
     require_keys_eq!(
         ctx.accounts.randomness.key(),
-        vrf::randomness_address(&pool.vrf_network_state, &round.vrf_seed),
+        vrf::randomness_address(&round.vrf_seed),
         HexVaultError::InvalidRandomnessAccount
     );
 
     vrf::request_randomness(
         &ctx.accounts.payer.to_account_info(),
         &ctx.accounts.vrf_network_state.to_account_info(),
+        &ctx.accounts.vrf_treasury.to_account_info(),
         &ctx.accounts.randomness.to_account_info(),
         &ctx.accounts.vrf_program.to_account_info(),
         &ctx.accounts.system_program.to_account_info(),
@@ -192,11 +192,7 @@ pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
         HexVaultError::RoundNotRequested
     );
 
-    let randomness = vrf::read_fulfilled(
-        &ctx.accounts.randomness.to_account_info(),
-        &pool.vrf_network_state,
-        &round.vrf_seed,
-    )?;
+    let randomness = vrf::read_fulfilled(&ctx.accounts.randomness.to_account_info(), &round.vrf_seed)?;
 
     // u64 sample mapped into 0..36 via the rejection-sampled unbiased
     // mapping (bias bound documented on `vrf::unbiased_u64`); the result is
@@ -396,6 +392,11 @@ pub struct RequestRoundRandomness<'info> {
     #[account(address = pool.vrf_network_state)]
     pub vrf_network_state: UncheckedAccount<'info>,
 
+    /// CHECK: ORAO's fee treasury (`network_state.config.treasury`). ORAO
+    /// rejects any other account, so it is only forwarded here.
+    #[account(mut)]
+    pub vrf_treasury: UncheckedAccount<'info>,
+
     /// CHECK: ORAO VRF program.
     #[account(address = vrf::ORAO_VRF_PROGRAM_ID)]
     pub vrf_program: UncheckedAccount<'info>,
@@ -423,8 +424,7 @@ pub struct SettleRound<'info> {
     pub round: Account<'info, Round>,
 
     /// CHECK: ORAO randomness account for this round's seed, verified
-    /// against `vrf::randomness_address` (via `vrf::read_fulfilled`) using
-    /// `pool.vrf_network_state`.
+    /// against `vrf::randomness_address` (via `vrf::read_fulfilled`).
     pub randomness: UncheckedAccount<'info>,
 
     #[account(

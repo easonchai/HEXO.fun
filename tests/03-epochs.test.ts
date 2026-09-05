@@ -12,6 +12,7 @@ import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   DEVNET_VRF_NETWORK_STATE,
+  DEVNET_VRF_TREASURY,
   epochPda,
   fulfillRandomness,
   playerPda,
@@ -180,6 +181,7 @@ async function closeRegistration(pool: PoolCtx, epochId: bigint) {
       // real ORAO deployment.
       randomness: Keypair.generate().publicKey,
       vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
+      vrfTreasury: DEVNET_VRF_TREASURY,
       vrfProgram: ORAO_VRF_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
@@ -275,6 +277,7 @@ async function requestRoundRandomness(pool: PoolCtx, roundId: bigint, seed: Uint
       round: roundPda(pool.pool, roundId),
       randomness: randomnessPda(Uint8Array.from(seed)),
       vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
+      vrfTreasury: DEVNET_VRF_TREASURY,
       vrfProgram: ORAO_VRF_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
