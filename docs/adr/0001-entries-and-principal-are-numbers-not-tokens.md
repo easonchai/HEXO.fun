@@ -1,0 +1,3 @@
+# Entries and Principal are numbers in the Player account, not Token-2022 mints
+
+The first build minted non-transferable Token-2022 receipts for principal (PT) and entries (ET) so balances would show in wallets and could be enumerated for the lottery snapshot. Tokens that can never move buy nothing but two extra mints, two ATAs per user, Token-2022 extension edge cases, and a dependency on off-chain enumeration of token accounts. The rebuild stores `principal` and `entries` as `u64` fields on the Player PDA, which also makes the time-weighted accumulator and the registration interval live next to the balance they describe. Reversing this means a new program and a migration, so it is recorded here.
