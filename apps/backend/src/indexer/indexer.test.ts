@@ -443,14 +443,26 @@ describe("operator queries", () => {
     expect(await indexer.getOpenRound()).toMatchObject({ id: 2n, status: 1 });
   });
 
-  it("lists the positions of a round that are still on chain", async () => {
-    await prisma.position.createMany({
+  it("lists positions across every round that has reached a terminal status", async () => {
+    await prisma.round.createMany({
       data: [
-        { address: "pos-a", owner: ALICE, roundId: 2n, tiles: 1n, stakePerTile: 1n, settled: false },
-        { address: "pos-b", owner: BOB, roundId: 3n, tiles: 1n, stakePerTile: 1n, settled: false },
+        { id: 1n, epochId: 5n, startsAt: 0n, endsAt: 60n, status: 2, pot: 0n, tileTotals: [] }, // Settled
+        { id: 2n, epochId: 5n, startsAt: 60n, endsAt: 120n, status: 1, pot: 5n, tileTotals: [] }, // Requested: still live
+        { id: 3n, epochId: 5n, startsAt: 120n, endsAt: 180n, status: 4, pot: 0n, tileTotals: [] }, // Voided
       ],
     });
-    expect(await indexer.unsettledPositions(2n)).toEqual([{ address: "pos-a", owner: ALICE }]);
+    await prisma.position.createMany({
+      data: [
+        { address: "pos-a", owner: ALICE, roundId: 1n, tiles: 1n, stakePerTile: 1n, settled: false },
+        { address: "pos-b", owner: BOB, roundId: 2n, tiles: 1n, stakePerTile: 1n, settled: false },
+        { address: "pos-c", owner: CAROL, roundId: 3n, tiles: 1n, stakePerTile: 1n, settled: false },
+      ],
+    });
+    const positions = await indexer.unsettledPositions();
+    expect(positions.sort((a, b) => a.address.localeCompare(b.address))).toEqual([
+      { address: "pos-a", owner: ALICE, roundId: 1n },
+      { address: "pos-c", owner: CAROL, roundId: 3n },
+    ]);
   });
 
   it("reads a single epoch and every player", async () => {

@@ -129,11 +129,20 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       .map((player) => player.owner);
   }
 
-  /** Positions still on chain for a round, so still worth a `settle_position`. */
-  async unsettledPositions(roundId: bigint): Promise<{ address: string; owner: string }[]> {
+  /**
+   * Positions still on chain whose Round is Settled, Forfeited or Voided,
+   * across every such Round, so still worth a `settle_position`. Position has
+   * no Prisma relation to Round (just its id), so this is two queries.
+   */
+  async unsettledPositions(): Promise<{ address: string; owner: string; roundId: bigint }[]> {
+    const terminalRounds = await this.prisma.round.findMany({
+      where: { status: { notIn: LIVE_ROUND_STATUSES } },
+      select: { id: true },
+    });
+    if (terminalRounds.length === 0) return [];
     return this.prisma.position.findMany({
-      where: { roundId, settled: false },
-      select: { address: true, owner: true },
+      where: { roundId: { in: terminalRounds.map((round) => round.id) }, settled: false },
+      select: { address: true, owner: true, roundId: true },
     });
   }
 

@@ -224,13 +224,19 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
             )
             .map((player) => player.owner.toBase58());
         },
-        unsettledPositions: async (roundId) => {
-          const round = chain.roundAddress(roundId);
+        unsettledPositions: async () => {
+          const terminal = new Map(
+            (await allRounds(chain))
+              .filter((round) => round.status !== ROUND_STATUS.OPEN && round.status !== ROUND_STATUS.REQUESTED)
+              .map((round) => [round.address.toBase58(), round.roundId]),
+          );
           return (await allPositions(chain))
-            .filter((position) => position.round.equals(round))
+            .filter((position) => terminal.has(position.round.toBase58()))
             .map((position) => ({
-              address: positionAddress(chain.programId, round, position.owner).toBase58(),
+              address: positionAddress(chain.programId, position.round, position.owner).toBase58(),
               owner: position.owner.toBase58(),
+              // SAFETY: `terminal.has` above already confirmed this key exists.
+              roundId: terminal.get(position.round.toBase58()) as bigint,
             }));
         },
       };
@@ -400,6 +406,20 @@ const allPlayers = async (chain: ChainService, pool: PublicKey): Promise<RawPlay
 const allPositions = async (chain: ChainService): Promise<RawPosition[]> =>
   (await programAccounts<RawPosition>(chain, "position", [170, 188, 143, 228, 122, 64, 247, 208]))
     .map(({ account }) => account);
+
+/** Every Round on chain, for the fake indexer's sweep to filter by status. */
+async function allRounds(
+  chain: ChainService,
+): Promise<{ address: PublicKey; roundId: bigint; status: number }[]> {
+  const coder = chain.program.coder.accounts;
+  const accounts = await chain.connection.getProgramAccounts(chain.programId, {
+    filters: [{ memcmp: coder.memcmp("round") }],
+  });
+  return accounts.map(({ pubkey, account }) => {
+    const decoded = decodeRound(chain.program, account.data);
+    return { address: pubkey, roundId: decoded.roundId, status: decoded.status };
+  });
+}
 
 /** `epochs::register`'s three weight cases, off the mirrored account. */
 function registerWeight(player: RawPlayer, epoch: EpochState): bigint {

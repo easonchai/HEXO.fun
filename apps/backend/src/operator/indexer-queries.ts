@@ -13,6 +13,10 @@ export interface IndexerQueries {
    * operator resend `register` forever and never fund or close the epoch.
    */
   playersToRegister(epochId: bigint): Promise<string[]>;
-  /** Positions still on chain for a round. */
-  unsettledPositions(roundId: bigint): Promise<{ address: string; owner: string }[]>;
+  /**
+   * Positions still on chain whose Round has reached a terminal status
+   * (Settled, Forfeited, Voided), across every such Round, with the Round id
+   * so the operator can group a batch by Round.
+   */
+  unsettledPositions(): Promise<{ address: string; owner: string; roundId: bigint }[]>;
 }

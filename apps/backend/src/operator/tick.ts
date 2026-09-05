@@ -1,4 +1,7 @@
-// Spec §3.4: the eight steps, in order, at most one transaction per tick.
+// Spec §3.4: the seven steps, in order, at most one transaction per tick.
+// Round steps (1-2) run before the Epoch steps (3+) so a Round can never
+// straddle an Epoch boundary; `begin_epoch` (3) waits for both the sweep and
+// the previous Epoch to be settled.
 //
 // Everything the steps touch arrives in the context, so a test drives them
 // with a fabricated chain state and a recording `send`, and the service is
@@ -34,6 +37,16 @@ export function yieldAmount(
   return accrued > floor ? accrued : floor;
 }
 
+/**
+ * What step 4 remembers about the last tick's `playersToRegister` check, so
+ * it can tell "empty again" from "empty for the first time". The service
+ * persists this across ticks; the pure function only reads and returns it.
+ */
+export interface RegisterCheck {
+  readonly epochId: bigint;
+  readonly empty: boolean;
+}
+
 export interface TickContext {
   /** Chain clock, not wall time: every deadline below is a chain timestamp. */
   readonly now: bigint;
@@ -45,12 +58,19 @@ export interface TickContext {
   readonly aprBps: bigint;
   readonly jackpotFloor: bigint;
   readonly ix: OperatorInstructions;
+  /** Null before the first tick has ever checked. */
+  readonly lastRegisterCheck: RegisterCheck | null;
   /** Has the oracle answered the request for this seed? */
   fulfilled(seed: Uint8Array): Promise<boolean>;
   /** The authority's own hexUSDC balance, in atomic units. */
   authorityBalance(): Promise<bigint>;
   playersToRegister(epochId: bigint): Promise<string[]>;
-  unsettledPositions(roundId: bigint): Promise<{ address: string; owner: string }[]>;
+  /**
+   * Positions still on chain whose Round has reached a terminal status
+   * (Settled, Forfeited, Voided), across every such Round, not just the
+   * newest, with the Round id so step 2 can group a batch by Round.
+   */
+  unsettledPositions(): Promise<{ address: string; owner: string; roundId: bigint }[]>;
   /** Owner of the Player whose registered interval contains `target`. */
   winner(epochId: bigint, target: bigint): Promise<string | null>;
   send(instructions: TransactionInstruction[]): Promise<string>;
@@ -59,8 +79,11 @@ export interface TickContext {
 export interface TickOutcome {
   /** Instruction sent this tick, named as in the program, or null. */
   readonly action: string | null;
-  /** Registration progress, while step 2 is cranking. */
+  /** Registration progress, while step 4 is cranking. */
   readonly progress?: { readonly count: number; readonly total: number };
+  /** Present whenever step 4 checked `playersToRegister`, for the service to
+   *  remember as next tick's `lastRegisterCheck`. */
+  readonly registerCheck?: RegisterCheck;
 }
 
 const NOTHING: TickOutcome = { action: null };
@@ -68,14 +91,56 @@ const NOTHING: TickOutcome = { action: null };
 export async function runTick(ctx: TickContext): Promise<TickOutcome> {
   const { pool, currentEpoch, previousEpoch, openRound, now } = ctx;
 
-  // 1. No epoch yet, or the current one is over.
-  if (pool.currentEpochId === 0n || (currentEpoch && now >= currentEpoch.endsAt)) {
+  // 1. Round: an Open round past its end asks for randomness; Requested and
+  // fulfilled settles; Requested past `vrf_timeout` voids. Runs first so a
+  // Round can never straddle the boundary step 3 might open next.
+  if (openRound) {
+    if (openRound.status === ROUND_STATUS.OPEN && now >= openRound.endsAt) {
+      await ctx.send(await ctx.ix.requestRoundRandomness(pool, openRound));
+      return { action: "request_round_randomness" };
+    }
+    if (openRound.status === ROUND_STATUS.REQUESTED) {
+      if (await ctx.fulfilled(openRound.vrfSeed)) {
+        await ctx.send(await ctx.ix.settleRound(pool, openRound));
+        return { action: "settle_round" };
+      }
+      if (now > openRound.requestedAt + pool.vrfTimeout) {
+        await ctx.send(await ctx.ix.voidRound(pool, openRound.roundId));
+        return { action: "void_round" };
+      }
+    }
+  }
+
+  // 2. Sweep: unsettled Positions on any Round that is Settled, Forfeited or
+  // Voided, not just the newest one. Grouped by Round because a batch settles
+  // within one Round; one batch, and one Round, per tick, as before.
+  const sweep = await ctx.unsettledPositions();
+  const [firstUnsettled] = sweep;
+  if (firstUnsettled) {
+    const roundId = firstUnsettled.roundId;
+    const batch = sweep.filter((position) => position.roundId === roundId).slice(0, BATCH_SIZE);
+    await ctx.send(await ctx.ix.settlePositions(pool, roundId, batch));
+    return { action: "settle_position" };
+  }
+
+  // 3. Begin Epoch: only once the Round and the sweep above are clear, and
+  // the previous Epoch (if any) has actually finished, so no Epoch is ever
+  // left two behind.
+  const epochEnded =
+    pool.currentEpochId === 0n || (currentEpoch !== null && now >= currentEpoch.endsAt);
+  const previousDone =
+    previousEpoch === null ||
+    previousEpoch.status === EPOCH_STATUS.PAID ||
+    previousEpoch.status === EPOCH_STATUS.ROLLED_OVER;
+  if (epochEnded && pool.openRoundId === 0n && previousDone) {
     await ctx.send(await ctx.ix.beginEpoch(pool));
     return { action: "begin_epoch" };
   }
 
-  // 2. The ended epoch is taking registrations: crank them, then fund the
-  // jackpot and close in one transaction.
+  // 4. The ended epoch is taking registrations: crank them, then fund the
+  // jackpot and close once the list has come back empty on two consecutive
+  // ticks for this Epoch, so a player who registered right before `ends_at`
+  // gets one more indexer sync window before being counted out.
   if (previousEpoch?.status === EPOCH_STATUS.REGISTERING) {
     const owners = await ctx.playersToRegister(previousEpoch.epochId);
     if (owners.length > 0) {
@@ -91,7 +156,14 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
           count: previousEpoch.registeredCount,
           total: previousEpoch.registeredCount + owners.length,
         },
+        registerCheck: { epochId: previousEpoch.epochId, empty: false },
       };
+    }
+
+    const emptyLastTick =
+      ctx.lastRegisterCheck?.epochId === previousEpoch.epochId && ctx.lastRegisterCheck.empty;
+    if (!emptyLastTick) {
+      return { action: null, registerCheck: { epochId: previousEpoch.epochId, empty: true } };
     }
 
     const amount = yieldAmount(
@@ -106,7 +178,7 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
     return { action: "close_registration" };
   }
 
-  // 3. Waiting on the draw's randomness.
+  // 5. Waiting on the draw's randomness.
   if (previousEpoch?.status === EPOCH_STATUS.DRAWING) {
     if (await ctx.fulfilled(previousEpoch.vrfSeed)) {
       await ctx.send(await ctx.ix.draw(pool, previousEpoch));
@@ -118,7 +190,7 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
     }
   }
 
-  // 4. Drawn: pay whoever owns the interval the target landed in.
+  // 6. Drawn: pay whoever owns the interval the target landed in.
   if (previousEpoch?.status === EPOCH_STATUS.DRAWN) {
     const winner = await ctx.winner(previousEpoch.epochId, previousEpoch.target);
     if (winner) {
@@ -129,41 +201,7 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
     // registrations. Retried next tick rather than treated as an error.
   }
 
-  if (openRound) {
-    // 5. The round is over: ask for its randomness.
-    if (openRound.status === ROUND_STATUS.OPEN && now >= openRound.endsAt) {
-      await ctx.send(await ctx.ix.requestRoundRandomness(pool, openRound));
-      return { action: "request_round_randomness" };
-    }
-
-    // 6. Requested: settle it, or void it once the oracle has had long enough.
-    if (openRound.status === ROUND_STATUS.REQUESTED) {
-      if (await ctx.fulfilled(openRound.vrfSeed)) {
-        await ctx.send(await ctx.ix.settleRound(pool, openRound));
-        return { action: "settle_round" };
-      }
-      if (now > openRound.requestedAt + pool.vrfTimeout) {
-        await ctx.send(await ctx.ix.voidRound(pool, openRound.roundId));
-        return { action: "void_round" };
-      }
-    }
-  }
-
-  // 7. Close out the Positions of the round that just ended. `open_round_id`
-  // is cleared by settle/void, so the round to sweep is always the newest one,
-  // and step 8 below cannot open the next one until this comes up empty.
-  if (pool.openRoundId === 0n && pool.nextRoundId > 1n) {
-    const roundId = pool.nextRoundId - 1n;
-    const positions = await ctx.unsettledPositions(roundId);
-    if (positions.length > 0) {
-      await ctx.send(
-        await ctx.ix.settlePositions(pool, roundId, positions.slice(0, BATCH_SIZE)),
-      );
-      return { action: "settle_position" };
-    }
-  }
-
-  // 8. Open the next round, if a whole one still fits in this epoch.
+  // 7. Open the next round, if a whole one still fits in this epoch.
   if (
     pool.openRoundId === 0n &&
     !pool.paused &&

@@ -20,7 +20,13 @@ import {
 } from "./chain-state";
 import { INDEXER_QUERIES, type IndexerQueries } from "./indexer-queries";
 import { OperatorInstructions } from "./instructions";
-import { EXPECTED_ERRORS, runTick, type TickContext, type TickOutcome } from "./tick";
+import {
+  EXPECTED_ERRORS,
+  runTick,
+  type RegisterCheck,
+  type TickContext,
+  type TickOutcome,
+} from "./tick";
 import { isFulfilled, randomnessAddress } from "./vrf";
 
 const TICK_MS = 2_000;
@@ -35,6 +41,9 @@ export class OperatorService {
   private readonly testVrf: boolean;
   /** Single-flight: a tick that overruns 2 s skips the next one. */
   private running = false;
+  /** Ticket 04: whether `playersToRegister` came back empty last tick, and
+   *  for which Epoch, so step 4 can require two consecutive empty ticks. */
+  private lastRegisterCheck: RegisterCheck | null = null;
 
   constructor(
     private readonly chain: ChainService,
@@ -77,6 +86,7 @@ export class OperatorService {
     const tickAt = BigInt(Math.floor(Date.now() / 1000));
     try {
       const outcome = await runTick(await this.context());
+      if (outcome.registerCheck) this.lastRegisterCheck = outcome.registerCheck;
       if (outcome.action) this.logger.log(`sent ${outcome.action}`);
       await this.writeState(tickAt, outcome, null);
       return outcome;
@@ -118,10 +128,11 @@ export class OperatorService {
       aprBps: this.aprBps,
       jackpotFloor: this.jackpotFloor,
       ix: this.instructions,
+      lastRegisterCheck: this.lastRegisterCheck,
       fulfilled: (seed) => this.fulfilled(seed),
       authorityBalance: () => this.authorityBalance(),
       playersToRegister: (epochId) => this.indexer.playersToRegister(epochId),
-      unsettledPositions: (roundId) => this.indexer.unsettledPositions(roundId),
+      unsettledPositions: () => this.indexer.unsettledPositions(),
       winner: (epochId, target) => this.winner(epochId, target),
       send: (instructions) => this.chain.send(instructions),
     };
@@ -176,7 +187,7 @@ export class OperatorService {
     }
   }
 
-  /** The registered interval containing `target` (spec §3.4 step 4). */
+  /** The registered interval containing `target` (spec §3.4 step 6). */
   private async winner(epochId: bigint, target: bigint): Promise<string | null> {
     const player = await this.prisma.player.findFirst({
       where: {
