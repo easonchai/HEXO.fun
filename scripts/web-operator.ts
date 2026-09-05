@@ -94,13 +94,18 @@ async function tick(): Promise<void> {
     if (Number(round.status) === 2) {
       if (roundId >= BigInt(MAX_ROUNDS)) return;
       const next = roundId + 1n;
-      const start = now;
-      const end = now + BigInt(ROUND_SECONDS);
+      const nextRound = await quiet(() => roundShow(ctx, POOL_ID, next));
+      if (nextRound && Number(nextRound.epochId) === Number(pool.latestEpochId)) {
+        // Round `next` already exists: inspect it this tick instead of
+        // returning, so the loop keeps advancing past a settled round.
+        roundId = next;
+        continue;
+      }
       const created = await quiet(() =>
         roundCreate(ctx, POOL_ID, {
           roundId: next.toString(),
-          starts: start.toString(),
-          ends: end.toString(),
+          starts: now.toString(),
+          ends: (now + BigInt(ROUND_SECONDS)).toString(),
           bonus: BONUS,
         }),
       );
