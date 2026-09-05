@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -11,7 +12,14 @@ import {
 } from "./decode.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const IDL = loadIdl(resolve(HERE, "../../../target/idl/hex_vault.json"));
+// Prefer the fresh `anchor build` output; fall back to the committed web copy
+// so the unit suite passes on a clean checkout with no prior program build.
+const BUILD_IDL = resolve(HERE, "../../../target/idl/hex_vault.json");
+const FALLBACK_IDL = resolve(
+  HERE,
+  "../../../apps/web/src/idl/hex_vault.json",
+);
+const IDL = loadIdl(existsSync(BUILD_IDL) ? BUILD_IDL : FALLBACK_IDL);
 const decode = createEventDecoder(IDL);
 /** The IDL lists event fields in `types`, keyed by the event name. */
 const eventFields = (name: string): { name: string; type: unknown }[] => {

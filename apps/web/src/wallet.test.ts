@@ -31,8 +31,8 @@ describe("wallet configuration", () => {
     expect(() => assertSupportedWallet("devnet")).not.toThrow();
   });
 
-  it("defaults the cluster to localnet and maps it to an RPC endpoint", () => {
-    expect(clusterFromEnv({})).toBe("localnet");
+  it("defaults the cluster to devnet and maps it to an RPC endpoint", () => {
+    expect(clusterFromEnv({})).toBe("devnet");
     expect(clusterFromEnv({ VITE_CLUSTER: " devnet " })).toBe("devnet");
     expect(() => clusterFromEnv({ VITE_CLUSTER: "mainnet-beta" })).toThrow(
       "unsupported cluster",
