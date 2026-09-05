@@ -2,100 +2,78 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum HexVaultError {
-    #[msg("protocol is paused")]
-    ProtocolPaused,
-    #[msg("only the configured protocol authority may perform this action")]
-    UnauthorizedAuthority,
-    #[msg("only the configured guardian may perform this action")]
-    UnauthorizedGuardian,
-    #[msg("only the configured snapshot authority may perform this action")]
-    UnauthorizedSnapshotAuthority,
-    #[msg("only the configured mock randomness authority may perform this action")]
-    UnauthorizedMockRandomnessAuthority,
-    #[msg("mock randomness is disabled in production mode")]
-    MockRandomnessDisabled,
-    #[msg("the supplied epoch is not the active epoch")]
-    InactiveEpoch,
-    #[msg("epoch is not open")]
-    EpochNotOpen,
-    #[msg("epoch state does not allow this action")]
-    InvalidEpochState,
-    #[msg("round state does not allow this action")]
-    InvalidRoundState,
-    #[msg("randomness request state does not allow this action")]
-    InvalidRandomnessRequest,
-    #[msg("randomness request is not bound to this subject")]
-    RandomnessSubjectMismatch,
-    #[msg("randomness sample must be retried to avoid modulo bias")]
-    RandomnessRejection,
-    #[msg("time window is invalid")]
-    InvalidTimeWindow,
-    #[msg("round is not accepting positions")]
-    RoundClosed,
-    #[msg("position tiles are invalid")]
-    InvalidTileSelection,
-    #[msg("stake amount is invalid")]
-    InvalidStakeAmount,
-    #[msg("entry balance is insufficient")]
-    InsufficientEntries,
-    #[msg("principal and entry balances must both cover a withdrawal")]
-    InsufficientMatchedBalance,
-    #[msg("amount must be non-zero")]
-    ZeroAmount,
-    #[msg("amount is below the configured minimum deposit")]
-    DepositTooSmall,
     #[msg("arithmetic overflow")]
     ArithmeticOverflow,
-    #[msg("receipt mint or token program does not match configuration")]
-    ReceiptConfigurationMismatch,
-    #[msg("USDC mint or token program does not match configuration")]
-    UsdcConfigurationMismatch,
-    #[msg("player account does not belong to signer")]
-    PlayerOwnerMismatch,
-    #[msg("player has not refreshed entries for the active epoch")]
-    EntriesNeedRefresh,
-    #[msg("player has already refreshed entries for the active epoch")]
-    EntriesAlreadyRefreshed,
-    #[msg("position did not cover the winning tile")]
-    NonWinningPosition,
-    #[msg("round reward has already been claimed")]
-    RoundRewardAlreadyClaimed,
-    #[msg("prize amount exceeds the segregated prize vault balance")]
-    PrizeUnderfunded,
-    #[msg("prize snapshot must contain non-zero entry weight")]
-    EmptyPrizeSnapshot,
-    #[msg("prize claim deadline has not passed")]
-    PrizeClaimStillOpen,
-    #[msg("prize has already been claimed or expired")]
-    PrizeAlreadyResolved,
-    #[msg("Merkle-sum proof is invalid")]
-    InvalidMerkleProof,
-    #[msg("Merkle proof leaf is not the selected prize interval")]
-    NonWinningPrizeProof,
-    #[msg("epoch ID is not sequential")]
-    NonSequentialEpoch,
-    #[msg("prior epoch must be resolved before rollover")]
-    PriorEpochUnresolved,
-    #[msg("first epoch has already been created")]
-    FirstEpochAlreadyCreated,
-    #[msg("round bonus entries exceed the pool cap")]
-    BonusEntriesExceedCap,
-    #[msg("jackpot state does not allow this action")]
-    InvalidJackpotState,
-    #[msg("jackpot has already been committed for this epoch")]
-    JackpotAlreadyCommitted,
-    #[msg("jackpot proof is not the selected interval")]
-    NonWinningJackpotProof,
-    #[msg("pool configuration is invalid")]
-    InvalidPoolConfiguration,
-    #[msg("pool does not match the instruction context")]
-    PoolMismatch,
-    #[msg("accepted mint is not owned by the declared accepted token program")]
-    MintTokenProgramMismatch,
-    #[msg("VRF randomness is not configured for this protocol")]
-    VrfRandomnessDisabled,
-    #[msg("the VRF randomness request is not yet fulfilled")]
-    RandomnessNotFulfilled,
-    #[msg("the supplied VRF randomness account is not valid")]
+
+    // Custody
+    #[msg("the pool is paused")]
+    PoolPaused,
+    #[msg("deposit is below the pool minimum")]
+    BelowMinimumDeposit,
+    #[msg("amount must be greater than zero")]
+    ZeroAmount,
+    #[msg("principal is lower than the requested amount")]
+    InsufficientPrincipal,
+    #[msg("entries are lower than the requested amount")]
+    InsufficientEntries,
+    #[msg("token account has the wrong mint")]
+    MintMismatch,
+    #[msg("token account is not owned by the pool authority")]
+    NotAuthorityOwned,
+    #[msg("parameter is outside its allowed range")]
+    InvalidParameter,
+
+    // Rounds
+    #[msg("a round is already open for this pool")]
+    RoundAlreadyOpen,
+    #[msg("round is not open")]
+    RoundNotOpen,
+    #[msg("round is closed to new positions")]
+    RoundClosed,
+    #[msg("round has not ended yet")]
+    RoundNotEnded,
+    #[msg("round randomness has not been requested")]
+    RoundNotRequested,
+    #[msg("round is not settled")]
+    RoundNotSettled,
+    #[msg("round would end after the current epoch")]
+    RoundOutsideEpoch,
+    #[msg("round length does not match the pool's round_seconds")]
+    InvalidRoundLength,
+    #[msg("tile selection must be a non-empty mask over tiles 0..35")]
+    InvalidTileSelection,
+    #[msg("stake per tile must be at least one entry")]
+    InvalidStake,
+
+    // Epochs
+    #[msg("the current epoch has not ended yet")]
+    EpochNotEnded,
+    #[msg("epoch is not accepting registrations")]
+    EpochNotRegistering,
+    #[msg("epoch is not drawing")]
+    EpochNotDrawing,
+    #[msg("epoch has not been drawn")]
+    EpochNotDrawn,
+    #[msg("only the epoch immediately before the current one may be registered")]
+    NotPreviousEpoch,
+    #[msg("player is already registered for this epoch")]
+    AlreadyRegistered,
+    #[msg("player's frozen weight belongs to a different epoch")]
+    FrozenEpochMismatch,
+    #[msg("player is not registered for this epoch")]
+    NotRegistered,
+    #[msg("the drawn target is outside this player's registered interval")]
+    NotTheWinner,
+    #[msg("no weight was registered for this epoch")]
+    NothingRegistered,
+
+    // Randomness
+    #[msg("randomness account does not match the request seed")]
     InvalidRandomnessAccount,
+    #[msg("randomness is not yet fulfilled")]
+    RandomnessNotFulfilled,
+    #[msg("randomness sample fell in the rejected tail")]
+    RandomnessRejection,
+    #[msg("the randomness timeout has not elapsed")]
+    VrfTimeoutNotElapsed,
 }

@@ -18,10 +18,8 @@ players when your tile is drawn. Principal never moves except back to you.
 
 ## State of the repo
 
-The code currently in `programs/`, `packages/`, `scripts/`, and `tests/` is the previous
-design (Token-2022 receipts, Merkle snapshots, two prize draws, a CLI operator). It is
-being replaced ticket by ticket under `docs/plan/rebuild/`. Ticket 01 deletes it. Until the
-rebuild lands, treat the docs above as the truth and the code as history.
+The old design (Token-2022 receipts, Merkle snapshots, two prize draws, a CLI operator) is
+gone. The rebuild lands ticket by ticket under `docs/plan/rebuild/`.
 
 ## Layout after the rebuild
 
