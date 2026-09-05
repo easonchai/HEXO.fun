@@ -106,6 +106,41 @@ pub fn is_fulfilled(account: &AccountInfo, network_state: &Pubkey, seed: &[u8; 3
     read_fulfilled(account, network_state, seed).is_ok()
 }
 
+/// Requests randomness for one subject (a round's board or an epoch's draw).
+/// Both request paths (rounds.rs, epochs.rs) call this so the CPI is written
+/// once.
+///
+/// `test-vrf` builds no-op: nothing needs to exist here, because
+/// [`crate::test_vrf::test_fulfill`] fabricates the fulfilled account
+/// directly instead of going through a real request/fulfill round trip.
+#[cfg(feature = "test-vrf")]
+pub fn request_randomness<'info>(
+    _payer: &AccountInfo<'info>,
+    _network_state: &AccountInfo<'info>,
+    _randomness: &AccountInfo<'info>,
+    _vrf_program: &AccountInfo<'info>,
+    _system_program: &AccountInfo<'info>,
+    _seed: [u8; 32],
+) -> Result<()> {
+    Ok(())
+}
+
+/// Real builds CPI ORAO's `request_v2` with `seed`, funded by `payer`. Left
+/// as `todo!()`: ticket 03 owns verifying ORAO's exact account list and
+/// instruction discriminator against the deployed program before wiring
+/// this up for real.
+#[cfg(not(feature = "test-vrf"))]
+pub fn request_randomness<'info>(
+    _payer: &AccountInfo<'info>,
+    _network_state: &AccountInfo<'info>,
+    _randomness: &AccountInfo<'info>,
+    _vrf_program: &AccountInfo<'info>,
+    _system_program: &AccountInfo<'info>,
+    _seed: [u8; 32],
+) -> Result<()> {
+    todo!("ORAO request_v2 CPI - ticket 03")
+}
+
 /// u64 sample from the first 8 bytes of the randomness (LE).
 pub fn sample_u64(randomness: &[u8; 64]) -> u64 {
     u64::from_le_bytes(randomness[..8].try_into().expect("fixed slice"))

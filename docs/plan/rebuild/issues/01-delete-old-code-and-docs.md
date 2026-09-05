@@ -1,6 +1,6 @@
 # 01 Delete the old code and docs
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: none
 
@@ -30,3 +30,19 @@ The old docs, `docs/plan/audit-fixes/`, and the README were already removed or r
 
 - `pnpm install` and `pnpm run check` succeed for the remaining workspace (`apps/web` may fail typecheck until ticket 10; note it in the PR).
 - `rg -i "merkle|snapshot authority|prize vault" --glob '!docs/adr/**' .` returns nothing outside `node_modules` and `target`.
+
+## Comments
+
+Done in `bde6a49`. Two deviations from the ticket:
+
+- `scripts/test-program-local.sh` was moved to `tests/run-local.sh` rather than
+  deleted. The 02-04 acceptance criteria all need a localnet runner, and
+  rewriting a working one is waste. It gained a `HEXVAULT_RPC_PORT` override so
+  several suites can run side by side, which parallel agents need. `Anchor.toml`
+  `[scripts] test` now points at it; the root `test:program` script is gone as
+  the ticket asked.
+- `.hexvault/` was gitignored, so it was removed from disk only.
+
+The acceptance grep still reports hits in `programs/hex_vault/src/lib.rs`, which
+ticket 02 rewrites, and in `README.md` / `CONTEXT.md`, where the words appear in
+a "do not use this vocabulary" sense.

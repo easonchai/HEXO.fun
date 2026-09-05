@@ -23,14 +23,17 @@ cleanup() {
   rm -r "$ledger" 2>/dev/null || true
 }
 
-anchor build
+# `test-vrf` compiles in `test_fulfill`, which fabricates a fulfilled ORAO
+# randomness account. The round and epoch suites cannot settle without it, and
+# the devnet build is a separate explicit `anchor build` with no feature flag.
+anchor build -- --features test-vrf
 
 solana-test-validator \
   --ledger "$ledger" --reset --quiet \
   --rpc-port "$port" \
-  --faucet-port $((port + 1)) \
-  --gossip-port $((port + 2)) \
-  --dynamic-port-range $((port + 3))-$((port + 23)) \
+  --faucet-port $((port + 2)) \
+  --gossip-port $((port + 3)) \
+  --dynamic-port-range $((port + 4))-$((port + 44)) \
   >"$ledger.log" 2>&1 &
 validator_pid=$!
 trap cleanup EXIT INT TERM
@@ -46,7 +49,8 @@ program_id=$(node -e "process.stdout.write(require('./target/idl/hex_vault.json'
 solana --url "$rpc" program deploy \
   target/deploy/hex_vault.so \
   --program-id target/deploy/hex_vault-keypair.json \
-  --upgrade-authority "$ANCHOR_WALLET" >/dev/null
+  --upgrade-authority "$ANCHOR_WALLET" \
+  --use-rpc >/dev/null
 echo "deployed $program_id at $rpc"
 
 pnpm exec vitest run "${@:-tests}"

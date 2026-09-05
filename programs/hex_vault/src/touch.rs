@@ -184,6 +184,7 @@ mod tests {
     fn first_touch_of_a_fresh_player_credits_nothing() {
         let pool = pool_at(2, 5_000);
         let mut p = player(0, 0, 0, 0);
+        p.owner = Pubkey::default(); // what `init_if_needed` actually leaves behind
         p.init_if_fresh(Pubkey::new_unique(), &pool, 5_500, 254);
         assert_eq!(p.last_update, 5_500, "init seeds the clock");
         assert_eq!(p.epoch_id, 2);
