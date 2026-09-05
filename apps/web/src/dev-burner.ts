@@ -1,8 +1,8 @@
 /**
  * Dev-only in-memory burner wallet for automated browser testing of the
  * localnet app. NOT a custodial path for users: it is opt-in via
- * VITE_BURNER_WALLET=1, refuses every cluster but localnet, and its keypair
- * lives only in page memory for the session.
+ * VITE_BURNER_WALLET=1, refuses any RPC endpoint that is not a local
+ * validator, and its keypair lives only in page memory for the session.
  */
 import {
   BaseWalletAdapter,
@@ -17,9 +17,9 @@ import {
 } from "@solana/web3.js";
 
 /**
- * Deterministic dev seed so external test harnesses (scripts/e2e-web.sh) can
- * pre-fund the burner before the browser connects. Not used outside the
- * VITE_BURNER_WALLET=1 localnet path.
+ * Deterministic dev seed so an external test harness can pre-fund the burner
+ * before the browser connects. Not used outside the VITE_BURNER_WALLET=1
+ * local-validator path.
  */
 export const burnerKeypair = (): Keypair => {
   const seed = new TextEncoder()
@@ -57,7 +57,7 @@ export class BurnerWalletAdapter extends BaseWalletAdapter {
     return this.keypair?.publicKey ?? null;
   }
 
-  /** Fund with `solana airdrop` externally; see scripts/e2e-web.sh. */
+  /** Fund with `solana airdrop` externally before connecting. */
   async connect(): Promise<void> {
     this._connecting = true;
     try {
@@ -103,9 +103,23 @@ export class BurnerWalletAdapter extends BaseWalletAdapter {
   }
 }
 
-/** Gate: explicit env flag AND localnet. Anything else = disabled. */
+/** True when the RPC endpoint is a local validator, not devnet or mainnet. */
+export const isLocalRpc = (url: string | undefined): boolean => {
+  try {
+    const { hostname } = new URL(url ?? "");
+    return hostname === "localhost" || hostname === "127.0.0.1";
+  } catch {
+    // No VITE_RPC_URL set: chain.ts defaults to the local validator.
+    return url === undefined || url.trim() === "";
+  }
+};
+
+/**
+ * Gate: explicit env flag AND a local RPC endpoint. There is no cluster
+ * variable any more, so the endpoint is what says "this is localnet".
+ */
 export const burnerEnabled = (
   environment: Record<string, string | undefined>,
-  cluster: string,
 ): boolean =>
-  environment.VITE_BURNER_WALLET?.trim() === "1" && cluster === "localnet";
+  environment.VITE_BURNER_WALLET?.trim() === "1" &&
+  isLocalRpc(environment.VITE_RPC_URL);

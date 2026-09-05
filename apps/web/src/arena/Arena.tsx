@@ -85,13 +85,14 @@ export function HexpotTicker({
   return (
     <div className="hexpot" data-testid="hexpot-ticker" data-value={tenths}>
       <div className="hexpot-info-wrap">
-        <span className="hexpot-label">HEXPOT</span>
+        <span className="hexpot-label">ROUND POT</span>
         <span className="info-bubble-icon">i</span>
         <div className="hexpot-tooltip">
-          <div className="hexpot-tooltip-title">ROUND REWARD POOL</div>
+          <div className="hexpot-tooltip-title">ROUND POT</div>
           <div>
-            Shared jackpot distributed to miners on the winning tile. This is a
-            game prize, not your personal wallet balance.
+            Every Entry staked in this round, plus any carry from a voided
+            round. It goes to the positions covering the winning tile, pro
+            rata. Not your Principal.
           </div>
         </div>
       </div>
@@ -124,8 +125,8 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
     selected,
     reveal,
     banner,
-    hexpot,
-    hexpotPulse,
+    pot,
+    potPulse,
     takeover,
     dismissTakeover,
   } = engine;
@@ -334,7 +335,7 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
             : null}
         </div>
 
-        <HexpotTicker value={hexpot} pulse={hexpotPulse} symbol={symbol} />
+        <HexpotTicker value={pot} pulse={potPulse} symbol={symbol} />
       </div>
 
       {/* Win / jackpot takeover */}

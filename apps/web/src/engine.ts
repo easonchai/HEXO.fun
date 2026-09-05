@@ -6,63 +6,38 @@
 export const ROUND_OPEN = 0;
 export const ROUND_REQUESTED = 1;
 export const ROUND_SETTLED = 2;
+export const ROUND_FORFEITED = 3;
+export const ROUND_VOIDED = 4;
 
 export type Phase =
   | /** no round exists yet */ "idle"
-  /** buys open: countdown to the close */
+  /** positions open: countdown to the close */
   | "mine"
-  /** closed (or draw requested): waiting for the settle */
+  /** closed (or randomness requested): waiting for the settle */
   | "settling"
-  /** settled and revealed; waiting for the next round to be created */
+  /** settled and revealed; waiting for the next round to open */
   | "awaiting";
 
 export interface RoundLike {
+  roundId: bigint;
   epochId: bigint;
-  id: bigint;
   startsAt: bigint;
   endsAt: bigint;
   status: number;
   winningTile: number;
-  bonusEntries: bigint;
-  totalStake: bigint;
-  tileStakes: bigint[];
+  pot: bigint;
+  tileTotals: bigint[];
 }
 
 export interface PositionLike {
-  roundId: bigint;
   tiles: bigint;
   stakePerTile: bigint;
-  rewardClaimed: boolean;
 }
 
-/** Identity for a round; round ids restart in each epoch. */
-export const roundKey = (epochId: bigint, roundId: bigint): string =>
-  `${epochId}:${roundId}`;
+/** Identity for a round; round ids are unique per pool. */
+export const roundKey = (roundId: bigint): string => roundId.toString();
 
-/** Highest (epoch, round) pair (the live one), null if none. */
-export function currentRound(rounds: RoundLike[]): RoundLike | null {
-  if (rounds.length === 0) return null;
-  return rounds.reduce((latest, round) =>
-    round.epochId > latest.epochId ||
-    (round.epochId === latest.epochId && round.id > latest.id)
-      ? round
-      : latest,
-  );
-}
-
-/** Most recently settled round by (epochId, roundId), for reveal triggers. */
-export function latestSettled(rounds: RoundLike[]): RoundLike | null {
-  const settled = rounds.filter((round) => round.status === ROUND_SETTLED);
-  if (settled.length === 0) return null;
-  return settled.reduce((latest, round) =>
-    round.epochId > latest.epochId ||
-    (round.epochId === latest.epochId && round.id > latest.id)
-      ? round
-      : latest,
-  );
-}
-
-/** Protocol buys stop `buffer` seconds before the round's ends_at. */
+/** Positions stop `buffer` seconds before the round's ends_at. */
 export function buyClosesAt(round: RoundLike, bufferSeconds: bigint): bigint {
   const close = round.endsAt - bufferSeconds;
   return close > round.startsAt ? close : round.startsAt;
@@ -80,21 +55,26 @@ export function phaseFor(
   return "awaiting";
 }
 
+/** True once the round has a winning tile the program will pay against. */
+export const isRevealed = (round: RoundLike): boolean =>
+  round.status === ROUND_SETTLED || round.status === ROUND_FORFEITED;
+
 export const covers = (mask: bigint, tile: number): boolean =>
   ((mask >> BigInt(tile)) & 1n) === 1n;
 
-/** Expected ET reward: bonus * stake / staked-on-winning-tile (floor division). */
+/** Round reward in Entries: pot × stake / staked-on-winning-tile, floored. */
 export function expectedReward(
   round: RoundLike,
   position: PositionLike,
 ): bigint {
+  if (round.status !== ROUND_SETTLED) return 0n;
   if (!covers(position.tiles, round.winningTile)) return 0n;
-  const winningTotal = round.tileStakes[round.winningTile] ?? 0n;
+  const winningTotal = round.tileTotals[round.winningTile] ?? 0n;
   if (winningTotal === 0n) return 0n;
-  return (round.bonusEntries * position.stakePerTile) / winningTotal;
+  return (round.pot * position.stakePerTile) / winningTotal;
 }
 
-/** Seconds until buys close, clamped at zero. */
+/** Seconds until positions close, clamped at zero. */
 export function secondsLeft(
   round: RoundLike,
   bufferSeconds: bigint,
@@ -119,7 +99,7 @@ export interface FeedRow {
   key: string;
   /** Short address label; "you" when it is the connected wallet. */
   who: string;
-  /** Orange gain column, e.g. entry spend or "+reward". */
+  /** Orange gain column, e.g. Entries staked or "+reward". */
   action: string;
   tileLabel: string;
 }

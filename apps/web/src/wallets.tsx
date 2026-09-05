@@ -54,7 +54,7 @@ const privyAppIdFrom = (
 export interface WalletEnvironment extends Record<string, string | undefined> {
   VITE_PRIVY_APP_ID?: string;
   VITE_PRIVY_CLIENT_ID?: string;
-  VITE_CLUSTER?: string;
+  VITE_RPC_URL?: string;
 }
 
 /** Privy boots only when an App ID is configured; otherwise standard wallets. */
@@ -129,33 +129,23 @@ export function useGameSigner(): GameSigner {
  * provider, so the mode decides which subtree renders — no conditional hook
  * calls anywhere.
  */
-export function GameSignerProvider({
-  env,
-  children,
-}: {
-  env: WalletEnvironment;
-  children: ReactNode;
-}) {
+export function GameSignerProvider({ children }: { children: ReactNode }) {
   const mode = useWalletMode();
   return mode === "privy" ? (
-    <PrivySignerSource env={env} mode={mode}>
-      {children}
-    </PrivySignerSource>
+    <PrivySignerSource mode={mode}>{children}</PrivySignerSource>
   ) : (
     <StandardSignerSource mode={mode}>{children}</StandardSignerSource>
   );
 }
 
 function PrivySignerSource({
-  env,
   mode,
   children,
 }: {
-  env: WalletEnvironment;
   mode: WalletMode;
   children: ReactNode;
 }) {
-  const signer = usePrivySigner(env);
+  const signer = usePrivySigner();
   return (
     <GameSignerContext.Provider value={{ ...signer, mode }}>
       {children}
@@ -178,7 +168,14 @@ function StandardSignerSource({
   );
 }
 
-function usePrivySigner(env: WalletEnvironment): GameSigner {
+/**
+ * Wallet-standard chain id. Nothing but devnet and a local validator is in
+ * scope, and the local validator answers to the devnet genesis in every
+ * wallet that supports it, so this is a constant.
+ */
+const SIGNING_CHAIN = "solana:devnet";
+
+function usePrivySigner(): GameSigner {
   const { login } = useLogin();
   const { logout } = useLogout();
   const { wallets, ready } = useStandardWallets();
@@ -191,13 +188,11 @@ function usePrivySigner(env: WalletEnvironment): GameSigner {
         throw new Error("no Privy Solana wallet connected");
       const feature = wallet.features["solana:signTransaction"];
       if (!feature) throw new Error("wallet cannot sign Solana transactions");
-      const chain =
-        env.VITE_CLUSTER === "devnet" ? "solana:devnet" : "solana:mainnet";
       // Wallet-standard methods are variadic: one input in, one output out.
       const [output] = await feature.signTransaction({
         transaction: transaction.serialize(),
         account,
-        chain,
+        chain: SIGNING_CHAIN,
       });
       const signed = Uint8Array.from(output!.signedTransaction);
       if (transaction instanceof Transaction) {
@@ -205,7 +200,7 @@ function usePrivySigner(env: WalletEnvironment): GameSigner {
       }
       return VersionedTransaction.deserialize(signed) as T;
     },
-    [wallet, account, env.VITE_CLUSTER],
+    [wallet, account],
   );
 
   return {
@@ -219,8 +214,7 @@ function usePrivySigner(env: WalletEnvironment): GameSigner {
 }
 
 function useStandardSigner(): GameSigner {
-  const { publicKey, wallet, connected, connect, disconnect, select } =
-    useWallet();
+  const { publicKey, wallet, connected, select } = useWallet();
   const { setVisible } = useWalletModal();
 
   const adapter = wallet?.adapter as unknown as

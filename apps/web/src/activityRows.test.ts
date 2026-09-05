@@ -1,38 +1,47 @@
 import { describe, expect, it } from "vitest";
 
 import { eventsToRows, liveEventToRow } from "./activityRows.js";
-import type { EventRow } from "./api.js";
+import type { EventDto } from "./api.js";
 import type { LiveEvent } from "./useProgramEvents.js";
 
 const OWNER = "OwnerPubkey11111111111111111111111111111";
 
 const historyRow = (
   name: string,
-  payload: Record<string, unknown>,
-): EventRow => ({
+  data: Record<string, unknown>,
+): EventDto => ({
   slot: "1",
   signature: "SIG",
-  eventIndex: 0,
+  index: 0,
   name,
-  pool: "PoolPubkey1111111111111111111111111111111",
-  payload,
+  data,
   blockTime: null,
 });
 
+const liveRow = (name: string, data: Record<string, unknown>): LiveEvent => ({
+  key: `k-${name}`,
+  name,
+  slot: 1,
+  signature: "SIG",
+  data,
+  at: 0,
+});
+
 describe("activity feed row mappers", () => {
-  it("maps a DepositRecorded history row to a feed row", () => {
+  it("maps a Deposited history row to a feed row", () => {
     const rows = eventsToRows(
-      [historyRow("DepositRecorded", { owner: OWNER, amount: "1500000" })],
+      [historyRow("Deposited", { owner: OWNER, amount: "1500000" })],
       OWNER,
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]?.tileLabel).toBe("deposit");
-    expect(rows[0]?.action).toContain("USDC");
+    expect(rows[0]?.who).toBe("you");
+    expect(rows[0]?.action).toBe("+1.5 USDC");
   });
 
-  it("maps a WithdrawalRecorded history row to a feed row", () => {
+  it("maps a Withdrawn history row to a feed row", () => {
     const rows = eventsToRows(
-      [historyRow("WithdrawalRecorded", { owner: OWNER, amount: "500000" })],
+      [historyRow("Withdrawn", { owner: OWNER, amount: "500000" })],
       OWNER,
     );
     expect(rows).toHaveLength(1);
@@ -40,29 +49,38 @@ describe("activity feed row mappers", () => {
     expect(rows[0]?.action).toContain("USDC");
   });
 
-  it("maps a DepositRecorded live event to a feed row", () => {
-    const event: LiveEvent = {
-      key: "k1",
-      name: "DepositRecorded",
-      slot: 1,
-      signature: "SIG",
-      data: { owner: OWNER, amount: "1500000" },
-      at: 0,
-    };
-    const row = liveEventToRow(event, OWNER);
-    expect(row?.tileLabel).toBe("deposit");
+  it("counts the tiles in a PositionBought mask", () => {
+    const rows = eventsToRows(
+      [
+        historyRow("PositionBought", {
+          owner: OWNER,
+          tiles: String((1n << 3n) | (1n << 9n) | (1n << 30n)),
+          total: "3000000",
+        }),
+      ],
+      OWNER,
+    );
+    expect(rows[0]?.tileLabel).toBe("3 tiles");
+    expect(rows[0]?.action).toBe("−3 Entries");
   });
 
-  it("maps a WithdrawalRecorded live event to a feed row", () => {
-    const event: LiveEvent = {
-      key: "k2",
-      name: "WithdrawalRecorded",
-      slot: 1,
-      signature: "SIG",
-      data: { owner: OWNER, amount: "500000" },
-      at: 0,
-    };
-    const row = liveEventToRow(event, OWNER);
-    expect(row?.tileLabel).toBe("withdraw");
+  it("reads the same events off a live log, camelCased by Anchor", () => {
+    expect(
+      liveEventToRow(liveRow("deposited", { owner: OWNER, amount: "1500000" }), OWNER)
+        ?.tileLabel,
+    ).toBe("deposit");
+    expect(
+      liveEventToRow(
+        liveRow("roundSettled", { winningTile: 7, pot: "10", forfeited: false }),
+        OWNER,
+      )?.action,
+    ).toBe("tile 8");
+  });
+
+  it("drops a zero-reward settle and anything it does not recognise", () => {
+    expect(
+      liveEventToRow(liveRow("positionSettled", { owner: OWNER, reward: "0" }), OWNER),
+    ).toBeNull();
+    expect(liveEventToRow(liveRow("paramsSet", {}), OWNER)).toBeNull();
   });
 });

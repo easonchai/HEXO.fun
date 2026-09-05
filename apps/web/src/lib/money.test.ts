@@ -38,10 +38,16 @@ describe("atomic formatting", () => {
 
 describe("withdrawable math", () => {
   it("is the matched minimum of principal and entries", () => {
+    // Entries spent on a position: principal > entries, entries binds.
     expect(withdrawable(10n, 4n)).toBe(4n);
+    // Entries won in a round: principal < entries, principal binds.
     expect(withdrawable(4n, 10n)).toBe(4n);
+    // Untouched since the epoch reset: equal, and both bind to the same value.
+    expect(withdrawable(7n, 7n)).toBe(7n);
+    expect(withdrawable(0n, 0n)).toBe(0n);
     expect(withdrawable(0n, 10n)).toBe(0n);
     expect(withdrawable(10n, 0n)).toBe(0n);
+    expect(withdrawable(5_000_000n, 5_000_000n)).toBe(5_000_000n);
   });
 
   it("previews a board purchase before confirmation", () => {
