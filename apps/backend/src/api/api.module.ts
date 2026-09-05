@@ -1,0 +1,35 @@
+import { Module } from "@nestjs/common";
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
+import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
+
+import { ChainModule } from "../chain/chain.module";
+import { ApiController } from "./api.controller";
+import { ApiService } from "./api.service";
+import { FaucetController } from "./faucet.controller";
+import { SerializationInterceptor } from "./serialization.interceptor";
+
+/**
+ * spec.md §3.5. The interceptor and the guard are registered here rather than
+ * in main.ts so importing this module is the whole wiring. `skipIf` keeps the
+ * global guard off every route but the faucet: the frontend polls the read
+ * routes every 2 s and /healthz is a container probe.
+ */
+@Module({
+  imports: [
+    ChainModule,
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000,
+        limit: 10,
+        skipIf: (context) => context.getClass() !== FaucetController,
+      },
+    ]),
+  ],
+  controllers: [ApiController, FaucetController],
+  providers: [
+    ApiService,
+    { provide: APP_INTERCEPTOR, useClass: SerializationInterceptor },
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
+})
+export class ApiModule {}
