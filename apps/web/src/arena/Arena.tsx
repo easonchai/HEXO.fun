@@ -116,9 +116,17 @@ export interface ArenaProps {
   symbol: string;
   canPick: boolean;
   onToggleTile: (displayNumber: number) => void;
+  /** True when the backend status pill is amber: the operator isn't ticking. */
+  operatorStale?: boolean;
 }
 
-export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
+export function Arena({
+  engine,
+  symbol,
+  canPick,
+  onToggleTile,
+  operatorStale = false,
+}: ArenaProps) {
   const {
     phase,
     secondsLeft,
@@ -154,8 +162,11 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
       <div className="hex-stage-container">
         {/* Timer / win banner above the hexagon */}
         {showTimer && !banner ? (
-          <div className="stage-timer" data-testid="round-timer">
-            {timerText}
+          <div
+            className={`stage-timer${operatorStale ? " stage-timer-stale" : ""}`}
+            data-testid="round-timer"
+          >
+            {operatorStale ? "OPERATOR PAUSED" : timerText}
           </div>
         ) : null}
         {banner ? (

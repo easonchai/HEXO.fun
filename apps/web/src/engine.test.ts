@@ -5,6 +5,7 @@ import {
   covers,
   displayTile,
   expectedReward,
+  hmText,
   isRevealed,
   phaseFor,
   roundKey,
@@ -88,5 +89,15 @@ describe("round engine", () => {
     expect(timerText(0n)).toBe("00:00");
     expect(displayTile(0)).toBe(1);
     expect(displayTile(35)).toBe(36);
+  });
+
+  it("renders HH:MM for epoch-length countdowns", () => {
+    expect(hmText(0n)).toBe("00:00");
+    expect(hmText(59n)).toBe("00:00");
+    expect(hmText(60n)).toBe("00:01");
+    expect(hmText(3600n)).toBe("01:00");
+    expect(hmText(90_000n)).toBe("25:00");
+    // Already past: clamp, no sign.
+    expect(hmText(-5n)).toBe("00:00");
   });
 });

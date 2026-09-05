@@ -1,6 +1,6 @@
 # 10 Frontend: rewire to the new program and API
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: 03, 04, 08
 

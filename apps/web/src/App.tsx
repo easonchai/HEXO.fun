@@ -7,9 +7,11 @@ import { eventsToRows, liveEventToRow, mergeFeed } from "./activityRows.js";
 import { Arena, LogoCog } from "./arena/Arena.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
 import { About } from "./screens/About.js";
+import { Jackpot } from "./screens/Jackpot.js";
+import { Leaderboard } from "./screens/Leaderboard.js";
 import { Vault } from "./screens/Vault.js";
 import { buyPosition, deposit, settlePosition } from "./actions.js";
-import { apiBaseUrl, fetchFeed } from "./api.js";
+import { apiBaseUrl, fetchFeed, fetchStatus } from "./api.js";
 import { type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
@@ -25,10 +27,12 @@ import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { useChainState } from "./read.js";
 import { useChainClock } from "./useChainClock.js";
 import { useProgramEvents } from "./useProgramEvents.js";
+import { useApiPoll } from "./useApiPoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
+import { summarizeStatus } from "./status.js";
 
-const TABS = ["MINE", "VAULT", "ABOUT"] as const;
+const TABS = ["MINE", "VAULT", "JACKPOT", "LEADERBOARD", "ABOUT"] as const;
 type Tab = (typeof TABS)[number];
 
 /** The accepted asset is hexUSDC (6 decimals) for every pool in this build. */
@@ -92,6 +96,15 @@ export function App() {
   const round = state.round;
   const { now } = useChainClock(connection);
   const { events, live } = useProgramEvents(program, connection);
+  const loadStatus = useCallback(
+    (signal: AbortSignal) => fetchStatus(apiBaseUrl(), signal),
+    [],
+  );
+  const statusPoll = useApiPoll(loadStatus, 2000);
+  const status = useMemo(
+    () => summarizeStatus(statusPoll.data, Date.now()),
+    [statusPoll.data],
+  );
   const engine = useRoundEngine({
     round,
     position: state.position,
@@ -329,6 +342,12 @@ export function App() {
           ))}
         </nav>
         <div className="topbar-right">
+          <span className="chip" data-testid="status-pill" title={status.detail}>
+            <span className={`dot ${status.tone === "ok" ? "ok" : "warn"}`} />
+            {status.label.length > 24
+              ? `${status.label.slice(0, 24)}…`
+              : status.label}
+          </span>
           <span className="chip" data-testid="slot-chip">
             {now !== null ? `T+${now.toString()}` : "SYNC…"}
             <span
@@ -438,6 +457,7 @@ export function App() {
               engine={engine}
               symbol="Entries"
               canPick={canPick}
+              operatorStale={status.stale}
               onToggleTile={(n) => {
                 sfx("click");
                 engine.setSelected(
@@ -485,6 +505,7 @@ export function App() {
             entries={entries}
             walletBalance={state.walletBalance}
             paused={pool.paused}
+            now={now}
             onDone={refresh}
           />
         ) : null}
@@ -492,6 +513,18 @@ export function App() {
           <div className="screen-note err">
             Connect a wallet with a live pool to deposit or withdraw.
           </div>
+        ) : null}
+        {tab === "JACKPOT" ? (
+          <Jackpot
+            program={program}
+            owner={publicKey ?? undefined}
+            pool={pool}
+            now={now}
+            onDone={refresh}
+          />
+        ) : null}
+        {tab === "LEADERBOARD" ? (
+          <Leaderboard owner={publicKey ?? undefined} />
         ) : null}
         {tab === "ABOUT" ? <About symbol={SYMBOL} /> : null}
       </main>

@@ -3,12 +3,13 @@
  * test hexUSDC from the faucet. The program is the custody boundary:
  * Principal and Entries move together, so a withdrawal needs both.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import { deposit, withdraw } from "../actions.js";
 import { apiBaseUrl, requestFaucet } from "../api.js";
 import type { HexVaultProgram } from "../chain.js";
+import { hmText } from "../engine.js";
 import {
   formatAtomic,
   parseAtomic,
@@ -16,7 +17,7 @@ import {
   withdrawable,
 } from "../lib/money.js";
 import type { PoolLike } from "../read.js";
-import { PanelCard } from "../ui.js";
+import { PanelCard, Stat, StatGrid } from "../ui.js";
 
 const DECIMALS = 6;
 const SYMBOL = "hexUSDC";
@@ -29,6 +30,8 @@ export interface VaultScreenProps {
   entries: bigint;
   walletBalance: bigint;
   paused: boolean;
+  /** Chain clock seconds, for the "rest unlocks in HH:MM" countdown. */
+  now: bigint | null;
   onDone: () => void;
 }
 
@@ -41,6 +44,7 @@ export function Vault(props: VaultScreenProps) {
     entries,
     walletBalance,
     paused,
+    now,
     onDone,
   } = props;
   const fmt = (value: bigint) => formatAtomic(value, DECIMALS);
@@ -51,8 +55,22 @@ export function Vault(props: VaultScreenProps) {
   const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(
     null,
   );
-  /** Seconds the faucet says to wait; ticket 11 turns this into a countdown. */
+  /** Seconds left before the faucet will accept another request. */
   const [faucetWait, setFaucetWait] = useState<number | null>(null);
+
+  // Ticks the 429 wait down to zero, then re-enables the button.
+  useEffect(() => {
+    if (faucetWait === null) return;
+    if (faucetWait <= 0) {
+      setFaucetWait(null);
+      return;
+    }
+    const id = window.setTimeout(
+      () => setFaucetWait((seconds) => (seconds === null ? null : seconds - 1)),
+      1000,
+    );
+    return () => window.clearTimeout(id);
+  }, [faucetWait]);
 
   const run = async (label: string, action: () => Promise<string>) => {
     setBusy(label);
@@ -105,8 +123,35 @@ export function Vault(props: VaultScreenProps) {
       ? null
       : previewWithdraw(principal, entries, withdrawAmount);
 
+  // Entries lost to the game (principal > entries) come back at the next
+  // epoch reset, not before. See CONTEXT.md "Entries".
+  const locked = principal > entries ? principal - entries : 0n;
+  const epochEndsAt = pool.currentEpochStart + pool.epochSeconds;
+  const resetsIn = now !== null ? hmText(epochEndsAt - now) : null;
+
   return (
     <div className="screen-vault" data-testid="vault-screen">
+      <PanelCard wide title="YOUR VAULT">
+        <StatGrid>
+          <Stat label="Principal" value={`${fmt(principal)} ${SYMBOL}`} />
+          <Stat label="Entries" value={fmt(entries)} />
+          <Stat
+            label="Withdrawable now"
+            value={`${fmt(matched)} ${SYMBOL}`}
+            testid="withdrawable-now"
+          />
+          <Stat
+            label="Rest unlocks"
+            value={
+              locked > 0n
+                ? `in ${resetsIn ?? "--:--"}`
+                : "fully withdrawable"
+            }
+            small
+            testid="unlock-note"
+          />
+        </StatGrid>
+      </PanelCard>
       <PanelCard
         wide
         title="DEPOSIT"
@@ -167,7 +212,8 @@ export function Vault(props: VaultScreenProps) {
               busy !== null ||
               paused ||
               !depositAmount ||
-              depositAmount < pool.minDeposit
+              depositAmount < pool.minDeposit ||
+              depositAmount > walletBalance
             }
             data-testid="deposit-submit"
             onClick={() =>
@@ -189,6 +235,11 @@ export function Vault(props: VaultScreenProps) {
               Pool is paused: deposits are blocked; withdrawals stay live.
             </div>
           ) : null}
+          {depositAmount !== null && depositAmount > walletBalance ? (
+            <div className="panel-note" data-testid="deposit-over-balance">
+              Amount is more than your wallet balance.
+            </div>
+          ) : null}
           <div className="panel-note">
             Minimum deposit {fmt(pool.minDeposit)} {SYMBOL}.
           </div>
@@ -196,7 +247,7 @@ export function Vault(props: VaultScreenProps) {
         <button
           type="button"
           className="btn-deploy ghost"
-          disabled={busy !== null}
+          disabled={busy !== null || faucetWait !== null}
           data-testid="faucet"
           onClick={() => void pullFaucet()}
         >
@@ -282,6 +333,11 @@ export function Vault(props: VaultScreenProps) {
           >
             <span>{busy === "Withdraw" ? "SIGNING…" : "WITHDRAW"}</span>
           </button>
+          {withdrawAmount !== null && withdrawAmount > matched ? (
+            <div className="panel-note" data-testid="withdraw-over-matched">
+              Amount is more than what you can withdraw right now.
+            </div>
+          ) : null}
         </div>
       </PanelCard>
 

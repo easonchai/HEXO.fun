@@ -95,6 +95,18 @@ export function timerText(seconds: bigint): string {
   return `${mm}:${ss}`;
 }
 
+/**
+ * HH:MM for a duration longer than a round: epoch countdowns and the
+ * Vault's "unlocks in" note. Floors to the minute; negative (already past)
+ * clamps to 00:00 rather than showing a sign.
+ */
+export function hmText(seconds: bigint): string {
+  const total = seconds > 0n ? seconds : 0n;
+  const hh = total / 3600n;
+  const mm = (total % 3600n) / 60n;
+  return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
+}
+
 export interface FeedRow {
   key: string;
   /** Short address label; "you" when it is the connected wallet. */
