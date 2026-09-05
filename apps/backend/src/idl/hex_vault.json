@@ -53,9 +53,9 @@
         {
           "name": "current_epoch",
           "docs": [
-            "The epoch that just ended, moved to Registering. Does not exist yet",
-            "on the very first call (`pool.current_epoch_id == 0`); ticket 04",
-            "owns that bootstrap case."
+            "exist yet on the very first call (`pool.current_epoch_id == 0`); the",
+            "handler skips it entirely in that case, so it is never deserialized",
+            "before it exists."
           ],
           "writable": true,
           "pda": {
@@ -246,6 +246,11 @@
       "accounts": [
         {
           "name": "authority",
+          "docs": [
+            "Pays ORAO's request fee and the request account's rent, so it must be",
+            "writable."
+          ],
+          "writable": true,
           "signer": true,
           "relations": [
             "pool"
@@ -324,16 +329,26 @@
         },
         {
           "name": "randomness",
+          "docs": [
+            "depends on the seed this instruction computes, so unlike `draw`",
+            "(which reads `epoch.vrf_seed` back) there is nothing to check it",
+            "against yet; `draw` is what actually verifies it."
+          ],
           "writable": true
         },
         {
           "name": "vrf_network_state"
         },
         {
-          "name": "vrf_program",
+          "name": "vrf_treasury",
           "docs": [
-            "account list and instruction discriminator."
-          ]
+            "rejects any other account, so it is only forwarded here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vrf_program",
+          "address": "VRFzZoJdhFWL8rkvu87LpKM3RbcVezpMEc6X5GVDr7y"
         },
         {
           "name": "system_program",
@@ -528,6 +543,14 @@
               }
             ]
           }
+        },
+        {
+          "name": "current_epoch",
+          "docs": [
+            "when one is open (`pool.current_epoch_id != 0`); any account may be",
+            "passed before the first epoch begins, since there is nothing yet to",
+            "bound `ends_at` against."
+          ]
         },
         {
           "name": "round",
@@ -801,6 +824,9 @@
           }
         },
         {
+          "name": "accepted_mint"
+        },
+        {
           "name": "source",
           "writable": true
         },
@@ -880,6 +906,9 @@
               }
             ]
           }
+        },
+        {
+          "name": "accepted_mint"
         },
         {
           "name": "epoch",
@@ -1145,7 +1174,7 @@
         {
           "name": "randomness",
           "docs": [
-            "verifies its address with `vrf::randomness_address` before use."
+            "against `vrf::randomness_address` in the handler."
           ],
           "writable": true
         },
@@ -1153,10 +1182,15 @@
           "name": "vrf_network_state"
         },
         {
-          "name": "vrf_program",
+          "name": "vrf_treasury",
           "docs": [
-            "list and instruction discriminator against the deployed program."
-          ]
+            "rejects any other account, so it is only forwarded here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vrf_program",
+          "address": "VRFzZoJdhFWL8rkvu87LpKM3RbcVezpMEc6X5GVDr7y"
         },
         {
           "name": "system_program",
@@ -1487,6 +1521,7 @@
         },
         {
           "name": "pool",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1534,7 +1569,10 @@
           }
         },
         {
-          "name": "randomness"
+          "name": "randomness",
+          "docs": [
+            "against `vrf::randomness_address` (via `vrf::read_fulfilled`)."
+          ]
         },
         {
           "name": "house",
@@ -1568,6 +1606,78 @@
       "args": []
     },
     {
+      "name": "test_fulfill",
+      "discriminator": [
+        150,
+        84,
+        4,
+        82,
+        192,
+        168,
+        165,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "randomness",
+          "docs": [
+            "here instead of deserialized."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  101,
+                  115,
+                  116,
+                  45,
+                  118,
+                  114,
+                  102
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "seed"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "seed",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "randomness",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "void_round",
       "discriminator": [
         102,
@@ -1589,6 +1699,7 @@
         },
         {
           "name": "pool",
+          "writable": true,
           "pda": {
             "seeds": [
               {

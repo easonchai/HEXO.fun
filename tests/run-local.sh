@@ -26,7 +26,13 @@ cleanup() {
 # `test-vrf` compiles in `test_fulfill`, which fabricates a fulfilled ORAO
 # randomness account. The round and epoch suites cannot settle without it, and
 # the devnet build is a separate explicit `anchor build` with no feature flag.
-anchor build -- --features test-vrf
+#
+# HEXVAULT_SKIP_BUILD=1 reuses whatever is already in target/deploy. Several
+# runs in parallel would otherwise each fight for the same cargo target lock
+# to produce the identical artifact.
+if [ "${HEXVAULT_SKIP_BUILD:-}" != "1" ]; then
+  anchor build -- --features test-vrf
+fi
 
 solana-test-validator \
   --ledger "$ledger" --reset --quiet \

@@ -85,11 +85,14 @@ model Event {
   @@id([slot, signature, index])
 }
 
-// Single row (id = 1): the indexer's signature-catch-up cursor.
+// Single row (id = 1): the indexer's signature-catch-up cursor. `updatedAt`
+// is unix seconds of the last successful sync, so GET /status can report a
+// cursor age without guessing from the newest event's block time.
 model Cursor {
   id            Int     @id
   lastSignature String?
   lastSlot      BigInt?
+  updatedAt     BigInt?
 }
 
 model FaucetClaim {
