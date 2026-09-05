@@ -77,6 +77,25 @@ describe("activity feed row mappers", () => {
     ).toBe("tile 8");
   });
 
+  it("renders every name GET /feed sends, in either casing", () => {
+    // The backend's FEED_NAMES list, plus PositionSettled with a reward.
+    const sent = [
+      historyRow("Deposited", { owner: OWNER, amount: "1000000" }),
+      historyRow("Withdrawn", { owner: OWNER, amount: "1000000" }),
+      historyRow("PositionBought", { owner: OWNER, tiles: "1", total: "1" }),
+      historyRow("RoundSettled", { winning_tile: 0, forfeited: true }),
+      historyRow("JackpotPaid", { winner: OWNER, amount: "1000000" }),
+      historyRow("EpochRolledOver", { epochId: "3", jackpotAmount: "12000000" }),
+      historyRow("PositionSettled", { owner: OWNER, reward: "5000000" }),
+    ];
+    const rows = eventsToRows(sent, OWNER);
+    expect(rows).toHaveLength(sent.length);
+    expect(rows.map((row) => row.tileLabel)).toContain("rollover");
+    expect(rows.find((row) => row.tileLabel === "rollover")?.action).toBe(
+      "12 USDC held over",
+    );
+  });
+
   it("drops a zero-reward settle and anything it does not recognise", () => {
     expect(
       liveEventToRow(liveRow("positionSettled", { owner: OWNER, reward: "0" }), OWNER),

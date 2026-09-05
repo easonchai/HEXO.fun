@@ -37,61 +37,57 @@ hits ("snapshotted at close_registration", "1:1 claim on deposited USDC") are
 the program's own Rust doc comments in the generated IDL, byte-identical to
 `target/idl/`.
 
-### The API shapes the frontend codes against (ticket 08, match these)
+### The API shapes, reconciled against the landed ticket 08
 
-`apps/web/src/api.ts` is the contract. Every `u64`/`u128`/timestamp is a
-**decimal string** (spec §3.2); `registeredCount`, `eligibleCount`, `index`,
-`winningTile`, `ageSeconds` and `odds` are JSON numbers; `paused`, `isHouse`
-and `rpcOk` are booleans.
+`api.ts` was first written from spec §3.5 alone, because ticket 08 had not
+merged. It landed while this ticket was in flight (`3d14b51`), so the client
+was re-read against `apps/backend/src/api/` and corrected. The backend is right
+in every case below; only the frontend changed.
 
-```
-PoolDto    { address, poolId, authority, mint, epochSeconds, roundSeconds,
-             paused, currentEpochId, totalPrincipal, carryPot, updatedSlot }
-EpochDto   { id, startsAt, endsAt, status, registeredWeight,
-             registeredCount: number, jackpotAmount, target, winner: string|null }
-RoundDto   { id, epochId, startsAt, endsAt, status, pot,
-             winningTile: number, tileTotals: string[36] }
-PlayerDto  { owner, principal, entries, weightAcc, lastUpdate, epochId,
-             frozenWeight, frozenEpoch, regEpoch, regStart, regEnd,
-             isHouse: boolean, liveWeight, odds: number }
-EventDto   { slot, signature, index: number, name, data: object,
-             blockTime: string|null }
-StatusDto  { operator: { lastTickAt, lastAction, lastError,
-                         registeredCount: number, registeredTotal: number },
-             cursor: { lastSlot, lastSignature, ageSeconds: number },
-             rpcOk: boolean }
+Four differences from a plain reading of §3.5:
 
-GET  /pool            -> { pool: PoolDto, epoch: EpochDto|null, round: RoundDto|null }
-GET  /epochs?limit    -> EpochDto[]
-GET  /epochs/current  -> EpochDto & { eligibleCount: number }
-GET  /rounds?limit    -> RoundDto[]
-GET  /rounds/:id      -> RoundDto
-GET  /players/:owner  -> PlayerDto
-GET  /leaderboard?limit -> PlayerDto[]
-GET  /feed?limit      -> EventDto[]
-GET  /status          -> StatusDto
-GET  /healthz         -> { ok: true }
-POST /faucet {owner}  -> 200 { signature, amount } | 429 { retryAfterSeconds: number }
-```
+1. `GET /pool` returns `{ pool, currentEpoch, openRound }`, not
+   `{ pool, epoch, round }`, and `openRound` is a summary of six fields
+   (`id`, `epochId`, `startsAt`, `endsAt`, `status`, `pot`) with no
+   `tileTotals` and no `winningTile`. That is `RoundSummaryDto` in `api.ts`.
+2. `GET /epochs/current` nests progress under `drawing`, which is null unless
+   the previous epoch is Registering or Drawing:
+   `{ epochId, registeredCount, eligible, status }`. There is no flat
+   `eligibleCount`.
+3. `GET /leaderboard` sends six fields per row, not the whole Player:
+   `owner`, `principal`, `entries`, `isHouse`, `liveWeight`, `odds`.
+4. `odds` is a percentage **string** with two decimals, `"12.34"`, not a
+   fraction and not a number. `oddsPercent` in `api.service.ts` produces it.
 
-Three points ticket 08 must decide, where the client is deliberately tolerant:
+Three nullability corrections in `GET /status` and `RoundDto`:
+`operator` is null until the operator has run one tick, `cursor.ageSeconds` is
+null when the indexer has never synced (deliberately not 0), the response also
+carries `slot`, and `RoundDto.winningTile` is null until the round settles.
 
-1. **`status`** is typed `number | string` (`StatusValue` in `lib/protocol.ts`)
-   and rendered through `labelEpochStatus` / `labelRoundStatus`, which accept
-   the u8, its decimal string, or the name. Sending the u8 as a decimal string
-   is the consistent choice, since every other integer is one.
-2. **`EventDto.name`** — the client compares through `eventKey()` in `chain.ts`,
-   which lower-cases the first letter, so `RoundSettled` and `roundSettled`
-   both work. Send the IDL spelling (`RoundSettled`, `PositionBought`,
-   `Deposited`, `Withdrawn`, `PositionSettled`, `Registered`, `JackpotPaid` —
-   those are the seven `/feed` renders).
-3. **`EventDto.data`** field names: the client reads `amount`, `owner`,
-   `tiles`, `total`, `reward`, `winner`, `forfeited` and accepts either
-   `winningTile` or `winning_tile`. Everything else is ignored.
+`POST /faucet` returns `{ owner, tokenAccount, amount, signature, nextRequestAt }`
+on success and, on 429, a body carrying `retryAfterSeconds` alongside the Nest
+error envelope. `requestFaucet` returns a third variant
+`{ ok: false, retryAfterSeconds }` for it. `screens/Vault.tsx` shows the wait on
+the button; ticket 11 turns it into a live countdown.
 
-The 429 body is handled in `requestFaucet`, which returns a third variant
-`{ ok: false, retryAfterSeconds }`. `screens/Vault.tsx` shows the wait on the
-button; ticket 11 turns it into a live countdown.
+Where the client stays tolerant on purpose:
+
+- **`status`** is typed `number | string` (`StatusValue` in `lib/protocol.ts`)
+  and rendered through `labelEpochStatus` / `labelRoundStatus`, which accept
+  the u8, its decimal string, or the name. The backend sends the u8 as a JSON
+  number, since Prisma types it `Int`.
+- **`EventDto.name`** is compared through `eventKey()` in `chain.ts`, which
+  lower-cases the first letter, so the API's `RoundSettled` and a decoded log's
+  `roundSettled` both match.
+- **`EventDto.data`** field names: the client reads `amount`, `owner`, `tiles`,
+  `total`, `reward`, `winner`, `forfeited`, and accepts `winningTile` or
+  `winning_tile` and `jackpotAmount` or `jackpot_amount`.
+
+`GET /feed` sends `Deposited`, `Withdrawn`, `PositionBought`, `RoundSettled`,
+`JackpotPaid`, `EpochRolledOver`, and `PositionSettled` when its reward is
+non-zero. `activityRows.ts` now renders all seven; `EpochRolledOver` had no
+case and was silently dropping rows, which would have made the feed show fewer
+entries than the API returned. A test pins the whole list.
 
 ### Deleted
 

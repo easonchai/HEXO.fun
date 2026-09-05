@@ -103,6 +103,15 @@ function toRow(
         action: `+${atomicShort(field(data, "amount"))} USDC`,
         tileLabel: "jackpot",
       };
+    // GET /feed sends this one, so without a case here the row count the API
+    // returns and the row count the feed shows drift apart.
+    case "epochRolledOver":
+      return {
+        key,
+        who: "pool",
+        action: `${atomicShort(field(data, "jackpotAmount", "jackpot_amount"))} USDC held over`,
+        tileLabel: "rollover",
+      };
     default:
       return null;
   }

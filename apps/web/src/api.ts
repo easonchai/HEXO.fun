@@ -5,6 +5,13 @@
  *
  * Every u64/u128/timestamp arrives as a decimal string (spec §3.2), so these
  * types say `string` and the UI converts with BigInt where it needs to.
+ *
+ * These types were checked against the landed backend (ticket 08:
+ * `apps/backend/src/api/`), not just the spec. Four shapes differ from a plain
+ * reading of §3.5, and the backend is right in each case: `/pool` names its
+ * fields `currentEpoch` and `openRound` and sends the round as a summary,
+ * `/epochs/current` nests progress under `drawing`, `/leaderboard` sends a
+ * subset of the Player row, and `odds` is a percentage string, not a fraction.
  */
 import { API_URL } from "./chain.js";
 import type { StatusValue } from "./lib/protocol.js";
@@ -67,9 +74,16 @@ export interface RoundDto {
   endsAt: string;
   status: StatusValue;
   pot: string;
-  winningTile: number;
+  /** Null until the round settles. */
+  winningTile: number | null;
   tileTotals: string[];
 }
+
+/** What `GET /pool` carries for the open round: no tile totals, no winner. */
+export type RoundSummaryDto = Pick<
+  RoundDto,
+  "id" | "epochId" | "startsAt" | "endsAt" | "status" | "pot"
+>;
 
 export interface PlayerDto {
   owner: string;
@@ -86,9 +100,15 @@ export interface PlayerDto {
   isHouse: boolean;
   /** weightAcc + entries × (now − lastUpdate). */
   liveWeight: string;
-  /** liveWeight / epoch registered weight, 0..1. */
-  odds: number;
+  /** Share of the epoch's live weight as a percentage, two decimals: "12.34". */
+  odds: string;
 }
+
+/** `GET /leaderboard` sends a subset of the Player row, not the whole thing. */
+export type LeaderboardRowDto = Pick<
+  PlayerDto,
+  "owner" | "principal" | "entries" | "isHouse" | "liveWeight" | "odds"
+>;
 
 export interface EventDto {
   slot: string;
@@ -99,29 +119,46 @@ export interface EventDto {
   blockTime: string | null;
 }
 
+export interface OperatorStateDto {
+  id: number;
+  lastTickAt: string | null;
+  lastAction: string | null;
+  lastError: string | null;
+  registeredCount: number | null;
+  registeredTotal: number | null;
+}
+
 export interface StatusDto {
-  operator: {
-    lastTickAt: string | null;
-    lastAction: string | null;
-    lastError: string | null;
-    registeredCount: number;
-    registeredTotal: number;
-  };
+  /** Null until the operator has run one tick. */
+  operator: OperatorStateDto | null;
   cursor: {
     lastSlot: string | null;
     lastSignature: string | null;
-    ageSeconds: number;
+    /** Null means the indexer has never synced, which is not the same as 0. */
+    ageSeconds: number | null;
   };
   rpcOk: boolean;
+  slot: number | null;
 }
 
 export interface PoolSummaryDto {
   pool: PoolDto;
-  epoch: EpochDto | null;
-  round: RoundDto | null;
+  currentEpoch: EpochDto | null;
+  openRound: RoundSummaryDto | null;
 }
 
-export type CurrentEpochDto = EpochDto & { eligibleCount: number };
+/** Registration and draw progress for the epoch that just ended. */
+export interface DrawingProgressDto {
+  epochId: string;
+  registeredCount: number;
+  eligible: number;
+  status: StatusValue;
+}
+
+export type CurrentEpochDto = EpochDto & {
+  /** Null unless the previous epoch is Registering or Drawing. */
+  drawing: DrawingProgressDto | null;
+};
 
 export const fetchPoolSummary = (
   baseUrl: string,
@@ -167,8 +204,8 @@ export const fetchLeaderboard = (
   baseUrl: string,
   limit: number,
   signal?: AbortSignal,
-): Promise<ApiResult<PlayerDto[]>> =>
-  get<PlayerDto[]>(baseUrl, `/leaderboard?limit=${limit}`, signal);
+): Promise<ApiResult<LeaderboardRowDto[]>> =>
+  get<LeaderboardRowDto[]>(baseUrl, `/leaderboard?limit=${limit}`, signal);
 
 export const fetchFeed = (
   baseUrl: string,
@@ -189,9 +226,13 @@ export const fetchHealth = (
   get<{ ok: true }>(baseUrl, "/healthz", signal);
 
 export interface FaucetGrant {
-  signature: string;
+  owner: string;
+  tokenAccount: string;
   /** hexUSDC minted, atomic units, decimal string. */
   amount: string;
+  signature: string;
+  /** Unix seconds the same wallet may ask again. */
+  nextRequestAt: string;
 }
 
 /**
