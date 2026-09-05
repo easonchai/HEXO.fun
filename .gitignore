@@ -8,6 +8,8 @@ target/
 # Local protocol runtime and generated E2E output
 .hexvault/
 screenshots/
+test-results/
+playwright-report/
 
 # Local secrets and deployment authority
 .env
