@@ -3,6 +3,7 @@ import { AnchorProvider, Program } from "@anchor-lang/core";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { eventsToRows, liveEventToRow, mergeFeed } from "./activityRows.js";
 import { Arena, LogoCog } from "./arena/Arena.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
 import { About } from "./screens/About.js";
@@ -14,7 +15,7 @@ import {
   deposit,
   requestRoundRandomness,
 } from "./actions.js";
-import { apiBaseUrl, fetchEvents, type EventRow } from "./api.js";
+import { apiBaseUrl, fetchEvents } from "./api.js";
 import { epochAddress, type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
@@ -27,11 +28,11 @@ import {
   ROUND_OPEN,
   type FeedRow,
 } from "./engine.js";
-import { formatAddress, formatAtomic, parseAtomic } from "./lib/money.js";
+import { formatAtomic, parseAtomic } from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { useVaultState, type VaultState } from "./state.js";
 import { useChainClock } from "./useChainClock.js";
-import { useProgramEvents, type LiveEvent } from "./useProgramEvents.js";
+import { useProgramEvents } from "./useProgramEvents.js";
 import { useRoundEngine, type Takeover } from "./useRoundEngine.js";
 import { anchorWalletOf, useGameSigner } from "./wallets.js";
 import { clusterFromEnv, type Cluster } from "./wallet.js";
@@ -548,127 +549,4 @@ export function App() {
       ) : null}
     </main>
   );
-}
-
-// --- helpers -----------------------------------------------------------------
-
-function eventsToRows(rows: EventRow[], owner: string | undefined): FeedRow[] {
-  const out: FeedRow[] = [];
-  for (const row of rows) {
-    const payload = row.payload ?? {};
-    const ownerText = typeof payload.owner === "string" ? payload.owner : null;
-    const who = ownerText
-      ? ownerText === owner
-        ? "you"
-        : formatAddress(ownerText)
-      : "pool";
-    if (row.name === "PositionPurchased") {
-      const tilesMask = BigInt(String(payload.tiles ?? "0"));
-      let count = 0;
-      for (let tile = 0; tile < 36; tile += 1)
-        if ((tilesMask >> BigInt(tile)) & 1n) count += 1;
-      out.push({
-        key: `${row.slot}-${row.signature}-${row.eventIndex}`,
-        who,
-        action: `−${atomicShort(String(payload.total_stake ?? "0"))} ET`,
-        tileLabel: `${count} tiles`,
-      });
-    } else if (row.name === "Deposit") {
-      out.push({
-        key: `${row.slot}-${row.signature}-${row.eventIndex}`,
-        who,
-        action: `+${atomicShort(String(payload.amount ?? "0"))} USDC`,
-        tileLabel: "deposit",
-      });
-    } else if (row.name === "RoundSettled") {
-      out.push({
-        key: `${row.slot}-${row.signature}-${row.eventIndex}`,
-        who: "pool",
-        action: `tile ${displayTile(Number(payload.winning_tile ?? 0))}`,
-        tileLabel: "settled",
-      });
-    }
-  }
-  return out;
-}
-
-function liveEventToRow(
-  event: LiveEvent,
-  owner: string | undefined,
-): FeedRow | null {
-  const data = event.data ?? {};
-  const ownerKey =
-    typeof data.owner === "string"
-      ? data.owner
-      : typeof data.user === "string"
-        ? data.user
-        : null;
-  const who = ownerKey
-    ? ownerKey === owner
-      ? "you"
-      : formatAddress(ownerKey)
-    : "pool";
-  switch (event.name) {
-    case "PositionPurchased": {
-      const tilesMask = BigInt(String(data.tiles ?? "0"));
-      let count = 0;
-      for (let tile = 0; tile < 36; tile += 1)
-        if ((tilesMask >> BigInt(tile)) & 1n) count += 1;
-      return {
-        key: event.key,
-        who,
-        action: `−${atomicShort(String(data.totalStake ?? data.total_stake ?? "0"))} ET`,
-        tileLabel: `${count} tiles`,
-      };
-    }
-    case "Deposited":
-      return {
-        key: event.key,
-        who,
-        action: `+${atomicShort(String(data.amount ?? "0"))} USDC`,
-        tileLabel: "deposit",
-      };
-    case "RoundSettled":
-      return {
-        key: event.key,
-        who: "pool",
-        action: `tile ${displayTile(Number(data.winningTile ?? data.winning_tile ?? 0))}`,
-        tileLabel: "settled",
-      };
-    case "RoundRewardClaimed":
-      return {
-        key: event.key,
-        who,
-        action: `+${atomicShort(String(data.reward ?? "0"))} ET`,
-        tileLabel: "reward",
-      };
-    default:
-      return null;
-  }
-}
-
-function mergeFeed(
-  live: FeedRow[],
-  history: FeedRow[],
-  owner: string | undefined,
-): FeedRow[] {
-  void owner;
-  const seen = new Set<string>();
-  const out: FeedRow[] = [];
-  for (const row of [...live, ...history]) {
-    if (seen.has(row.key)) continue;
-    seen.add(row.key);
-    out.push(row);
-    if (out.length >= 12) break;
-  }
-  return out;
-}
-
-/** Atomic string (6dp) → compact decimal text without floats. */
-function atomicShort(text: string): string {
-  const clean = text.replace(/[^0-9]/g, "") || "0";
-  const padded = clean.padStart(7, "0");
-  const whole = padded.slice(0, padded.length - 6).replace(/^0+(?=\d)/, "");
-  const frac = padded.slice(padded.length - 6).replace(/0+$/, "");
-  return frac ? `${whole}.${frac}` : whole;
 }

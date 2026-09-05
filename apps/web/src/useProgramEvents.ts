@@ -26,13 +26,13 @@ export interface ProgramEvents {
   live: boolean;
 }
 
-const EVENT_NAMES = [
+/** Every event name the IDL declares — kept in sync by useProgramEvents.test.ts. */
+export const EVENT_NAMES = [
   "PoolCreated",
-  "EpochOpened",
-  "Deposited",
-  "Withdrawn",
+  "EpochCreated",
+  "DepositRecorded",
+  "WithdrawalRecorded",
   "EntriesRefreshed",
-  "RoundOpened",
   "PositionPurchased",
   "RoundRandomnessRequested",
   "RoundSettled",
@@ -47,8 +47,9 @@ const EVENT_NAMES = [
   "JackpotClaimed",
   "PrizeExpired",
   "JackpotExpired",
-  "PoolPaused",
+  "ProtocolPauseChanged",
   "PrizeFunded",
+  "JackpotFunded",
 ] as const;
 
 const MAX_EVENTS = 60;
