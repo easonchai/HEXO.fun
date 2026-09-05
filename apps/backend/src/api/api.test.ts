@@ -29,6 +29,10 @@ const PREVIOUS_EPOCH = 6n;
 const CURRENT_START = NOW - 100n;
 const PREVIOUS_START = CURRENT_START - EPOCH_LENGTH;
 
+// Deliberately far from wall-clock NOW, so a route that read Date.now()
+// instead of the chain clock would return a different liveWeight.
+const CHAIN_NOW = NOW + 10_000n;
+
 const POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
 const ALICE = Keypair.generate().publicKey.toBase58();
 const BOB = Keypair.generate().publicKey.toBase58();
@@ -40,11 +44,23 @@ const HUGE_U64 = "9007199254740993";
 const HUGE_U128 = "123456789012345678901234567890";
 
 const FAKE_SIGNATURE = "FakeSignature1111111111111111111111111111111";
+
+/** A Clock sysvar account's data, `unix_timestamp` at byte offset 32 (see
+ *  operator/chain-state.ts `clockUnixTimestamp`). The other fields are unused. */
+function clockSysvarData(unixTimestamp: bigint): Buffer {
+  const data = Buffer.alloc(40);
+  data.writeBigInt64LE(unixTimestamp, 32);
+  return data;
+}
+
 const sentInstructions: TransactionInstruction[][] = [];
 const fakeChain = {
   connection: {
     rpcEndpoint: "http://127.0.0.1:8899",
     getSlot: async (): Promise<number> => 1234,
+    getAccountInfo: async (): Promise<{ data: Buffer }> => ({
+      data: clockSysvarData(CHAIN_NOW),
+    }),
   },
   keypair: Keypair.generate(),
   send: async (instructions: TransactionInstruction[]): Promise<string> => {
@@ -254,14 +270,17 @@ describe("API routes", () => {
     await http.get("/rounds/abc").expect(400);
   });
 
-  it("GET /players/:owner adds liveWeight and odds", async () => {
+  it("GET /players/:owner computes liveWeight from the chain clock, not wall time", async () => {
     const { body } = await http.get(`/players/${ALICE}`).expect(200);
     expect(body.owner).toBe(ALICE);
     expect(body.principal).toBe("1000000");
     expect(body.weightAcc).toBe(HUGE_U128);
     // Alice is the only player holding entries, so she owns all of the weight.
     expect(body.odds).toBe("100.00");
-    expect(BigInt(body.liveWeight)).toBeGreaterThan(BigInt(HUGE_U128));
+    // CHAIN_NOW sits 10,000 s ahead of wall-clock NOW: this is the value
+    // weightAt(alice, ...) gives only when `at` came from the chain clock.
+    const expectedLiveWeight = BigInt(HUGE_U128) + 1_000_000n * (CHAIN_NOW - CURRENT_START);
+    expect(body.liveWeight).toBe(expectedLiveWeight.toString());
     assertNoLargeNumbers(body, "/players/:owner");
   });
 

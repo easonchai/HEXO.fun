@@ -1,7 +1,9 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { Prisma, type Epoch, type Player, type Pool, type Round } from "@prisma/client";
+import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
+import { clockUnixTimestamp } from "../operator/chain-state";
 import { PrismaService } from "../prisma/prisma.service";
 
 /** Mirrors programs/hex_vault/src/constants.rs `epoch_status`. */
@@ -250,7 +252,7 @@ export class ApiService {
         "The current epoch is not indexed yet. Try again in a few seconds.",
       );
     }
-    const at = nowSeconds();
+    const at = await this.chainNow();
     const players = await this.prisma.player.findMany();
     const weights = players.map((player) => ({
       player,
@@ -258,6 +260,18 @@ export class ApiService {
     }));
     const total = weights.reduce((sum, entry) => sum + entry.liveWeight, 0n);
     return { weights, total };
+  }
+
+  /**
+   * The Clock sysvar's `unix_timestamp`, read the same way the operator reads
+   * it (see `operator/chain-state.ts`), so Weight and odds here agree with
+   * what the draw uses instead of drifting from wall time.
+   * ponytail: no caching, unlike rpcHealth below; add the same TTL cache here
+   * if /players and /leaderboard polling starts hammering the RPC.
+   */
+  private async chainNow(): Promise<bigint> {
+    const info = await this.chain.connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY);
+    return clockUnixTimestamp(info?.data);
   }
 
   /** Cached so /status polling at 2 s does not turn into a getSlot per client. */

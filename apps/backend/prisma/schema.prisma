@@ -70,7 +70,6 @@ model Position {
   roundId      BigInt
   tiles        BigInt
   stakePerTile BigInt
-  settled      Boolean
 }
 
 // Finalized program events, decoded from `Program data:` logs.

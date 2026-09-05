@@ -234,9 +234,6 @@ export function positionRow(
     roundId,
     tiles: big(position.tiles),
     stakePerTile: big(position.stakePerTile),
-    // `settle_position` closes the account, so a row that exists is unsettled.
-    // The account sync deletes the row once the account is gone.
-    settled: false,
   };
 }
 

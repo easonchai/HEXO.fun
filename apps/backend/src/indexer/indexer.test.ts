@@ -242,7 +242,7 @@ describe("account sync", () => {
       .toMatchObject({ principal: 3_000_000n, entries: 2_500_000n, isHouse: false });
 
     expect(await prisma.position.findMany()).toMatchObject([
-      { owner: OWNER.toBase58(), roundId: 1n, tiles: 11n, stakePerTile: 1_000n, settled: false },
+      { owner: OWNER.toBase58(), roundId: 1n, tiles: 11n, stakePerTile: 1_000n },
     ]);
   });
 
@@ -453,9 +453,9 @@ describe("operator queries", () => {
     });
     await prisma.position.createMany({
       data: [
-        { address: "pos-a", owner: ALICE, roundId: 1n, tiles: 1n, stakePerTile: 1n, settled: false },
-        { address: "pos-b", owner: BOB, roundId: 2n, tiles: 1n, stakePerTile: 1n, settled: false },
-        { address: "pos-c", owner: CAROL, roundId: 3n, tiles: 1n, stakePerTile: 1n, settled: false },
+        { address: "pos-a", owner: ALICE, roundId: 1n, tiles: 1n, stakePerTile: 1n },
+        { address: "pos-b", owner: BOB, roundId: 2n, tiles: 1n, stakePerTile: 1n },
+        { address: "pos-c", owner: CAROL, roundId: 3n, tiles: 1n, stakePerTile: 1n },
       ],
     });
     const positions = await indexer.unsettledPositions();

@@ -141,7 +141,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     });
     if (terminalRounds.length === 0) return [];
     return this.prisma.position.findMany({
-      where: { roundId: { in: terminalRounds.map((round) => round.id) }, settled: false },
+      where: { roundId: { in: terminalRounds.map((round) => round.id) } },
       select: { address: true, owner: true, roundId: true },
     });
   }
