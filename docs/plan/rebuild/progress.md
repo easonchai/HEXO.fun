@@ -42,6 +42,10 @@ runs vitest. The port override exists so several suites can run side by side.
 Assign a distinct port per concurrent agent; 8899 and 9099 were used for the
 rounds and epoch suites.
 
+A full run takes two to four minutes. Run it in the foreground with a generous
+timeout. Launching it as a background task and then waiting on the result burned
+an hour on ticket 02, because the wait itself ends the turn and nothing advances.
+
 ## Decisions taken during the build
 
 - `Pool` has two fields the spec's §2.1 list omits but §2.3 and §2.5 need:
