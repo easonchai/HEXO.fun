@@ -16,6 +16,8 @@ file carries the detail under its `## Comments`; this is the map.
 | 08     | `3d14b51` | 24 API tests against a seeded Postgres                             |
 | 06     | `5f1e056` | 40 unit and Postgres tests, 3 localnet tests                       |
 | 07     | `511fa8e` | 27 unit tests, one 47 s localnet end-to-end through payout         |
+| 10     | `538be2a` | web check and vitest, then `9e923ae` matched the API client to ticket 08 |
+| 11     | `8e03ac1` | web check clean, 41 vitest tests, copy audit at ticket 10's baseline |
 
 `89fb8b3` adds the shared `fulfillRandomness` and `randomnessFor` test helpers.
 `1cd51bc` adds what all four backend tickets needed from files none of them
@@ -29,8 +31,19 @@ passed, 4 skipped (the two localnet files, which each ran on their own).
 
 ## Next
 
-10 (frontend rewire) and 11 (frontend screens), then 12 (deploy) and 13 (smoke).
-12 is `ready-for-human`: it needs the devnet deploy key and the VPS.
+12, and only 12. It is `ready-for-human` and needs the devnet deploy key and
+the VPS. Step 4 of it (compose stack, env example, deploy runbook) landed in
+`04b291b`; the deploy itself has not happened.
+
+13's code landed in `e5bd20a`: the `admin` command group (`set-params`,
+`pause`, `unpause`, `fund-jackpot`), the runbook sections, and
+`apps/web/e2e/demo.spec.ts` behind an `E2E_BASE_URL` env var. Its ticket stays
+`blocked`, because its acceptance is a passing Playwright run against the live
+URL and there is no live URL yet. Point the env var at Vercel once 12 lands.
+
+Two things nobody has run: the PRD §9 manual walkthrough on localnet that
+ticket 11 asks for, and the demo spec itself against any stack. Both want a
+validator, backend and frontend up together.
 
 ## How the program is split
 
