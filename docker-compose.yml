@@ -1,1 +1,59 @@
-# Rewritten by ticket 12 (postgres + backend, Traefik labels).
+# Postgres + backend for the VPS. Traefik is already running on the host and is
+# not part of this file; it only needs the labels below and a shared network.
+# Every deployment-specific value comes from .env (see .env.example).
+name: hexvault
+
+networks:
+  # The network Traefik already watches. Created outside this file.
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK}
+
+volumes:
+  postgres-data:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # No ports: 5432 stays off the host. Reach it with `docker compose exec postgres psql`.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  backend:
+    # Build context is the repo root; the Dockerfile needs the workspace lockfile.
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # RPC_URL, PROGRAM_ID, POOL_ID, AUTHORITY_KEYPAIR, HEXUSDC_MINT, CORS_ORIGIN
+    # and the tuning values all come from here.
+    env_file: .env
+    environment:
+      # Overrides whatever .env holds: inside compose the database is a service name.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Pinned because the Traefik service label below hardcodes 8080.
+      PORT: 8080
+    networks:
+      - default
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK}
+      traefik.http.routers.hexvault-api.rule: Host(`api.${DOMAIN}`)
+      traefik.http.routers.hexvault-api.entrypoints: websecure
+      traefik.http.routers.hexvault-api.tls.certresolver: ${CERT_RESOLVER}
+      traefik.http.services.hexvault-api.loadbalancer.server.port: "8080"
