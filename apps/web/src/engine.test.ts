@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buyClosesAt,
   covers,
+  decideAutoRound,
   displayTile,
   expectedReward,
   hmText,
@@ -11,7 +12,9 @@ import {
   roundKey,
   secondsLeft,
   timerText,
+  type Phase,
   type PositionLike,
+  type RememberedBoard,
   type RoundLike,
 } from "./engine.js";
 
@@ -99,5 +102,80 @@ describe("round engine", () => {
     expect(hmText(90_000n)).toBe("25:00");
     // Already past: clamp, no sign.
     expect(hmText(-5n)).toBe("00:00");
+  });
+});
+
+describe("decideAutoRound", () => {
+  const board: RememberedBoard = { tiles: [1, 2, 3], stake: 10n };
+
+  it.each([
+    [
+      "no remembered board",
+      null,
+      1000n,
+      "mine" as Phase,
+      false,
+      "no remembered board",
+    ],
+    [
+      "empty tiles",
+      { tiles: [], stake: 10n },
+      1000n,
+      "mine" as Phase,
+      false,
+      "remembered board has no tiles",
+    ],
+    [
+      "zero stake",
+      { tiles: [1, 2], stake: 0n },
+      1000n,
+      "mine" as Phase,
+      false,
+      "remembered stake is zero",
+    ],
+    [
+      "stake exceeding Entries",
+      board,
+      5n,
+      "mine" as Phase,
+      false,
+      "stake exceeds Entries",
+    ],
+    [
+      "Position already placed",
+      board,
+      1000n,
+      "mine" as Phase,
+      true,
+      "position already placed this round",
+    ],
+    [
+      "phase not mine",
+      board,
+      1000n,
+      "settling" as Phase,
+      false,
+      "round is not open for positions",
+    ],
+  ])(
+    "%s → skip",
+    (_label, remembered, entries, phase, hasPosition, reason) => {
+      expect(
+        decideAutoRound(
+          remembered as RememberedBoard | null,
+          entries,
+          phase,
+          hasPosition,
+        ),
+      ).toEqual({ action: "skip", reason });
+    },
+  );
+
+  it("places the remembered board when everything checks out", () => {
+    expect(decideAutoRound(board, 1000n, "mine", false)).toEqual({
+      action: "place",
+      tiles: board.tiles,
+      stake: board.stake,
+    });
   });
 });

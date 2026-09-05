@@ -107,6 +107,41 @@ export function hmText(seconds: bigint): string {
   return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
 }
 
+/** The tiles + uniform stake remembered from the last manual deploy. */
+export interface RememberedBoard {
+  tiles: number[];
+  stake: bigint;
+}
+
+export type AutoRoundDecision =
+  | { action: "place"; tiles: number[]; stake: bigint }
+  | { action: "skip"; reason: string };
+
+/**
+ * Whether auto-rounds should re-place the remembered board in a freshly
+ * opened Round. Pure: no chain I/O, no React state.
+ */
+export function decideAutoRound(
+  board: RememberedBoard | null,
+  entries: bigint,
+  phase: Phase,
+  hasPosition: boolean,
+): AutoRoundDecision {
+  if (!board) return { action: "skip", reason: "no remembered board" };
+  if (board.tiles.length === 0)
+    return { action: "skip", reason: "remembered board has no tiles" };
+  if (board.stake <= 0n)
+    return { action: "skip", reason: "remembered stake is zero" };
+  if (hasPosition)
+    return { action: "skip", reason: "position already placed this round" };
+  if (phase !== "mine")
+    return { action: "skip", reason: "round is not open for positions" };
+  const spend = board.stake * BigInt(board.tiles.length);
+  if (spend > entries)
+    return { action: "skip", reason: "stake exceeds Entries" };
+  return { action: "place", tiles: board.tiles, stake: board.stake };
+}
+
 export interface FeedRow {
   key: string;
   /** Short address label; "you" when it is the connected wallet. */

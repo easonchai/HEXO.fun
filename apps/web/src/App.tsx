@@ -16,11 +16,13 @@ import { type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
   covers,
+  decideAutoRound,
   displayTile,
   expectedReward,
   isRevealed,
   phaseFor,
   type FeedRow,
+  type RememberedBoard,
 } from "./engine.js";
 import { formatAtomic, parseAtomic, withdrawable } from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
@@ -158,11 +160,6 @@ export function App() {
 
   // --- Actions ---------------------------------------------------------------
   const stake = parseAtomic(stakeText, DECIMALS) ?? 0n;
-  const mask = useMemo(
-    () =>
-      engine.selected.reduce((acc, tile) => acc | (1n << BigInt(tile - 1)), 0n),
-    [engine.selected],
-  );
   const position = engine.activePosition;
   const openRound = round && round.status === 0 ? round : null;
   const locked = Boolean(position) && Boolean(openRound);
@@ -182,48 +179,45 @@ export function App() {
   if (spend > entries)
     problems.push("not enough Entries — deposit to earn more");
 
-  const deploy = useCallback(async () => {
-    if (!pool || !openRound || !publicKey || !program) return;
-    if (engine.selected.length === 0 || stake <= 0n) return;
-    setDeployBusy(true);
-    setDeployNote(null);
-    try {
-      sfx("click");
-      await buyPosition(
-        program,
-        { publicKey },
-        pool,
-        openRound.roundId,
-        mask,
-        stake,
-      );
-      const entriesAfter = entries - spend;
-      setDeployNote(
-        `Entries in ${fmt(spend)} · Entries after ${fmt(entriesAfter)} · withdrawable after ${fmt(withdrawable(principal, entriesAfter))}`,
-      );
-      lastDeployRef.current = { tiles: [...engine.selected], stake };
-      sfx("prime");
-      refresh();
-    } catch (error) {
-      setDeployNote(error instanceof Error ? error.message : String(error));
-    } finally {
-      setDeployBusy(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    pool,
-    openRound,
-    publicKey,
-    program,
-    mask,
-    stake,
-    spend,
-    entries,
-    principal,
-    engine.selected,
-    fmt,
-    refresh,
-  ]);
+  /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction was sent. */
+  const deploy = useCallback(
+    async (tiles: number[], stakeAmount: bigint): Promise<boolean> => {
+      if (!pool || !openRound || !publicKey || !program) return false;
+      if (tiles.length === 0 || stakeAmount <= 0n) return false;
+      setDeployBusy(true);
+      setDeployNote(null);
+      try {
+        sfx("click");
+        const tileMask = tiles.reduce(
+          (acc, tile) => acc | (1n << BigInt(tile - 1)),
+          0n,
+        );
+        const spendNow = stakeAmount * BigInt(tiles.length);
+        await buyPosition(
+          program,
+          { publicKey },
+          pool,
+          openRound.roundId,
+          tileMask,
+          stakeAmount,
+        );
+        const entriesAfter = entries - spendNow;
+        setDeployNote(
+          `Entries in ${fmt(spendNow)} · Entries after ${fmt(entriesAfter)} · withdrawable after ${fmt(withdrawable(principal, entriesAfter))}`,
+        );
+        lastDeployRef.current = { tiles: [...tiles], stake: stakeAmount };
+        sfx("prime");
+        refresh();
+        return true;
+      } catch (error) {
+        setDeployNote(error instanceof Error ? error.message : String(error));
+        return false;
+      } finally {
+        setDeployBusy(false);
+      }
+    },
+    [pool, openRound, publicKey, program, entries, principal, fmt, refresh],
+  );
 
   const doDeposit = useCallback(
     async (amount: bigint) => {
@@ -251,24 +245,45 @@ export function App() {
     [pool, publicKey, program, fmt, refresh],
   );
 
-  // Auto-rounds: re-place the last board when a fresh round opens.
-  const lastDeployRef = useRef<{ tiles: number[]; stake: bigint } | null>(null);
+  // Auto-rounds: re-place the last board when a fresh round opens. The
+  // counter and the "handled this round" marker only move after deploy()
+  // reports the transaction was actually sent — a board that can't be
+  // placed (see decideAutoRound) leaves both alone, so it retries next
+  // round instead of silently eating one.
+  const lastDeployRef = useRef<RememberedBoard | null>(null);
   const autoRoundRef = useRef<string | null>(null);
   useEffect(() => {
-    if (autoRounds <= 0 || !lastDeployRef.current || !pool) return;
-    if (!openRound) return;
+    if (autoRounds <= 0 || !pool || !openRound || deployBusy) return;
     const key = openRound.roundId.toString();
     if (autoRoundRef.current === key) return;
-    if (position) return;
-    if (phaseFor(openRound, now ?? 0n, pool.closeBuffer) !== "mine") return;
-    autoRoundRef.current = key;
-    setAutoRounds((value) => value - 1);
-    const tiles = lastDeployRef.current.tiles;
-    const stakeForRound = lastDeployRef.current.stake;
-    setStakeText(formatAtomic(stakeForRound, DECIMALS));
-    engine.setSelected(tiles);
-    void deploy();
-  }, [openRound, autoRounds, position, now, pool, engine, deploy]);
+    const phase = phaseFor(openRound, now ?? 0n, pool.closeBuffer);
+    const decision = decideAutoRound(
+      lastDeployRef.current,
+      entries,
+      phase,
+      Boolean(position),
+    );
+    if (decision.action === "skip") return;
+    const { tiles, stake: stakeForRound } = decision;
+    void (async () => {
+      const placed = await deploy(tiles, stakeForRound);
+      if (!placed) return;
+      autoRoundRef.current = key;
+      setAutoRounds((value) => value - 1);
+      setStakeText(formatAtomic(stakeForRound, DECIMALS));
+      engine.setSelected(tiles);
+    })();
+  }, [
+    openRound,
+    autoRounds,
+    position,
+    now,
+    pool,
+    entries,
+    deployBusy,
+    engine,
+    deploy,
+  ]);
 
   // Theme attribute + sound subscription.
   useEffect(() => {
@@ -489,7 +504,7 @@ export function App() {
               rewardHint={rewardHint}
               settleBusy={settleBusy}
               onSettle={() => void settle()}
-              onDeploy={() => void deploy()}
+              onDeploy={() => void deploy(engine.selected, stake)}
               onDeposit={(amount) => void doDeposit(amount)}
               depositBusy={depositBusy}
               vaultNote={vaultNote}

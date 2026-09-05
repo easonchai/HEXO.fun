@@ -26,6 +26,7 @@ import {
   lastFlyArrivalMs,
   type LaserPath,
 } from "./arena/geo.js";
+import { formatAtomic } from "./lib/money.js";
 import { sfx } from "./sfx.js";
 import type { PositionRow, RoundRow } from "./read.js";
 
@@ -53,7 +54,7 @@ export interface EngineOutput {
   phase: Phase;
   /** Seconds until positions close, during the "mine" phase. */
   secondsLeft: bigint;
-  /** Protocol tile indexes 0..35 the user has picked. */
+  /** Display numbers 1..36 the user has picked. */
   selected: number[];
   setSelected: (tiles: number[]) => void;
   /** The round once it has revealed a winning tile; null before that. */
@@ -173,7 +174,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
           sfx("win");
           setTakeover({
             title: "YOU WON",
-            amount: `+${formatReward(reward)}`,
+            amount: `+${formatAtomic(reward, 6)}`,
             tileText: `Tile ${displayTile(tileIndex)}`,
           });
         }, 1550);
@@ -227,12 +228,4 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     feed,
     activePosition: owner ? position : null,
   };
-}
-
-/** Atomic (6dp) → "x.yyy" string without floats. */
-export function formatReward(amount: bigint): string {
-  const text = amount.toString();
-  return text.length <= 3
-    ? `0.${text.padStart(3, "0")}`
-    : `${text.slice(0, -3)}.${text.slice(-3)}`;
 }
