@@ -8,7 +8,6 @@ import { useState } from "react";
 
 import { Textile } from "../arena/Textile.js";
 import { formatAtomic, parseAtomic, previewBuy } from "../lib/money.js";
-import type { Balances } from "../state.js";
 import type { EngineOutput } from "../useRoundEngine.js";
 import type { FeedRow } from "../engine.js";
 import { PanelCard } from "../ui.js";
@@ -17,7 +16,12 @@ const SYMBOL_ROW = [0, 1, 2, 3, 4, 5];
 
 export interface ControlPanelProps {
   engine: EngineOutput;
-  balances: Balances;
+  /** Player.principal, atomic units. */
+  principal: bigint;
+  /** Player.entries, atomic units. */
+  entries: bigint;
+  /** The wallet's own hexUSDC balance, atomic units. */
+  walletBalance: bigint;
   decimals: number;
   symbol: string;
   stakeText: string;
@@ -33,8 +37,8 @@ export interface ControlPanelProps {
   lastWin: { tile: number; kind: string } | null;
   feed: FeedRow[];
   rewardHint: string | null;
-  claimRewardBusy: boolean;
-  onClaimReward: () => void;
+  settleBusy: boolean;
+  onSettle: () => void;
   onDeploy: () => void;
   onDeposit: (amount: bigint) => void;
   depositBusy: boolean;
@@ -44,7 +48,9 @@ export interface ControlPanelProps {
 export function ControlPanel(props: ControlPanelProps) {
   const {
     engine,
-    balances,
+    principal,
+    entries,
+    walletBalance,
     decimals,
     symbol,
     stakeText,
@@ -60,8 +66,8 @@ export function ControlPanel(props: ControlPanelProps) {
     lastWin,
     feed,
     rewardHint,
-    claimRewardBusy,
-    onClaimReward,
+    settleBusy,
+    onSettle,
     onDeploy,
     onDeposit,
     depositBusy,
@@ -71,13 +77,13 @@ export function ControlPanel(props: ControlPanelProps) {
   const tiles = engine.selected.length;
   const stake = parseAtomic(stakeText, decimals) ?? 0n;
   const perRound = stake * BigInt(Math.max(tiles, 0));
-  const buyPreview = previewBuy(
-    balances.principal,
-    balances.entries,
-    tiles,
-    stake,
-  );
+  const buyPreview = previewBuy(principal, entries, tiles, stake);
   const fmt = (value: bigint) => formatAtomic(value, decimals);
+
+  // These are spans, not buttons, so `disabled` does nothing: gate the handler.
+  const depositClick = (amount: bigint) => (): void => {
+    if (!depositBusy) onDeposit(amount);
+  };
 
   const addAmount = (delta: number): void => {
     const current = stake;
@@ -87,8 +93,7 @@ export function ControlPanel(props: ControlPanelProps) {
 
   const setMax = (): void => {
     if (tiles === 0) return;
-    const perTile = balances.entries / BigInt(tiles);
-    setStakeText(formatAtomic(perTile, decimals));
+    setStakeText(formatAtomic(entries / BigInt(tiles), decimals));
   };
 
   const togglePreset = (kind: "odd" | "even" | "all"): void => {
@@ -167,11 +172,11 @@ export function ControlPanel(props: ControlPanelProps) {
         </div>
 
         <div className="dual-line">
-          <span data-testid="wallet-entries">
-            wallet ET {fmt(balances.entries)}
-          </span>
+          <span data-testid="wallet-entries">Entries {fmt(entries)}</span>
           <span className="dual-accent">
-            {tiles > 0 && stake > 0n ? `${tiles} × ${fmt(stake)} ET` : "— ET"}
+            {tiles > 0 && stake > 0n
+              ? `${tiles} × ${fmt(stake)} Entries`
+              : "— Entries"}
           </span>
         </div>
 
@@ -272,27 +277,30 @@ export function ControlPanel(props: ControlPanelProps) {
           <span className="row-label">PER ROUND</span>
           <div>
             <span className="cost-value">{fmt(perRound)}</span>
-            <span className="cost-unit"> ET</span>
+            <span className="cost-unit"> Entries</span>
           </div>
         </div>
         <div className="cost-row">
-          <span className="row-label">TOTAL COST</span>
+          <span className="row-label">ENTRIES IN</span>
           <div className="cost-badge-wrap">
             <span className="cost-badge" data-testid="total-cost">
               {fmt(perRound)}
             </span>
-            <span className="cost-unit">ET ENTRIES</span>
+            <span className="cost-unit">ENTRIES</span>
           </div>
         </div>
         <div className="cost-row deployed">
-          <span className="row-label strong">DEPLOYED (CURRENT)</span>
+          <span className="row-label strong">IN THIS ROUND</span>
           <span className="volt-badge" data-testid="deployed-total">
             {fmt(deployedTotal)}
           </span>
         </div>
         {tiles > 0 && stake > 0n ? (
           <div className="dual-line" data-testid="deploy-preview">
-            <span>ET after {fmt(buyPreview.entriesAfter)}</span>
+            <span>
+              Entries in {fmt(buyPreview.spend)} · Entries after{" "}
+              {fmt(buyPreview.entriesAfter)}
+            </span>
             <span className="dual-accent">
               withdrawable after {fmt(buyPreview.withdrawableAfter)}
             </span>
@@ -306,11 +314,11 @@ export function ControlPanel(props: ControlPanelProps) {
             <button
               type="button"
               className="btn-deploy ghost"
-              disabled={claimRewardBusy}
-              data-testid="claim-round-reward"
-              onClick={onClaimReward}
+              disabled={settleBusy}
+              data-testid="settle-position"
+              onClick={onSettle}
             >
-              <span>{claimRewardBusy ? "SIGNING…" : "CLAIM ROUND REWARD"}</span>
+              <span>{settleBusy ? "SIGNING…" : "SETTLE POSITION"}</span>
             </button>
           </div>
         ) : null}
@@ -392,33 +400,36 @@ export function ControlPanel(props: ControlPanelProps) {
         <div className="vault-row">
           <div className="vault-balances" data-testid="vault-balances">
             <span>
-              {symbol} {fmt(balances.accepted)}
+              {symbol} {fmt(walletBalance)}
             </span>
-            <span>PT {fmt(balances.principal)}</span>
-            <span>ET {fmt(balances.entries)}</span>
+            <span>Principal {fmt(principal)}</span>
+            <span>Entries {fmt(entries)}</span>
           </div>
           <div className="vault-actions">
             <span
               className="pill max"
               role="button"
+              aria-disabled={depositBusy}
               data-testid="quick-deposit-1"
-              onClick={() => onDeposit(BigInt(1) * 10n ** BigInt(decimals))}
+              onClick={depositClick(BigInt(1) * 10n ** BigInt(decimals))}
             >
               DEPOSIT 1
             </span>
             <span
               className="pill max"
               role="button"
+              aria-disabled={depositBusy}
               data-testid="quick-deposit-10"
-              onClick={() => onDeposit(BigInt(10) * 10n ** BigInt(decimals))}
+              onClick={depositClick(BigInt(10) * 10n ** BigInt(decimals))}
             >
               DEPOSIT 10
             </span>
             <span
               className="pill max"
               role="button"
+              aria-disabled={depositBusy}
               data-testid="quick-deposit-max"
-              onClick={() => onDeposit(balances.accepted)}
+              onClick={depositClick(walletBalance)}
             >
               DEPOSIT ALL
             </span>

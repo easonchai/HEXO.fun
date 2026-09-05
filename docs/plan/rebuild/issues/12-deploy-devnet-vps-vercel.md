@@ -20,3 +20,46 @@ The demo is live at a public URL.
 - `https://api.<domain>/status` is green.
 - The Vercel URL completes PRD §9 with a fresh Privy wallet.
 - `docker compose logs backend` shows rounds opening and settling every ~65 s.
+
+## Comments
+
+Step 4 done. Steps 1, 2 and 3 stay human work and are untouched; `Status` stays
+`ready-for-human`.
+
+Written:
+
+- `docker-compose.yml`: `postgres:16-alpine` with a named volume, a `pg_isready`
+  healthcheck and no published port, plus `backend` built from
+  `apps/backend/Dockerfile` with the repo root as context. `depends_on` waits on
+  `service_healthy`, `restart: unless-stopped`, `env_file: .env`. `DATABASE_URL`
+  and `PORT` are set in `environment:` so they override the file: the database
+  host inside compose is the service name, and `PORT` is pinned to 8080 to match
+  the Traefik service label. The Traefik network is declared `external: true`
+  under `${TRAEFIK_NETWORK}`; no Traefik service is defined. Router labels cover
+  `Host(\`api.${DOMAIN}\`)`, `websecure`, `${CERT_RESOLVER}` and
+  `loadbalancer.server.port=8080`.
+- Root `.env.example`: every variable in spec §3.1 and
+  `apps/backend/src/config/env.ts`, plus `DOMAIN`, `TRAEFIK_NETWORK`,
+  `CERT_RESOLVER` and the `POSTGRES_*` credentials compose needs. Grouped by who
+  supplies the value: human, bootstrap (ticket 09), or a spec §7 default.
+  Placeholders only.
+- `docs/plan/rebuild/runbook.md`: steps 1 to 3 as commands, the reset recipe
+  (bump `POOL_ID`, re-run bootstrap, recreate the backend), and the acceptance
+  checks. Ticket 13's triage content is deliberately not in it.
+
+Verified: `docker compose config -q` parses clean against a throwaway `.env`
+copied from `.env.example`, and the resolved output shows the intended
+`DATABASE_URL`, labels and external network. The throwaway `.env` was deleted.
+
+Two things the repo could not settle:
+
+- The step 2 command `docker compose run backend pnpm bootstrap` fails as
+  written. The Dockerfile's runtime stage never runs `corepack enable`, and
+  `node:22-alpine` ships no `pnpm` shim (checked in the image). The runbook keeps
+  the intended command and gives the working equivalent,
+  `docker compose run --rm backend node_modules/.bin/tsx src/bootstrap.ts`.
+  A one-line `RUN corepack enable` in the runtime stage would fix it, but the
+  Dockerfile belongs to ticket 05.
+- Nothing in the repo converts `solana-keygen`'s JSON array to the base58
+  `AUTHORITY_KEYPAIR` that `ChainService` decodes. The runbook carries a `node -e`
+  one-liner using the workspace's own `bs58`.

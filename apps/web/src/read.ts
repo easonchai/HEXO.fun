@@ -1,97 +1,101 @@
-/** Decoded chain reads. Every balance the UI shows is re-read from chain here. */
+/**
+ * Chain reads. This module owns the three accounts the UI cannot get wrong:
+ * the Pool, the connected wallet's Player, and the open Round. Everything
+ * else comes from `api.ts`. Polled every 2 s and re-read immediately when a
+ * `RoundSettled` event lands on the program's logs.
+ */
 import { BN } from "@anchor-lang/core";
-import { PublicKey } from "@solana/web3.js";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { PublicKey, type Connection } from "@solana/web3.js";
 
 import {
   accountOf,
-  epochAddress,
+  acceptedAta,
+  decodeEventLogs,
+  eventKey,
+  playerAddress,
+  poolAddress,
   positionAddress,
-  randomnessAddress,
   roundAddress,
   toBigint,
+  tokenBalance,
+  POOL_ID,
+  PROGRAM_ID,
   type HexVaultProgram,
 } from "./chain.js";
+import { withdrawable } from "./lib/money.js";
+
+export { withdrawable };
 
 export interface PoolRow {
   poolId: bigint;
-  paused: boolean;
+  authority: PublicKey;
   acceptedMint: PublicKey;
-  acceptedTokenProgram: PublicKey;
-  acceptedDecimals: number;
-  principalMint: PublicKey;
-  entryMint: PublicKey;
   principalVault: PublicKey;
-  prizeVault: PublicKey;
   jackpotVault: PublicKey;
+  treasury: PublicKey;
+  buybackReserve: PublicKey;
+  house: PublicKey;
+  epochSeconds: bigint;
+  roundSeconds: bigint;
+  closeBuffer: bigint;
+  vrfTimeout: bigint;
   minDeposit: bigint;
-  maxStakePerTile: bigint;
-  maxRoundBonusEntries: bigint;
-  minEpochSeconds: bigint;
-  maxEpochSeconds: bigint;
-  roundCloseBufferSeconds: bigint;
-  latestEpochId: bigint;
-}
-
-export interface EpochRow {
-  pool: PublicKey;
-  id: bigint;
-  startsAt: bigint;
-  entryCutoffAt: bigint;
-  endsAt: bigint;
-  prizeSnapshotAt: bigint;
-  claimDeadline: bigint;
-  status: number;
-  prizeSnapshotRoot: number[];
-  totalEntryWeight: bigint;
-  prizeAmount: bigint;
-  prizeTarget: bigint;
-  jackpotStatus: number;
-  jackpotAmount: bigint;
-  jackpotTarget: bigint;
-}
-
-export interface RoundRow {
-  pool: PublicKey;
-  epoch: PublicKey;
-  epochId: bigint;
-  id: bigint;
-  startsAt: bigint;
-  endsAt: bigint;
-  status: number;
-  winningTile: number;
-  bonusEntries: bigint;
-  totalStake: bigint;
-  tileStakes: bigint[];
-}
-
-export interface PositionRow {
-  pool: PublicKey;
-  owner: PublicKey;
-  round: PublicKey;
-  roundId: bigint;
-  tiles: bigint;
-  stakePerTile: bigint;
-  rewardClaimed: boolean;
-}
-
-export interface RandomnessRow {
-  pool: PublicKey;
-  kind: number;
-  status: number;
-  subject: PublicKey;
-  epochId: bigint;
-  roundId: bigint;
+  paused: boolean;
+  currentEpochId: bigint;
+  currentEpochStart: bigint;
+  previousEpochStart: bigint;
+  nextRoundId: bigint;
+  /** 0 when no round is open. */
+  openRoundId: bigint;
+  carryPot: bigint;
+  totalPrincipal: bigint;
 }
 
 /** A pool row plus its own address: what every screen needs. */
 export type PoolLike = { address: PublicKey } & PoolRow;
 
+export interface PlayerRow {
+  owner: PublicKey;
+  principal: bigint;
+  entries: bigint;
+  weightAcc: bigint;
+  lastUpdate: bigint;
+  epochId: bigint;
+  frozenWeight: bigint;
+  frozenEpoch: bigint;
+  regEpoch: bigint;
+  regStart: bigint;
+  regEnd: bigint;
+  isHouse: boolean;
+}
+
+export interface RoundRow {
+  roundId: bigint;
+  epochId: bigint;
+  startsAt: bigint;
+  endsAt: bigint;
+  /** 0 Open, 1 Requested, 2 Settled, 3 Forfeited, 4 Voided. */
+  status: number;
+  tileTotals: bigint[];
+  pot: bigint;
+  requestedAt: bigint;
+  winningTile: number;
+}
+
+export interface PositionRow {
+  owner: PublicKey;
+  round: PublicKey;
+  tiles: bigint;
+  stakePerTile: bigint;
+}
+
 /**
- * Anchor decodes accounts with the IDL's snake_case field names and BN for
- * u64/i64. The UI works in camelCase + bigint, so normalize once, here.
- * Pubkeys are re-keyed through THIS copy of web3.js: dependency hoisting can
- * put a second copy in the bundle, and foreign PublicKey instances break the
- * spl-token helpers (`mint.toBuffer is not a function`).
+ * Anchor decodes accounts with BN for u64/u128/i64. The UI works in bigint,
+ * so normalize once, here. Pubkeys are re-keyed through THIS copy of web3.js:
+ * dependency hoisting can put a second copy in the bundle, and foreign
+ * PublicKey instances break the spl-token helpers (`mint.toBuffer is not a
+ * function`).
  */
 function normalize(value: unknown): unknown {
   if (value instanceof BN) return toBigint(value);
@@ -125,111 +129,161 @@ function decode<T>(raw: unknown): T {
   return normalize(raw) as T;
 }
 
-/** Every pool the program holds (localnet volumes are tiny). */
-export async function listPools(
+/** Null instead of a throw: a missing account is a normal state here. */
+async function fetchAccount<T>(
   program: HexVaultProgram,
-): Promise<{ address: PublicKey; pool: PoolRow }[]> {
-  const accounts = await accountOf(program, "pool").all();
-  return accounts.map(({ publicKey, account }) => ({
-    address: publicKey,
-    pool: decode<PoolRow>(account),
-  }));
-}
-
-export async function fetchPool(
-  program: HexVaultProgram,
+  name: string,
   address: PublicKey,
-): Promise<PoolRow | null> {
+): Promise<T | null> {
   try {
-    return decode<PoolRow>(await accountOf(program, "pool").fetch(address));
+    return decode<T>(await accountOf(program, name).fetch(address));
   } catch {
     return null;
   }
 }
 
-/** Epochs 1..latestEpochId for a pool; gaps come back null and are dropped. */
-export async function listEpochs(
+export const fetchPool = (
   program: HexVaultProgram,
-  pool: PublicKey,
-  latestEpochId: bigint,
-): Promise<EpochRow[]> {
-  if (latestEpochId <= 0n) return [];
-  const keys = Array.from({ length: Number(latestEpochId) }, (_, i) =>
-    epochAddress(pool, BigInt(i + 1)),
-  );
-  const rows = await accountOf(program, "epoch").fetchMultiple(keys);
-  return rows.flatMap((row) => (row ? [decode<EpochRow>(row)] : []));
-}
+  address: PublicKey,
+): Promise<PoolRow | null> => fetchAccount<PoolRow>(program, "pool", address);
 
-export async function listRounds(
-  program: HexVaultProgram,
-  epochKeys: PublicKey[],
-): Promise<RoundRow[]> {
-  if (epochKeys.length === 0) return [];
-  const wanted = new Set(epochKeys.map((key) => key.toBase58()));
-  const accounts = await accountOf(program, "round").all();
-  return accounts
-    .filter(({ account }) =>
-      wanted.has(String((account as Record<string, unknown>).epoch)),
-    )
-    .map(({ account }) => decode<RoundRow>(account))
-    .sort(byRoundOrder);
-}
-
-const byRoundOrder = (a: RoundRow, b: RoundRow): number =>
-  a.epochId === b.epochId ? Number(a.id - b.id) : Number(a.epochId - b.epochId);
-
-/** One position per wallet per round; rounds without one are simply absent. */
-export async function listPositions(
+export const fetchPlayer = (
   program: HexVaultProgram,
   pool: PublicKey,
   owner: PublicKey,
-  rounds: RoundRow[],
-): Promise<Map<string, PositionRow>> {
-  if (rounds.length === 0) return new Map();
-  const keys = rounds.map((round) =>
-    positionAddress(pool, roundAddressOf(round), owner),
-  );
-  const rows = await accountOf(program, "position").fetchMultiple(keys);
-  const out = new Map<string, PositionRow>();
-  rows.forEach((row, index) => {
-    const round = rounds[index]!;
-    const key = `${round.epochId}:${round.id}`;
-    if (row) out.set(key, decode<PositionRow>(row));
-  });
-  return out;
-}
+): Promise<PlayerRow | null> =>
+  fetchAccount<PlayerRow>(program, "player", playerAddress(pool, owner));
 
-const roundAddressOf = (round: RoundRow): PublicKey =>
-  roundAddress(round.pool, round.epochId, round.id);
-
-/**
- * Prize (kind 1) and jackpot (kind 2) requests for every epoch, keyed
- * "prize:<id>" / "jackpot:<id>". One fetchMultiple instead of 2N single
- * fetches — this ran on every refresh and dominated the RPC call count.
- */
-export async function listRandomness(
+export const fetchRound = (
   program: HexVaultProgram,
   pool: PublicKey,
-  epochs: EpochRow[],
-): Promise<Map<string, RandomnessRow>> {
-  const out = new Map<string, RandomnessRow>();
-  if (epochs.length === 0) return out;
-  const kinds = [1, 2] as const;
-  const keys = epochs.flatMap((epoch) =>
-    kinds.map((kind) =>
-      randomnessAddress(pool, epochAddress(pool, epoch.id), kind),
-    ),
-  );
-  const rows = await accountOf(program, "randomnessRequest").fetchMultiple(keys);
-  rows.forEach((row, index) => {
-    if (!row) return;
-    const epoch = epochs[Math.floor(index / kinds.length)]!;
-    const kind = kinds[index % kinds.length]!;
-    out.set(
-      `${kind === 1 ? "prize" : "jackpot"}:${epoch.id}`,
-      decode<RandomnessRow>(row),
+  roundId: bigint,
+): Promise<RoundRow | null> =>
+  fetchAccount<RoundRow>(program, "round", roundAddress(pool, roundId));
+
+export interface ChainState {
+  pool: PoolLike | null;
+  player: PlayerRow | null;
+  /** The open round, or the last one this session saw once it has settled. */
+  round: RoundRow | null;
+  /** The connected wallet's position in `round`, when it has one. */
+  position: PositionRow | null;
+  /** The wallet's own hexUSDC balance, atomic units. */
+  walletBalance: bigint;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+}
+
+const POLL_MS = 2000;
+
+const EMPTY: Omit<ChainState, "refresh"> = {
+  pool: null,
+  player: null,
+  round: null,
+  position: null,
+  walletBalance: 0n,
+  loading: false,
+  error: null,
+};
+
+export function useChainState(
+  connection: Connection,
+  program: HexVaultProgram | null,
+  owner: PublicKey | undefined,
+): ChainState {
+  const [state, setState] = useState(EMPTY);
+  const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((value) => value + 1), []);
+  /** A settled round stops being `open_round_id`, but the reveal still needs it. */
+  const lastRoundId = useRef(0n);
+  const ownerKey = owner?.toBase58();
+
+  useEffect(() => {
+    if (!program) {
+      setState(EMPTY);
+      return;
+    }
+    let cancelled = false;
+    const address = poolAddress(POOL_ID);
+
+    const load = async (): Promise<void> => {
+      try {
+        const pool = await fetchPool(program, address);
+        if (cancelled) return;
+        if (!pool) {
+          // A missing account and a stuttering RPC look the same from here, so
+          // keep the last good read on screen and say so rather than blanking.
+          setState((current) => ({
+            ...current,
+            loading: false,
+            error: `pool ${POOL_ID} not readable at ${address.toBase58()}`,
+          }));
+          return;
+        }
+        if (pool.openRoundId > 0n) lastRoundId.current = pool.openRoundId;
+        const roundId = lastRoundId.current;
+
+        const [player, round, walletBalance] = await Promise.all([
+          owner ? fetchPlayer(program, address, owner) : null,
+          roundId > 0n ? fetchRound(program, address, roundId) : null,
+          owner
+            ? tokenBalance(connection, acceptedAta(pool.acceptedMint, owner))
+            : 0n,
+        ]);
+        const position =
+          owner && round
+            ? await fetchAccount<PositionRow>(
+                program,
+                "position",
+                positionAddress(roundAddress(address, roundId), owner),
+              )
+            : null;
+        if (cancelled) return;
+        setState({
+          pool: { address, ...pool },
+          player,
+          round,
+          position,
+          walletBalance,
+          loading: false,
+          error: null,
+        });
+      } catch (caught) {
+        if (cancelled) return;
+        setState((current) => ({
+          ...current,
+          loading: false,
+          error: caught instanceof Error ? caught.message : String(caught),
+        }));
+      }
+    };
+
+    setState((current) => ({ ...current, loading: true }));
+    void load();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void load();
+    }, POLL_MS);
+
+    // A settle changes every balance at once; do not wait for the next poll.
+    const subscription = connection.onLogs(
+      PROGRAM_ID,
+      ({ logs }) => {
+        const settled = decodeEventLogs(program, logs).some(
+          (event) => eventKey(event.name) === "roundSettled",
+        );
+        if (settled) void load();
+      },
+      "confirmed",
     );
-  });
-  return out;
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      void connection.removeOnLogsListener(subscription);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ownerKey stands in for owner
+  }, [program, connection, ownerKey, tick]);
+
+  return { ...state, refresh };
 }

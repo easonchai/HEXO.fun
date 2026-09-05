@@ -1,12 +1,13 @@
 /**
- * VAULT tab — custody surface: deposit accepted asset, withdraw matched
- * principal, refresh entries after a rollover, and inspect receipts. The
- * program is the custody boundary: PT and ET always move together.
+ * VAULT tab — custody: deposit hexUSDC, withdraw matched principal, and pull
+ * test hexUSDC from the faucet. The program is the custody boundary:
+ * Principal and Entries move together, so a withdrawal needs both.
  */
 import { useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
-import { deposit, refreshEntries, withdraw } from "../actions.js";
+import { deposit, withdraw } from "../actions.js";
+import { apiBaseUrl, requestFaucet } from "../api.js";
 import type { HexVaultProgram } from "../chain.js";
 import {
   formatAtomic,
@@ -14,18 +15,19 @@ import {
   previewWithdraw,
   withdrawable,
 } from "../lib/money.js";
-import { epochAddress } from "../chain.js";
-import type { EpochRow, PoolLike } from "../read.js";
-import type { Balances, PlayerRow } from "../state.js";
+import type { PoolLike } from "../read.js";
 import { PanelCard } from "../ui.js";
+
+const DECIMALS = 6;
+const SYMBOL = "hexUSDC";
 
 export interface VaultScreenProps {
   program: HexVaultProgram;
   owner: PublicKey;
   pool: PoolLike;
-  latestEpoch: EpochRow | null;
-  balances: Balances;
-  player: PlayerRow | null;
+  principal: bigint;
+  entries: bigint;
+  walletBalance: bigint;
   paused: boolean;
   onDone: () => void;
 }
@@ -35,17 +37,13 @@ export function Vault(props: VaultScreenProps) {
     program,
     owner,
     pool,
-    latestEpoch,
-    balances,
-    player,
+    principal,
+    entries,
+    walletBalance,
     paused,
     onDone,
   } = props;
-  const decimals = pool.acceptedDecimals;
-  const fmt = (value: bigint) => formatAtomic(value, decimals);
-  const epochKey = latestEpoch
-    ? epochAddress(pool.address, latestEpoch.id)
-    : null;
+  const fmt = (value: bigint) => formatAtomic(value, DECIMALS);
 
   const [amountText, setAmountText] = useState("");
   const [withdrawText, setWithdrawText] = useState("");
@@ -53,11 +51,8 @@ export function Vault(props: VaultScreenProps) {
   const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(
     null,
   );
-
-  const needsRefresh =
-    player !== null &&
-    latestEpoch !== null &&
-    player.lastEntryEpochId !== latestEpoch.id;
+  /** Seconds the faucet says to wait; ticket 11 turns this into a countdown. */
+  const [faucetWait, setFaucetWait] = useState<number | null>(null);
 
   const run = async (label: string, action: () => Promise<string>) => {
     setBusy(label);
@@ -79,13 +74,36 @@ export function Vault(props: VaultScreenProps) {
     }
   };
 
-  const depositAmount = parseAtomic(amountText, decimals);
-  const withdrawAmount = parseAtomic(withdrawText, decimals);
-  const matched = withdrawable(balances.principal, balances.entries);
+  const pullFaucet = async () => {
+    setBusy("Faucet");
+    setNote(null);
+    setFaucetWait(null);
+    const result = await requestFaucet(apiBaseUrl(), owner.toBase58());
+    if (result.ok) {
+      setNote({
+        tone: "ok",
+        text: `faucet sent ${fmt(BigInt(result.data.amount))} ${SYMBOL}`,
+      });
+      onDone();
+    } else if ("retryAfterSeconds" in result) {
+      setFaucetWait(result.retryAfterSeconds);
+      setNote({
+        tone: "err",
+        text: `faucet rate limited: try again in ${result.retryAfterSeconds}s`,
+      });
+    } else {
+      setNote({ tone: "err", text: result.reason });
+    }
+    setBusy(null);
+  };
+
+  const depositAmount = parseAtomic(amountText, DECIMALS);
+  const withdrawAmount = parseAtomic(withdrawText, DECIMALS);
+  const matched = withdrawable(principal, entries);
   const withdrawalPreview =
     withdrawAmount === null
       ? null
-      : previewWithdraw(balances.principal, balances.entries, withdrawAmount);
+      : previewWithdraw(principal, entries, withdrawAmount);
 
   return (
     <div className="screen-vault" data-testid="vault-screen">
@@ -94,14 +112,14 @@ export function Vault(props: VaultScreenProps) {
         title="DEPOSIT"
         aside={
           <span className="dual-line-inline">
-            wallet {pool.acceptedMint.toBase58().slice(0, 4)}…{" "}
-            {fmt(balances.accepted)}
+            wallet {SYMBOL} {fmt(walletBalance)}
           </span>
         }
       >
         <p className="screen-copy">
-          Deposit mints equal PT and ET 1:1. ET is the entry currency for
-          rounds; PT stays matched to principal.
+          A deposit credits equal Principal and Entries. Entries pay for
+          positions on the board and decide your odds in the draw; Principal is
+          never at risk.
         </p>
         <div className="vault-form">
           <div className="volt-banner slim">
@@ -125,8 +143,8 @@ export function Vault(props: VaultScreenProps) {
                 onClick={() =>
                   setAmountText(
                     formatAtomic(
-                      BigInt(units) * 10n ** BigInt(decimals),
-                      decimals,
+                      BigInt(units) * 10n ** BigInt(DECIMALS),
+                      DECIMALS,
                     ),
                   )
                 }
@@ -137,7 +155,7 @@ export function Vault(props: VaultScreenProps) {
             <span
               className="pill max"
               role="button"
-              onClick={() => setAmountText(fmt(balances.accepted))}
+              onClick={() => setAmountText(fmt(walletBalance))}
             >
               MAX
             </span>
@@ -149,20 +167,12 @@ export function Vault(props: VaultScreenProps) {
               busy !== null ||
               paused ||
               !depositAmount ||
-              depositAmount <= 0n ||
-              !epochKey ||
-              needsRefresh
+              depositAmount < pool.minDeposit
             }
             data-testid="deposit-submit"
             onClick={() =>
               void run("Deposit", () =>
-                deposit(
-                  program,
-                  { publicKey: owner },
-                  pool,
-                  epochKey!,
-                  depositAmount!,
-                ),
+                deposit(program, { publicKey: owner }, pool, depositAmount!),
               )
             }
           >
@@ -179,37 +189,38 @@ export function Vault(props: VaultScreenProps) {
               Pool is paused: deposits are blocked; withdrawals stay live.
             </div>
           ) : null}
-          {needsRefresh ? (
-            <div className="panel-note" data-testid="needs-refresh">
-              New epoch: refresh entries to restore matched withdrawals and
-              deposits.
-            </div>
-          ) : null}
+          <div className="panel-note">
+            Minimum deposit {fmt(pool.minDeposit)} {SYMBOL}.
+          </div>
         </div>
         <button
           type="button"
           className="btn-deploy ghost"
-          disabled={busy !== null || !needsRefresh || !epochKey}
-          data-testid="refresh-entries"
-          onClick={() =>
-            void run("Refresh", () =>
-              refreshEntries(program, { publicKey: owner }, pool, epochKey!),
-            )
-          }
+          disabled={busy !== null}
+          data-testid="faucet"
+          onClick={() => void pullFaucet()}
         >
-          <span>{busy === "Refresh" ? "SIGNING…" : "REFRESH ENTRIES"}</span>
+          <span>
+            {busy === "Faucet"
+              ? "REQUESTING…"
+              : faucetWait !== null
+                ? `FAUCET IN ${faucetWait}s`
+                : `GET TEST ${SYMBOL}`}
+          </span>
         </button>
       </PanelCard>
 
       <PanelCard
         wide
         title="WITHDRAW"
-        aside={<span className="dual-line-inline">matched {fmt(matched)}</span>}
+        aside={
+          <span className="dual-line-inline">withdrawable {fmt(matched)}</span>
+        }
       >
         <p className="screen-copy">
-          A withdrawal burns equal PT and ET and pays out principal. You can
-          withdraw exactly your matched balance — spent ET lowers it until the
-          next refresh.
+          A withdrawal takes the same amount off Principal and Entries and pays
+          out {SYMBOL}. You can withdraw min(Principal, Entries) — Entries
+          staked in an open round lower it until that round settles.
         </p>
         <div className="vault-form">
           <div className="volt-banner slim">
@@ -230,7 +241,7 @@ export function Vault(props: VaultScreenProps) {
               role="button"
               onClick={() => setWithdrawText(fmt(matched))}
             >
-              MATCHED MAX
+              MAX
             </span>
             <span
               className="pill"
@@ -243,11 +254,11 @@ export function Vault(props: VaultScreenProps) {
           {withdrawalPreview ? (
             <div className="dual-line" data-testid="withdraw-preview">
               <span>
-                before PT {fmt(balances.principal)} / ET {fmt(balances.entries)}{" "}
-                / withdrawable {fmt(withdrawalPreview.withdrawableBefore)}
+                before Principal {fmt(principal)} / Entries {fmt(entries)} /
+                withdrawable {fmt(withdrawalPreview.withdrawableBefore)}
               </span>
               <span className="dual-accent">
-                after PT {fmt(withdrawalPreview.principalAfter)} / ET{" "}
+                after Principal {fmt(withdrawalPreview.principalAfter)} / Entries{" "}
                 {fmt(withdrawalPreview.entriesAfter)} / withdrawable{" "}
                 {fmt(withdrawalPreview.withdrawableAfter)}
               </span>

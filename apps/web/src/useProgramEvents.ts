@@ -1,16 +1,18 @@
 /**
  * Real-time program events. Solana's RPC WebSocket pushes every transaction
- * log; the Anchor client decodes our typed events from it. This gives every
- * connected viewer the same sub-second view of settles, buys, deposits, and
- * draws — no custom WebSocket backend. The REST /events feed supplies only
- * pre-subscription history.
+ * log; the Anchor event coder decodes our typed events out of them. Every
+ * connected viewer gets the same sub-second view of settles, positions,
+ * deposits and draws, with no custom WebSocket backend. The API's `/feed`
+ * supplies only pre-subscription history.
  */
 import { useEffect, useRef, useState } from "react";
+import type { Connection } from "@solana/web3.js";
 
-import type { HexVaultProgram } from "./chain.js";
+import { decodeEventLogs, PROGRAM_ID, type HexVaultProgram } from "./chain.js";
 
 export interface LiveEvent {
   key: string;
+  /** Decoded name, camelCase as the Anchor client spells it. */
   name: string;
   slot: number;
   signature: string;
@@ -22,90 +24,59 @@ export interface LiveEvent {
 
 export interface ProgramEvents {
   events: LiveEvent[];
-  /** False when the WebSocket subscription failed (polling fallback covers). */
+  /** False when the WebSocket subscription never started. */
   live: boolean;
 }
 
-/** Every event name the IDL declares — kept in sync by useProgramEvents.test.ts. */
-export const EVENT_NAMES = [
-  "PoolCreated",
-  "EpochCreated",
-  "DepositRecorded",
-  "WithdrawalRecorded",
-  "EntriesRefreshed",
-  "PositionPurchased",
-  "RoundRandomnessRequested",
-  "RoundSettled",
-  "RoundRewardClaimed",
-  "PrizeSnapshotCommitted",
-  "JackpotCommitted",
-  "PrizeRandomnessRequested",
-  "JackpotRandomnessRequested",
-  "PrizeDrawn",
-  "JackpotDrawn",
-  "PrizeClaimed",
-  "JackpotClaimed",
-  "PrizeExpired",
-  "JackpotExpired",
-  "ProtocolPauseChanged",
-  "PrizeFunded",
-  "JackpotFunded",
-] as const;
-
 const MAX_EVENTS = 60;
 
-/** Subscribes to every program event; newest first. Null program = silent. */
+/** Subscribes to the program's logs; newest first. Null program = silent. */
 export function useProgramEvents(
   program: HexVaultProgram | null,
+  connection: Connection,
 ): ProgramEvents {
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const [live, setLive] = useState(false);
   const seq = useRef(0);
 
   useEffect(() => {
-    if (!program) return;
-    // The loosely-typed program view needs the raw Anchor event emitter.
-    const emitter = program as unknown as {
-      addEventListener?: (
-        name: string,
-        callback: (data: unknown, slot: number, signature: string) => void,
-      ) => number;
-      removeEventListener?: (id: number) => Promise<void>;
-    };
-    if (!emitter.addEventListener || !emitter.removeEventListener) {
+    if (!program) {
       setLive(false);
       return;
     }
-
-    const ids: number[] = [];
-    const push =
-      (name: string) => (data: unknown, slot: number, signature: string) => {
-        seq.current += 1;
-        const event: LiveEvent = {
-          key: `${slot}-${signature}-${seq.current}`,
-          name,
-          slot,
-          signature,
-          data: (data ?? {}) as Record<string, unknown>,
-          at: Date.now(),
-        };
-        setEvents((current) => [event, ...current].slice(0, MAX_EVENTS));
-      };
-
-    let failed = false;
-    for (const name of EVENT_NAMES) {
-      try {
-        ids.push(emitter.addEventListener(name, push(name)));
-      } catch {
-        failed = true;
-      }
+    let subscription: number;
+    try {
+      subscription = connection.onLogs(
+        PROGRAM_ID,
+        ({ logs, signature }, { slot }) => {
+          const decoded = decodeEventLogs(program, logs);
+          if (decoded.length === 0) return;
+          const rows = decoded.map((event) => {
+            seq.current += 1;
+            return {
+              key: `${slot}-${signature}-${seq.current}`,
+              name: event.name,
+              slot,
+              signature,
+              data: event.data ?? {},
+              at: Date.now(),
+            };
+          });
+          setEvents((current) => [...rows.reverse(), ...current].slice(0, MAX_EVENTS));
+        },
+        "confirmed",
+      );
+    } catch {
+      setLive(false);
+      return;
     }
-    setLive(ids.length > 0 && !failed);
+    setLive(true);
 
     return () => {
-      for (const id of ids) void emitter.removeEventListener!(id);
+      setLive(false);
+      void connection.removeOnLogsListener(subscription);
     };
-  }, [program]);
+  }, [program, connection]);
 
   return { events, live };
 }

@@ -9,10 +9,9 @@ import type { PublicKey } from "@solana/web3.js";
 
 import {
   covers,
-  currentRound,
   displayTile,
   expectedReward,
-  latestSettled,
+  isRevealed,
   phaseFor,
   roundKey,
   secondsLeft,
@@ -33,7 +32,7 @@ import type { PositionRow, RoundRow } from "./read.js";
 const GEO = computeGeo();
 
 export interface RevealState {
-  /** Chain key (epochId:roundId) this reveal animates. */
+  /** Round id this reveal animates. */
   key: string;
   /** Protocol tile index 0..35. */
   winningTile: number;
@@ -52,52 +51,43 @@ export interface Takeover {
 
 export interface EngineOutput {
   phase: Phase;
-  /** Seconds until buys close, during the "mine" phase. */
+  /** Seconds until positions close, during the "mine" phase. */
   secondsLeft: bigint;
   /** Protocol tile indexes 0..35 the user has picked. */
   selected: number[];
   setSelected: (tiles: number[]) => void;
-  /** Most recent settled round (reveal source); null before any draw. */
+  /** The round once it has revealed a winning tile; null before that. */
   settled: RoundLike | null;
   reveal: RevealState | null;
   banner: string | null;
   takeover: Takeover | null;
   dismissTakeover: () => void;
-  /** Hexpot ticker value (atomic units) + pulse flag. */
-  hexpot: bigint;
-  hexpotPulse: boolean;
+  /** Round pot in Entries + pulse flag for the ticker. */
+  pot: bigint;
+  potPulse: boolean;
   lastWin: { tile: number; kind: string } | null;
   feed: FeedRow[];
-  /** The user's position on the current round, if any. */
+  /** The user's position in the tracked round, if any. */
   activePosition: PositionRow | null;
 }
 
 export interface EngineInput {
-  rounds: RoundRow[];
-  positions: Map<string, PositionRow>;
+  round: RoundRow | null;
+  position: PositionRow | null;
   owner: PublicKey | undefined;
-  poolBufferSeconds: bigint;
-  hexpot: bigint;
+  closeBuffer: bigint;
   clockNow: bigint | null;
   feed: FeedRow[];
 }
 
 export function useRoundEngine(input: EngineInput): EngineOutput {
-  const {
-    rounds,
-    positions,
-    owner,
-    poolBufferSeconds: buffer,
-    hexpot,
-    clockNow,
-    feed,
-  } = input;
+  const { round, position, owner, closeBuffer: buffer, clockNow, feed } = input;
 
   const [selected, setSelected] = useState<number[]>([]);
   const [reveal, setRevealState] = useState<RevealState | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [takeover, setTakeover] = useState<Takeover | null>(null);
-  const [hexpotPulse, setHexpotPulse] = useState(false);
+  const [potPulse, setPotPulse] = useState(false);
   const [lastWin, setLastWin] = useState<{ tile: number; kind: string } | null>(
     null,
   );
@@ -123,19 +113,17 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
   );
 
   // --- Round reveal choreography --------------------------------------------
-  const settled = latestSettled(rounds);
-  const settledKey = settled ? roundKey(settled.epochId, settled.id) : null;
+  const settled = round && isRevealed(round) ? round : null;
+  const settledKey = settled ? roundKey(settled.roundId) : null;
   const revealedRef = useRef<Set<string>>(new Set());
 
   const runReveal = useCallback(
-    (round: RoundLike, key: string) => {
-      const tileIndex = round.winningTile;
+    (target: RoundLike, key: string) => {
+      const tileIndex = target.winningTile;
       if (tileIndex < 0 || tileIndex > 35) return; // u8::MAX = "unset" guard
       const tile = GEO.tiles[tileIndex]!;
 
-      const own = owner
-        ? positions.get(roundKey(round.epochId, round.id))
-        : undefined;
+      const own = owner ? position : null;
       const won = Boolean(own && covers(own.tiles, tileIndex));
       if (own && !won) later(() => sfx("miss"), 950);
 
@@ -171,16 +159,16 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
         later(
           () => {
             sfx("feed");
-            setHexpotPulse(true);
-            later(() => setHexpotPulse(false), 260);
+            setPotPulse(true);
+            later(() => setPotPulse(false), 260);
           },
           Math.round((token.delay + 0.68) * 1000) + 900,
         );
       }
-      later(() => setHexpotPulse(false), lastArrival + 980);
+      later(() => setPotPulse(false), lastArrival + 980);
 
       if (won) {
-        const reward = expectedReward(round, own!);
+        const reward = expectedReward(target, own!);
         later(() => {
           sfx("win");
           setTakeover({
@@ -196,7 +184,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
         setBanner(null);
       }, 4600);
     },
-    [owner, positions, later],
+    [owner, position, later],
   );
 
   useEffect(() => {
@@ -206,26 +194,22 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     runReveal(settled, settledKey);
   }, [settledKey, settled, runReveal]);
 
-  // --- Hexpot pulse on live vault movement -----------------------------------
-  const hexpotRef = useRef(hexpot);
+  // --- Pot pulse on live movement --------------------------------------------
+  const pot = round?.pot ?? 0n;
+  const potRef = useRef(pot);
   useEffect(() => {
-    if (hexpotRef.current !== hexpot) {
-      hexpotRef.current = hexpot;
-      setHexpotPulse(true);
-      later(() => setHexpotPulse(false), 260);
+    if (potRef.current !== pot) {
+      potRef.current = pot;
+      setPotPulse(true);
+      later(() => setPotPulse(false), 260);
     }
-  }, [hexpot, later]);
+  }, [pot, later]);
 
   // --- Derived phase ----------------------------------------------------------
   const now = clockNow ?? 0n;
-  const active = currentRound(rounds);
-  const phase = phaseFor(active, now, buffer);
+  const phase = phaseFor(round, now, buffer);
   const activeSecondsLeft =
-    active && phase === "mine" ? secondsLeft(active, buffer, now) : 0n;
-  const activePosition =
-    owner && active
-      ? (positions.get(roundKey(active.epochId, active.id)) ?? null)
-      : null;
+    round && phase === "mine" ? secondsLeft(round, buffer, now) : 0n;
 
   return {
     phase,
@@ -237,11 +221,11 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     banner,
     takeover,
     dismissTakeover: () => setTakeover(null),
-    hexpot,
-    hexpotPulse,
+    pot,
+    potPulse,
     lastWin,
     feed,
-    activePosition,
+    activePosition: owner ? position : null,
   };
 }
 

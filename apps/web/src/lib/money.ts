@@ -44,8 +44,9 @@ export function formatAddress(address: string): string {
 }
 
 /**
- * Immediately withdrawable principal: the matched (PT ∧ ET) portion. Spending
- * entries on a position lowers it without touching PT, so it is min(PT, ET).
+ * Principal the program will let you take out right now. `withdraw(x)` needs
+ * both Principal and Entries of at least x, and buying a position spends
+ * Entries without touching Principal, so the ceiling is min(principal, entries).
  */
 export function withdrawable(principal: bigint, entries: bigint): bigint {
   return principal < entries ? principal : entries;
