@@ -12,16 +12,25 @@ file carries the detail under its `## Comments`; this is the map.
 | 05     | `e6e173d` | check, 2 vitest tests, build, `/healthz`, docker build against postgres:16-alpine |
 | 03     | `3cbbf6e` | `tests/02-rounds.test.ts` 8 passed                                 |
 | 04     | `0281e08` | `tests/03-epochs.test.ts` 10 passed                                |
+| 09     | `eaf3053` | two localnet bootstrap runs, clean diff, with and without the fast-pool flags |
+| 08     | `3d14b51` | 24 API tests against a seeded Postgres                             |
+| 06     | `5f1e056` | 40 unit and Postgres tests, 3 localnet tests                       |
+| 07     | `511fa8e` | 27 unit tests, one 47 s localnet end-to-end through payout         |
 
 `89fb8b3` adds the shared `fulfillRandomness` and `randomnessFor` test helpers.
+`1cd51bc` adds what all four backend tickets needed from files none of them
+owned: `PrismaService`, the resynced IDL, `Cursor.updatedAt`, the four new
+dependencies, and `HEXVAULT_SKIP_BUILD`. `ce72add` wires the three server
+modules into `AppModule`.
 
 The whole program suite run together after 03 and 04 merged: 24 localnet tests
-passed, 15 Rust unit tests passed.
+passed, 15 Rust unit tests passed. The backend suite after 06 to 09 merged: 97
+passed, 4 skipped (the two localnet files, which each ran on their own).
 
 ## Next
 
-Tickets 06 (indexer), 07 (operator) and 08 (API) all depend on 05, which is in.
-09 (bootstrap) also only needs 05. 07 depends on 06; 08 depends on 06.
+10 (frontend rewire) and 11 (frontend screens), then 12 (deploy) and 13 (smoke).
+12 is `ready-for-human`: it needs the devnet deploy key and the VPS.
 
 ## How the program is split
 
@@ -34,17 +43,68 @@ Shared and owned by nobody working a ticket: `state.rs`, `touch.rs`, `errors.rs`
 `events.rs`, `constants.rs`, `vrf.rs`, `tests/helpers/hx.ts`,
 `tests/run-local.sh`.
 
+## How the backend is split
+
+Same trick, one directory per ticket: `src/indexer/`, `src/operator/`,
+`src/api/`, `src/bootstrap.ts`. Tickets 06 to 09 ran in parallel because the
+files none of them owned were written first and landed in `1cd51bc`:
+`src/prisma/`, `src/chain/`, `src/config/`, `src/idl/`, `prisma/schema.prisma`
+and `package.json`.
+
+The operator depends on the indexer, so that edge is a token rather than an
+import. `src/operator/indexer-queries.ts` declares `INDEXER_QUERIES` and the
+two method signatures; `OperatorModule` binds it to `IndexerService`. Neither
+module imports the other's implementation, and either could have landed first.
+
+The binding has to live in `OperatorModule`. Nest resolves a provider's
+dependencies from its own module and the exports of that module's imports,
+never from the parent, so the same provider declared in `AppModule` is
+invisible to `OperatorService`.
+
+`ScheduleModule.forRoot()` is imported only by `OperatorModule`. The indexer
+ticks on a plain `setInterval` for that reason: two `forRoot()` calls produce
+two schedulers and every job fires twice.
+
 ## Running the localnet suite
 
 `HEXVAULT_RPC_PORT=<port> sh tests/run-local.sh tests/<file>` builds with
 `--features test-vrf`, boots an isolated validator on that port, deploys, and
 runs vitest. The port override exists so several suites can run side by side.
 Assign a distinct port per concurrent agent; 8899 and 9099 were used for the
-rounds and epoch suites.
+rounds and epoch suites, 9199 / 9299 / 9399 for tickets 06, 07 and 09.
+
+`HEXVAULT_SKIP_BUILD=1` reuses whatever is in `target/deploy` instead of
+rebuilding. Several agents each running `anchor build` fight over one cargo
+target lock to produce the identical artifact, so build once first, then set
+it for every parallel run.
+
+A backend suite driven this way needs `--root apps/backend --config
+vitest.config.ts` appended, because the script runs vitest from the repo root
+and the backend config's `include` is relative.
 
 A full run takes two to four minutes. Run it in the foreground with a generous
 timeout. Launching it as a background task and then waiting on the result burned
 an hour on ticket 02, because the wait itself ends the turn and nothing advances.
+
+## Running the backend tests
+
+The Postgres suites want a real database:
+
+```
+docker run -d --name hexvault-pg -e POSTGRES_USER=hexvault \
+  -e POSTGRES_PASSWORD=hexvault -e POSTGRES_DB=hexvault \
+  -p 5433:5432 postgres:16-alpine
+DATABASE_URL=postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault \
+  pnpm --filter @hexvault/backend exec prisma migrate deploy
+```
+
+That URL is `src/test-setup.ts`'s default. The four parallel agents each used
+their own database on the same server (`hexvault_indexer`, `hexvault_operator`,
+`hexvault_api`) so their truncations could not collide.
+
+Boot smoke tests must run against `nest build` output, not `tsx`. Esbuild does
+not emit `design:paramtypes`, so a tsx boot reports every constructor parameter
+as unresolvable whether or not the DI graph is sound.
 
 ## Decisions taken during the build
 
@@ -103,8 +163,21 @@ live-pinned unit tests are the only check on the ORAO side.
 ## Open, and needed before ticket 12
 
 - `apps/backend/src/idl/hex_vault.json` is a snapshot and goes stale every time
-  the program changes. Re-run the sync script once the program is final.
-  `ChainService` overrides the IDL's own `address` with the env `PROGRAM_ID`, so
-  a stale snapshot cannot point the backend at the wrong program.
-- The backend needs `HEXUSDC_MINT`, which does not exist until `bootstrap`
-  (ticket 09) has run once.
+  the program changes. Resynced in `1cd51bc` from the post-04 build; re-run the
+  sync script again once the program is final. `ChainService` overrides the
+  IDL's own `address` with the env `PROGRAM_ID`, so a stale snapshot cannot
+  point the backend at the wrong program. It can still mislead the operator:
+  `OperatorService` decides between the test-vrf randomness PDA and ORAO's
+  request PDA by looking for `testFulfill` in the IDL, and logs which mode it
+  picked at boot.
+- The backend needs `HEXUSDC_MINT`, which `bootstrap` (ticket 09) prints on its
+  first run.
+- Sync the IDL to `apps/web` too. Ticket 10 owns that.
+- `pnpm format:check` fails repo-wide, including on files untouched since
+  ticket 05. There is no prettier config, so it is checking against defaults
+  the code was never written to. Either add a config or reformat once, in its
+  own commit, not mixed into a feature.
+- Two `ponytail:` shortcuts are worth knowing about before load matters: the
+  API scans every `Player` row per request for the odds denominator, and the
+  faucet reads its claim row before minting rather than guarding the write, so
+  two simultaneous requests for one owner can both mint.

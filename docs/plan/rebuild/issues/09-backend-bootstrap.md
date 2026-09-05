@@ -1,6 +1,6 @@
 # 09 Backend: bootstrap command
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: 05
 

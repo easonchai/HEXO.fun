@@ -1,6 +1,6 @@
 # 06 Backend: indexer module
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: 05
 
