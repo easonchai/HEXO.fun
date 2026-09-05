@@ -138,7 +138,32 @@ pub fn request_randomness<'info>(
     _system_program: &AccountInfo<'info>,
     _seed: [u8; 32],
 ) -> Result<()> {
-    todo!("ORAO request_v2 CPI - ticket 03")
+    // Verified against ORAO's own generated Anchor IDL and CPI example on
+    // their GitHub master branch (orao-network/solana-vrf, fetched
+    // 2026-09-05): `js/src/types/orao_vrf.json` (instruction `request_v2`)
+    // and `rust/examples/cpi/programs/russian-roulette/src/lib.rs`.
+    //
+    //   discriminator: [38, 151, 209, 6, 195, 102, 28, 217]
+    //   accounts, in order:
+    //     payer          (signer, mut)
+    //     network_state  (mut) - PDA [CONFIG_ACCOUNT_SEED], ORAO program
+    //     treasury       (mut) - must equal network_state.config.treasury
+    //                    (or its token-fee treasury); ORAO enforces this
+    //                    itself, this program only forwards it
+    //     request        (mut) - PDA [RANDOMNESS_ACCOUNT_SEED, seed], ORAO
+    //                    program; created by ORAO's own `init` when it
+    //                    processes this CPI, not by us
+    //     system_program
+    //   data: discriminator ++ seed (32 raw bytes, Borsh's encoding of a
+    //   fixed-size array has no length prefix)
+    //
+    // This function's signature (fixed outside ticket 03's scope) has no
+    // `treasury` parameter, so the CPI cannot be assembled with the accounts
+    // it is given - `RequestRoundRandomness` would need a `treasury` field
+    // and this function a `_treasury: &AccountInfo<'info>` parameter. Left
+    // as `todo!()` rather than guessing an account list that would fail
+    // silently on devnet; see the ticket 03 report for detail.
+    todo!("ORAO request_v2 CPI - ticket 03: signature is missing the required `treasury` account, see comment above")
 }
 
 /// u64 sample from the first 8 bytes of the randomness (LE).
