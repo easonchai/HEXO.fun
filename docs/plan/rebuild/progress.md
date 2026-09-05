@@ -10,13 +10,18 @@ file carries the detail under its `## Comments`; this is the map.
 | 01     | `bde6a49` | acceptance grep clean outside docs and the program being rewritten |
 | 02     | `4d201b4` | `cargo test --lib` 15 passed, `tests/01-custody.test.ts` 6 passed |
 | 05     | `e6e173d` | check, 2 vitest tests, build, `/healthz`, docker build against postgres:16-alpine |
+| 03     | `3cbbf6e` | `tests/02-rounds.test.ts` 8 passed                                 |
+| 04     | `0281e08` | `tests/03-epochs.test.ts` 10 passed                                |
 
 `89fb8b3` adds the shared `fulfillRandomness` and `randomnessFor` test helpers.
 
-## In flight
+The whole program suite run together after 03 and 04 merged: 24 localnet tests
+passed, 15 Rust unit tests passed.
 
-Tickets 03 (rounds) and 04 (epochs), one agent each, running at the same time
-against the same working tree.
+## Next
+
+Tickets 06 (indexer), 07 (operator) and 08 (API) all depend on 05, which is in.
+09 (bootstrap) also only needs 05. 07 depends on 06; 08 depends on 06.
 
 ## How the program is split
 
@@ -34,7 +39,8 @@ which is ticket 03's), `tests/helpers/hx.ts`, `tests/run-local.sh`.
 `HEXVAULT_RPC_PORT=<port> sh tests/run-local.sh tests/<file>` builds with
 `--features test-vrf`, boots an isolated validator on that port, deploys, and
 runs vitest. The port override exists so several suites can run side by side.
-Reserved while 03 and 04 are in flight: 8899 for rounds, 9099 for epochs.
+Assign a distinct port per concurrent agent; 8899 and 9099 were used for the
+rounds and epoch suites.
 
 ## Decisions taken during the build
 
@@ -50,6 +56,11 @@ Reserved while 03 and 04 are in flight: 8899 for rounds, 9099 for epochs.
 - `scripts/test-program-local.sh` became `tests/run-local.sh` rather than being
   deleted with the rest of `scripts/`. Tickets 02 to 04 all need a localnet
   runner and rewriting a working one is waste.
+- Spec invariant 2 was wrong and is corrected in `spec.md`. It double-counted
+  the House. See ticket 04's comments.
+- Test suites read the validator's own clock rather than `Date.now()`. A test
+  validator's slot-derived clock lags wall time under load, which made both the
+  round and epoch suites fail on timing until they stopped trusting wall time.
 
 ## Open, and needed before ticket 12
 
