@@ -328,6 +328,8 @@ describe("API routes", () => {
       registeredCount: 1,
       registeredTotal: 3,
     });
+    // ISO, not unix seconds: the frontend `Date.parse`s it.
+    expect(Date.parse(body.operator.lastTickAt)).toBe(Number(NOW - 2n) * 1000);
     expect(body.cursor.lastSlot).toBe("15");
     expect(body.cursor.ageSeconds).toBeGreaterThanOrEqual(40);
     expect(body.cursor.ageSeconds).toBeLessThan(120);

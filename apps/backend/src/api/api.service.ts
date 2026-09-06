@@ -187,7 +187,15 @@ export class ApiService {
     ]);
     const now = nowSeconds();
     return {
-      operator,
+      // The row keeps unix seconds; the frontend `Date.parse`s this field,
+      // which reads a bare digit string as NaN and shows "STALLED" forever.
+      operator: operator && {
+        ...operator,
+        lastTickAt:
+          operator.lastTickAt == null
+            ? null
+            : new Date(Number(operator.lastTickAt) * 1000),
+      },
       cursor: {
         lastSlot: cursor?.lastSlot ?? null,
         lastSignature: cursor?.lastSignature ?? null,
