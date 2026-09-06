@@ -21,6 +21,10 @@ const BPS = 10_000n;
 const SECONDS_PER_YEAR = 31_536_000n;
 /** Instructions per transaction for the two batched steps (spec §3.4). */
 export const BATCH_SIZE = 8;
+/** The reveal's 4.6 s choreography, rounded up to whole chain seconds. Step 7
+ *  waits this long past a settled/forfeited `lastRound.endsAt` before opening
+ *  the next Round, so no viewer sees a new countdown while the laser lands. */
+export const REVEAL_SECONDS = 5n;
 
 /**
  * The simulated yield an ended epoch pays out, in atomic units. Integer math
@@ -33,7 +37,8 @@ export function yieldAmount(
   epochSeconds: bigint,
   floor: bigint,
 ): bigint {
-  const accrued = (totalPrincipal * aprBps * epochSeconds) / (BPS * SECONDS_PER_YEAR);
+  const accrued =
+    (totalPrincipal * aprBps * epochSeconds) / (BPS * SECONDS_PER_YEAR);
   return accrued > floor ? accrued : floor;
 }
 
@@ -55,6 +60,9 @@ export interface TickContext {
   readonly previousEpoch: EpochState | null;
   /** The Round at `pool.openRoundId`, null when none is open. */
   readonly openRound: RoundState | null;
+  /** The Round at `pool.nextRoundId - 1`, the most recently created one
+   *  (open or already terminal). Null when none has ever been created. */
+  readonly lastRound: RoundState | null;
   readonly aprBps: bigint;
   readonly jackpotFloor: bigint;
   readonly ix: OperatorInstructions;
@@ -70,7 +78,9 @@ export interface TickContext {
    * (Settled, Forfeited, Voided), across every such Round, not just the
    * newest, with the Round id so step 2 can group a batch by Round.
    */
-  unsettledPositions(): Promise<{ address: string; owner: string; roundId: bigint }[]>;
+  unsettledPositions(): Promise<
+    { address: string; owner: string; roundId: bigint }[]
+  >;
   /** Owner of the Player whose registered interval contains `target`. */
   winner(epochId: bigint, target: bigint): Promise<string | null>;
   send(instructions: TransactionInstruction[]): Promise<string>;
@@ -91,11 +101,15 @@ const NOTHING: TickOutcome = { action: null };
 export async function runTick(ctx: TickContext): Promise<TickOutcome> {
   const { pool, currentEpoch, previousEpoch, openRound, now } = ctx;
 
-  // 1. Round: an Open round past its end asks for randomness; Requested and
+  // 1. Round: an Open round past its close asks for randomness, the same
+  // instant `buy_position` starts refusing (program §2.3); Requested and
   // fulfilled settles; Requested past `vrf_timeout` voids. Runs first so a
   // Round can never straddle the boundary step 3 might open next.
   if (openRound) {
-    if (openRound.status === ROUND_STATUS.OPEN && now >= openRound.endsAt) {
+    if (
+      openRound.status === ROUND_STATUS.OPEN &&
+      now >= openRound.endsAt - pool.closeBuffer
+    ) {
       await ctx.send(await ctx.ix.requestRoundRandomness(pool, openRound));
       return { action: "request_round_randomness" };
     }
@@ -118,7 +132,9 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
   const [firstUnsettled] = sweep;
   if (firstUnsettled) {
     const roundId = firstUnsettled.roundId;
-    const batch = sweep.filter((position) => position.roundId === roundId).slice(0, BATCH_SIZE);
+    const batch = sweep
+      .filter((position) => position.roundId === roundId)
+      .slice(0, BATCH_SIZE);
     await ctx.send(await ctx.ix.settlePositions(pool, roundId, batch));
     return { action: "settle_position" };
   }
@@ -127,7 +143,8 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
   // the previous Epoch (if any) has actually finished, so no Epoch is ever
   // left two behind.
   const epochEnded =
-    pool.currentEpochId === 0n || (currentEpoch !== null && now >= currentEpoch.endsAt);
+    pool.currentEpochId === 0n ||
+    (currentEpoch !== null && now >= currentEpoch.endsAt);
   const previousDone =
     previousEpoch === null ||
     previousEpoch.status === EPOCH_STATUS.PAID ||
@@ -144,7 +161,9 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
   if (previousEpoch?.status === EPOCH_STATUS.REGISTERING) {
     const owners = await ctx.playersToRegister(previousEpoch.epochId);
     if (owners.length > 0) {
-      const batch = owners.slice(0, BATCH_SIZE).map((owner) => new PublicKey(owner));
+      const batch = owners
+        .slice(0, BATCH_SIZE)
+        .map((owner) => new PublicKey(owner));
       await ctx.send(await ctx.ix.register(pool, previousEpoch.epochId, batch));
       // ponytail: an owner whose on-chain weight is zero registers as a no-op
       // and comes back next tick, so a sloppy indexer query stalls the epoch
@@ -161,9 +180,13 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
     }
 
     const emptyLastTick =
-      ctx.lastRegisterCheck?.epochId === previousEpoch.epochId && ctx.lastRegisterCheck.empty;
+      ctx.lastRegisterCheck?.epochId === previousEpoch.epochId &&
+      ctx.lastRegisterCheck.empty;
     if (!emptyLastTick) {
-      return { action: null, registerCheck: { epochId: previousEpoch.epochId, empty: true } };
+      return {
+        action: null,
+        registerCheck: { epochId: previousEpoch.epochId, empty: true },
+      };
     }
 
     const amount = yieldAmount(
@@ -174,7 +197,9 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
     );
     const balance = await ctx.authorityBalance();
     const shortfall = amount > balance ? amount - balance : 0n;
-    await ctx.send(await ctx.ix.fundAndClose(pool, previousEpoch.epochId, amount, shortfall));
+    await ctx.send(
+      await ctx.ix.fundAndClose(pool, previousEpoch.epochId, amount, shortfall),
+    );
     return { action: "close_registration" };
   }
 
@@ -192,23 +217,38 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
 
   // 6. Drawn: pay whoever owns the interval the target landed in.
   if (previousEpoch?.status === EPOCH_STATUS.DRAWN) {
-    const winner = await ctx.winner(previousEpoch.epochId, previousEpoch.target);
+    const winner = await ctx.winner(
+      previousEpoch.epochId,
+      previousEpoch.target,
+    );
     if (winner) {
-      await ctx.send(await ctx.ix.payout(pool, previousEpoch.epochId, new PublicKey(winner)));
+      await ctx.send(
+        await ctx.ix.payout(pool, previousEpoch.epochId, new PublicKey(winner)),
+      );
       return { action: "payout" };
     }
     // No row covers the target yet: the indexer has not caught up with the
     // registrations. Retried next tick rather than treated as an error.
   }
 
-  // 7. Open the next round, if a whole one still fits in this epoch.
+  // 7. Open the next round, if a whole one still fits in this epoch, and the
+  // previous Round's reveal has had time to play: no viewer should see a new
+  // countdown while the last Round's laser is still landing.
+  const lastRound = ctx.lastRound;
+  const revealDone =
+    lastRound === null ||
+    lastRound.status === ROUND_STATUS.VOIDED ||
+    now >= lastRound.endsAt + REVEAL_SECONDS;
   if (
     pool.openRoundId === 0n &&
     !pool.paused &&
     currentEpoch &&
-    now + pool.roundSeconds <= currentEpoch.endsAt
+    now + pool.roundSeconds <= currentEpoch.endsAt &&
+    revealDone
   ) {
-    await ctx.send(await ctx.ix.createRound(pool, now, now + pool.roundSeconds));
+    await ctx.send(
+      await ctx.ix.createRound(pool, now, now + pool.roundSeconds),
+    );
     return { action: "create_round" };
   }
 

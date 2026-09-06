@@ -128,7 +128,7 @@ export class OperatorService {
     const pool = decodePool(this.chain.program, poolAddress, poolInfo.data);
     const now = clockUnixTimestamp(clockInfo?.data);
 
-    const { currentEpoch, previousEpoch, openRound } =
+    const { currentEpoch, previousEpoch, openRound, lastRound } =
       await this.readCycle(pool);
 
     return {
@@ -137,6 +137,7 @@ export class OperatorService {
       currentEpoch,
       previousEpoch,
       openRound,
+      lastRound,
       aprBps: this.aprBps,
       jackpotFloor: this.jackpotFloor,
       ix: this.instructions,
@@ -150,11 +151,13 @@ export class OperatorService {
     };
   }
 
-  /** Current epoch, previous epoch and open round in one `getMultipleAccounts`. */
+  /** Current epoch, previous epoch, open round and last round in one
+   *  `getMultipleAccounts`. */
   private async readCycle(pool: PoolState): Promise<{
     currentEpoch: EpochState | null;
     previousEpoch: EpochState | null;
     openRound: RoundState | null;
+    lastRound: RoundState | null;
   }> {
     const wanted: PublicKey[] = [];
     const currentIndex =
@@ -169,8 +172,20 @@ export class OperatorService {
       pool.openRoundId > 0n
         ? wanted.push(this.chain.roundAddress(pool.openRoundId)) - 1
         : -1;
+    // `nextRoundId - 1` is the most recently created Round, open or already
+    // terminal; equal to `openRoundId` while one is open. Round ids start at
+    // 1, so `nextRoundId <= 1` means none has ever been created.
+    const lastRoundIndex =
+      pool.nextRoundId > 1n
+        ? wanted.push(this.chain.roundAddress(pool.nextRoundId - 1n)) - 1
+        : -1;
     if (wanted.length === 0) {
-      return { currentEpoch: null, previousEpoch: null, openRound: null };
+      return {
+        currentEpoch: null,
+        previousEpoch: null,
+        openRound: null,
+        lastRound: null,
+      };
     }
 
     const infos = await this.chain.connection.getMultipleAccountsInfo(wanted);
@@ -178,12 +193,16 @@ export class OperatorService {
       const data = index >= 0 ? infos[index]?.data : undefined;
       return data ? decodeEpoch(this.chain.program, data) : null;
     };
-    const roundData = roundIndex >= 0 ? infos[roundIndex]?.data : undefined;
+    const roundAt = (index: number): RoundState | null => {
+      const data = index >= 0 ? infos[index]?.data : undefined;
+      return data ? decodeRound(this.chain.program, data) : null;
+    };
 
     return {
       currentEpoch: epochAt(currentIndex),
       previousEpoch: epochAt(previousIndex),
-      openRound: roundData ? decodeRound(this.chain.program, roundData) : null,
+      openRound: roundAt(roundIndex),
+      lastRound: roundAt(lastRoundIndex),
     };
   }
 

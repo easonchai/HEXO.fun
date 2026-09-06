@@ -31,6 +31,7 @@ export interface PoolState {
   readonly vrfNetworkState: PublicKey;
   readonly epochSeconds: bigint;
   readonly roundSeconds: bigint;
+  readonly closeBuffer: bigint;
   readonly vrfTimeout: bigint;
   readonly paused: boolean;
   readonly currentEpochId: bigint;
@@ -60,7 +61,10 @@ export interface RoundState {
 }
 
 /** Anchor hands back BN for u64/u128 and number[] for byte arrays. */
-type Decoded = Record<string, { toString(): string } | number | boolean | PublicKey | number[]>;
+type Decoded = Record<
+  string,
+  { toString(): string } | number | boolean | PublicKey | number[]
+>;
 
 const big = (value: unknown): bigint => BigInt(String(value));
 
@@ -80,6 +84,7 @@ export function decodePool(
     vrfNetworkState: raw.vrfNetworkState as PublicKey,
     epochSeconds: big(raw.epochSeconds),
     roundSeconds: big(raw.roundSeconds),
+    closeBuffer: big(raw.closeBuffer),
     vrfTimeout: big(raw.vrfTimeout),
     paused: raw.paused === true,
     currentEpochId: big(raw.currentEpochId),

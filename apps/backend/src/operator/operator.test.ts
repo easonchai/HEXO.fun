@@ -45,10 +45,19 @@ const POOL = poolAddress(PROGRAM_ID, 1n);
 const idl = { ...loadIdl(), address: PROGRAM_ID.toBase58() } as Idl;
 const program = new Program(
   idl,
-  new AnchorProvider(new Connection("http://127.0.0.1:1"), new Wallet(Keypair.generate()), {}),
+  new AnchorProvider(
+    new Connection("http://127.0.0.1:1"),
+    new Wallet(Keypair.generate()),
+    {},
+  ),
 );
 const coder = new BorshInstructionCoder(idl);
-const instructions = new OperatorInstructions(program, PROGRAM_ID, AUTHORITY, true);
+const instructions = new OperatorInstructions(
+  program,
+  PROGRAM_ID,
+  AUTHORITY,
+  true,
+);
 
 /** Readable name for one recorded instruction, whoever owns it. */
 function label(ix: TransactionInstruction): string {
@@ -56,7 +65,8 @@ function label(ix: TransactionInstruction): string {
     return coder.decode(ix.data)?.name ?? "unknown";
   }
   if (ix.programId.equals(TOKEN_PROGRAM_ID)) return `token:${ix.data[0]}`;
-  if (ix.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)) return `ata:${ix.data[0]}`;
+  if (ix.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID))
+    return `ata:${ix.data[0]}`;
   return ix.programId.toBase58();
 }
 
@@ -75,6 +85,7 @@ const pool = (over: Partial<PoolState> = {}): PoolState => ({
   vrfNetworkState: Keypair.generate().publicKey,
   epochSeconds: 86_400n,
   roundSeconds: 60n,
+  closeBuffer: 0n,
   vrfTimeout: 120n,
   paused: false,
   currentEpochId: 2n,
@@ -121,6 +132,9 @@ function context(over: Partial<TickContext> = {}): Recorder {
     currentEpoch: epoch(),
     previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.PAID }),
     openRound: round(),
+    // Null by default: only the step 7 tests below care, and null means "no
+    // previous round", which never delays opening the next one.
+    lastRound: null,
     aprBps: 500n,
     jackpotFloor: 10_000_000n,
     ix: instructions,
@@ -169,9 +183,28 @@ describe("runTick", () => {
     expect(result.labels).toEqual(["request_round_randomness"]);
   });
 
+  it("1. does not request randomness one second before the close", async () => {
+    const result = await tickLabels({
+      pool: pool({ closeBuffer: 5n }),
+      openRound: round({ endsAt: NOW + 6n }),
+    });
+    expect(result.transactions).toBe(0);
+  });
+
+  it("1. requests randomness at the close, `closeBuffer` seconds before `endsAt`", async () => {
+    const result = await tickLabels({
+      pool: pool({ closeBuffer: 5n }),
+      openRound: round({ endsAt: NOW + 5n }),
+    });
+    expect(result.labels).toEqual(["request_round_randomness"]);
+  });
+
   it("1. settles a requested round once the randomness is fulfilled", async () => {
     const result = await tickLabels({
-      openRound: round({ status: ROUND_STATUS.REQUESTED, requestedAt: NOW - 5n }),
+      openRound: round({
+        status: ROUND_STATUS.REQUESTED,
+        requestedAt: NOW - 5n,
+      }),
       fulfilled: async () => true,
     });
     expect(result.labels).toEqual(["settle_round"]);
@@ -179,7 +212,10 @@ describe("runTick", () => {
 
   it("1. voids a requested round after the timeout", async () => {
     const result = await tickLabels({
-      openRound: round({ status: ROUND_STATUS.REQUESTED, requestedAt: NOW - 121n }),
+      openRound: round({
+        status: ROUND_STATUS.REQUESTED,
+        requestedAt: NOW - 121n,
+      }),
     });
     expect(result.labels).toEqual(["void_round"]);
   });
@@ -196,7 +232,10 @@ describe("runTick", () => {
   it("1. settles a requested round before begin_epoch when the epoch has also ended", async () => {
     const result = await tickLabels({
       currentEpoch: epoch({ endsAt: NOW }),
-      openRound: round({ status: ROUND_STATUS.REQUESTED, requestedAt: NOW - 5n }),
+      openRound: round({
+        status: ROUND_STATUS.REQUESTED,
+        requestedAt: NOW - 5n,
+      }),
       fulfilled: async () => true,
     });
     expect(result.labels).toEqual(["settle_round"]);
@@ -293,7 +332,9 @@ describe("runTick", () => {
   // with a last-second deposit gets one more chance.
 
   it("4. registers up to eight players per transaction", async () => {
-    const owners = Array.from({ length: 10 }, () => Keypair.generate().publicKey.toBase58());
+    const owners = Array.from({ length: 10 }, () =>
+      Keypair.generate().publicKey.toBase58(),
+    );
     const { ctx, sent } = context({
       previousEpoch: epoch({
         epochId: 1n,
@@ -336,12 +377,19 @@ describe("runTick", () => {
       authorityBalance: async () => 0n,
       lastRegisterCheck: { epochId: 1n, empty: true },
     });
-    expect(result.labels).toEqual([MINT_TO, "fund_jackpot", "close_registration"]);
+    expect(result.labels).toEqual([
+      MINT_TO,
+      "fund_jackpot",
+      "close_registration",
+    ]);
   });
 
   it("4. list empty, then non-empty, then empty: only the second empty tick closes", async () => {
     const owner = Keypair.generate().publicKey.toBase58();
-    const previousEpoch = epoch({ epochId: 1n, status: EPOCH_STATUS.REGISTERING });
+    const previousEpoch = epoch({
+      epochId: 1n,
+      status: EPOCH_STATUS.REGISTERING,
+    });
 
     // Tick 1: nobody left, for the first time. Waits.
     const tick1 = context({ previousEpoch, playersToRegister: async () => [] });
@@ -387,7 +435,11 @@ describe("runTick", () => {
 
   it("5. draws once the randomness is fulfilled", async () => {
     const result = await tickLabels({
-      previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.DRAWING, requestedAt: NOW }),
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWING,
+        requestedAt: NOW,
+      }),
       fulfilled: async () => true,
     });
     expect(result.labels).toEqual(["draw"]);
@@ -421,7 +473,11 @@ describe("runTick", () => {
   it("6. pays the winner, creating their token account in the same transaction", async () => {
     const winner = Keypair.generate().publicKey.toBase58();
     const result = await tickLabels({
-      previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.DRAWN, target: 42n }),
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+      }),
       winner: async (epochId, target) =>
         epochId === 1n && target === 42n ? winner : null,
     });
@@ -430,7 +486,11 @@ describe("runTick", () => {
 
   it("6. waits when no registered interval covers the target yet", async () => {
     const result = await tickLabels({
-      previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.DRAWN, target: 42n }),
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+      }),
       openRound: round({ endsAt: NOW + 1n }),
     });
     expect(result.transactions).toBe(0);
@@ -439,7 +499,10 @@ describe("runTick", () => {
   // --- 7. Create Round.
 
   it("7. opens the next round when the last one is fully settled", async () => {
-    const result = await tickLabels({ pool: pool({ openRoundId: 0n }), openRound: null });
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+    });
     expect(result.labels).toEqual(["create_round"]);
   });
 
@@ -459,6 +522,45 @@ describe("runTick", () => {
     });
     expect(result.transactions).toBe(0);
   });
+
+  // --- 7. The previous Round's reveal (5 s past its `endsAt`) must have had
+  // time to play before the next one opens (ticket 03).
+
+  it("7. holds the next round while a settled lastRound's reveal is still playing", async () => {
+    const settledLastRound = round({
+      status: ROUND_STATUS.SETTLED,
+      endsAt: NOW - 4n,
+    });
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      lastRound: settledLastRound,
+    });
+    expect(result.transactions).toBe(0);
+  });
+
+  it("7. opens the next round one second later, once the reveal has played", async () => {
+    const settledLastRound = round({
+      status: ROUND_STATUS.SETTLED,
+      endsAt: NOW - 4n,
+    });
+    const result = await tickLabels({
+      now: NOW + 1n,
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      lastRound: settledLastRound,
+    });
+    expect(result.labels).toEqual(["create_round"]);
+  });
+
+  it("7. a voided lastRound opens the next round immediately", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      lastRound: round({ status: ROUND_STATUS.VOIDED, endsAt: NOW }),
+    });
+    expect(result.labels).toEqual(["create_round"]);
+  });
 });
 
 describe("yieldAmount", () => {
@@ -466,12 +568,16 @@ describe("yieldAmount", () => {
     // 1,000 hexUSDC at 5% for one day.
     const principal = 1_000_000_000n;
     expect(yieldAmount(principal, 500n, 86_400n, 0n)).toBe(136_986n);
-    expect(yieldAmount(principal, 500n, 86_400n, 10_000_000n)).toBe(10_000_000n);
+    expect(yieldAmount(principal, 500n, 86_400n, 10_000_000n)).toBe(
+      10_000_000n,
+    );
   });
 
   it("pays the accrued amount once it clears the floor", () => {
     // 1,000,000 hexUSDC at 5% for one day is 136.98 hexUSDC.
-    expect(yieldAmount(1_000_000_000_000n, 500n, 86_400n, 10_000_000n)).toBe(136_986_301n);
+    expect(yieldAmount(1_000_000_000_000n, 500n, 86_400n, 10_000_000n)).toBe(
+      136_986_301n,
+    );
   });
 });
 
@@ -489,9 +595,15 @@ describe("randomness", () => {
     const other = poolAddress(PROGRAM_ID, 2n);
     const base = vrfSeed("epoch", POOL, 7n);
     expect(Buffer.from(vrfSeed("epoch", POOL, 7n))).toEqual(Buffer.from(base));
-    expect(Buffer.from(vrfSeed("round", POOL, 7n))).not.toEqual(Buffer.from(base));
-    expect(Buffer.from(vrfSeed("epoch", other, 7n))).not.toEqual(Buffer.from(base));
-    expect(Buffer.from(vrfSeed("epoch", POOL, 8n))).not.toEqual(Buffer.from(base));
+    expect(Buffer.from(vrfSeed("round", POOL, 7n))).not.toEqual(
+      Buffer.from(base),
+    );
+    expect(Buffer.from(vrfSeed("epoch", other, 7n))).not.toEqual(
+      Buffer.from(base),
+    );
+    expect(Buffer.from(vrfSeed("epoch", POOL, 8n))).not.toEqual(
+      Buffer.from(base),
+    );
   });
 
   it("uses this program's PDA under test-vrf and ORAO's otherwise", () => {
