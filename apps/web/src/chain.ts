@@ -6,7 +6,7 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 
 export type HexVaultProgram = Program<Idl>;
 
@@ -159,16 +159,3 @@ export const TOKEN_PROGRAM = TOKEN_PROGRAM_ID;
 /** hexUSDC is a classic SPL Token mint, so the ATA is the classic one. */
 export const acceptedAta = (mint: PublicKey, owner: PublicKey): PublicKey =>
   getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);
-
-/** Token balance in atomic units; a missing account reads as zero. */
-export async function tokenBalance(
-  connection: Connection,
-  account: PublicKey,
-): Promise<bigint> {
-  try {
-    const { value } = await connection.getTokenAccountBalance(account);
-    return BigInt(value.amount);
-  } catch {
-    return 0n;
-  }
-}

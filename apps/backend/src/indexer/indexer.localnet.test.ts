@@ -269,7 +269,8 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await wipe(prisma);
 
     indexer = new IndexerService(prisma, chain);
-    // The real boot path: the 2 s timer plus the finalized log subscription.
+    // The real boot path: the boot sweep, the confirmed-log sync trigger and
+    // the finalized log subscription.
     indexer.onModuleInit();
     startedAt = Date.now();
   }, 180_000);
@@ -289,7 +290,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         (await prisma.player.count()) > 0 &&
         (await prisma.round.count()) > 0 &&
         (await prisma.position.count()) > 0,
-      // The tick runs every 2 s, so the ticket's 4 s budget is two chances.
+      // The boot sweep runs at once; the ticket's 4 s budget covers one RPC round trip.
       4_000 - (Date.now() - startedAt),
     );
     expect(Date.now() - startedAt).toBeLessThan(4_000);

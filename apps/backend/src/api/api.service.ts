@@ -24,8 +24,8 @@ const FEED_NAMES = [
   "EpochRolledOver",
 ] as const;
 
-/** How long a `getSlot` probe answers for. The frontend polls /status every 2 s. */
-const RPC_PROBE_TTL_MS = 5_000;
+/** How long a `getSlot` probe answers for. `rpcOk` only needs to be roughly right. */
+const RPC_PROBE_TTL_MS = 300_000;
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
 

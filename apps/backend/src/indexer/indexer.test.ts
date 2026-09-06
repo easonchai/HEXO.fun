@@ -30,25 +30,20 @@ interface StoredAccount {
   data: Buffer;
 }
 
-/** Only the four calls the indexer makes; everything else stays unimplemented. */
+/** Only the three calls the indexer makes; everything else stays unimplemented. */
 class FakeConnection {
   slot = 100;
   accounts: StoredAccount[] = [];
 
-  getSlot(): Promise<number> {
-    return Promise.resolve(this.slot);
-  }
-
-  getProgramAccounts(
-    _programId: PublicKey,
-    config: { filters: [{ memcmp: { offset: number; bytes: string } }] },
-  ): Promise<{ pubkey: PublicKey; account: { data: Buffer } }[]> {
-    const prefix = Buffer.from(bs58.decode(config.filters[0].memcmp.bytes));
-    return Promise.resolve(
-      this.accounts
-        .filter(({ data }) => data.subarray(0, prefix.length).equals(prefix))
-        .map(({ pubkey, data }) => ({ pubkey, account: { data } })),
-    );
+  /** The indexer reads unfiltered and sorts by discriminator itself. */
+  getProgramAccounts(): Promise<{
+    context: { slot: number };
+    value: { pubkey: PublicKey; account: { data: Buffer } }[];
+  }> {
+    return Promise.resolve({
+      context: { slot: this.slot },
+      value: this.accounts.map(({ pubkey, data }) => ({ pubkey, account: { data } })),
+    });
   }
 
   getSignaturesForAddress(): Promise<never[]> {

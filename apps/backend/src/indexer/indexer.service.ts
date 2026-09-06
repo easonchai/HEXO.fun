@@ -7,6 +7,7 @@ import {
 import { EventParser } from "@anchor-lang/core";
 import type { Epoch, Player, Prisma, Round } from "@prisma/client";
 import { PublicKey, type ConfirmedSignatureInfo } from "@solana/web3.js";
+import bs58 from "bs58";
 
 import { ChainService } from "../chain/chain.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -27,7 +28,12 @@ import {
   type DecodedRound,
 } from "./decode";
 
-const SYNC_INTERVAL_MS = 2_000;
+/**
+ * The account sync is event driven: a confirmed program log triggers one
+ * `getProgramAccounts`. This sweep is the safety net for a dropped websocket,
+ * and it is where the finalized event catch-up runs.
+ */
+const SWEEP_INTERVAL_MS = 60_000;
 const CURSOR_ID = 1;
 // One page of `getSignaturesForAddress`. Beyond this the oldest signatures
 // behind the cursor are dropped, which only happens if the indexer was down
@@ -56,6 +62,11 @@ export interface LogBatch {
   logs: string[];
 }
 
+/** Decoded accounts of one type, from the single `getProgramAccounts` read. */
+interface AccountsByType {
+  get<T>(name: string): { pubkey: PublicKey; account: T }[];
+}
+
 interface SocketLike {
   on(event: string, listener: (...args: unknown[]) => void): void;
 }
@@ -71,8 +82,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
 
   private timer?: NodeJS.Timeout;
   private subscriptionId?: number;
+  private syncSubscriptionId?: number;
   /** Single-flight: a slow tick is skipped, never queued behind itself. */
   private ticking = false;
+  /** Coalesces log-triggered syncs: one in flight, at most one more queued. */
+  private syncing: Promise<void> | null = null;
+  private syncAgain = false;
   /** Serializes the live socket and the catch-up poll onto one writer. */
   private queue: Promise<void> = Promise.resolve();
   private lastFailure: string | undefined;
@@ -88,15 +103,18 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     this.watchSocket();
     this.subscribeToLogs();
-    this.timer = setInterval(() => void this.tick(), SYNC_INTERVAL_MS);
+    this.subscribeToSync();
+    void this.tick();
+    this.timer = setInterval(() => void this.tick(), SWEEP_INTERVAL_MS);
   }
 
   async onModuleDestroy(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
-    if (this.subscriptionId !== undefined) {
-      await this.chain.connection.removeOnLogsListener(this.subscriptionId);
+    for (const id of [this.subscriptionId, this.syncSubscriptionId]) {
+      if (id !== undefined) await this.chain.connection.removeOnLogsListener(id);
     }
     await this.queue;
+    await this.syncing;
   }
 
   // ---------------------------------------------------------------- reads
@@ -152,7 +170,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     if (this.ticking) return;
     this.ticking = true;
     try {
-      await this.syncAccounts();
+      await this.requestSync();
       await this.catchUpEvents();
       await this.prisma.cursor.upsert({
         where: { id: CURSOR_ID },
@@ -170,8 +188,45 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   // --------------------------------------------------------- account sync
 
   /**
-   * One `getProgramAccounts` per account type, filtered by the 8-byte Anchor
-   * discriminator, then one Prisma transaction per type.
+   * Every confirmed program transaction changes some account, so each one
+   * triggers a sync. Coalesced: a burst of logs during a sync runs one more
+   * sync after it, not one per log.
+   */
+  private subscribeToSync(): void {
+    this.syncSubscriptionId = this.chain.connection.onLogs(
+      this.chain.programId,
+      (logs) => {
+        if (logs.err) return;
+        void this.requestSync().catch((error: unknown) =>
+          this.noteFailure("log-triggered sync failed", error),
+        );
+      },
+      "confirmed",
+    );
+  }
+
+  private requestSync(): Promise<void> {
+    if (this.syncing) {
+      this.syncAgain = true;
+      return this.syncing;
+    }
+    this.syncing = (async () => {
+      try {
+        do {
+          this.syncAgain = false;
+          await this.syncAccounts();
+        } while (this.syncAgain);
+      } finally {
+        this.syncing = null;
+      }
+    })();
+    return this.syncing;
+  }
+
+  /**
+   * One unfiltered `getProgramAccounts` (the program owns a few hundred
+   * accounts at most), sorted by Anchor discriminator locally, then one
+   * Prisma transaction per type.
    *
    * Every account is checked against the PDA it must live at for the
    * configured pool. Epoch, Round and Player carry no pool field, and the
@@ -179,10 +234,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * pool's accounts would collide with this one's.
    */
   async syncAccounts(): Promise<void> {
-    const slot = BigInt(await this.chain.connection.getSlot("confirmed"));
     const pool = this.chain.poolAddress();
+    const { slot, accounts } = await this.fetchAll();
 
-    const pools = await this.fetch<DecodedPool>(ACCOUNT.pool);
+    const pools = accounts.get<DecodedPool>(ACCOUNT.pool);
     await this.prisma.$transaction(
       pools
         .filter(({ pubkey }) => pubkey.equals(pool))
@@ -196,7 +251,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         }),
     );
 
-    const epochs = await this.fetch<DecodedEpoch>(ACCOUNT.epoch);
+    const epochs = accounts.get<DecodedEpoch>(ACCOUNT.epoch);
     await this.prisma.$transaction(
       epochs
         .filter(({ pubkey, account }) =>
@@ -208,7 +263,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         }),
     );
 
-    const rounds = (await this.fetch<DecodedRound>(ACCOUNT.round)).filter(({ pubkey, account }) =>
+    const rounds = accounts.get<DecodedRound>(ACCOUNT.round).filter(({ pubkey, account }) =>
       pubkey.equals(this.chain.roundAddress(BigInt(account.roundId.toString()), pool)),
     );
     await this.prisma.$transaction(
@@ -218,7 +273,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       }),
     );
 
-    const players = await this.fetch<DecodedPlayer>(ACCOUNT.player);
+    const players = accounts.get<DecodedPlayer>(ACCOUNT.player);
     await this.prisma.$transaction(
       players
         .filter(({ pubkey, account }) => pubkey.equals(this.chain.playerAddress(account.owner, pool)))
@@ -238,7 +293,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const roundIds = new Map(
       rounds.map(({ pubkey, account }) => [pubkey.toBase58(), BigInt(account.roundId.toString())]),
     );
-    const positions = (await this.fetch<DecodedPosition>(ACCOUNT.position)).flatMap(
+    const positions = accounts.get<DecodedPosition>(ACCOUNT.position).flatMap(
       ({ pubkey, account }) => {
         const roundId = roundIds.get(account.round.toBase58());
         if (roundId === undefined) return [];
@@ -263,17 +318,36 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     ]);
   }
 
-  private async fetch<T>(
-    name: string,
-  ): Promise<{ pubkey: PublicKey; account: T }[]> {
+  /** Every account the program owns, in one RPC call, keyed by type. */
+  private async fetchAll(): Promise<{ slot: bigint; accounts: AccountsByType }> {
     const coder = this.chain.program.coder.accounts;
-    const accounts = await this.chain.connection.getProgramAccounts(this.chain.programId, {
-      filters: [{ memcmp: coder.memcmp(name) }],
-    });
-    return accounts.map(({ pubkey, account }) => ({
-      pubkey,
-      account: coder.decode<T>(name, account.data),
-    }));
+    const { context, value } = await this.chain.connection.getProgramAccounts(
+      this.chain.programId,
+      { withContext: true },
+    );
+    const byType = new Map<string, { pubkey: PublicKey; data: Buffer }[]>();
+    for (const name of Object.values(ACCOUNT)) {
+      // SAFETY: the interface types `memcmp` as `any`; BorshAccountsCoder
+      // returns `{ offset: 0, bytes: base58(discriminator) }`.
+      const memcmp = coder.memcmp(name) as { bytes: string };
+      const discriminator = Buffer.from(bs58.decode(memcmp.bytes));
+      byType.set(
+        name,
+        value
+          .filter(({ account }) => account.data.subarray(0, discriminator.length).equals(discriminator))
+          .map(({ pubkey, account }) => ({ pubkey, data: account.data })),
+      );
+    }
+    return {
+      slot: BigInt(context.slot),
+      accounts: {
+        get: <T>(name: string) =>
+          (byType.get(name) ?? []).map(({ pubkey, data }) => ({
+            pubkey,
+            account: coder.decode<T>(name, data),
+          })),
+      },
+    };
   }
 
   // --------------------------------------------------------- event ingest
@@ -321,8 +395,8 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Replays every finalized signature the cursor has not seen. Runs on the 2 s
-   * tick, not only at boot: it is what actually guarantees no event is lost
+   * Replays every finalized signature the cursor has not seen. Runs on the
+   * sweep, not only at boot: it is what actually guarantees no event is lost
    * when the websocket is down, and it costs one RPC call when nothing moved.
    */
   private async catchUpEvents(): Promise<void> {
@@ -447,7 +521,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     return next;
   }
 
-  /** A failing RPC repeats every 2 s; log the change, not the repetition. */
+  /** A failing RPC repeats on every sync; log the change, not the repetition. */
   private noteFailure(scope: string, error?: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     const line = error === undefined ? scope : `${scope}: ${message}`;

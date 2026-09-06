@@ -1,24 +1,26 @@
 /**
  * Chain reads. This module owns the three accounts the UI cannot get wrong:
  * the Pool, the connected wallet's Player, and the open Round. Everything
- * else comes from `api.ts`. Polled every 2 s and re-read immediately when a
- * `RoundSettled` event lands on the program's logs.
+ * else comes from `api.ts`. One `getMultipleAccountsInfo` every 10 s, and
+ * again as soon as any program event lands on the logs websocket.
  */
 import { BN } from "@anchor-lang/core";
+import { AccountLayout } from "@solana/spl-token";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PublicKey, type Connection } from "@solana/web3.js";
+import {
+  PublicKey,
+  type AccountInfo,
+  type Connection,
+} from "@solana/web3.js";
 
 import {
-  accountOf,
   acceptedAta,
   decodeEventLogs,
-  eventKey,
   playerAddress,
   poolAddress,
   positionAddress,
   roundAddress,
   toBigint,
-  tokenBalance,
   POOL_ID,
   PROGRAM_ID,
   type HexVaultProgram,
@@ -129,37 +131,28 @@ function decode<T>(raw: unknown): T {
   return normalize(raw) as T;
 }
 
-/** Null instead of a throw: a missing account is a normal state here. */
-async function fetchAccount<T>(
+/** Decode raw account bytes already fetched; null for a missing account. */
+function decodeAccount<T>(
   program: HexVaultProgram,
   name: string,
-  address: PublicKey,
-): Promise<T | null> {
+  info: AccountInfo<Buffer> | null | undefined,
+): T | null {
+  if (!info) return null;
+  const coder = (
+    program as unknown as {
+      coder: { accounts: { decode(name: string, data: Buffer): unknown } };
+    }
+  ).coder;
   try {
-    return decode<T>(await accountOf(program, name).fetch(address));
+    return decode<T>(coder.accounts.decode(name, info.data));
   } catch {
     return null;
   }
 }
 
-export const fetchPool = (
-  program: HexVaultProgram,
-  address: PublicKey,
-): Promise<PoolRow | null> => fetchAccount<PoolRow>(program, "pool", address);
-
-export const fetchPlayer = (
-  program: HexVaultProgram,
-  pool: PublicKey,
-  owner: PublicKey,
-): Promise<PlayerRow | null> =>
-  fetchAccount<PlayerRow>(program, "player", playerAddress(pool, owner));
-
-export const fetchRound = (
-  program: HexVaultProgram,
-  pool: PublicKey,
-  roundId: bigint,
-): Promise<RoundRow | null> =>
-  fetchAccount<RoundRow>(program, "round", roundAddress(pool, roundId));
+/** SPL token balance from raw account bytes; a missing account reads as zero. */
+const decodeTokenAmount = (info: AccountInfo<Buffer> | null | undefined): bigint =>
+  info ? AccountLayout.decode(info.data).amount : 0n;
 
 export interface ChainState {
   pool: PoolLike | null;
@@ -177,7 +170,15 @@ export interface ChainState {
   refresh: () => void;
 }
 
-const POLL_MS = 2000;
+/** Fallback cadence; the logs subscription below reloads on every event. */
+const POLL_MS = 10_000;
+
+/** What the last pool read told us the other addresses are. */
+interface ReadPlan {
+  mint: string;
+  jackpotVault: PublicKey;
+  roundId: bigint;
+}
 
 const EMPTY: Omit<ChainState, "refresh"> = {
   pool: null,
@@ -198,8 +199,13 @@ export function useChainState(
   const [state, setState] = useState(EMPTY);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((value) => value + 1), []);
-  /** A settled round stops being `open_round_id`, but the reveal still needs it. */
-  const lastRoundId = useRef(0n);
+  /**
+   * The round and token addresses come from the pool, so the first read only
+   * knows the pool; every later read fetches all six accounts in one call.
+   * A settled round stops being `open_round_id`, but the reveal still needs
+   * it, so `roundId` is the last open one this session saw.
+   */
+  const plan = useRef<ReadPlan | null>(null);
   const ownerKey = owner?.toBase58();
 
   useEffect(() => {
@@ -210,10 +216,30 @@ export function useChainState(
     let cancelled = false;
     const address = poolAddress(POOL_ID);
 
-    const load = async (): Promise<void> => {
+    const load = async (followUp = true): Promise<void> => {
       try {
-        const pool = await fetchPool(program, address);
+        const known = plan.current;
+        const round =
+          known && known.roundId > 0n ? roundAddress(address, known.roundId) : null;
+        const wanted: [string, PublicKey | null][] = [
+          ["pool", address],
+          ["player", owner ? playerAddress(address, owner) : null],
+          ["round", round],
+          ["position", owner && round ? positionAddress(round, owner) : null],
+          ["wallet", owner && known ? acceptedAta(new PublicKey(known.mint), owner) : null],
+          ["jackpot", known?.jackpotVault ?? null],
+        ];
+        const keys = wanted.filter(
+          (entry): entry is [string, PublicKey] => entry[1] !== null,
+        );
+        const infos = await connection.getMultipleAccountsInfo(
+          keys.map(([, key]) => key),
+        );
         if (cancelled) return;
+        const infoOf = (name: string): AccountInfo<Buffer> | null =>
+          infos[keys.findIndex(([key]) => key === name)] ?? null;
+
+        const pool = decodeAccount<PoolRow>(program, "pool", infoOf("pool"));
         if (!pool) {
           // A missing account and a stuttering RPC look the same from here, so
           // keep the last good read on screen and say so rather than blanking.
@@ -224,33 +250,27 @@ export function useChainState(
           }));
           return;
         }
-        if (pool.openRoundId > 0n) lastRoundId.current = pool.openRoundId;
-        const roundId = lastRoundId.current;
+        const next: ReadPlan = {
+          mint: pool.acceptedMint.toBase58(),
+          jackpotVault: pool.jackpotVault,
+          roundId: pool.openRoundId > 0n ? pool.openRoundId : (known?.roundId ?? 0n),
+        };
+        const stale =
+          !known || known.mint !== next.mint || known.roundId !== next.roundId;
+        if (stale) {
+          plan.current = next;
+          // The pool named addresses this read did not ask for (first read, or
+          // a new round opened): read once more, now with the full list.
+          if (followUp) return load(false);
+        }
 
-        const [player, round, walletBalance, hexpot] = await Promise.all([
-          owner ? fetchPlayer(program, address, owner) : null,
-          roundId > 0n ? fetchRound(program, address, roundId) : null,
-          owner
-            ? tokenBalance(connection, acceptedAta(pool.acceptedMint, owner))
-            : 0n,
-          tokenBalance(connection, pool.jackpotVault),
-        ]);
-        const position =
-          owner && round
-            ? await fetchAccount<PositionRow>(
-                program,
-                "position",
-                positionAddress(roundAddress(address, roundId), owner),
-              )
-            : null;
-        if (cancelled) return;
         setState({
           pool: { address, ...pool },
-          player,
-          round,
-          position,
-          walletBalance,
-          hexpot,
+          player: decodeAccount<PlayerRow>(program, "player", infoOf("player")),
+          round: decodeAccount<RoundRow>(program, "round", infoOf("round")),
+          position: decodeAccount<PositionRow>(program, "position", infoOf("position")),
+          walletBalance: decodeTokenAmount(infoOf("wallet")),
+          hexpot: decodeTokenAmount(infoOf("jackpot")),
           loading: false,
           error: null,
         });
@@ -270,14 +290,13 @@ export function useChainState(
       if (!document.hidden) void load();
     }, POLL_MS);
 
-    // A settle changes every balance at once; do not wait for the next poll.
+    // Every program event moves something on screen (a deposit, a position,
+    // a settle, a new round); re-read right away instead of waiting 10 s.
     const subscription = connection.onLogs(
       PROGRAM_ID,
-      ({ logs }) => {
-        const settled = decodeEventLogs(program, logs).some(
-          (event) => eventKey(event.name) === "roundSettled",
-        );
-        if (settled) void load();
+      ({ logs, err }) => {
+        if (err) return;
+        if (decodeEventLogs(program, logs).length > 0) void load();
       },
       "confirmed",
     );
