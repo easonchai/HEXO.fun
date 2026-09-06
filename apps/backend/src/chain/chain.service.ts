@@ -15,7 +15,6 @@ import {
   PublicKey,
   Transaction,
   type TransactionInstruction,
-  sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import bs58 from "bs58";
 
@@ -76,15 +75,24 @@ export class ChainService {
     return poolAddress(this.programId, poolId);
   }
 
-  epochAddress(epochId: bigint, pool: PublicKey = this.poolAddress()): PublicKey {
+  epochAddress(
+    epochId: bigint,
+    pool: PublicKey = this.poolAddress(),
+  ): PublicKey {
     return epochAddress(this.programId, pool, epochId);
   }
 
-  roundAddress(roundId: bigint, pool: PublicKey = this.poolAddress()): PublicKey {
+  roundAddress(
+    roundId: bigint,
+    pool: PublicKey = this.poolAddress(),
+  ): PublicKey {
     return roundAddress(this.programId, pool, roundId);
   }
 
-  playerAddress(owner: PublicKey, pool: PublicKey = this.poolAddress()): PublicKey {
+  playerAddress(
+    owner: PublicKey,
+    pool: PublicKey = this.poolAddress(),
+  ): PublicKey {
     return playerAddress(this.programId, pool, owner);
   }
 
@@ -100,13 +108,41 @@ export class ChainService {
     return jackpotVaultAddress(this.programId, pool);
   }
 
-  /** Signs with the authority keypair, sends, confirms at "confirmed". */
+  /**
+   * Signs with the authority keypair, sends, confirms at "confirmed".
+   *
+   * The blockhash is fetched at "finalized" on purpose. The RPC is a
+   * load-balanced pool, and a "confirmed" blockhash from one node is not yet
+   * known to a node a few slots behind, so preflight there fails with
+   * "Blockhash not found". A finalized hash is ~32 slots old, which every node
+   * has, and still leaves ~118 of its 150 valid slots to land.
+   */
   async send(instructions: TransactionInstruction[]): Promise<string> {
-    const tx = new Transaction().add(...instructions);
     try {
-      return await sendAndConfirmTransaction(this.connection, tx, [this.keypair], {
-        commitment: "confirmed",
-      });
+      const { blockhash, lastValidBlockHeight } =
+        await this.connection.getLatestBlockhash("finalized");
+      const tx = new Transaction({
+        blockhash,
+        lastValidBlockHeight,
+        feePayer: this.keypair.publicKey,
+      }).add(...instructions);
+      tx.sign(this.keypair);
+      const signature = await this.connection.sendRawTransaction(
+        tx.serialize(),
+        {
+          preflightCommitment: "confirmed",
+        },
+      );
+      const { value } = await this.connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed",
+      );
+      if (value.err) {
+        throw new Error(
+          `transaction ${signature} failed: ${JSON.stringify(value.err)}`,
+        );
+      }
+      return signature;
     } catch (cause) {
       throw this.mapSendError(cause);
     }

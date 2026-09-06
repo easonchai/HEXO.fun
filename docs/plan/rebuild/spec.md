@@ -129,7 +129,7 @@ Authority-only unless marked permissionless. All amount math is checked; any ove
 
 - `create_round(starts_at, ends_at)`: require `!paused`, no Open/Requested round exists (pool tracks `open_round_id`, 0 when none), `ends_at - starts_at == round_seconds`, `ends_at <= current epoch ends_at`. `round_id = next_round_id++`, `pot = pool.carry_pot; pool.carry_pot = 0`, seed = keccak("round", pool, round_id).
 - `buy_position(round, tiles, stake_per_tile)` permissionless: `touch`; require round Open, `now < ends_at - close_buffer`, `tiles != 0 && tiles < 2^36`, `stake_per_tile >= 1`, `total = stake × popcount(tiles)`, `entries >= total`. Pre-credit weight: `weight_acc += total × (round.ends_at - now)`. Then `entries -= total`, each selected `tile_totals[t] += stake`, `pot += total`. Creates Position (rent paid by owner).
-- `request_round_randomness(round)` permissionless: require Open, `now >= ends_at`; CPI ORAO `request_v2(seed)`; status Requested, `requested_at = now`.
+- `request_round_randomness(round)` permissionless: require Open, `now >= ends_at - close_buffer` (the close, when Positions stop); CPI ORAO `request_v2(seed)`; status Requested, `requested_at = now`.
 - `settle_round(round, orao_randomness, house Player)`: require Requested and ORAO account fulfilled; `winning_tile = u64(randomness[0..8]) % 36` (bias < 2^-59, documented); if `tile_totals[tile] == 0`: `touch(house)`; `house.entries += pot`; status Forfeited; else status Settled. Sets `pool.open_round_id = 0`.
 - `settle_position(round, position, player)` permissionless: `touch(player)`; require round Settled or Forfeited; if Settled and position covers winning_tile: `reward = pot × stake_per_tile / tile_totals[winning_tile]`, `entries += reward`. Closes Position, rent to owner. Integer division dust stays unminted and is documented as negligible.
 - `void_round(round)`: require Requested and `now > requested_at + vrf_timeout`; `pool.carry_pot += pot`; status Voided; `open_round_id = 0`. Positions in a voided round settle to zero reward and close.
@@ -216,13 +216,13 @@ All on-chain `u64` map to `BigInt`, `u128` to `Decimal(40,0)`. The API serialize
 
 `@nestjs/schedule` interval 2 s, single-flight (skip a tick if the previous is still running). Each tick reads fresh Pool/Epoch/Round state from chain (three `getAccountInfo` calls), then runs in order and stops after the first transaction sent:
 
-1. Open round past `endsAt` → `request_round_randomness`. Requested round: fulfilled → `settle_round`; timed out → `void_round`. Round steps run first so a Round can never straddle an Epoch boundary that step 3 might open.
+1. Open round past `endsAt - closeBuffer` (the close, the same instant `buy_position` starts refusing) → `request_round_randomness`, so ORAO's round trip runs inside the countdown. Requested round: fulfilled → `settle_round`; timed out → `void_round`. Round steps run first so a Round can never straddle an Epoch boundary that step 3 might open.
 2. Unsettled Positions in Postgres on any Round that is Settled, Forfeited or Voided, not just the newest → `settle_position`, up to 8 per transaction, one Round per tick.
 3. `begin_epoch`, only when the current Epoch has ended, `open_round_id == 0`, step 2 found nothing, and the previous Epoch (if any) is `Paid` or `RolledOver`.
 4. Previous epoch `Registering`: from Postgres take players with `regEpoch != prev.id` and non-zero computed weight; send `register` for up to 8 players per transaction. When none remain, `close_registration` (`fund_jackpot(max(floor, totalPrincipal × APR × len / year))` from the authority's hexUSDC account, mint to self first if short, then close) is sent only once the list has come back empty on two consecutive ticks, so a player who deposited just before `ends_at` gets one more indexer sync window before being counted out.
 5. Previous epoch `Drawing`: if ORAO account fulfilled → `draw`; else if `now > requestedAt + vrfTimeout` → `rollover_epoch`.
 6. Previous epoch `Drawn`: find the Player with `regEpoch == id && regStart <= target < regEnd` → `payout` (create the winner's ATA idempotently in the same transaction).
-7. No open round and `now + roundSeconds <= epoch.endsAt` and not paused → `create_round(now, now + roundSeconds)`.
+7. No open round and `now + roundSeconds <= epoch.endsAt` and not paused and the previous Round's reveal has played (no previous Round, or it is Voided, or `now >= previousRound.endsAt + 5`) → `create_round(now, now + roundSeconds)`.
 
 Every step writes `OperatorState.lastAction`; any thrown error writes `lastError` and the tick ends. Program errors for "already done" states are expected and logged at debug.
 

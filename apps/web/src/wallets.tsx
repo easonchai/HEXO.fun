@@ -7,7 +7,8 @@
 import { PrivyProvider, useLogin, useLogout } from "@privy-io/react-auth";
 import {
   toSolanaWalletConnectors,
-  useStandardWallets,
+  useSignTransaction,
+  useWallets,
 } from "@privy-io/react-auth/solana";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { createContext, useContext, useCallback, type ReactNode } from "react";
@@ -28,10 +29,10 @@ export interface GameSigner {
   connect: () => void;
   disconnect: () => void;
   signTransaction:
-    | (<T extends Transaction | VersionedTransaction>(
-        transaction: T,
-      ) => Promise<T>)
-    | undefined;
+  | (<T extends Transaction | VersionedTransaction>(
+    transaction: T,
+  ) => Promise<T>)
+  | undefined;
 }
 
 /**
@@ -61,6 +62,10 @@ export interface WalletEnvironment extends Record<string, string | undefined> {
 export const walletModeFor = (env: WalletEnvironment): WalletMode =>
   privyAppIdFrom(env) ? "privy" : "standard";
 
+// Built once: connectors register wallet-standard listeners, and a fresh set
+// per render (or per StrictMode double-mount) can miss Phantom's injection.
+const SOLANA_CONNECTORS = toSolanaWalletConnectors({ shouldAutoConnect: true });
+
 /** App root: wraps children in PrivyProvider only when Privy is configured. */
 export function WalletLayer({
   env,
@@ -77,11 +82,14 @@ export function WalletLayer({
         appId={appId}
         {...(clientId ? { clientId } : {})}
         config={{
-          appearance: { theme: "dark", accentColor: "#ffd720" },
+          appearance: {
+            theme: "dark",
+            accentColor: "#ffd720",
+            // Privy defaults to ethereum-only, which connects Phantom's EVM side.
+            // walletChainType: "solana-only",
+          },
           externalWallets: {
-            solana: {
-              connectors: toSolanaWalletConnectors({ shouldAutoConnect: true }),
-            },
+            solana: { connectors: SOLANA_CONNECTORS },
           },
           embeddedWallets: {
             solana: { createOnLogin: "users-without-wallets" },
@@ -178,35 +186,48 @@ const SIGNING_CHAIN = "solana:devnet";
 function usePrivySigner(): GameSigner {
   const { login } = useLogin();
   const { logout } = useLogout();
-  const { wallets, ready } = useStandardWallets();
+  // `useWallets` is the wallet Privy actually connected for this session
+  // (embedded or external). `useStandardWallets` lists every Solana wallet
+  // Privy knows about, connected or not, so its first entry can be a wallet
+  // that cannot sign for the address the app then uses as fee payer.
+  const { wallets, ready } = useWallets();
+  const { signTransaction: privySign } = useSignTransaction();
   const wallet = wallets[0];
-  const account = wallet?.accounts[0];
 
   const signTransaction = useCallback(
     async <T extends Transaction | VersionedTransaction>(transaction: T) => {
-      if (!wallet || !account)
-        throw new Error("no Privy Solana wallet connected");
-      const feature = wallet.features["solana:signTransaction"];
-      if (!feature) throw new Error("wallet cannot sign Solana transactions");
-      // Wallet-standard methods are variadic: one input in, one output out.
-      const [output] = await feature.signTransaction({
-        transaction: transaction.serialize(),
-        account,
+      if (!wallet) throw new Error("no Privy Solana wallet connected");
+      // Anchor builds the tx with its own copy of web3.js (pnpm keeps two,
+      // split on a peer dep), so `instanceof Transaction` is false for a
+      // legacy tx. Anchor's own check: only VersionedTransaction has `version`.
+      const versioned = "version" in transaction;
+      // A legacy Transaction verifies signatures on serialize() by default,
+      // which throws "Missing signature" on the unsigned tx we hand to Privy.
+      const bytes = versioned
+        ? (transaction as VersionedTransaction).serialize()
+        : (transaction as Transaction).serialize({
+            requireAllSignatures: false,
+            verifySignatures: false,
+          });
+      const { signedTransaction } = await privySign({
+        transaction: bytes,
+        wallet,
         chain: SIGNING_CHAIN,
       });
-      const signed = Uint8Array.from(output!.signedTransaction);
-      if (transaction instanceof Transaction) {
-        return Transaction.from(Buffer.from(signed)) as T;
-      }
-      return VersionedTransaction.deserialize(signed) as T;
+      const signed = Uint8Array.from(signedTransaction);
+      return (
+        versioned
+          ? VersionedTransaction.deserialize(signed)
+          : Transaction.from(Buffer.from(signed))
+      ) as T;
     },
-    [wallet, account],
+    [wallet, privySign],
   );
 
   return {
     mode: "privy",
-    publicKey: account ? safePubkey(account.address) : undefined,
-    connected: ready && Boolean(account),
+    publicKey: wallet ? safePubkey(wallet.address) : undefined,
+    connected: ready && Boolean(wallet),
     connect: () => login(),
     disconnect: () => void logout(),
     signTransaction,
@@ -219,11 +240,11 @@ function useStandardSigner(): GameSigner {
 
   const adapter = wallet?.adapter as unknown as
     | {
-        signTransaction?: <T extends Transaction | VersionedTransaction>(
-          tx: T,
-        ) => Promise<T>;
-        disconnect?: () => Promise<void>;
-      }
+      signTransaction?: <T extends Transaction | VersionedTransaction>(
+        tx: T,
+      ) => Promise<T>;
+      disconnect?: () => Promise<void>;
+    }
     | undefined;
 
   return {
