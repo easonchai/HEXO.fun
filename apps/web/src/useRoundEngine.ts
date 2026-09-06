@@ -154,16 +154,25 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
       });
       const lastArrival = lastFlyArrivalMs(flyTokens);
 
+      // The laser fires now, in step with the launch and dot-tick sounds; the
+      // tile is only announced (boom, banner, fly tokens) once it lands at
+      // 900 ms, so the beam visibly travels to the number first.
+      setReveal({
+        key,
+        winningTile: tileIndex,
+        laser,
+        boom: false,
+        flyTokens: [],
+        flyMap: {},
+      });
+
       later(() => {
         sfx("land");
-        setReveal({
-          key,
-          winningTile: tileIndex,
-          laser,
-          boom: true,
-          flyTokens,
-          flyMap,
-        });
+        setRevealState((current) =>
+          current && current.key === key
+            ? { ...current, boom: true, flyTokens, flyMap }
+            : current,
+        );
         setBanner(`TILE ${displayTile(tileIndex)} WINS`);
         setLastWin({ tile: displayTile(tileIndex), kind: "ROUND" });
       }, 900);

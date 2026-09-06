@@ -141,7 +141,8 @@ export function Arena({
   } = engine;
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
-  const winDisplay = reveal ? reveal.winningTile + 1 : 0;
+  // The winner lights up when the laser lands (boom), not when it launches.
+  const winDisplay = reveal?.boom ? reveal.winningTile + 1 : 0;
   const revealDots = reveal?.laser.activeDotTimes ?? {};
   const flyMap = reveal?.flyMap ?? {};
   const seconds = Number(secondsLeft);
@@ -149,7 +150,7 @@ export function Arena({
   const timerText =
     phase === "mine"
       ? `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
-      : "00:00";
+      : "DRAWING";
 
   const shake =
     phase === "mine"
