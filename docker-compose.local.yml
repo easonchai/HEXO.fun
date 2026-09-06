@@ -1,0 +1,10 @@
+# Local dev only. On the VPS, Traefik terminates TLS and nothing is published
+# on the host, so this file is never passed there.
+#
+#   docker network create traefik            # once; the base file wants it
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+services:
+  backend:
+    # `pnpm dev` on the host talks to http://127.0.0.1:8080 (apps/web VITE_API_URL default).
+    ports:
+      - "8080:8080"
