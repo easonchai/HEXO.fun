@@ -419,6 +419,83 @@ describe("rounds", () => {
   );
 
   it(
+    "rejects request_round_randomness before the close with RoundNotEnded",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 20, closeBuffer: 14 });
+      const { round } = await createRound(pool, 20);
+
+      const roundBefore = await program.account.round.fetch(round);
+      const seed = Uint8Array.from(roundBefore.vrfSeed);
+      // Well before ends_at - close_buffer (20 - 14 = 6s in): the round is
+      // still open to Positions, so the draw window has not started yet.
+      await expect(requestRandomness(pool, round, seed)).rejects.toThrow();
+
+      const roundAfter = await program.account.round.fetch(round);
+      expect(roundAfter.status).toBe(0); // still Open
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "requests randomness the instant positions close and settles before ends_at, exactly like a late round",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 20, closeBuffer: 14 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      const bob = await pool.fundedWallet(10_000_000n);
+      const carol = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+      await deposit(pool, bob, 5_000_000n);
+      await deposit(pool, carol, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 20);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n); // tile 0
+      await buyPosition(pool, bob, round, 1n << 1n, 1_000_000n); // tile 1
+
+      // ends_at - close_buffer (20 - 14 = 6s in): positions close here, 14s
+      // before the round itself ends.
+      const closeAt = endsAt - 14;
+      await waitUntil(closeAt);
+
+      // Positions are closed, but the round has not ended -- only the
+      // close-buffer instant unblocks the draw request.
+      await expect(
+        buyPosition(pool, carol, round, 1n << 2n, 1_000_000n),
+      ).rejects.toThrow();
+
+      const roundBefore = await program.account.round.fetch(round);
+      const seed = Uint8Array.from(roundBefore.vrfSeed);
+      await requestRandomness(pool, round, seed);
+
+      const requested = await program.account.round.fetch(round);
+      expect(requested.status).toBe(1); // Requested
+      expect(Number(requested.requestedAt.toString())).toBeLessThan(endsAt);
+
+      await fulfillRandomness(seed, randomnessFor(0)); // tile 0 wins
+      await settleRound(pool, round, seed);
+
+      const settled = await program.account.round.fetch(round);
+      expect(settled.status).toBe(2); // Settled
+      expect(settled.pot.toString()).toBe("2000000");
+      expect(await chainNow()).toBeLessThan(endsAt);
+
+      await settlePosition(pool, round, alice.keypair.publicKey);
+      await settlePosition(pool, round, bob.keypair.publicKey);
+
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
+      const bobAfter = await program.account.player.fetch(
+        playerPda(pool.pool, bob.keypair.publicKey),
+      );
+      // Same pro-rata payout as a round settled after ends_at: alice wins the
+      // whole 2M pot, bob's stake is gone.
+      expect(aliceAfter.entries.toString()).toBe("6000000"); // 5M - 1M + 2M
+      expect(bobAfter.entries.toString()).toBe("4000000"); // 5M - 1M, lost
+    },
+    TIMEOUT,
+  );
+
+  it(
     "buying a position is weight-neutral: staking everything matches just holding",
     async () => {
       const pool = await setupPool({ roundSeconds: 20, closeBuffer: 2 });

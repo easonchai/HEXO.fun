@@ -156,10 +156,17 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
 
 pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<()> {
     let now = utils::now()?;
+    let pool = &ctx.accounts.pool;
     let round = &mut ctx.accounts.round;
 
     require!(round.status == round_status::OPEN, HexVaultError::RoundNotOpen);
-    require!(now >= round.ends_at, HexVaultError::RoundNotEnded);
+    // Same instant `buy_position` starts refusing with `RoundClosed`: the
+    // draw window opens the moment Positions close, not at `ends_at`.
+    let close_at = round
+        .ends_at
+        .checked_sub(pool.close_buffer)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    require!(now >= close_at, HexVaultError::RoundNotEnded);
 
     require_keys_eq!(
         ctx.accounts.randomness.key(),
