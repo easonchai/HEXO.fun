@@ -3,7 +3,11 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
-import { getAccount, getAssociatedTokenAddressSync, TokenAccountNotFoundError } from "@solana/spl-token";
+import {
+  getAccount,
+  getAssociatedTokenAddressSync,
+  TokenAccountNotFoundError,
+} from "@solana/spl-token";
 import { PublicKey, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
@@ -57,9 +61,13 @@ export class OperatorService {
 
     // Which randomness account the program expects depends on how it was
     // compiled, and the IDL is the only thing that travels with the build.
-    this.testVrf = chain.program.idl.instructions.some((ix) => ix.name === "testFulfill");
+    this.testVrf = chain.program.idl.instructions.some(
+      (ix) => ix.name === "testFulfill",
+    );
     if (this.testVrf) {
-      this.logger.warn("program is a test-vrf build: randomness is fabricated, not ORAO's");
+      this.logger.warn(
+        "program is a test-vrf build: randomness is fabricated, not ORAO's",
+      );
     }
 
     this.instructions = new OperatorInstructions(
@@ -83,41 +91,45 @@ export class OperatorService {
 
   /** One pass of spec §3.4. Never throws: a failed tick is state, not a crash. */
   async runOnce(): Promise<TickOutcome> {
-    const tickAt = BigInt(Math.floor(Date.now() / 1000));
     try {
       const outcome = await runTick(await this.context());
       if (outcome.registerCheck) this.lastRegisterCheck = outcome.registerCheck;
       if (outcome.action) this.logger.log(`sent ${outcome.action}`);
-      await this.writeState(tickAt, outcome, null);
+      await this.writeState(outcome, null);
       return outcome;
     } catch (cause) {
-      const error = cause instanceof Error ? cause : new Error(String(cause), { cause });
+      const error =
+        cause instanceof Error ? cause : new Error(String(cause), { cause });
       if (EXPECTED_ERRORS.has(error.message)) {
         // Lost a race with someone else's transaction (or our own, confirmed
         // after we read). The next tick reads the newer state and moves on.
         this.logger.debug(`skipped: ${error.message}`);
-        await this.writeState(tickAt, { action: null }, null);
+        await this.writeState({ action: null }, null);
         return { action: null };
       }
       this.logger.error(`tick failed: ${error.message}`, error.stack);
-      await this.writeState(tickAt, { action: null }, error.message);
+      await this.writeState({ action: null }, error.message);
       return { action: null };
     }
   }
 
   private async context(): Promise<TickContext> {
     const poolAddress = this.chain.poolAddress();
-    const [poolInfo, clockInfo] = await this.chain.connection.getMultipleAccountsInfo([
-      poolAddress,
-      SYSVAR_CLOCK_PUBKEY,
-    ]);
+    const [poolInfo, clockInfo] =
+      await this.chain.connection.getMultipleAccountsInfo([
+        poolAddress,
+        SYSVAR_CLOCK_PUBKEY,
+      ]);
     if (!poolInfo) {
-      throw new Error(`pool ${poolAddress.toBase58()} does not exist; run bootstrap first`);
+      throw new Error(
+        `pool ${poolAddress.toBase58()} does not exist; run bootstrap first`,
+      );
     }
     const pool = decodePool(this.chain.program, poolAddress, poolInfo.data);
     const now = clockUnixTimestamp(clockInfo?.data);
 
-    const { currentEpoch, previousEpoch, openRound } = await this.readCycle(pool);
+    const { currentEpoch, previousEpoch, openRound } =
+      await this.readCycle(pool);
 
     return {
       now,
@@ -145,9 +157,18 @@ export class OperatorService {
     openRound: RoundState | null;
   }> {
     const wanted: PublicKey[] = [];
-    const currentIndex = pool.currentEpochId > 0n ? wanted.push(this.chain.epochAddress(pool.currentEpochId)) - 1 : -1;
-    const previousIndex = pool.currentEpochId > 1n ? wanted.push(this.chain.epochAddress(pool.currentEpochId - 1n)) - 1 : -1;
-    const roundIndex = pool.openRoundId > 0n ? wanted.push(this.chain.roundAddress(pool.openRoundId)) - 1 : -1;
+    const currentIndex =
+      pool.currentEpochId > 0n
+        ? wanted.push(this.chain.epochAddress(pool.currentEpochId)) - 1
+        : -1;
+    const previousIndex =
+      pool.currentEpochId > 1n
+        ? wanted.push(this.chain.epochAddress(pool.currentEpochId - 1n)) - 1
+        : -1;
+    const roundIndex =
+      pool.openRoundId > 0n
+        ? wanted.push(this.chain.roundAddress(pool.openRoundId)) - 1
+        : -1;
     if (wanted.length === 0) {
       return { currentEpoch: null, previousEpoch: null, openRound: null };
     }
@@ -173,7 +194,10 @@ export class OperatorService {
   }
 
   private async authorityBalance(): Promise<bigint> {
-    const address = getAssociatedTokenAddressSync(this.mint, this.chain.keypair.publicKey);
+    const address = getAssociatedTokenAddressSync(
+      this.mint,
+      this.chain.keypair.publicKey,
+    );
     try {
       return (await getAccount(this.chain.connection, address)).amount;
     } catch (cause) {
@@ -188,7 +212,10 @@ export class OperatorService {
   }
 
   /** The registered interval containing `target` (spec §3.4 step 6). */
-  private async winner(epochId: bigint, target: bigint): Promise<string | null> {
+  private async winner(
+    epochId: bigint,
+    target: bigint,
+  ): Promise<string | null> {
     const player = await this.prisma.player.findFirst({
       where: {
         regEpoch: epochId,
@@ -200,18 +227,26 @@ export class OperatorService {
     return player?.owner ?? null;
   }
 
+  /**
+   * The clock is read here, not at the start of the tick: `outcome` only
+   * exists once `ctx.send` has resolved, so this timestamp reflects when the
+   * transaction actually confirmed rather than when the tick began reading
+   * state. A slow devnet confirmation must not read as a stall (ticket 01).
+   */
   private async writeState(
-    tickAt: bigint,
     outcome: TickOutcome,
     error: string | null,
   ): Promise<void> {
     const fields = {
-      lastTickAt: tickAt,
+      lastTickAt: BigInt(Math.floor(Date.now() / 1000)),
       lastError: error,
       ...(outcome.action === null ? {} : { lastAction: outcome.action }),
       ...(outcome.progress === undefined
         ? {}
-        : { registeredCount: outcome.progress.count, registeredTotal: outcome.progress.total }),
+        : {
+            registeredCount: outcome.progress.count,
+            registeredTotal: outcome.progress.total,
+          }),
     };
     await this.prisma.operatorState.upsert({
       where: { id: 1 },
