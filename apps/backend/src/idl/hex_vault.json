@@ -337,7 +337,12 @@
           "writable": true
         },
         {
-          "name": "vrf_network_state"
+          "name": "vrf_network_state",
+          "docs": [
+            "`mut` because `request_v2` increments its `num_received`: the CPI marks",
+            "it writable, and an outer context that is not cannot grant that."
+          ],
+          "writable": true
         },
         {
           "name": "vrf_treasury",
@@ -1179,7 +1184,12 @@
           "writable": true
         },
         {
-          "name": "vrf_network_state"
+          "name": "vrf_network_state",
+          "docs": [
+            "`mut` because `request_v2` increments its `num_received`: the CPI marks",
+            "it writable, and an outer context that is not cannot grant that."
+          ],
+          "writable": true
         },
         {
           "name": "vrf_treasury",
@@ -1604,78 +1614,6 @@
         }
       ],
       "args": []
-    },
-    {
-      "name": "test_fulfill",
-      "discriminator": [
-        150,
-        84,
-        4,
-        82,
-        192,
-        168,
-        165,
-        11
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "randomness",
-          "docs": [
-            "here instead of deserialized."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  101,
-                  115,
-                  116,
-                  45,
-                  118,
-                  114,
-                  102
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "seed"
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "seed",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "randomness",
-          "type": {
-            "array": [
-              "u8",
-              64
-            ]
-          }
-        }
-      ]
     },
     {
       "name": "void_round",

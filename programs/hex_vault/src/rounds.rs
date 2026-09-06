@@ -404,7 +404,9 @@ pub struct RequestRoundRandomness<'info> {
     pub randomness: UncheckedAccount<'info>,
 
     /// CHECK: ORAO VRF network state, pinned on the pool at `create_pool`.
-    #[account(address = pool.vrf_network_state)]
+    /// `mut` because `request_v2` increments its `num_received`: the CPI marks
+    /// it writable, and an outer context that is not cannot grant that.
+    #[account(mut, address = pool.vrf_network_state)]
     pub vrf_network_state: UncheckedAccount<'info>,
 
     /// CHECK: ORAO's fee treasury (`network_state.config.treasury`). ORAO

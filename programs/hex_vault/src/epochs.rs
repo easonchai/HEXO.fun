@@ -470,7 +470,9 @@ pub struct CloseRegistration<'info> {
     pub randomness: UncheckedAccount<'info>,
 
     /// CHECK: ORAO VRF network state, pinned on the pool at `create_pool`.
-    #[account(address = pool.vrf_network_state @ HexVaultError::InvalidRandomnessAccount)]
+    /// `mut` because `request_v2` increments its `num_received`: the CPI marks
+    /// it writable, and an outer context that is not cannot grant that.
+    #[account(mut, address = pool.vrf_network_state @ HexVaultError::InvalidRandomnessAccount)]
     pub vrf_network_state: UncheckedAccount<'info>,
 
     /// CHECK: ORAO's fee treasury (`network_state.config.treasury`). ORAO
