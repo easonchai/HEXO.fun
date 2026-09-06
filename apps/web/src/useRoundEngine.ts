@@ -9,10 +9,12 @@ import type { PublicKey } from "@solana/web3.js";
 
 import {
   covers,
+  decideReveal,
   displayTile,
   expectedReward,
   isRevealed,
   phaseFor,
+  ROUND_OPEN,
   roundKey,
   secondsLeft,
   type FeedRow,
@@ -42,6 +44,8 @@ export interface RevealState {
   flyTokens: ReturnType<typeof buildFlyTokens>;
   /** dot key → fly launch delay; lattice symbols lift off with their token. */
   flyMap: Record<string, number>;
+  /** Past the 4600 ms clear: the old lattice symbols are fading over 0.65 s. */
+  clearing?: boolean;
 }
 
 export interface Takeover {
@@ -66,6 +70,8 @@ export interface EngineOutput {
   /** Jackpot vault balance in hexUSDC + pulse flag for the odometer. */
   hexpot: bigint;
   hexpotPulse: boolean;
+  /** True for 0.85 s when a freshly opened Round's core is fading in. */
+  coreEnter: boolean;
   /** Round pot in Entries, for the stake panel. */
   pot: bigint;
   lastWin: { tile: number; kind: string } | null;
@@ -125,20 +131,37 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     [],
   );
 
+  // --- Derived phase ----------------------------------------------------------
+  const now = clockNow ?? 0n;
+  const phase = phaseFor(round, now, buffer);
+  const activeSecondsLeft = round ? secondsLeft(round, buffer, now) : 0n;
+
   // --- Round reveal choreography --------------------------------------------
+  // A Round's chain object stops being what `round` returns once the next
+  // Round opens, so the first revealed (Settled or Forfeited) sighting of
+  // each id is kept here, independent of whatever `round` currently is —
+  // the source of truth for "is there a result to fire" and "what does it
+  // pay". `played` is the set `decideReveal` checks; `revealBusyRef` gates
+  // one reveal at a time, queuing a second result behind the 4600 ms clear.
   const settled = round && isRevealed(round) ? round : null;
-  const settledKey = settled ? roundKey(settled.roundId) : null;
-  const revealedRef = useRef<Set<string>>(new Set());
+  const rememberedRef = useRef<Map<string, RoundLike>>(new Map());
+  const playedRef = useRef<Set<string>>(new Set());
+  const seenAnyRoundRef = useRef(false);
+  const revealBusyRef = useRef(false);
+  const nowRef = useRef<bigint>(0n);
 
   const runReveal = useCallback(
-    (target: RoundLike, key: string) => {
+    (target: RoundLike, key: string, onDone: () => void) => {
       const tileIndex = target.winningTile;
-      if (tileIndex < 0 || tileIndex > 35) return; // u8::MAX = "unset" guard
+      if (tileIndex < 0 || tileIndex > 35) {
+        onDone(); // u8::MAX = "unset" guard — nothing to animate, unblock the queue
+        return;
+      }
       const tile = GEO.tiles[tileIndex]!;
 
       const own = owner ? position : null;
       const won = Boolean(own && covers(own.tiles, tileIndex));
-      if (own && !won) later(() => sfx("miss"), 950);
+      if (own && !won) later(() => sfx("miss"), 900);
 
       const laser = genPath(GEO, tile.x, tile.y);
       later(() => sfx("launch"), 0);
@@ -202,19 +225,88 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
       }
 
       later(() => {
-        setReveal(null);
         setBanner(null);
+        // The old lattice symbols fade over 0.65 s rather than vanishing
+        // outright; unblock the queue now, at the clear, not after the fade.
+        setRevealState((current) =>
+          current && current.key === key
+            ? { ...current, clearing: true }
+            : current,
+        );
+        onDone();
+        later(() => {
+          setRevealState((current) =>
+            current && current.key === key ? null : current,
+          );
+        }, 650);
       }, 4600);
     },
     [owner, position, later],
   );
 
+  /** Oldest remembered-but-unplayed Round ready to fire, or start it now. */
+  const pump = useCallback(() => {
+    if (revealBusyRef.current) return;
+    let candidate: RoundLike | null = null;
+    for (const entry of rememberedRef.current.values()) {
+      if (playedRef.current.has(roundKey(entry.roundId))) continue;
+      if (!candidate || entry.roundId < candidate.roundId) candidate = entry;
+    }
+    if (!candidate) return;
+    const key = roundKey(candidate.roundId);
+    const decision = decideReveal(
+      candidate,
+      nowRef.current,
+      candidate.endsAt,
+      playedRef.current,
+    );
+    if (decision !== "fire") return;
+    playedRef.current.add(key);
+    revealBusyRef.current = true;
+    runReveal(candidate, key, () => {
+      revealBusyRef.current = false;
+      pump();
+    });
+  }, [runReveal]);
+
+  // Remember every revealed Round the chain read shows, once, by id. A Round
+  // already revealed the first time this session ever sees any round (page
+  // opened mid-reveal or later) is marked played without animating it.
   useEffect(() => {
-    if (!settled || !settledKey) return;
-    if (revealedRef.current.has(settledKey)) return;
-    revealedRef.current.add(settledKey);
-    runReveal(settled, settledKey);
-  }, [settledKey, settled, runReveal]);
+    if (!round) return;
+    const firstRoundSeen = !seenAnyRoundRef.current;
+    seenAnyRoundRef.current = true;
+    if (!isRevealed(round)) return;
+    const key = roundKey(round.roundId);
+    if (rememberedRef.current.has(key)) return;
+    rememberedRef.current.set(key, round);
+    if (firstRoundSeen) {
+      playedRef.current.add(key);
+      return;
+    }
+    pump();
+  }, [round, pump]);
+
+  // Re-check the fire decision on every chain-clock tick.
+  useEffect(() => {
+    nowRef.current = now;
+    pump();
+  }, [now, pump]);
+
+  // --- Core fade-in + prime sound when a fresh Round opens --------------------
+  const [coreEnter, setCoreEnter] = useState(false);
+  const lastOpenRoundRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!round || round.status !== ROUND_OPEN) return;
+    const key = roundKey(round.roundId);
+    if (lastOpenRoundRef.current === key) return;
+    const isFirstRoundEver = lastOpenRoundRef.current === null;
+    lastOpenRoundRef.current = key;
+    if (isFirstRoundEver) return; // no fade-in/chime for the very first Round on load
+    sfx("prime");
+    setCoreEnter(true);
+    later(() => setCoreEnter(false), 850);
+  }, [round, later]);
 
   // --- Hexpot pulse on live vault movement (funding, payout, rollover) --------
   const hexpotRef = useRef(hexpot);
@@ -225,11 +317,6 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
       later(() => setHexpotPulse(false), 260);
     }
   }, [hexpot, later]);
-
-  // --- Derived phase ----------------------------------------------------------
-  const now = clockNow ?? 0n;
-  const phase = phaseFor(round, now, buffer);
-  const activeSecondsLeft = round ? secondsLeft(round, buffer, now) : 0n;
 
   // --- Tick sound at 3, 2, 1 seconds, driven by the chain clock ---------------
   const tickedRef = useRef<Set<string>>(new Set());
@@ -255,6 +342,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     dismissTakeover: () => setTakeover(null),
     hexpot,
     hexpotPulse,
+    coreEnter,
     pot: round?.pot ?? 0n,
     lastWin,
     feed,

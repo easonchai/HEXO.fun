@@ -51,17 +51,45 @@ export function phaseFor(
   bufferSeconds: bigint,
 ): Phase {
   if (!round) return "idle";
-  // A revealed or voided round is awaiting the next round no matter when it
-  // got there — the draw can now land before ends_at.
-  if (isRevealed(round) || round.status === ROUND_VOIDED) return "awaiting";
+  // The clock decides first. The draw now lands during the countdown, so a
+  // round that is already Settled before ends_at stays "locked": the timer
+  // keeps running and the build-up keeps playing, and the reveal fires at
+  // zero. Reading the status first would blank the stage for those seconds,
+  // which is the dead stage this whole effort removes.
   if (now < buyClosesAt(round, bufferSeconds)) return "mine";
   if (now < round.endsAt) return "locked";
+  if (isRevealed(round) || round.status === ROUND_VOIDED) return "awaiting";
   return "settling";
 }
 
 /** True once the round has a winning tile the program will pay against. */
 export const isRevealed = (round: RoundLike): boolean =>
   round.status === ROUND_SETTLED || round.status === ROUND_FORFEITED;
+
+/** What the reveal choreography should do right now for the remembered round. */
+export type RevealDecision = "fire" | "wait" | "nothing";
+
+/**
+ * Pure reveal-firing rule: no timers, no refs. `remembered` is the first
+ * revealed (Settled or Forfeited) Round the engine ever saw for this id,
+ * kept independent of whatever Round the chain read currently returns.
+ *
+ * - No remembered result yet → "wait" (nothing to fire).
+ * - The Round is already in `played` → "nothing" (never re-animate it).
+ * - Otherwise fire once the chain clock reaches `endsAt`: at `endsAt` when
+ *   the result was known earlier, or immediately when it is checked after
+ *   `endsAt` because the result only just arrived — "wait" until then.
+ */
+export function decideReveal(
+  remembered: RoundLike | null,
+  now: bigint,
+  endsAt: bigint,
+  played: ReadonlySet<string>,
+): RevealDecision {
+  if (!remembered) return "wait";
+  if (played.has(roundKey(remembered.roundId))) return "nothing";
+  return now >= endsAt ? "fire" : "wait";
+}
 
 export const covers = (mask: bigint, tile: number): boolean =>
   ((mask >> BigInt(tile)) & 1n) === 1n;

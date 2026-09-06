@@ -137,6 +137,7 @@ export function Arena({
     banner,
     hexpot,
     hexpotPulse,
+    coreEnter,
     takeover,
     dismissTakeover,
   } = engine;
@@ -198,8 +199,9 @@ export function Arena({
             const launch = flyMap[dot.key];
             let anim = "none";
             if (info) {
-              anim =
-                launch === undefined
+              anim = reveal?.clearing
+                ? "symbolFadeOut .65s ease-in forwards"
+                : launch === undefined
                   ? `symbolPop .36s cubic-bezier(.17,.89,.32,1.28) forwards ${info.delay}s`
                   : `symbolFadeOut .18s ease-in forwards ${launch}s`;
             }
@@ -227,7 +229,9 @@ export function Arena({
               style={{
                 left: GEO.cx,
                 top: GEO.cy,
-                animation: shake,
+                animation: coreEnter
+                  ? "coreFadeIn .85s ease-out forwards"
+                  : shake,
               }}
             >
               <div
@@ -242,6 +246,21 @@ export function Arena({
               >
                 <LogoCog size={60} />
               </div>
+            </div>
+          ) : reveal ? (
+            // The core detonates at the fire instant; coreHexExplode ends at
+            // opacity 0 and holds there ("forwards") for the rest of the
+            // reveal. Keyed on the reveal so a queued second reveal restarts it.
+            <div
+              key={reveal.key}
+              className="stage-core"
+              style={{
+                left: GEO.cx,
+                top: GEO.cy,
+                animation: "coreHexExplode .9s ease-out forwards",
+              }}
+            >
+              <LogoCog size={60} />
             </div>
           ) : null}
 

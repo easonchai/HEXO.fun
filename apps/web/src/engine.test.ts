@@ -4,6 +4,7 @@ import {
   buyClosesAt,
   covers,
   decideAutoRound,
+  decideReveal,
   displayTile,
   expectedReward,
   hmText,
@@ -58,11 +59,14 @@ describe("round engine", () => {
     expect(phaseFor(round(), 1060n, buffer)).toBe("settling");
     expect(phaseFor(round(), 9999n, buffer)).toBe("settling");
     expect(phaseFor(round({ status: 1 }), 1060n, buffer)).toBe("settling");
-    // awaiting: Settled, Forfeited or Voided, regardless of the clock — a
-    // Round may now settle before ends_at.
-    expect(phaseFor(round({ status: 2 }), 1000n, buffer)).toBe("awaiting");
-    expect(phaseFor(round({ status: 3 }), 1057n, buffer)).toBe("awaiting");
-    expect(phaseFor(round({ status: 4 }), 1000n, buffer)).toBe("awaiting");
+    // A Round Settled early still counts down: the clock decides the phase
+    // before ends_at, so the build-up keeps playing and the reveal fires at
+    // zero instead of the stage blanking the moment the draw lands.
+    expect(phaseFor(round({ status: 2 }), 1057n, buffer)).toBe("locked");
+    expect(phaseFor(round({ status: 3 }), 1057n, buffer)).toBe("locked");
+    // awaiting: revealed or Voided, from ends_at onwards.
+    expect(phaseFor(round({ status: 2 }), 1060n, buffer)).toBe("awaiting");
+    expect(phaseFor(round({ status: 3 }), 9999n, buffer)).toBe("awaiting");
     expect(phaseFor(round({ status: 4 }), 9999n, buffer)).toBe("awaiting");
     expect(buyClosesAt(round(), buffer)).toBe(1055n);
   });
@@ -78,10 +82,13 @@ describe("round engine", () => {
     // settling: holds at zero rather than going negative.
     expect(secondsLeft(round(), buffer, 1060n)).toBe(0n);
     expect(secondsLeft(round(), buffer, 9999n)).toBe(0n);
-    // awaiting (Settled/Forfeited/Voided): zero even before ends_at.
-    expect(secondsLeft(round({ status: 2 }), buffer, 1000n)).toBe(0n);
-    expect(secondsLeft(round({ status: 3 }), buffer, 1000n)).toBe(0n);
-    expect(secondsLeft(round({ status: 4 }), buffer, 1000n)).toBe(0n);
+    // A Round Settled early keeps its countdown: the timer runs to zero and
+    // the laser fires there, so the draw landing early is invisible.
+    expect(secondsLeft(round({ status: 2 }), buffer, 1057n)).toBe(3n);
+    // awaiting (revealed or Voided, past ends_at): nothing left to count.
+    expect(secondsLeft(round({ status: 2 }), buffer, 1060n)).toBe(0n);
+    expect(secondsLeft(round({ status: 3 }), buffer, 9999n)).toBe(0n);
+    expect(secondsLeft(round({ status: 4 }), buffer, 9999n)).toBe(0n);
   });
 
   it("treats Settled and Forfeited as revealed, nothing else", () => {
@@ -212,5 +219,45 @@ describe("decideAutoRound", () => {
       tiles: board.tiles,
       stake: board.stake,
     });
+  });
+});
+
+describe("decideReveal", () => {
+  // Fixture: a remembered, revealed round with ends_at 1060.
+  const remembered = round({ roundId: 3n, endsAt: 1060n, status: 2 });
+  const noPlayed: ReadonlySet<string> = new Set();
+
+  it("waits with no remembered result yet, whatever the clock reads", () => {
+    expect(decideReveal(null, 1000n, 1060n, noPlayed)).toBe("wait");
+    expect(decideReveal(null, 1060n, 1060n, noPlayed)).toBe("wait");
+    expect(decideReveal(null, 9999n, 1060n, noPlayed)).toBe("wait");
+  });
+
+  it("waits while the result is known and the clock is before ends_at", () => {
+    expect(decideReveal(remembered, 1000n, 1060n, noPlayed)).toBe("wait");
+    expect(decideReveal(remembered, 1059n, 1060n, noPlayed)).toBe("wait");
+  });
+
+  it("fires at ends_at when the result is known earlier", () => {
+    expect(decideReveal(remembered, 1060n, 1060n, noPlayed)).toBe("fire");
+  });
+
+  it("fires on arrival when the result is checked after ends_at has passed", () => {
+    // The result only just became known (this is the first non-null call for
+    // it), but the clock has already moved past ends_at — draw was slow.
+    expect(decideReveal(remembered, 1075n, 1060n, noPlayed)).toBe("fire");
+  });
+
+  it("does nothing for a round already played, before or after ends_at", () => {
+    const played = new Set([roundKey(remembered.roundId)]);
+    expect(decideReveal(remembered, 1000n, 1060n, played)).toBe("nothing");
+    expect(decideReveal(remembered, 1060n, 1060n, played)).toBe("nothing");
+    expect(decideReveal(remembered, 9999n, 1060n, played)).toBe("nothing");
+  });
+
+  it("keys the played set by round id, not by object identity", () => {
+    // A different round id in the played set does not block this one.
+    const played = new Set([roundKey(999n)]);
+    expect(decideReveal(remembered, 1060n, 1060n, played)).toBe("fire");
   });
 });
