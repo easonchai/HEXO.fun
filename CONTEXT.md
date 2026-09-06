@@ -83,8 +83,16 @@ One of the 36 indexed hex cells (0 to 35) on a round's board.
 _Avoid_: Hex, cell, square
 
 **Position**:
-A Player's single, immutable placement in one round: a set of tiles and one uniform stake per tile, paid in Entries.
+A Player's immutable placement in one round: a set of tiles and one uniform stake per tile, paid in Entries. A Player may hold up to eight Positions in one round; buying another is how a player adds stake or tiles.
 _Avoid_: Bet, wager, deployment, mine
+
+**Top-up**:
+A second or later Position a Player buys in the same round. Nothing about earlier Positions changes.
+_Avoid_: Add to bet, edit position, increase stake
+
+**Total stake**:
+The Entries a player types for one Position, split evenly across the selected tiles and floored to whole atomic Entries per tile.
+_Avoid_: Bet amount, wager, stake per tile (that is the derived figure)
 
 **Round pot**:
 All Entries staked in a round plus any carry from a voided round. Distributed pro rata to the positions covering the winning tile, so the total Entries in the pool is unchanged by a round.
