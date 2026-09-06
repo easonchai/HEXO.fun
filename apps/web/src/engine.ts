@@ -11,11 +11,13 @@ export const ROUND_VOIDED = 4;
 
 export type Phase =
   | /** no round exists yet */ "idle"
-  /** positions open: countdown to the close */
+  /** positions open: countdown to ends_at */
   | "mine"
-  /** closed (or randomness requested): waiting for the settle */
+  /** positions closed, not yet revealed: countdown continues to ends_at */
+  | "locked"
+  /** past ends_at, not yet revealed: countdown holds at zero */
   | "settling"
-  /** settled and revealed; waiting for the next round to open */
+  /** settled, forfeited or voided; waiting for the next round to open */
   | "awaiting";
 
 export interface RoundLike {
@@ -49,10 +51,12 @@ export function phaseFor(
   bufferSeconds: bigint,
 ): Phase {
   if (!round) return "idle";
-  if (round.status === ROUND_OPEN)
-    return now < buyClosesAt(round, bufferSeconds) ? "mine" : "settling";
-  if (round.status === ROUND_REQUESTED) return "settling";
-  return "awaiting";
+  // A revealed or voided round is awaiting the next round no matter when it
+  // got there — the draw can now land before ends_at.
+  if (isRevealed(round) || round.status === ROUND_VOIDED) return "awaiting";
+  if (now < buyClosesAt(round, bufferSeconds)) return "mine";
+  if (now < round.endsAt) return "locked";
+  return "settling";
 }
 
 /** True once the round has a winning tile the program will pay against. */
@@ -74,13 +78,20 @@ export function expectedReward(
   return (round.pot * position.stakePerTile) / winningTotal;
 }
 
-/** Seconds until positions close, clamped at zero. */
+/**
+ * Seconds until the round's ends_at, counting down through both "mine" and
+ * "locked". Zero in every other phase (idle, settling, awaiting) — settling
+ * holds at zero rather than going negative, and a revealed or voided round
+ * has nothing left to count down to.
+ */
 export function secondsLeft(
   round: RoundLike,
   bufferSeconds: bigint,
   now: bigint,
 ): bigint {
-  const left = buyClosesAt(round, bufferSeconds) - now;
+  const phase = phaseFor(round, now, bufferSeconds);
+  if (phase !== "mine" && phase !== "locked") return 0n;
+  const left = round.endsAt - now;
   return left > 0n ? left : 0n;
 }
 

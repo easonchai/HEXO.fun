@@ -787,6 +787,11 @@ input::placeholder {
   font-size: 18px;
 }
 
+/* Last two seconds of "mine"/"locked": same red the panel uses for problems. */
+.stage-timer.stage-timer-red {
+  color: #ff4444;
+}
+
 /* Victory banner (same 38px size, flat, optically centered) */
 .win-banner {
   position: absolute;

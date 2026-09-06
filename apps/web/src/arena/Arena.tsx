@@ -7,6 +7,7 @@ import { useMemo } from "react";
 
 import { computeGeo } from "./geo.js";
 import { Textile } from "./Textile.js";
+import { timerText } from "../engine.js";
 import type { EngineOutput } from "../useRoundEngine.js";
 
 const GEO = computeGeo();
@@ -91,8 +92,8 @@ export function HexpotTicker({
           <div className="hexpot-tooltip-title">HEXPOT</div>
           <div>
             The pool's prize vault: this week's simulated yield plus anything
-            held over from earlier draws. The weekly draw pays it to one
-            winner. Not your Principal.
+            held over from earlier draws. The weekly draw pays it to one winner.
+            Not your Principal.
           </div>
         </div>
       </div>
@@ -146,18 +147,21 @@ export function Arena({
   const revealDots = reveal?.laser.activeDotTimes ?? {};
   const flyMap = reveal?.flyMap ?? {};
   const seconds = Number(secondsLeft);
-  const showTimer = phase === "mine" || phase === "settling";
-  const timerText =
-    phase === "mine"
-      ? `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
-      : "DRAWING";
+  const showTimer =
+    phase === "mine" || phase === "locked" || phase === "settling";
+  // secondsLeft is already 0 outside "mine"/"locked", so this reads 00:00
+  // through "settling" for free.
+  const timerLabel = timerText(secondsLeft);
+  const timerRed = (phase === "mine" || phase === "locked") && seconds <= 2;
 
   const shake =
-    phase === "mine"
-      ? seconds <= 5
-        ? "hexShake .08s infinite"
-        : "hexShakeSubtle .25s infinite"
-      : "none";
+    phase === "settling"
+      ? "hexShake .08s infinite"
+      : phase === "mine" || phase === "locked"
+        ? seconds <= 5
+          ? "hexShake .08s infinite"
+          : "hexShakeSubtle .25s infinite"
+        : "none";
 
   return (
     <div className="stage-arena-wrap" data-testid="arena">
@@ -165,10 +169,10 @@ export function Arena({
         {/* Timer / win banner above the hexagon */}
         {showTimer && !banner ? (
           <div
-            className={`stage-timer${operatorStale ? " stage-timer-stale" : ""}`}
+            className={`stage-timer${operatorStale ? " stage-timer-stale" : ""}${timerRed && !operatorStale ? " stage-timer-red" : ""}`}
             data-testid="round-timer"
           >
-            {operatorStale ? "OPERATOR PAUSED" : timerText}
+            {operatorStale ? "OPERATOR PAUSED" : timerLabel}
           </div>
         ) : null}
         {banner ? (
@@ -217,18 +221,18 @@ export function Arena({
           })}
 
           {/* Central honeycomb core while the round is live */}
-          {phase === "mine" || phase === "settling" ? (
+          {phase === "mine" || phase === "locked" || phase === "settling" ? (
             <div
               className="stage-core"
               style={{
                 left: GEO.cx,
                 top: GEO.cy,
-                animation: phase === "mine" ? shake : "none",
+                animation: shake,
               }}
             >
               <div
                 style={{
-                  transform: `scale(${phase === "mine" && seconds <= 5 ? (1 + (5 - Math.min(5, seconds)) * 0.25).toFixed(3) : 1})`,
+                  transform: `scale(${(phase === "mine" || phase === "locked") && seconds <= 5 ? (1 + (5 - Math.min(5, seconds)) * 0.25).toFixed(3) : 1})`,
                   transformOrigin: "center center",
                   transition: "transform .18s linear",
                   display: "flex",

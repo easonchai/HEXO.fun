@@ -131,7 +131,10 @@ export function ControlPanel(props: ControlPanelProps) {
   const ready = canDeploy && tiles > 0 && stake > 0n && !locked && !deployBusy;
   const showScan = ready && !locked;
   const showLocked = locked && !deployBusy;
-  const settling = engine.phase === "settling" && !deployBusy;
+  // "locked" (positions closed, countdown still running) reads the same as
+  // "settling" here: the deploy button can't be pressed either way.
+  const settling =
+    (engine.phase === "settling" || engine.phase === "locked") && !deployBusy;
 
   /** Prototype deploy burst: six symbols radiating out for 0.65s. */
   const [burst, setBurst] = useState(false);

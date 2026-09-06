@@ -43,15 +43,45 @@ describe("round engine", () => {
 
   it("derives phases from status and chain time", () => {
     const buffer = 5n;
-    expect(phaseFor(null, 1000n, buffer)).toBe("idle");
     // Fixture round: starts 1000, ends 1060, positions close at 1055.
+    expect(phaseFor(null, 1000n, buffer)).toBe("idle");
+    // mine: right up to the close.
+    expect(phaseFor(round(), 1000n, buffer)).toBe("mine");
     expect(phaseFor(round(), 1054n, buffer)).toBe("mine");
-    expect(phaseFor(round(), 1055n, buffer)).toBe("settling");
-    expect(phaseFor(round({ status: 1 }), 1000n, buffer)).toBe("settling");
+    // locked: from the close (inclusive) up to ends_at (exclusive).
+    expect(phaseFor(round(), 1055n, buffer)).toBe("locked");
+    expect(phaseFor(round(), 1059n, buffer)).toBe("locked");
+    // Requested (randomness in flight) is still "locked" before ends_at —
+    // the draw now starts at the close, not at ends_at.
+    expect(phaseFor(round({ status: 1 }), 1057n, buffer)).toBe("locked");
+    // settling: from ends_at (inclusive) while still open or requested.
+    expect(phaseFor(round(), 1060n, buffer)).toBe("settling");
+    expect(phaseFor(round(), 9999n, buffer)).toBe("settling");
+    expect(phaseFor(round({ status: 1 }), 1060n, buffer)).toBe("settling");
+    // awaiting: Settled, Forfeited or Voided, regardless of the clock — a
+    // Round may now settle before ends_at.
     expect(phaseFor(round({ status: 2 }), 1000n, buffer)).toBe("awaiting");
+    expect(phaseFor(round({ status: 3 }), 1057n, buffer)).toBe("awaiting");
+    expect(phaseFor(round({ status: 4 }), 1000n, buffer)).toBe("awaiting");
+    expect(phaseFor(round({ status: 4 }), 9999n, buffer)).toBe("awaiting");
     expect(buyClosesAt(round(), buffer)).toBe(1055n);
-    expect(secondsLeft(round(), buffer, 1040n)).toBe(15n);
+  });
+
+  it("counts seconds left down to ends_at through mine and locked, zero elsewhere", () => {
+    const buffer = 5n;
+    // mine: counts to ends_at (1060), not to the close.
+    expect(secondsLeft(round(), buffer, 1040n)).toBe(20n);
+    expect(secondsLeft(round(), buffer, 1054n)).toBe(6n);
+    // locked: the same countdown continues past the close.
+    expect(secondsLeft(round(), buffer, 1055n)).toBe(5n);
+    expect(secondsLeft(round(), buffer, 1059n)).toBe(1n);
+    // settling: holds at zero rather than going negative.
+    expect(secondsLeft(round(), buffer, 1060n)).toBe(0n);
     expect(secondsLeft(round(), buffer, 9999n)).toBe(0n);
+    // awaiting (Settled/Forfeited/Voided): zero even before ends_at.
+    expect(secondsLeft(round({ status: 2 }), buffer, 1000n)).toBe(0n);
+    expect(secondsLeft(round({ status: 3 }), buffer, 1000n)).toBe(0n);
+    expect(secondsLeft(round({ status: 4 }), buffer, 1000n)).toBe(0n);
   });
 
   it("treats Settled and Forfeited as revealed, nothing else", () => {
@@ -150,26 +180,31 @@ describe("decideAutoRound", () => {
       "position already placed this round",
     ],
     [
-      "phase not mine",
+      "phase settling",
       board,
       1000n,
       "settling" as Phase,
       false,
       "round is not open for positions",
     ],
-  ])(
-    "%s → skip",
-    (_label, remembered, entries, phase, hasPosition, reason) => {
-      expect(
-        decideAutoRound(
-          remembered as RememberedBoard | null,
-          entries,
-          phase,
-          hasPosition,
-        ),
-      ).toEqual({ action: "skip", reason });
-    },
-  );
+    [
+      "phase locked",
+      board,
+      1000n,
+      "locked" as Phase,
+      false,
+      "round is not open for positions",
+    ],
+  ])("%s → skip", (_label, remembered, entries, phase, hasPosition, reason) => {
+    expect(
+      decideAutoRound(
+        remembered as RememberedBoard | null,
+        entries,
+        phase,
+        hasPosition,
+      ),
+    ).toEqual({ action: "skip", reason });
+  });
 
   it("places the remembered board when everything checks out", () => {
     expect(decideAutoRound(board, 1000n, "mine", false)).toEqual({

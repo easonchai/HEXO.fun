@@ -52,7 +52,7 @@ export interface Takeover {
 
 export interface EngineOutput {
   phase: Phase;
-  /** Seconds until positions close, during the "mine" phase. */
+  /** Seconds until the round's ends_at, during "mine" and "locked". */
   secondsLeft: bigint;
   /** Display numbers 1..36 the user has picked. */
   selected: number[];
@@ -229,8 +229,19 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
   // --- Derived phase ----------------------------------------------------------
   const now = clockNow ?? 0n;
   const phase = phaseFor(round, now, buffer);
-  const activeSecondsLeft =
-    round && phase === "mine" ? secondsLeft(round, buffer, now) : 0n;
+  const activeSecondsLeft = round ? secondsLeft(round, buffer, now) : 0n;
+
+  // --- Tick sound at 3, 2, 1 seconds, driven by the chain clock ---------------
+  const tickedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!round) return;
+    if (phase !== "mine" && phase !== "locked") return;
+    if (activeSecondsLeft < 1n || activeSecondsLeft > 3n) return;
+    const key = `${roundKey(round.roundId)}:${activeSecondsLeft}`;
+    if (tickedRef.current.has(key)) return;
+    tickedRef.current.add(key);
+    sfx("tick");
+  }, [round, phase, activeSecondsLeft]);
 
   return {
     phase,
