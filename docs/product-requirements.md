@@ -6,9 +6,11 @@ Status: agreed product definition, September 2026. Supersedes every earlier prod
 
 HexVault is a no-loss lottery on Solana with a game bolted on.
 
-You deposit USDC. Your principal is never at risk and you can withdraw it whenever you want. The yield the pool earns during an epoch becomes that epoch's jackpot, and one depositor wins the whole thing. Your odds are your time-weighted Entries: deposit one USDC for a full day and you hold one day of weight. That is PoolTogether.
+You deposit USDC. Your principal is never at risk and you can withdraw it whenever you want. The yield the pool earns during an epoch becomes that week's prize, and the weekly draw pays the whole thing to one depositor. Your odds are your time-weighted Entries: deposit one USDC for a full day and you hold one day of weight. That is PoolTogether.
 
-The twist is the game. Your Entries are also chips on a 36-tile hex board. Every 60 seconds a round runs: players put Entries on tiles, a verifiable random draw picks one tile, and everyone who covered it splits the whole round pot. Losers' Entries go to winners, not to the house. Win rounds and you carry more weight into the jackpot draw. Lose and you can still withdraw every cent you deposited, once your Entries reset at the next epoch. That is MinePEA, played with lottery odds instead of money.
+The twist is the game. Your Entries are also chips on a 36-tile hex board. Every 60 seconds a round runs: players put Entries on tiles, a verifiable random draw picks one tile, and everyone who covered it splits the whole round pot. Losers' Entries go to winners, not to the house. Win rounds and you carry more weight into the weekly draw. Lose and you can still withdraw every cent you deposited, once your Entries reset at the next epoch. That is MinePEA, played with lottery odds instead of money.
+
+On screen the epoch is a week, the amount is the prize, and the jackpot vault's balance under the board is the hexpot. Code, API and program keep `epoch` and `jackpot` as identifiers; see `CONTEXT.md`.
 
 The demo runs on Solana devnet with a test USDC mint we control. Yield is simulated at a published rate and labeled as simulated everywhere it appears.
 
@@ -18,7 +20,7 @@ The demo runs on Solana devnet with a test USDC mint we control. Yield is simula
 2. Get test USDC from the in-app faucet.
 3. Deposit. You receive equal Principal and Entries.
 4. Play rounds. Stake Entries on tiles, watch the draw, collect round rewards as Entries.
-5. Wait for the epoch to end. The operator registers every player's weight, draws a winner with ORAO VRF, and pushes the jackpot to the winner's wallet.
+5. Wait for the epoch to end. The operator registers every player's weight, draws a winner with ORAO VRF, and pushes the prize to the winner's wallet.
 6. New epoch. Entries reset to Principal. Play again, or withdraw.
 
 ## 3. Rules
@@ -38,9 +40,9 @@ The demo runs on Solana devnet with a test USDC mint we control. Yield is simula
 - At the first transaction a player makes in a new epoch, the program resets their Entries to their Principal and restarts weight accrual from the epoch's start time. Idle depositors lose nothing by being idle.
 - Total Entries in the pool always equals total Principal plus the House's Entries. The game only moves Entries between players.
 
-### 3.3 Epochs and the jackpot
+### 3.3 Epochs and the weekly draw
 
-- Epochs are contiguous and of fixed length, set on the pool by the authority. The demo uses one day. Production intent is one week.
+- Epochs are contiguous and of fixed length, set on the pool by the authority. Seven days, so the screen can call it a week without lying. Test pools run shorter epochs and the countdown shows the real time.
 - When an epoch ends, the operator registers each player's final weight as an interval in the epoch's total, funds the jackpot with the epoch's yield, requests randomness, and pays the winner. Target: done within 15 minutes of epoch end. No player action needed, though any player can register themselves from the UI.
 - A player who withdraws late in an epoch keeps the weight they earned before withdrawing. Their principal earned yield for that time.
 - A deposit made while the previous epoch's draw is still processing counts toward the new epoch.
@@ -74,19 +76,19 @@ The demo runs on Solana devnet with a test USDC mint we control. Yield is simula
 
 ### 4.1 Arena
 
-The existing HEXO arena design stays. The board shows the live round: tiles, your selection, stake per tile, total Entries in, Entries after, withdrawable after, countdown, then the draw animation and the result. A feed shows recent deposits, positions, round results, and jackpot payouts. Animations are cosmetic; the settled on-chain result is what the UI reports.
+The existing HEXO arena design stays. The board shows the live round: tiles, your selection, stake per tile, total Entries in, Entries after, withdrawable after, round pot, countdown, then the draw animation and the result. Under the board, the HEXPOT odometer shows the jackpot vault's balance. A feed shows recent deposits, positions, round results, and prize payouts. Animations are cosmetic; the settled on-chain result is what the UI reports.
 
 ### 4.2 Vault
 
 Deposit and withdraw. Always visible: Principal, Entries, withdrawable now, and when the rest becomes withdrawable. Faucet button on devnet.
 
-### 4.3 Jackpot
+### 4.3 Weekly draw
 
-Current epoch countdown, current jackpot with the "simulated 5% APR" label, your weight and your odds as a percentage of total weight so far, and the last few winners with amounts. During the minutes after an epoch ends, a "drawing epoch N" state with registration progress.
+Countdown to the draw, this week's prize with the "simulated 5% APR" label, your weight and your odds as a percentage of total weight so far, and the last few winners with amounts. During the minutes after an epoch ends, a "drawing week N" state with registration progress.
 
 ### 4.4 Leaderboard
 
-Top players by weight in the current epoch.
+Top players by weight this week.
 
 ### 4.5 Status
 
@@ -124,4 +126,4 @@ The existing Vite React app in `apps/web`, rewired. Reads its own Player account
 
 ## 9. Success for the demo
 
-A judge with no Solana wallet can open the Vercel URL, get a wallet and test USDC in under a minute, deposit, play three rounds and see one settle in their favor, read their odds on the jackpot screen, and withdraw. Within a day, the epoch draws and a winner's wallet receives USDC without anyone clicking anything.
+A judge with no Solana wallet can open the Vercel URL, get a wallet and test USDC in under a minute, deposit, play three rounds and see one settle in their favor, read their odds on the weekly draw screen, and withdraw. When the epoch ends, the draw runs and a winner's wallet receives USDC without anyone clicking anything.

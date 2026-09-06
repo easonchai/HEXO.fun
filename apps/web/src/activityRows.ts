@@ -95,13 +95,13 @@ function toRow(
         tileLabel: field(data, "forfeited") === "true" ? "forfeited" : "settled",
       };
     case "registered":
-      return { key, who, action: "registered", tileLabel: "epoch" };
+      return { key, who, action: "registered", tileLabel: "weekly draw" };
     case "jackpotPaid":
       return {
         key,
         who: whoOf(data.winner, owner),
         action: `+${atomicShort(field(data, "amount"))} USDC`,
-        tileLabel: "jackpot",
+        tileLabel: "prize",
       };
     // GET /feed sends this one, so without a case here the row count the API
     // returns and the row count the feed shows drift apart.
@@ -109,7 +109,7 @@ function toRow(
       return {
         key,
         who: "pool",
-        action: `${atomicShort(field(data, "jackpotAmount", "jackpot_amount"))} USDC held over`,
+        action: `${atomicShort(field(data, "jackpotAmount", "jackpot_amount"))} USDC stays in the hexpot`,
         tileLabel: "rollover",
       };
     default:

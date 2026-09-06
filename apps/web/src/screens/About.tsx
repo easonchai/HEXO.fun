@@ -12,10 +12,11 @@ export function About({ symbol }: { symbol: string }) {
           HexVault is a no-loss lottery prototype. You deposit {symbol} and the
           pool credits you equal Principal and Entries. Principal is yours 1:1
           against the deposit and is never at risk. Entries are lottery weight:
-          they decide your odds in the epoch draw, and you can risk them on the
-          board against other depositors. The jackpot is the yield the pool
-          earned during the epoch, simulated here at a published rate and
-          labelled as such.
+          they decide your odds in the weekly draw, and you can risk them on
+          the board against other depositors. The prize is the yield the pool
+          earned during the week, simulated here at a published rate and
+          labelled as such. It sits in the hexpot under the board until the
+          draw pays it out.
         </p>
         <HeadRow title="WHAT CAN GO WRONG" />
         <p className="screen-copy">
@@ -24,7 +25,7 @@ export function About({ symbol }: { symbol: string }) {
           board can be lost to other players: a round pays only the positions
           covering the winning tile, pro rata, and a round nobody covered goes
           to the House. Losing Entries lowers what you can withdraw until the
-          next epoch resets Entries to Principal. The pool has an authority key
+          next week resets Entries to Principal. The pool has an authority key
           and depends on an off-chain operator and the ORAO VRF oracle, and this
           build runs on a local validator or devnet with test assets only.
         </p>
@@ -42,15 +43,15 @@ export function About({ symbol }: { symbol: string }) {
       <PanelCard wide title="OPERATOR LOOP">
         <p className="screen-copy">
           The lifecycle steps belong to the operator, not to players: it opens
-          epochs and rounds, requests randomness, settles rounds, cranks
-          registration, funds the simulated yield and pays the epoch winner.
-          The jackpot is transferred straight to the winner's token account,
-          with no step for the winner to take.
+          weeks and rounds, requests randomness, settles rounds, cranks
+          registration, funds the simulated yield and pays the weekly draw's
+          winner. The prize is transferred straight to the winner's token
+          account, with no step for the winner to take.
         </p>
         <p className="screen-copy">
           Two instructions are permissionless and this app sends them for you
           when they are useful: settling your own position after a round
-          reveals, and registering your Weight in an epoch that has ended.
+          reveals, and registering your Weight for a week that has ended.
           Everything else here is a deposit, a withdrawal or a position.
         </p>
       </PanelCard>

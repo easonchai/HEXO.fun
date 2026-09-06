@@ -63,9 +63,11 @@ export interface EngineOutput {
   banner: string | null;
   takeover: Takeover | null;
   dismissTakeover: () => void;
-  /** Round pot in Entries + pulse flag for the ticker. */
+  /** Jackpot vault balance in hexUSDC + pulse flag for the odometer. */
+  hexpot: bigint;
+  hexpotPulse: boolean;
+  /** Round pot in Entries, for the stake panel. */
   pot: bigint;
-  potPulse: boolean;
   lastWin: { tile: number; kind: string } | null;
   feed: FeedRow[];
   /** The user's position in the tracked round, if any. */
@@ -79,16 +81,26 @@ export interface EngineInput {
   closeBuffer: bigint;
   clockNow: bigint | null;
   feed: FeedRow[];
+  /** Jackpot vault balance, atomic hexUSDC. */
+  hexpot: bigint;
 }
 
 export function useRoundEngine(input: EngineInput): EngineOutput {
-  const { round, position, owner, closeBuffer: buffer, clockNow, feed } = input;
+  const {
+    round,
+    position,
+    owner,
+    closeBuffer: buffer,
+    clockNow,
+    feed,
+    hexpot,
+  } = input;
 
   const [selected, setSelected] = useState<number[]>([]);
   const [reveal, setRevealState] = useState<RevealState | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [takeover, setTakeover] = useState<Takeover | null>(null);
-  const [potPulse, setPotPulse] = useState(false);
+  const [hexpotPulse, setHexpotPulse] = useState(false);
   const [lastWin, setLastWin] = useState<{ tile: number; kind: string } | null>(
     null,
   );
@@ -160,13 +172,13 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
         later(
           () => {
             sfx("feed");
-            setPotPulse(true);
-            later(() => setPotPulse(false), 260);
+            setHexpotPulse(true);
+            later(() => setHexpotPulse(false), 260);
           },
           Math.round((token.delay + 0.68) * 1000) + 900,
         );
       }
-      later(() => setPotPulse(false), lastArrival + 980);
+      later(() => setHexpotPulse(false), lastArrival + 980);
 
       if (won) {
         const reward = expectedReward(target, own!);
@@ -195,16 +207,15 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     runReveal(settled, settledKey);
   }, [settledKey, settled, runReveal]);
 
-  // --- Pot pulse on live movement --------------------------------------------
-  const pot = round?.pot ?? 0n;
-  const potRef = useRef(pot);
+  // --- Hexpot pulse on live vault movement (funding, payout, rollover) --------
+  const hexpotRef = useRef(hexpot);
   useEffect(() => {
-    if (potRef.current !== pot) {
-      potRef.current = pot;
-      setPotPulse(true);
-      later(() => setPotPulse(false), 260);
+    if (hexpotRef.current !== hexpot) {
+      hexpotRef.current = hexpot;
+      setHexpotPulse(true);
+      later(() => setHexpotPulse(false), 260);
     }
-  }, [pot, later]);
+  }, [hexpot, later]);
 
   // --- Derived phase ----------------------------------------------------------
   const now = clockNow ?? 0n;
@@ -222,8 +233,9 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     banner,
     takeover,
     dismissTakeover: () => setTakeover(null),
-    pot,
-    potPulse,
+    hexpot,
+    hexpotPulse,
+    pot: round?.pot ?? 0n,
     lastWin,
     feed,
     activePosition: owner ? position : null,

@@ -1,5 +1,5 @@
 /**
- * LEADERBOARD tab: top players by Weight in the current epoch, straight
+ * LEADERBOARD tab: top players by Weight in the current epoch (a week on screen), straight
  * from `GET /leaderboard` (already sorted server-side). Pure read: this
  * screen sends no on-chain instruction.
  */
@@ -33,7 +33,7 @@ export function Leaderboard({ owner }: LeaderboardScreenProps) {
         wide
         title="LEADERBOARD"
         aside={
-          <span className="dual-line-inline">top {LIMIT} by weight, this epoch</span>
+          <span className="dual-line-inline">top {LIMIT} by weight, this week</span>
         }
       >
         {rows.length === 0 ? (

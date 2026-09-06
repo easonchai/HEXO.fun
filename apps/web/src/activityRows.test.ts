@@ -92,7 +92,7 @@ describe("activity feed row mappers", () => {
     expect(rows).toHaveLength(sent.length);
     expect(rows.map((row) => row.tileLabel)).toContain("rollover");
     expect(rows.find((row) => row.tileLabel === "rollover")?.action).toBe(
-      "12 USDC held over",
+      "12 USDC stays in the hexpot",
     );
   });
 

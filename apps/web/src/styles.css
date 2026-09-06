@@ -1888,7 +1888,7 @@ input::placeholder {
   border: 1px solid rgba(255, 68, 68, 0.4);
 }
 
-/* Jackpot's winner list and the Leaderboard table share this row shape. */
+/* Weekly draw's winner list and the Leaderboard table share this row shape. */
 .board-list {
   display: flex;
   flex-direction: column;

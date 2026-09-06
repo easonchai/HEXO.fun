@@ -1,7 +1,7 @@
 # HexVault
 
 A no-loss lottery on Solana with a game bolted on. Deposit USDC, keep your principal, and
-your time-weighted Entries are your odds on the epoch's yield jackpot. Between draws, put
+your time-weighted Entries are your odds in the weekly draw for the pool's yield. Between draws, put
 Entries on a 36-tile hex board every 60 seconds and take the round pot from the other
 players when your tile is drawn. Principal never moves except back to you.
 

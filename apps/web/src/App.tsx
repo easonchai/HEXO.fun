@@ -7,9 +7,9 @@ import { eventsToRows, liveEventToRow, mergeFeed } from "./activityRows.js";
 import { Arena, LogoCog } from "./arena/Arena.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
 import { About } from "./screens/About.js";
-import { Jackpot } from "./screens/Jackpot.js";
 import { Leaderboard } from "./screens/Leaderboard.js";
 import { Vault } from "./screens/Vault.js";
+import { WeeklyDraw } from "./screens/WeeklyDraw.js";
 import { buyPosition, deposit, settlePosition } from "./actions.js";
 import { apiBaseUrl, fetchFeed, fetchStatus } from "./api.js";
 import { type HexVaultProgram } from "./chain.js";
@@ -34,7 +34,7 @@ import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
 
-const TABS = ["MINE", "VAULT", "JACKPOT", "LEADERBOARD", "ABOUT"] as const;
+const TABS = ["MINE", "VAULT", "WEEKLY DRAW", "LEADERBOARD", "ABOUT"] as const;
 type Tab = (typeof TABS)[number];
 
 /** The accepted asset is hexUSDC (6 decimals) for every pool in this build. */
@@ -114,6 +114,7 @@ export function App() {
     closeBuffer: pool?.closeBuffer ?? 0n,
     clockNow: now,
     feed: [],
+    hexpot: state.hexpot,
   });
 
   const refresh = state.refresh;
@@ -349,7 +350,7 @@ export function App() {
               key={candidate}
               role="button"
               className={`nav-item${tab === candidate ? " active" : ""}`}
-              data-testid={`tab-${candidate.toLowerCase()}`}
+              data-testid={`tab-${candidate.toLowerCase().replace(" ", "-")}`}
               onClick={() => setTab(candidate)}
             >
               {candidate}
@@ -470,7 +471,7 @@ export function App() {
           <>
             <Arena
               engine={engine}
-              symbol="Entries"
+              symbol={SYMBOL}
               canPick={canPick}
               operatorStale={status.stale}
               onToggleTile={(n) => {
@@ -529,8 +530,8 @@ export function App() {
             Connect a wallet with a live pool to deposit or withdraw.
           </div>
         ) : null}
-        {tab === "JACKPOT" ? (
-          <Jackpot
+        {tab === "WEEKLY DRAW" ? (
+          <WeeklyDraw
             program={program}
             owner={publicKey ?? undefined}
             pool={pool}

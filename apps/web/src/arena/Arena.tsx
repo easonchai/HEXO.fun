@@ -85,14 +85,14 @@ export function HexpotTicker({
   return (
     <div className="hexpot" data-testid="hexpot-ticker" data-value={tenths}>
       <div className="hexpot-info-wrap">
-        <span className="hexpot-label">ROUND POT</span>
+        <span className="hexpot-label">HEXPOT</span>
         <span className="info-bubble-icon">i</span>
         <div className="hexpot-tooltip">
-          <div className="hexpot-tooltip-title">ROUND POT</div>
+          <div className="hexpot-tooltip-title">HEXPOT</div>
           <div>
-            Every Entry staked in this round, plus any carry from a voided
-            round. It goes to the positions covering the winning tile, pro
-            rata. Not your Principal.
+            The pool's prize vault: this week's simulated yield plus anything
+            held over from earlier draws. The weekly draw pays it to one
+            winner. Not your Principal.
           </div>
         </div>
       </div>
@@ -113,6 +113,7 @@ export function HexpotTicker({
 
 export interface ArenaProps {
   engine: EngineOutput;
+  /** Unit under the hexpot odometer: the pool's accepted asset. */
   symbol: string;
   canPick: boolean;
   onToggleTile: (displayNumber: number) => void;
@@ -133,8 +134,8 @@ export function Arena({
     selected,
     reveal,
     banner,
-    pot,
-    potPulse,
+    hexpot,
+    hexpotPulse,
     takeover,
     dismissTakeover,
   } = engine;
@@ -346,10 +347,10 @@ export function Arena({
             : null}
         </div>
 
-        <HexpotTicker value={pot} pulse={potPulse} symbol={symbol} />
+        <HexpotTicker value={hexpot} pulse={hexpotPulse} symbol={symbol} />
       </div>
 
-      {/* Win / jackpot takeover */}
+      {/* Round win takeover */}
       {takeover ? (
         <div
           className="takeover"

@@ -289,6 +289,15 @@ export function ControlPanel(props: ControlPanelProps) {
             <span className="cost-unit">ENTRIES</span>
           </div>
         </div>
+        <div className="cost-row">
+          <span className="row-label">ROUND POT</span>
+          <div>
+            <span className="cost-value" data-testid="round-pot">
+              {fmt(engine.pot)}
+            </span>
+            <span className="cost-unit"> Entries</span>
+          </div>
+        </div>
         <div className="cost-row deployed">
           <span className="row-label strong">IN THIS ROUND</span>
           <span className="volt-badge" data-testid="deployed-total">

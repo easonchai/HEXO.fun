@@ -1,6 +1,8 @@
 # HexVault
 
-A no-loss lottery on Solana: users deposit USDC into a pool, the pool's yield becomes a jackpot, and each depositor's time-weighted Entries decide their odds. Entries can be risked in a MinePEA-style hex-tile game against other depositors to win more Entries, but principal is never at stake.
+A no-loss lottery on Solana: users deposit USDC into a pool, the pool's yield becomes the weekly draw's prize, and each depositor's time-weighted Entries decide their odds. Entries can be risked in a MinePEA-style hex-tile game against other depositors to win more Entries, but principal is never at stake.
+
+Player-facing words differ from mechanism names in two places, on purpose: the screen says "week" where the code says epoch, and "prize" or "hexpot" where the code says jackpot. Code, API and program identifiers keep the mechanism names.
 
 ## Language
 
@@ -31,11 +33,11 @@ The Player account owned by the pool authority. It holds no Principal, receives 
 _Avoid_: Admin wallet, protocol player, operator (a service, not an account)
 
 **Treasury**:
-The authority-owned USDC account that receives 20% of a jackpot the House wins.
+The authority-owned USDC account that receives 20% of a prize the House wins.
 _Avoid_: Fee account, protocol revenue
 
 **Buyback reserve**:
-The authority-owned USDC account that receives 50% of a jackpot the House wins, earmarked for a future token buyback.
+The authority-owned USDC account that receives 50% of a prize the House wins, earmarked for a future token buyback.
 _Avoid_: Buyback wallet, HEX fund
 
 ### Lottery
@@ -49,27 +51,35 @@ A player's time-weighted Entries over one epoch: the integral of Entries held ov
 _Avoid_: TWAB, average balance, odds
 
 **Epoch**:
-One lottery cycle of fixed length. Epochs are contiguous: the next opens the moment the previous ends. Configurable per pool; the demo uses one day.
-_Avoid_: Season, week, draw period
+One lottery cycle of fixed length. Epochs are contiguous: the next opens the moment the previous ends. Configurable per pool; production intent is seven days, which is why the screen calls it a week.
+_Avoid_: Season, draw period
 
-**Jackpot**:
-The yield the pool earned during an epoch, held in the pool's jackpot vault and paid in full to the epoch's single drawn winner. The demo's yield is simulated at a published rate and labeled as such.
-_Avoid_: Prize, pot, HexPot, reward (a game concept)
+**Weekly draw**:
+The player-facing name for one epoch's draw and payout. The screen says "weekly draw", "week #4", "draw in 3d 4h"; code and the API say epoch.
+_Avoid_: Jackpot, lottery, raffle
+
+**Prize**:
+The yield the pool earned during an epoch, paid in full to the weekly draw's single winner. The demo's yield is simulated at a published rate and labeled as such. Code and the API call this amount the jackpot (`jackpotAmount`, `fund_jackpot`).
+_Avoid_: Jackpot (on screen), pot, reward (a game concept)
+
+**Hexpot**:
+The jackpot vault's current balance: this epoch's prize once funded, plus anything a rollover or the House's 30% seed left behind. Shown on the odometer under the board and read straight from the token account.
+_Avoid_: Jackpot (on screen), honeypot, prize pool
 
 **Registration**:
 Recording one Player's final Weight for an ended epoch as a contiguous interval in that epoch's total. Permissionless; the operator cranks it for every player right after the epoch ends.
 _Avoid_: Snapshot, Merkle commit, freeze
 
 **Draw**:
-The verifiable random selection of one point in an epoch's total registered Weight via ORAO VRF. The Player whose interval contains the point wins the Jackpot.
+The verifiable random selection of one point in an epoch's total registered Weight via ORAO VRF. The Player whose interval contains the point wins the Prize.
 _Avoid_: Snapshot, lottery, raffle
 
 **Payout**:
-The operator-cranked transfer of the Jackpot to the winner's USDC account. No claim step. If the House wins, the Jackpot splits 50% buyback reserve, 30% stays for the next epoch, 20% treasury.
+The operator-cranked transfer of the Prize to the winner's USDC account. No claim step. If the House wins, the Prize splits 50% buyback reserve, 30% stays for the next epoch, 20% treasury.
 _Avoid_: Claim, redeem
 
 **Rollover**:
-A Jackpot that stays in the vault for the next epoch because nobody registered or the draw's randomness never arrived.
+A Prize that stays in the hexpot for the next epoch because nobody registered or the draw's randomness never arrived.
 _Avoid_: Expiry, unclaimed prize
 
 ### Game

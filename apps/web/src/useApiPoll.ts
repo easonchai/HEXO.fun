@@ -1,7 +1,7 @@
 /**
  * Polls one `api.ts` fetcher on an interval and keeps the last good value on
  * screen if a poll fails, matching `read.ts`'s "never blank the screen"
- * convention. Used by the header status pill and the Jackpot/Leaderboard
+ * convention. Used by the header status pill and the WeeklyDraw/Leaderboard
  * screens, which all poll aggregate API state on the same 2 s cadence ticket
  * 10 established for chain reads.
  *

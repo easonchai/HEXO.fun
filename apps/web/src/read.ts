@@ -170,6 +170,8 @@ export interface ChainState {
   position: PositionRow | null;
   /** The wallet's own hexUSDC balance, atomic units. */
   walletBalance: bigint;
+  /** The jackpot vault's hexUSDC balance: the hexpot under the board. */
+  hexpot: bigint;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -183,6 +185,7 @@ const EMPTY: Omit<ChainState, "refresh"> = {
   round: null,
   position: null,
   walletBalance: 0n,
+  hexpot: 0n,
   loading: false,
   error: null,
 };
@@ -224,12 +227,13 @@ export function useChainState(
         if (pool.openRoundId > 0n) lastRoundId.current = pool.openRoundId;
         const roundId = lastRoundId.current;
 
-        const [player, round, walletBalance] = await Promise.all([
+        const [player, round, walletBalance, hexpot] = await Promise.all([
           owner ? fetchPlayer(program, address, owner) : null,
           roundId > 0n ? fetchRound(program, address, roundId) : null,
           owner
             ? tokenBalance(connection, acceptedAta(pool.acceptedMint, owner))
             : 0n,
+          tokenBalance(connection, pool.jackpotVault),
         ]);
         const position =
           owner && round
@@ -246,6 +250,7 @@ export function useChainState(
           round,
           position,
           walletBalance,
+          hexpot,
           loading: false,
           error: null,
         });

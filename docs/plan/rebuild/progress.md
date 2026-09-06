@@ -29,6 +29,10 @@ The whole program suite run together after 03 and 04 merged: 24 localnet tests
 passed, 15 Rust unit tests passed. The backend suite after 06 to 09 merged: 97
 passed, 4 skipped (the two localnet files, which each ran on their own).
 
+14 renamed the epoch draw to the weekly draw on screen and put the HEXPOT
+odometer back under the board, fed by the jackpot vault balance. Frontend and
+docs only; every identifier below the API still says `jackpot` and `epoch`.
+
 ## Next
 
 12, and only 12. It is `ready-for-human` and needs the devnet deploy key and

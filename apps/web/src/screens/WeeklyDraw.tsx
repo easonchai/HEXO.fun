@@ -1,9 +1,12 @@
 /**
- * JACKPOT tab: the epoch's simulated yield, on the tab ticket 10 emptied out
- * when it deleted the old EXPLORE screen. Everything here is aggregate state
- * from the API (epoch, jackpot amount, your weight and odds, past winners).
- * `register` is the one on-chain write it sends, and only as the
- * permissionless fallback PRD §3.3 describes.
+ * WEEKLY DRAW tab: the epoch's simulated yield as this week's prize, on the
+ * tab ticket 10 emptied out when it deleted the old EXPLORE screen. Everything
+ * here is aggregate state from the API (epoch, prize amount, your weight and
+ * odds, past winners). `register` is the one on-chain write it sends, and
+ * only as the permissionless fallback PRD §3.3 describes.
+ *
+ * "Epoch" stays the mechanism name in code and the API; on screen it is a
+ * week (ticket 14).
  */
 import { useCallback, useMemo, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
@@ -29,16 +32,16 @@ const SYMBOL = "hexUSDC";
 const EPOCH_LOOKBACK = 20;
 const WINNERS_SHOWN = 5;
 
-export interface JackpotScreenProps {
+export interface WeeklyDrawScreenProps {
   program: HexVaultProgram | null;
   owner: PublicKey | undefined;
   pool: PoolLike | null;
-  /** Chain clock seconds, for the epoch countdown. */
+  /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
   onDone: () => void;
 }
 
-export function Jackpot(props: JackpotScreenProps) {
+export function WeeklyDraw(props: WeeklyDrawScreenProps) {
   const { program, owner, pool, now, onDone } = props;
   const ownerBase58 = owner?.toBase58();
 
@@ -101,28 +104,27 @@ export function Jackpot(props: JackpotScreenProps) {
   const apiError = epoch.error ?? player.error ?? history.error;
 
   return (
-    <div className="screen-vault" data-testid="jackpot-screen">
+    <div className="screen-vault" data-testid="weekly-draw-screen">
       <PanelCard
         wide
-        title="JACKPOT"
+        title="WEEKLY DRAW"
         aside={
-          <span className="dual-line-inline">
-            epoch resets in {countdown}
-          </span>
+          <span className="dual-line-inline">draw in {countdown}</span>
         }
       >
         <p className="screen-copy">
-          The jackpot is this epoch's yield, simulated at a published 5% APR
-          and labeled as such everywhere it appears. It pays in full to one
-          drawn winner; your odds are your share of the epoch's Weight so far.
+          This week's prize is the pool's yield, simulated at a published 5%
+          APR and labeled as such everywhere it appears. The weekly draw pays
+          it in full to one winner; your odds are your share of the week's
+          Weight so far.
         </p>
         <StatGrid>
           <Stat
-            label="Jackpot (simulated 5% APR)"
+            label="Prize (simulated 5% APR)"
             value={
               epoch.data ? `${atomicShort(epoch.data.jackpotAmount)} ${SYMBOL}` : "—"
             }
-            testid="jackpot-amount"
+            testid="prize-amount"
           />
           <Stat
             label="Your weight"
@@ -140,12 +142,12 @@ export function Jackpot(props: JackpotScreenProps) {
             value={player.data ? `${player.data.odds}%` : "—"}
             testid="your-odds"
           />
-          <Stat label="Epoch" value={epoch.data ? `#${epoch.data.id}` : "—"} small />
+          <Stat label="Week" value={epoch.data ? `#${epoch.data.id}` : "—"} small />
         </StatGrid>
       </PanelCard>
 
       {drawing ? (
-        <PanelCard wide title={`DRAWING EPOCH ${drawing.epochId}`}>
+        <PanelCard wide title={`DRAWING WEEK ${drawing.epochId}`}>
           <p className="screen-copy">
             registered {drawing.registeredCount} of {drawing.eligible} eligible
             players
@@ -170,12 +172,12 @@ export function Jackpot(props: JackpotScreenProps) {
 
       <PanelCard wide title="LAST WINNERS">
         {winners.length === 0 ? (
-          <p className="screen-copy">no epoch has drawn a winner yet.</p>
+          <p className="screen-copy">no weekly draw has paid a winner yet.</p>
         ) : (
           <div className="board-list" data-testid="winner-rows">
             {winners.map((row) => (
               <div className="board-row" key={row.id}>
-                <span>epoch #{row.id}</span>
+                <span>week #{row.id}</span>
                 <span>
                   {row.winner === ownerBase58 ? "you" : formatAddress(row.winner)}
                 </span>
