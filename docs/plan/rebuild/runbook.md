@@ -177,6 +177,17 @@ on-chain into the jackpot vault with the admin command:
 pnpm --filter @hexvault/backend admin fund-jackpot --amount 50000000
 ```
 
+## begin_epoch can lag ends_at
+
+The operator finishes the open Round (settle or void) and sweeps every
+unsettled Position before it sends `begin_epoch` (spec §3.4). If a Round is
+still Requested when its Epoch ends, `begin_epoch` waits for the oracle, so
+the new Epoch can start up to `vrf_timeout` plus one sweep after the old
+Epoch's `ends_at`. This is expected, not a stuck operator: the new Epoch still
+starts counting from the old `ends_at`, so Epochs stay contiguous and no
+Weight is double-counted. A `/status` that shows `lastAction: settle_round` or
+`settle_position` a few ticks past an Epoch's `endsAt` is this, not a hang.
+
 ## Troubleshooting an amber status pill
 
 The pill reads the backend's `/status` endpoint (`operator.lastTickAt`,

@@ -163,7 +163,7 @@ Authority-only unless marked permissionless. All amount math is checked; any ove
 
 ### 2.5 Randomness
 
-ORAO VRF v2, devnet network state `5ER1oENnV4srxYdAynUfRzWeQCPQaqMiAp4VqyMbSqnK`. The requesting instruction CPIs `request_v2` with a seed derived from the subject, so each round and each epoch has one randomness account. Settling instructions read that account and require it fulfilled. A Cargo feature `test-vrf` compiles in `test_fulfill(subject, bytes)` that writes a fake fulfilled randomness account; the devnet build is compiled without it. Modulo reduction is used with the bias bounds above; rejection sampling is not worth its code here.
+ORAO VRF v2, devnet network state `5ER1oENnV4srxYdAynUfRzWeQCPQaqMiAp4VqyMbSqnK`. The requesting instruction CPIs `request_v2` with a seed derived from the subject, so each round and each epoch has one randomness account. Settling instructions read that account and require it fulfilled. A Cargo feature `test-vrf` compiles in `test_fulfill(subject, bytes)` that writes a fake fulfilled randomness account; the devnet build is compiled without it. The tile and target mapping is rejection sampling with a rehash, not modulo reduction: `vrf::unbiased_u64` and its u128 twin reject a sample above the range's last full multiple and rehash the randomness with a counter instead. The bias bound is documented on `vrf::unbiased_u64` in the program.
 
 ### 2.6 Events
 
@@ -216,14 +216,13 @@ All on-chain `u64` map to `BigInt`, `u128` to `Decimal(40,0)`. The API serialize
 
 `@nestjs/schedule` interval 2 s, single-flight (skip a tick if the previous is still running). Each tick reads fresh Pool/Epoch/Round state from chain (three `getAccountInfo` calls), then runs in order and stops after the first transaction sent:
 
-1. No epoch, or `now >= current.endsAt` → `begin_epoch`.
-2. Previous epoch `Registering`: from Postgres take players with `regEpoch != prev.id` and non-zero computed weight; send `register` for up to 8 players per transaction. When none remain: `fund_jackpot(max(floor, totalPrincipal × APR × len / year))` from the authority's hexUSDC account (mint to self first if short, the authority is mint authority), then `close_registration`.
-3. Previous epoch `Drawing`: if ORAO account fulfilled → `draw`; else if `now > requestedAt + vrfTimeout` → `rollover_epoch`.
-4. Previous epoch `Drawn`: find the Player with `regEpoch == id && regStart <= target < regEnd` → `payout` (create the winner's ATA idempotently in the same transaction).
-5. Open round past `endsAt` → `request_round_randomness`.
-6. Requested round: fulfilled → `settle_round`; timed out → `void_round`.
-7. Settled/Forfeited/Voided round with unsettled Positions in Postgres → `settle_position`, up to 8 per transaction.
-8. No open round and `now + roundSeconds <= epoch.endsAt` and not paused → `create_round(now, now + roundSeconds)`.
+1. Open round past `endsAt` → `request_round_randomness`. Requested round: fulfilled → `settle_round`; timed out → `void_round`. Round steps run first so a Round can never straddle an Epoch boundary that step 3 might open.
+2. Unsettled Positions in Postgres on any Round that is Settled, Forfeited or Voided, not just the newest → `settle_position`, up to 8 per transaction, one Round per tick.
+3. `begin_epoch`, only when the current Epoch has ended, `open_round_id == 0`, step 2 found nothing, and the previous Epoch (if any) is `Paid` or `RolledOver`.
+4. Previous epoch `Registering`: from Postgres take players with `regEpoch != prev.id` and non-zero computed weight; send `register` for up to 8 players per transaction. When none remain, `close_registration` (`fund_jackpot(max(floor, totalPrincipal × APR × len / year))` from the authority's hexUSDC account, mint to self first if short, then close) is sent only once the list has come back empty on two consecutive ticks, so a player who deposited just before `ends_at` gets one more indexer sync window before being counted out.
+5. Previous epoch `Drawing`: if ORAO account fulfilled → `draw`; else if `now > requestedAt + vrfTimeout` → `rollover_epoch`.
+6. Previous epoch `Drawn`: find the Player with `regEpoch == id && regStart <= target < regEnd` → `payout` (create the winner's ATA idempotently in the same transaction).
+7. No open round and `now + roundSeconds <= epoch.endsAt` and not paused → `create_round(now, now + roundSeconds)`.
 
 Every step writes `OperatorState.lastAction`; any thrown error writes `lastError` and the tick ends. Program errors for "already done" states are expected and logged at debug.
 

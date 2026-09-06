@@ -22,3 +22,6 @@ playwright-report/
 .idea/
 .vscode/
 .gstack/
+
+# Local feature plans and tickets (docs/plan/rebuild predates this and stays tracked)
+docs/plan/
