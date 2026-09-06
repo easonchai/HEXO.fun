@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { eventsToRows, liveEventToRow } from "./activityRows.js";
+import { eventsToRows, isRowVisible, liveEventToRow } from "./activityRows.js";
 import type { EventDto } from "./api.js";
+import type { FeedRow } from "./engine.js";
 import type { LiveEvent } from "./useProgramEvents.js";
 
 const OWNER = "OwnerPubkey11111111111111111111111111111";
@@ -101,5 +102,78 @@ describe("activity feed row mappers", () => {
       liveEventToRow(liveRow("positionSettled", { owner: OWNER, reward: "0" }), OWNER),
     ).toBeNull();
     expect(liveEventToRow(liveRow("paramsSet", {}), OWNER)).toBeNull();
+  });
+
+  it("carries the round id on the two rows a reveal can hold, not on others", () => {
+    expect(
+      liveEventToRow(
+        liveRow("roundSettled", { roundId: "42", winningTile: 2, forfeited: false }),
+        OWNER,
+      )?.roundId,
+    ).toBe("42");
+    expect(
+      liveEventToRow(
+        liveRow("positionSettled", { owner: OWNER, roundId: "42", reward: "500" }),
+        OWNER,
+      )?.roundId,
+    ).toBe("42");
+    expect(
+      liveEventToRow(
+        liveRow("positionBought", { owner: OWNER, tiles: "1", total: "1" }),
+        OWNER,
+      )?.roundId,
+    ).toBeUndefined();
+  });
+});
+
+describe("isRowVisible (activity feed hold)", () => {
+  const settleRow: FeedRow = {
+    key: "s1",
+    who: "pool",
+    action: "tile 3",
+    tileLabel: "settled",
+    roundId: "7",
+  };
+  const rewardRow: FeedRow = {
+    key: "p1",
+    who: "you",
+    action: "+1 Entries",
+    tileLabel: "round reward",
+    roundId: "7",
+  };
+  const boughtRow: FeedRow = {
+    key: "b1",
+    who: "you",
+    action: "−1 Entries",
+    tileLabel: "3 tiles",
+  };
+
+  it("holds a settle row while its reveal is pending", () => {
+    expect(isRowVisible(settleRow, "pending")).toBe(false);
+  });
+
+  it("holds a settle row while its reveal is firing, before the land", () => {
+    expect(isRowVisible(settleRow, "firing")).toBe(false);
+  });
+
+  it("releases a settle row at the land", () => {
+    expect(isRowVisible(settleRow, "landed")).toBe(true);
+  });
+
+  it("never holds a settle row for a Round with no pending reveal", () => {
+    expect(isRowVisible(settleRow, "none")).toBe(true);
+  });
+
+  it("holds a rewarded Position row under the same rule the settle row follows", () => {
+    expect(isRowVisible(rewardRow, "pending")).toBe(false);
+    expect(isRowVisible(rewardRow, "firing")).toBe(false);
+    expect(isRowVisible(rewardRow, "landed")).toBe(true);
+  });
+
+  it("never holds a PositionBought row, whatever the reveal state", () => {
+    expect(isRowVisible(boughtRow, "pending")).toBe(true);
+    expect(isRowVisible(boughtRow, "firing")).toBe(true);
+    expect(isRowVisible(boughtRow, "landed")).toBe(true);
+    expect(isRowVisible(boughtRow, "none")).toBe(true);
   });
 });

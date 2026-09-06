@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
+import { isRowVisible, type RevealHoldState } from "./activityRows.js";
 import {
   covers,
   decideReveal,
@@ -75,6 +76,7 @@ export interface EngineOutput {
   /** Round pot in Entries, for the stake panel. */
   pot: bigint;
   lastWin: { tile: number; kind: string } | null;
+  /** `input.feed`, with a held row's Round removed until the reveal lands. */
   feed: FeedRow[];
   /** The user's position in the tracked round, if any. */
   activePosition: PositionRow | null;
@@ -86,6 +88,7 @@ export interface EngineInput {
   owner: PublicKey | undefined;
   closeBuffer: bigint;
   clockNow: bigint | null;
+  /** Live rows only — history from `GET /feed` is never held, so it bypasses the engine. */
   feed: FeedRow[];
   /** Jackpot vault balance, atomic hexUSDC. */
   hexpot: bigint;
@@ -330,6 +333,22 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     sfx("tick");
   }, [round, phase, activeSecondsLeft]);
 
+  // --- Activity feed hold: a held row appears with the land ------------------
+  // Reuses the choreography state above rather than a parallel copy: a Round
+  // is "pending" once remembered but not yet fired, "firing" from the fire
+  // instant up to the 900 ms land (reveal.boom flips true exactly there,
+  // alongside ticket 05's land sound and banner), and otherwise visible.
+  const revealHoldFor = (roundId: string | undefined): RevealHoldState => {
+    if (roundId === undefined) return "none";
+    if (reveal && reveal.key === roundId) return reveal.boom ? "landed" : "firing";
+    if (rememberedRef.current.has(roundId) && !playedRef.current.has(roundId))
+      return "pending";
+    return "none";
+  };
+  const visibleFeed = feed.filter((row) =>
+    isRowVisible(row, revealHoldFor(row.roundId)),
+  );
+
   return {
     phase,
     secondsLeft: activeSecondsLeft,
@@ -345,7 +364,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     coreEnter,
     pot: round?.pot ?? 0n,
     lastWin,
-    feed,
+    feed: visibleFeed,
     activePosition: owner ? position : null,
   };
 }

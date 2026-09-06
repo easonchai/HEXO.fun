@@ -107,13 +107,24 @@ export function App() {
     () => summarizeStatus(statusPoll.data, Date.now()),
     [statusPoll.data],
   );
+  // Live rows only; GET /feed history is never held, so it joins after the
+  // engine below rather than passing through the hold filter.
+  const ownerKey = publicKey?.toBase58();
+  const liveFeed = useMemo<FeedRow[]>(() => {
+    const rows: FeedRow[] = [];
+    for (const event of events) {
+      const row = liveEventToRow(event, ownerKey);
+      if (row) rows.push(row);
+    }
+    return rows;
+  }, [events, ownerKey]);
   const engine = useRoundEngine({
     round,
     position: state.position,
     owner: publicKey ?? undefined,
     closeBuffer: pool?.closeBuffer ?? 0n,
     clockNow: now,
-    feed: [],
+    feed: liveFeed,
     hexpot: state.hexpot,
   });
 
@@ -145,18 +156,9 @@ export function App() {
     return () => controller.abort();
   }, [publicKey]);
 
-  const ownerKey = publicKey?.toBase58();
-  const liveFeed = useMemo<FeedRow[]>(() => {
-    const rows: FeedRow[] = [];
-    for (const event of events) {
-      const row = liveEventToRow(event, ownerKey);
-      if (row) rows.push(row);
-    }
-    return rows;
-  }, [events, ownerKey]);
   const feed = useMemo(
-    () => mergeFeed(liveFeed, feedHistory),
-    [liveFeed, feedHistory],
+    () => mergeFeed(engine.feed, feedHistory),
+    [engine.feed, feedHistory],
   );
 
   // --- Actions ---------------------------------------------------------------

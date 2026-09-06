@@ -85,6 +85,7 @@ function toRow(
         who,
         action: `+${atomicShort(reward)} Entries`,
         tileLabel: "round reward",
+        roundId: field(data, "roundId", "round_id"),
       };
     }
     case "roundSettled":
@@ -93,6 +94,7 @@ function toRow(
         who: "pool",
         action: `tile ${displayTile(Number(field(data, "winningTile", "winning_tile")))}`,
         tileLabel: field(data, "forfeited") === "true" ? "forfeited" : "settled",
+        roundId: field(data, "roundId", "round_id"),
       };
     case "registered":
       return { key, who, action: "registered", tileLabel: "weekly draw" };
@@ -138,6 +140,22 @@ export const liveEventToRow = (
   event: LiveEvent,
   owner: string | undefined,
 ): FeedRow | null => toRow(event.key, event.name, event.data ?? {}, owner);
+
+/** Where a row's Round stands relative to the reveal choreography (ticket 05). */
+export type RevealHoldState = "pending" | "firing" | "landed" | "none";
+
+/**
+ * Pure hold predicate: whether a feed row should be visible right now. Only
+ * a row carrying a `roundId` — RoundSettled, or a rewarded PositionSettled —
+ * is ever held; every other row (PositionBought included) is always visible.
+ * A held row stays hidden through "pending" (reveal not fired yet) and
+ * "firing" (fired, before the 900 ms land), and shows at "landed" or "none"
+ * (no reveal pending for its Round at all).
+ */
+export function isRowVisible(row: FeedRow, hold: RevealHoldState): boolean {
+  if (row.roundId === undefined) return true;
+  return hold === "landed" || hold === "none";
+}
 
 export function mergeFeed(live: FeedRow[], history: FeedRow[]): FeedRow[] {
   const seen = new Set<string>();

@@ -188,4 +188,11 @@ export interface FeedRow {
   /** Orange gain column, e.g. Entries staked or "+reward". */
   action: string;
   tileLabel: string;
+  /**
+   * Round this row is about, set only for a RoundSettled or a rewarded
+   * PositionSettled row — the only rows the activity feed ever holds for a
+   * reveal. Absent on every other row, which is how the hold predicate knows
+   * to never hold it.
+   */
+  roundId?: string;
 }
