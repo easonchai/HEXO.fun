@@ -32,7 +32,9 @@ const TIMEOUT = 60_000;
 
 // Pinned in vrf.rs; not exported from hx.ts since only this file's real (not
 // test-vrf) CPI-shaped accounts need it.
-const ORAO_VRF_PROGRAM_ID = new PublicKey("VRFzZoJdhFWL8rkvu87LpKM3RbcVezpMEc6X5GVDr7y");
+const ORAO_VRF_PROGRAM_ID = new PublicKey(
+  "VRFzZoJdhFWL8rkvu87LpKM3RbcVezpMEc6X5GVDr7y",
+);
 
 type Wallet = Awaited<ReturnType<PoolCtx["fundedWallet"]>>;
 
@@ -131,7 +133,11 @@ async function buyPosition(
     .rpc();
 }
 
-async function requestRandomness(pool: PoolCtx, round: PublicKey, seed: Uint8Array) {
+async function requestRandomness(
+  pool: PoolCtx,
+  round: PublicKey,
+  seed: Uint8Array,
+) {
   return program.methods
     .requestRoundRandomness()
     .accountsPartial({
@@ -161,7 +167,11 @@ async function settleRound(pool: PoolCtx, round: PublicKey, seed: Uint8Array) {
     .rpc();
 }
 
-async function settlePosition(pool: PoolCtx, round: PublicKey, owner: PublicKey) {
+async function settlePosition(
+  pool: PoolCtx,
+  round: PublicKey,
+  owner: PublicKey,
+) {
   return program.methods
     .settlePosition()
     .accountsPartial({
@@ -177,14 +187,23 @@ async function settlePosition(pool: PoolCtx, round: PublicKey, owner: PublicKey)
 async function voidRound(pool: PoolCtx, round: PublicKey) {
   return program.methods
     .voidRound()
-    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool, round })
+    .accountsPartial({
+      authority: pool.authority.publicKey,
+      pool: pool.pool,
+      round,
+    })
     .signers([pool.authority])
     .rpc();
 }
 
 /** Runs the round to its end, requests randomness, and settles it with
  * `winningTile` as the drawn tile. Returns the fetched, settled Round. */
-async function playToSettlement(pool: PoolCtx, round: PublicKey, endsAt: number, winningTile: number) {
+async function playToSettlement(
+  pool: PoolCtx,
+  round: PublicKey,
+  endsAt: number,
+  winningTile: number,
+) {
   await waitUntil(endsAt);
   const roundBefore = await program.account.round.fetch(round);
   const seed = Uint8Array.from(roundBefore.vrfSeed);
@@ -227,10 +246,18 @@ describe("rounds", () => {
 
       const alicePositionPda = positionPda(round, alice.keypair.publicKey);
       const bobPositionPda = positionPda(round, bob.keypair.publicKey);
-      const aliceRentBefore = (await provider.connection.getAccountInfo(alicePositionPda))!.lamports;
-      const bobRentBefore = (await provider.connection.getAccountInfo(bobPositionPda))!.lamports;
-      const aliceBalBefore = await provider.connection.getBalance(alice.keypair.publicKey);
-      const bobBalBefore = await provider.connection.getBalance(bob.keypair.publicKey);
+      const aliceRentBefore = (await provider.connection.getAccountInfo(
+        alicePositionPda,
+      ))!.lamports;
+      const bobRentBefore = (await provider.connection.getAccountInfo(
+        bobPositionPda,
+      ))!.lamports;
+      const aliceBalBefore = await provider.connection.getBalance(
+        alice.keypair.publicKey,
+      );
+      const bobBalBefore = await provider.connection.getBalance(
+        bob.keypair.publicKey,
+      );
 
       const settled = await playToSettlement(pool, round, endsAt, 0); // tile 0 wins
       expect(settled.status).toBe(2); // Settled
@@ -239,18 +266,28 @@ describe("rounds", () => {
       await settlePosition(pool, round, alice.keypair.publicKey);
       await settlePosition(pool, round, bob.keypair.publicKey);
 
-      const aliceAfter = await program.account.player.fetch(playerPda(pool.pool, alice.keypair.publicKey));
-      const bobAfter = await program.account.player.fetch(playerPda(pool.pool, bob.keypair.publicKey));
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
+      const bobAfter = await program.account.player.fetch(
+        playerPda(pool.pool, bob.keypair.publicKey),
+      );
       // Alice staked 1M of her 5M, then wins the whole 2M pot: 5M - 1M + 2M.
       expect(aliceAfter.entries.toString()).toBe("6000000");
       // Bob staked 1M and lost it outright.
       expect(bobAfter.entries.toString()).toBe("4000000");
-      expect(aliceAfter.entries.add(bobAfter.entries).toString()).toBe("10000000");
+      expect(aliceAfter.entries.add(bobAfter.entries).toString()).toBe(
+        "10000000",
+      );
 
       await expectClosed(alicePositionPda);
       await expectClosed(bobPositionPda);
-      expect(await provider.connection.getBalance(alice.keypair.publicKey)).toBe(aliceBalBefore + aliceRentBefore);
-      expect(await provider.connection.getBalance(bob.keypair.publicKey)).toBe(bobBalBefore + bobRentBefore);
+      expect(
+        await provider.connection.getBalance(alice.keypair.publicKey),
+      ).toBe(aliceBalBefore + aliceRentBefore);
+      expect(await provider.connection.getBalance(bob.keypair.publicKey)).toBe(
+        bobBalBefore + bobRentBefore,
+      );
     },
     TIMEOUT,
   );
@@ -282,9 +319,15 @@ describe("rounds", () => {
       await settlePosition(pool, round, bob.keypair.publicKey);
       await settlePosition(pool, round, carol.keypair.publicKey);
 
-      const aliceAfter = await program.account.player.fetch(playerPda(pool.pool, alice.keypair.publicKey));
-      const bobAfter = await program.account.player.fetch(playerPda(pool.pool, bob.keypair.publicKey));
-      const carolAfter = await program.account.player.fetch(playerPda(pool.pool, carol.keypair.publicKey));
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
+      const bobAfter = await program.account.player.fetch(
+        playerPda(pool.pool, bob.keypair.publicKey),
+      );
+      const carolAfter = await program.account.player.fetch(
+        playerPda(pool.pool, carol.keypair.publicKey),
+      );
       // Started at 1_000_000, staked 3/5/4, alice and bob win their share back.
       expect(aliceAfter.entries.toString()).toBe("1000001"); // 1_000_000 - 3 + 4
       expect(bobAfter.entries.toString()).toBe("1000002"); // 1_000_000 - 5 + 7
@@ -312,16 +355,26 @@ describe("rounds", () => {
       expect(settled.winningTile).toBe(7);
 
       const houseAfter = await program.account.player.fetch(pool.house);
-      expect(houseAfter.entries.sub(houseBefore.entries).toString()).toBe("1000000");
+      expect(houseAfter.entries.sub(houseBefore.entries).toString()).toBe(
+        "1000000",
+      );
 
       const alicePositionPda = positionPda(round, alice.keypair.publicKey);
-      const aliceRentBefore = (await provider.connection.getAccountInfo(alicePositionPda))!.lamports;
-      const aliceBalBefore = await provider.connection.getBalance(alice.keypair.publicKey);
+      const aliceRentBefore = (await provider.connection.getAccountInfo(
+        alicePositionPda,
+      ))!.lamports;
+      const aliceBalBefore = await provider.connection.getBalance(
+        alice.keypair.publicKey,
+      );
       await settlePosition(pool, round, alice.keypair.publicKey);
-      const aliceAfter = await program.account.player.fetch(playerPda(pool.pool, alice.keypair.publicKey));
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
       expect(aliceAfter.entries.toString()).toBe("4000000"); // stake gone, no reward
       await expectClosed(alicePositionPda);
-      expect(await provider.connection.getBalance(alice.keypair.publicKey)).toBe(aliceBalBefore + aliceRentBefore);
+      expect(
+        await provider.connection.getBalance(alice.keypair.publicKey),
+      ).toBe(aliceBalBefore + aliceRentBefore);
     },
     TIMEOUT,
   );
@@ -343,16 +396,24 @@ describe("rounds", () => {
 
       await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
       // Same owner, same round: the Position PDA already exists.
-      await expect(buyPosition(pool, alice, round, 1n << 1n, 1_000_000n)).rejects.toThrow();
+      await expect(
+        buyPosition(pool, alice, round, 1n << 1n, 1_000_000n),
+      ).rejects.toThrow();
       // Empty tile mask.
-      await expect(buyPosition(pool, bob, round, 0n, 1_000_000n)).rejects.toThrow();
+      await expect(
+        buyPosition(pool, bob, round, 0n, 1_000_000n),
+      ).rejects.toThrow();
       // Stake total exceeds the player's Entries (carol only has 1_000_000).
-      await expect(buyPosition(pool, carol, round, 1n << 3n, 2_000_000n)).rejects.toThrow();
+      await expect(
+        buyPosition(pool, carol, round, 1n << 3n, 2_000_000n),
+      ).rejects.toThrow();
 
       // Past ends_at - close_buffer (6 - 3 = 3s in), still before the round
       // itself ends, so this is specifically the close-buffer rejection.
       await waitUntil(startsAt + 6 - 3);
-      await expect(buyPosition(pool, dave, round, 1n << 4n, 1_000_000n)).rejects.toThrow();
+      await expect(
+        buyPosition(pool, dave, round, 1n << 4n, 1_000_000n),
+      ).rejects.toThrow();
     },
     TIMEOUT,
   );
@@ -368,12 +429,20 @@ describe("rounds", () => {
       // submitted transactions would add a real (if small) timing skew.
       const depositIxs = await Promise.all(
         [staker, holder].map((w) =>
-          program.methods.deposit(new BN("5000000")).accountsPartial(depositAccounts(pool, w)).instruction(),
+          program.methods
+            .deposit(new BN("5000000"))
+            .accountsPartial(depositAccounts(pool, w))
+            .instruction(),
         ),
       );
-      await provider.sendAndConfirm(new Transaction().add(...depositIxs), [staker.keypair, holder.keypair]);
+      await provider.sendAndConfirm(new Transaction().add(...depositIxs), [
+        staker.keypair,
+        holder.keypair,
+      ]);
 
-      const holderAfterDeposit = await program.account.player.fetch(playerPda(pool.pool, holder.keypair.publicKey));
+      const holderAfterDeposit = await program.account.player.fetch(
+        playerPda(pool.pool, holder.keypair.publicKey),
+      );
       const holderWeight = BigInt(holderAfterDeposit.weightAcc.toString());
       const holderEntries = BigInt(holderAfterDeposit.entries.toString());
       const holderLastUpdate = BigInt(holderAfterDeposit.lastUpdate.toString());
@@ -383,7 +452,9 @@ describe("rounds", () => {
       // changes again (entries == 0), pre-credited as if she held to ends_at.
       await buyPosition(pool, staker, round, 1n << 0n, 5_000_000n);
 
-      const stakerAfter = await program.account.player.fetch(playerPda(pool.pool, staker.keypair.publicKey));
+      const stakerAfter = await program.account.player.fetch(
+        playerPda(pool.pool, staker.keypair.publicKey),
+      );
 
       // The holder is never touched again, so her weight at ends_at is
       // exactly what a future `touch` would compute: what's already
@@ -391,9 +462,12 @@ describe("rounds", () => {
       // both players had identical entries and last_update the moment
       // before the round opened, this is also what the staker's weight
       // should be once she buys, whenever in the round she actually does.
-      const holderProjectedAtEnd = holderWeight + holderEntries * (BigInt(endsAt) - holderLastUpdate);
+      const holderProjectedAtEnd =
+        holderWeight + holderEntries * (BigInt(endsAt) - holderLastUpdate);
 
-      expect(BigInt(stakerAfter.weightAcc.toString())).toBe(holderProjectedAtEnd);
+      expect(BigInt(stakerAfter.weightAcc.toString())).toBe(
+        holderProjectedAtEnd,
+      );
     },
     TIMEOUT,
   );
@@ -401,7 +475,11 @@ describe("rounds", () => {
   it(
     "voiding after the vrf timeout carries the pot into the next round",
     async () => {
-      const pool = await setupPool({ roundSeconds: 4, closeBuffer: 1, vrfTimeout: 2 });
+      const pool = await setupPool({
+        roundSeconds: 4,
+        closeBuffer: 1,
+        vrfTimeout: 2,
+      });
       const alice = await pool.fundedWallet(10_000_000n);
       await deposit(pool, alice, 5_000_000n);
 
@@ -431,13 +509,21 @@ describe("rounds", () => {
       // settle_position on a voided round: zero reward, account still closes
       // and refunds rent.
       const alicePositionPda = positionPda(round, alice.keypair.publicKey);
-      const aliceRentBefore = (await provider.connection.getAccountInfo(alicePositionPda))!.lamports;
-      const aliceBalBefore = await provider.connection.getBalance(alice.keypair.publicKey);
+      const aliceRentBefore = (await provider.connection.getAccountInfo(
+        alicePositionPda,
+      ))!.lamports;
+      const aliceBalBefore = await provider.connection.getBalance(
+        alice.keypair.publicKey,
+      );
       await settlePosition(pool, round, alice.keypair.publicKey);
-      const aliceAfter = await program.account.player.fetch(playerPda(pool.pool, alice.keypair.publicKey));
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
       expect(aliceAfter.entries.toString()).toBe("4000000"); // no reward credited
       await expectClosed(alicePositionPda);
-      expect(await provider.connection.getBalance(alice.keypair.publicKey)).toBe(aliceBalBefore + aliceRentBefore);
+      expect(
+        await provider.connection.getBalance(alice.keypair.publicKey),
+      ).toBe(aliceBalBefore + aliceRentBefore);
     },
     TIMEOUT,
   );
@@ -518,7 +604,9 @@ describe("rounds", () => {
         // `begin_epoch` (ticket 04) is being implemented concurrently and is
         // a `todo!()` stub as of this ticket; skip until it lands rather
         // than implementing it here.
-        ctx.skip(`begin_epoch unusable (ticket 04 in progress): ${(err as Error).message}`);
+        ctx.skip(
+          `begin_epoch unusable (ticket 04 in progress): ${(err as Error).message}`,
+        );
         return;
       }
 
@@ -534,8 +622,14 @@ describe("rounds", () => {
           .accountsPartial({
             authority: pool.authority.publicKey,
             pool: pool.pool,
-            currentEpoch: epochPda(pool.pool, BigInt(poolAccount.currentEpochId.toString())),
-            round: roundPda(pool.pool, BigInt(poolAccount.nextRoundId.toString())),
+            currentEpoch: epochPda(
+              pool.pool,
+              BigInt(poolAccount.currentEpochId.toString()),
+            ),
+            round: roundPda(
+              pool.pool,
+              BigInt(poolAccount.nextRoundId.toString()),
+            ),
             systemProgram: SystemProgram.programId,
           })
           .signers([pool.authority])
