@@ -54,7 +54,20 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
         previous.try_serialize(&mut buf)?;
         data[..buf.len()].copy_from_slice(&buf);
 
-        previous_ends_at
+        // Contiguous when the operator is merely late, so the schedule holds.
+        // A whole epoch or more late (the operator was down), chaining would
+        // open an epoch that has already ended, and every Round would wait
+        // while the crank replays the backlog one epoch at a time. Skip the
+        // gap instead: nobody accrued Weight in it (`touch` clamps at the
+        // previous `ends_at`), so nothing is lost.
+        let whole_epoch_late = previous_ends_at
+            .checked_add(pool.epoch_seconds)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        if now >= whole_epoch_late {
+            now
+        } else {
+            previous_ends_at
+        }
     };
 
     let ends_at = starts_at

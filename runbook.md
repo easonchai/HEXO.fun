@@ -34,6 +34,16 @@
   Nothing needs re-bootstrapping. Only bump POOL_ID and re-run bootstrap if you want a clean pool, and then paste the new HEXUSDC_MINT
   into .env.
 
+  After the backend has been down
+
+  Epochs chain: begin_epoch starts the next one at the previous ends_at. Before 2026-09-07 that held no matter how late, so a backend
+  that came back after hours replayed the whole gap one epoch at a time (begin_epoch, register, close_registration, draw, payout,
+  20s to 40s each), paid the jackpot floor to the registered players once per replayed epoch, and opened no Round until it caught up:
+  tick step 7 needs a whole round_seconds to fit before the epoch's ends_at, and a replayed epoch has already ended. The UI said
+  "no open round" the entire time. Now begin_epoch starts at the current time when it is a whole epoch or more late, so one
+  begin_epoch after an outage lands in real time and Rounds resume on the next tick. Less than an epoch late still chains, so the
+  schedule holds through ordinary lag.
+
   close_buffer: the draw window
 
   close_buffer is the number of seconds before a Round's ends_at that Positions close and request_round_randomness starts accepting

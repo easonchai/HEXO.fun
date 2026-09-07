@@ -60,15 +60,19 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
     }
 
     let previous_epoch_id = pool.current_epoch_id - 1;
+    // The previous epoch ended a fixed length after it started. That is
+    // usually `current_epoch_start` too, but a `begin_epoch` that ran a whole
+    // epoch late starts the new one at `now`, leaving a gap nobody accrues in.
+    let previous_ends_at = pool.previous_epoch_start.saturating_add(pool.epoch_seconds);
 
     player.frozen_weight = if player.epoch_id == previous_epoch_id {
         // Acted during the previous epoch: finish its accumulator at the
-        // instant the epoch ended, which is when the current one started.
+        // instant the epoch ended.
         player
             .weight_acc
             .checked_add(weight_of(
                 player.entries,
-                elapsed(player.last_update, pool.current_epoch_start),
+                elapsed(player.last_update, previous_ends_at),
             )?)
             .ok_or(HexVaultError::ArithmeticOverflow)?
     } else {
@@ -76,7 +80,7 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
         // Principal for every second of it.
         weight_of(
             player.principal,
-            elapsed(pool.previous_epoch_start, pool.current_epoch_start),
+            elapsed(pool.previous_epoch_start, previous_ends_at),
         )?
     };
     player.frozen_epoch = previous_epoch_id;
@@ -225,6 +229,28 @@ mod tests {
             250 * DAY as u128,
             "credited at most the new epoch's own length"
         );
+    }
+
+    #[test]
+    fn a_gap_between_epochs_counts_for_nobody() {
+        // Epoch 3 ran [1_000, 1_000 + DAY). The operator was down, so
+        // begin_epoch started epoch 4 at `now` = 1_000 + 3 * DAY instead of
+        // chaining. Both the active and the idle player freeze exactly one
+        // epoch's worth of weight, and neither gets the two-day gap.
+        let mut pool = pool_at(4, 1_000 + 3 * DAY);
+        pool.previous_epoch_start = 1_000;
+
+        // Touched once in the gap (same-epoch branch, clamped), then rolled.
+        let mut active = player(100, 100, 3, 1_000);
+        touch(&mut active, &pool_at(3, 1_000), 1_000 + 2 * DAY).expect("touch");
+        touch(&mut active, &pool, 1_000 + 3 * DAY + 10).expect("touch");
+        assert_eq!(active.frozen_weight, 100 * DAY as u128);
+        assert_eq!(active.weight_acc, 100 * 10);
+
+        let mut idle = player(250, 250, 1, 0);
+        touch(&mut idle, &pool, 1_000 + 3 * DAY).expect("touch");
+        assert_eq!(idle.frozen_weight, 250 * DAY as u128);
+        assert_eq!(idle.frozen_epoch, 3);
     }
 
     #[test]

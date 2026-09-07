@@ -51,7 +51,7 @@ A player's time-weighted Entries over one epoch: the integral of Entries held ov
 _Avoid_: TWAB, average balance, odds
 
 **Epoch**:
-One lottery cycle of fixed length. Epochs are contiguous: the next opens the moment the previous ends. Configurable per pool; production intent is seven days, which is why the screen calls it a week.
+One lottery cycle of fixed length. Epochs are contiguous: the next opens the moment the previous ends. The one exception is an operator that comes back a whole epoch or more late: `begin_epoch` then starts at the current time, skipping the dead gap instead of replaying it one epoch at a time. Configurable per pool; production intent is seven days, which is why the screen calls it a week.
 _Avoid_: Season, draw period
 
 **Weekly draw**:
