@@ -22,6 +22,8 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
     page,
   }) => {
     await page.goto("/");
+    // HOME is the first screen now; these flows live on MINE.
+    await page.getByTestId("tab-mine").click();
     await expect(page.getByTestId("tile-0")).toBeVisible();
 
     // Mounted (spec.md "Breakpoint" exception) but not visible.
@@ -38,6 +40,8 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
 
   test("closes on backdrop tap", async ({ page }) => {
     await page.goto("/");
+    // HOME is the first screen now; these flows live on MINE.
+    await page.getByTestId("tab-mine").click();
     await openDrawer(page);
 
     // click({ position }) with { force: true } would still target the
@@ -49,6 +53,8 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
 
   test("closes on Escape", async ({ page }) => {
     await page.goto("/");
+    // HOME is the first screen now; these flows live on MINE.
+    await page.getByTestId("tab-mine").click();
     await openDrawer(page);
 
     await page.keyboard.press("Escape");
@@ -59,6 +65,8 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
     page,
   }) => {
     await page.goto("/");
+    // HOME is the first screen now; these flows live on MINE.
+    await page.getByTestId("tab-mine").click();
     const tileCount = page.getByTestId("bet-drawer").getByTestId("tile-count");
 
     await openDrawer(page);
@@ -79,6 +87,8 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
     page,
   }) => {
     await page.goto("/");
+    // HOME is the first screen now; these flows live on MINE.
+    await page.getByTestId("tab-mine").click();
     await openDrawer(page);
 
     // mouse.wheel isn't supported on mobile WebKit (the "phone" project);

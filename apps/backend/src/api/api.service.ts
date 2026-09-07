@@ -7,6 +7,7 @@ import { clockUnixTimestamp } from "../operator/chain-state";
 import { PrismaService } from "../prisma/prisma.service";
 
 /** Mirrors programs/hex_vault/src/constants.rs `epoch_status`. */
+export const EPOCH_OPEN = 0;
 export const EPOCH_REGISTERING = 1;
 export const EPOCH_DRAWING = 2;
 
@@ -117,7 +118,35 @@ export class ApiService {
         "The current epoch is not indexed yet. Try again in a few seconds.",
       );
     }
-    return { ...epoch, drawing: await this.drawingProgress(pool) };
+    return {
+      ...epoch,
+      jackpotAmount: await this.liveJackpot(epoch),
+      drawing: await this.drawingProgress(pool),
+    };
+  }
+
+  /**
+   * `Epoch.jackpot_amount` is a snapshot the program takes once, at
+   * `close_registration`. While the epoch is still open it is 0 on chain no
+   * matter what `fund_jackpot` has moved into the vault, so the open epoch
+   * reports the vault's token balance instead. From REGISTERING on the chain
+   * value is authoritative (the vault drains to the winner at payout).
+   */
+  private async liveJackpot(epoch: Epoch): Promise<bigint> {
+    if (epoch.status !== EPOCH_OPEN) return epoch.jackpotAmount;
+    try {
+      const { value } = await this.chain.connection.getTokenAccountBalance(
+        this.chain.jackpotVaultAddress(),
+      );
+      return BigInt(value.amount);
+    } catch (error: unknown) {
+      this.logger.warn(
+        `jackpot vault balance read failed, serving the indexed snapshot: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return epoch.jackpotAmount;
+    }
   }
 
   getRounds(limit: number): Promise<Round[]> {

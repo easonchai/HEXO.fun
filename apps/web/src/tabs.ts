@@ -1,5 +1,6 @@
 /** Tab list: single source for the desktop long label and the phone short label. */
 export const TABS = [
+  { id: "HOME", long: "HOME", short: "HOME" },
   { id: "MINE", long: "MINE", short: "MINE" },
   { id: "VAULT", long: "VAULT", short: "VAULT" },
   { id: "WEEKLY DRAW", long: "WEEKLY DRAW", short: "DRAW" },

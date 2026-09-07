@@ -9,6 +9,7 @@ import { BetDrawer } from "./panel/BetDrawer.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
 import { StakeBarButton } from "./panel/StakeBarButton.js";
 import { About } from "./screens/About.js";
+import { Home } from "./screens/Home.js";
 import { Leaderboard } from "./screens/Leaderboard.js";
 import { Vault } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
@@ -65,7 +66,7 @@ export function App() {
     () => (publicKey ? { publicKey, sendTransaction } : null),
     [publicKey, sendTransaction],
   );
-  const [tab, setTab] = useState<Tab>("MINE");
+  const [tab, setTab] = useState<Tab>("HOME");
   const [soundOn, setSoundOnState] = useState(isSoundOn());
   // Dark only: the toggle is gone, but the light tokens and the
   // `data-theme` attribute stay so re-enabling it is a one-line change.
@@ -350,12 +351,17 @@ export function App() {
   return (
     <main className="app">
       <header className="topbar">
-        <div className="brand">
+        <button
+          type="button"
+          className="brand"
+          aria-label="Home"
+          onClick={() => setTab("HOME")}
+        >
           <LogoCog size={34} />
           <span className="brand-logo">
             <LogoWordmark height={15} />
           </span>
-        </div>
+        </button>
         <nav className="nav" aria-label="Sections">
           {TABS.map((candidate) => (
             <button
@@ -443,6 +449,9 @@ export function App() {
       ) : null}
 
       <main className="main-content-split">
+        {tab === "HOME" ? (
+          <Home now={now} onDeposit={() => setTab("VAULT")} />
+        ) : null}
         {tab === "MINE" ? (
           <>
             <Arena
