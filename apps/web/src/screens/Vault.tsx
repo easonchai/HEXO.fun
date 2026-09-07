@@ -1,41 +1,60 @@
 /**
- * VAULT tab — custody: deposit hexUSDC, withdraw matched principal, and pull
- * test hexUSDC from the faucet. The program is the custody boundary:
- * Principal and Entries move together, so a withdrawal needs both.
+ * VAULT tab: the Figma "Deposit" frame. One widget with DEPOSIT / WITHDRAW
+ * tabs on the HOME halftone background. The program is the custody boundary:
+ * Principal and Tickets move together, so a withdrawal needs both.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import { deposit, withdraw, type TxSigner } from "../actions.js";
-import { apiBaseUrl, requestFaucet } from "../api.js";
+import { LogoCog } from "../arena/Arena.js";
 import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
 import {
-  formatAtomic,
+  addCapped,
+  clampDecimals,
+  estimatedYield,
   formatAtomic2,
   parseAtomic,
   previewWithdraw,
   withdrawable,
 } from "../lib/money.js";
 import type { PoolLike } from "../read.js";
-import { PanelCard, Stat, StatGrid } from "../ui.js";
+import { GlyphRow } from "./Home.js";
 
 const DECIMALS = 6;
 const SYMBOL = "hexUSDC";
+const ONE = 10n ** BigInt(DECIMALS);
+/**
+ * The input, the pills and MAX all stay at two decimals so what the rows show
+ * is what gets signed. Up to 0.009999 hexUSDC of game dust in Tickets can
+ * stay behind on a MAX withdraw; worth less than a cent.
+ */
+const INPUT_DECIMALS = 2;
+/** The Figma quick pills: each adds this many whole hexUSDC. */
+const QUICK_ADDS = [50n, 100n, 500n] as const;
+
+type Mode = "deposit" | "withdraw";
 
 export interface VaultScreenProps {
-  program: HexVaultProgram;
-  owner: PublicKey;
+  /** Null until a wallet is connected; the CTA then reads CONNECT WALLET. */
+  program: HexVaultProgram | null;
+  owner: PublicKey | null;
   /** Sponsored send path of the Privy embedded wallet; unset for the rest. */
   sendTransaction?: TxSigner["sendTransaction"] | undefined;
-  pool: PoolLike;
+  pool: PoolLike | null;
   principal: bigint;
   entries: bigint;
   walletBalance: bigint;
   paused: boolean;
   /** Chain clock seconds, for the "rest unlocks in HH:MM" countdown. */
   now: bigint | null;
+  /** Basis points from GET /status; null while the backend is unreachable. */
+  aprBps: number | null;
+  onConnect: () => void;
   onDone: () => void;
+  /** "Play HEXO" on the deposit-confirmed modal: App switches to the MINE tab. */
+  onPlay: () => void;
 }
 
 export function Vault(props: VaultScreenProps) {
@@ -49,46 +68,55 @@ export function Vault(props: VaultScreenProps) {
     walletBalance,
     paused,
     now,
+    aprBps,
+    onConnect,
     onDone,
+    onPlay,
   } = props;
-  const signer: TxSigner = { publicKey: owner, sendTransaction };
-  // `fmt` keeps full mint precision: the two MAX pills below write it into an
-  // input. Everything else on this screen is a display and uses `fmt2`.
-  const fmt = (value: bigint) => formatAtomic(value, DECIMALS);
+  // Two decimals everywhere, including what the pills write into the input
+  // (see INPUT_DECIMALS).
   const fmt2 = (value: bigint) => formatAtomic2(value, DECIMALS);
 
+  const [mode, setMode] = useState<Mode>("deposit");
   const [amountText, setAmountText] = useState("");
-  const [withdrawText, setWithdrawText] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(
     null,
   );
-  /** Seconds left before the faucet will accept another request. */
-  const [faucetWait, setFaucetWait] = useState<number | null>(null);
+  /** Atomic amount of the deposit that just landed; null closes the modal. */
+  const [confirmed, setConfirmed] = useState<bigint | null>(null);
 
-  // Ticks the 429 wait down to zero, then re-enables the button.
-  useEffect(() => {
-    if (faucetWait === null) return;
-    if (faucetWait <= 0) {
-      setFaucetWait(null);
-      return;
-    }
-    const id = window.setTimeout(
-      () => setFaucetWait((seconds) => (seconds === null ? null : seconds - 1)),
-      1000,
-    );
-    return () => window.clearTimeout(id);
-  }, [faucetWait]);
+  const connected = owner !== null && program !== null && pool !== null;
+  const matched = withdrawable(principal, entries);
+  const amount = parseAtomic(amountText, DECIMALS);
+  /** What the pills clamp to: wallet on deposit, matched on withdraw. */
+  const cap = mode === "deposit" ? walletBalance : matched;
+
+  const switchMode = (next: Mode) => {
+    if (next === mode) return;
+    setMode(next);
+    setAmountText("");
+    setNote(null);
+  };
+
+  const addQuick = (units: bigint) =>
+    setAmountText(fmt2(addCapped(amount ?? 0n, units * ONE, connected ? cap : null)));
 
   const run = async (label: string, action: () => Promise<string>) => {
-    setBusy(label);
+    setBusy(true);
     setNote(null);
     try {
       const signature = await action();
-      setNote({
-        tone: "ok",
-        text: `${label} confirmed: ${signature.slice(0, 16)}…`,
-      });
+      // Deposit gets the confirmed modal; withdraw keeps the inline note.
+      if (label === "Deposit" && amount !== null) {
+        setConfirmed(amount);
+      } else {
+        setNote({
+          tone: "ok",
+          text: `${label} confirmed: ${signature.slice(0, 16)}…`,
+        });
+      }
+      setAmountText("");
       onDone();
     } catch (error) {
       setNote({
@@ -96,264 +124,276 @@ export function Vault(props: VaultScreenProps) {
         text: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
-
-  const pullFaucet = async () => {
-    setBusy("Faucet");
-    setNote(null);
-    setFaucetWait(null);
-    const result = await requestFaucet(apiBaseUrl(), owner.toBase58());
-    if (result.ok) {
-      setNote({
-        tone: "ok",
-        text: `faucet sent ${fmt2(BigInt(result.data.amount))} ${SYMBOL}`,
-      });
-      onDone();
-    } else if ("retryAfterSeconds" in result) {
-      setFaucetWait(result.retryAfterSeconds);
-      setNote({
-        tone: "err",
-        text: `faucet rate limited: try again in ${result.retryAfterSeconds}s`,
-      });
-    } else {
-      setNote({ tone: "err", text: result.reason });
-    }
-    setBusy(null);
-  };
-
-  const depositAmount = parseAtomic(amountText, DECIMALS);
-  const withdrawAmount = parseAtomic(withdrawText, DECIMALS);
-  const matched = withdrawable(principal, entries);
-  const withdrawalPreview =
-    withdrawAmount === null
-      ? null
-      : previewWithdraw(principal, entries, withdrawAmount);
 
   // Entries lost to the game (principal > entries) come back at the next
   // epoch reset, not before. See CONTEXT.md "Entries".
   const locked = principal > entries ? principal - entries : 0n;
-  const epochEndsAt = pool.currentEpochStart + pool.epochSeconds;
-  const resetsIn = now !== null ? hmText(epochEndsAt - now) : null;
+  const resetsIn =
+    pool && now !== null
+      ? hmText(pool.currentEpochStart + pool.epochSeconds - now)
+      : null;
+
+  const overCap = connected && amount !== null && amount > cap;
+  const underMin =
+    mode === "deposit" && pool !== null && amount !== null && amount < pool.minDeposit;
+  const yearlyYield =
+    amount !== null && aprBps !== null ? estimatedYield(amount, aprBps) : null;
+  const withdrawPreview =
+    mode === "withdraw" && amount !== null
+      ? previewWithdraw(principal, entries, amount)
+      : null;
+
+  const submit = () => {
+    if (!connected || !amount) return;
+    const signer: TxSigner = { publicKey: owner, sendTransaction };
+    if (mode === "deposit") {
+      void run("Deposit", () => deposit(program, signer, pool, amount));
+    } else {
+      void run("Withdraw", () => withdraw(program, signer, pool, amount));
+    }
+  };
+
+  const canSubmit =
+    connected &&
+    !busy &&
+    !!amount &&
+    amount > 0n &&
+    !overCap &&
+    !underMin &&
+    !(mode === "deposit" && paused);
+
+  const ctaText = !connected
+    ? "CONNECT WALLET"
+    : busy
+      ? "SIGNING…"
+      : mode === "deposit" && paused
+        ? "POOL PAUSED"
+        : mode.toUpperCase();
 
   return (
-    <div className="screen-vault" data-testid="vault-screen">
-      <PanelCard wide title="YOUR VAULT">
-        <StatGrid>
-          <Stat label="Principal" value={`${fmt2(principal)} ${SYMBOL}`} />
-          <Stat label="Tickets" value={fmt2(entries)} />
-          <Stat
-            label="Withdrawable now"
-            value={`${fmt2(matched)} ${SYMBOL}`}
-            testid="withdrawable-now"
-          />
-          <Stat
-            label="Rest unlocks"
-            value={
-              locked > 0n
-                ? `in ${resetsIn ?? "--:--"}`
-                : "fully withdrawable"
-            }
-            small
-            testid="unlock-note"
-          />
-        </StatGrid>
-      </PanelCard>
-      <PanelCard
-        wide
-        title="DEPOSIT"
-        aside={
-          <span className="dual-line-inline">
-            wallet {SYMBOL} {fmt2(walletBalance)}
-          </span>
-        }
-      >
-        <p className="screen-copy">
-          A deposit credits equal Principal and Tickets. Tickets pay for
-          positions on the board and decide your odds in the draw; Principal is
-          never at risk.
-        </p>
-        <div className="vault-form">
-          <div className="volt-banner slim">
-            <input
-              value={amountText}
-              placeholder="0.00"
-              onChange={(event) =>
-                setAmountText(event.target.value.replace(/[^0-9.]/g, ""))
-              }
-              inputMode="decimal"
-              data-testid="deposit-input"
-              aria-label="Deposit amount"
-            />
-          </div>
-          <div className="quick-row">
-            {[1, 5, 10].map((units) => (
-              <span
-                key={units}
-                className="pill"
-                role="button"
-                onClick={() =>
-                  setAmountText(
-                    formatAtomic(
-                      BigInt(units) * 10n ** BigInt(DECIMALS),
-                      DECIMALS,
-                    ),
-                  )
-                }
+    <div className="vault" data-testid="vault-screen">
+      <div className="vault-row">
+        <GlyphRow />
+        <section className="vault-widget" aria-label="Deposit or withdraw">
+          <div className="vault-tabs" role="tablist">
+            {(["deposit", "withdraw"] as const).map((candidate) => (
+              <button
+                key={candidate}
+                type="button"
+                role="tab"
+                aria-selected={mode === candidate}
+                className={`vault-tab${mode === candidate ? " active" : ""}`}
+                data-testid={`vault-tab-${candidate}`}
+                onClick={() => switchMode(candidate)}
               >
-                +{units}
-              </span>
+                {candidate}
+              </button>
             ))}
-            <span
-              className="pill max"
-              role="button"
-              onClick={() => setAmountText(fmt(walletBalance))}
+          </div>
+
+          <div className="vault-body">
+            <label className="vault-amount">
+              <span className="vault-amount-dollar" aria-hidden="true">
+                $
+              </span>
+              <input
+                value={amountText}
+                placeholder="0"
+                onChange={(event) =>
+                  setAmountText(clampDecimals(event.target.value, INPUT_DECIMALS))
+                }
+                inputMode="decimal"
+                data-testid={`${mode}-input`}
+                aria-label={`${mode} amount`}
+              />
+              <span className="vault-amount-symbol">{SYMBOL}</span>
+              <span className="vault-amount-available" data-testid="withdrawable-now">
+                {mode === "deposit"
+                  ? `Available ${fmt2(walletBalance)} ${SYMBOL}`
+                  : `Available ${fmt2(matched)} tickets`}
+              </span>
+              {mode === "withdraw" && locked > 0n ? (
+                <span className="vault-amount-locked" data-testid="unlock-note">
+                  Principal {fmt2(principal)} · rest unlocks in {resetsIn ?? "--:--"}
+                </span>
+              ) : null}
+            </label>
+
+            <div className="vault-quick">
+              {QUICK_ADDS.map((units) => (
+                <button
+                  key={units.toString()}
+                  type="button"
+                  className="vault-pill"
+                  onClick={() => addQuick(units)}
+                >
+                  +${units.toString()}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="vault-pill"
+                onClick={() => setAmountText(fmt2(cap))}
+              >
+                MAX
+              </button>
+            </div>
+
+            <dl className="vault-rows">
+              {mode === "deposit" ? (
+                <>
+                  <div className="vault-line">
+                    <dt>Tickets</dt>
+                    <dd>{fmt2(amount ?? 0n)}</dd>
+                  </div>
+                  <div className="vault-line">
+                    <dt>Estimated yield</dt>
+                    <dd>
+                      {yearlyYield === null
+                        ? "—"
+                        : `$${fmt2(yearlyYield)} (${aprBps! / 100}% APR)`}
+                    </dd>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="vault-line">
+                    <dt>You receive</dt>
+                    <dd>
+                      {fmt2(amount ?? 0n)} {SYMBOL}
+                    </dd>
+                  </div>
+                  <div className="vault-line">
+                    <dt>Tickets after</dt>
+                    <dd>
+                      {fmt2(withdrawPreview ? withdrawPreview.entriesAfter : entries)}
+                    </dd>
+                  </div>
+                </>
+              )}
+            </dl>
+
+            <button
+              type="button"
+              className="vault-cta"
+              disabled={connected && !canSubmit}
+              data-testid={`${mode}-submit`}
+              onClick={connected ? submit : onConnect}
             >
-              MAX
-            </span>
+              {ctaText}
+            </button>
+
+            <div className="vault-notes">
+              {mode === "deposit" && paused ? (
+                <span className="vault-note">
+                  Pool is paused: deposits are blocked; withdrawals stay live.
+                </span>
+              ) : null}
+              {overCap ? (
+                <span className="vault-note" data-testid={`${mode}-over-balance`}>
+                  {mode === "deposit"
+                    ? "Amount is more than your wallet balance."
+                    : "Amount is more than what you can withdraw right now."}
+                </span>
+              ) : null}
+              {mode === "deposit" && pool ? (
+                <span className="vault-note">
+                  Minimum deposit {fmt2(pool.minDeposit)} {SYMBOL}.
+                </span>
+              ) : null}
+              {note ? (
+                <span className={`vault-note ${note.tone}`} data-testid="vault-note">
+                  {note.text}
+                </span>
+              ) : null}
+            </div>
           </div>
+        </section>
+        <GlyphRow />
+      </div>
+      {confirmed !== null ? (
+        <DepositConfirmed
+          amount={`$${fmt2(confirmed)} ${SYMBOL}`}
+          tickets={fmt2(entries)}
+          onClose={() => setConfirmed(null)}
+          onPlay={onPlay}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+interface DepositConfirmedProps {
+  amount: string;
+  /** Live Tickets balance; refreshes in place once the chain read lands. */
+  tickets: string;
+  onClose: () => void;
+  onPlay: () => void;
+}
+
+/** The Figma "deposit confirmed" popup: backdrop, ×, and Escape dismiss. */
+function DepositConfirmed({ amount, tickets, onClose, onPlay }: DepositConfirmedProps) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    closeRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="deposit-modal-backdrop" onClick={onClose} data-testid="deposit-modal">
+      <section
+        className="deposit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="deposit-modal-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="deposit-modal-head">
+          <span className="deposit-modal-brand">
+            <LogoCog size={18} />
+            DEPOSIT
+          </span>
           <button
+            ref={closeRef}
             type="button"
-            className="btn-deploy"
-            disabled={
-              busy !== null ||
-              paused ||
-              !depositAmount ||
-              depositAmount < pool.minDeposit ||
-              depositAmount > walletBalance
-            }
-            data-testid="deposit-submit"
-            onClick={() =>
-              void run("Deposit", () =>
-                deposit(program, signer, pool, depositAmount!),
-              )
-            }
+            className="deposit-modal-close"
+            aria-label="Close"
+            onClick={onClose}
           >
-            <span>
-              {busy === "Deposit"
-                ? "SIGNING…"
-                : paused
-                  ? "POOL PAUSED"
-                  : "DEPOSIT"}
-            </span>
+            ×
           </button>
-          {paused ? (
-            <div className="panel-note">
-              Pool is paused: deposits are blocked; withdrawals stay live.
-            </div>
-          ) : null}
-          {depositAmount !== null && depositAmount > walletBalance ? (
-            <div className="panel-note" data-testid="deposit-over-balance">
-              Amount is more than your wallet balance.
-            </div>
-          ) : null}
-          <div className="panel-note">
-            Minimum deposit {fmt2(pool.minDeposit)} {SYMBOL}.
-          </div>
-        </div>
+        </header>
+        <img
+          className="deposit-modal-coin"
+          src="/deposit-check.png"
+          alt=""
+          width={188}
+          height={188}
+        />
+        <p className="deposit-modal-kicker">DEPOSIT CONFIRMED</p>
+        <p className="deposit-modal-amount" id="deposit-modal-title" data-testid="deposit-modal-amount">
+          {amount}
+        </p>
+        <p className="deposit-modal-sub">
+          You have <strong>{tickets} Tickets</strong> to play
+        </p>
         <button
           type="button"
-          className="btn-deploy ghost"
-          disabled={busy !== null || faucetWait !== null}
-          data-testid="faucet"
-          onClick={() => void pullFaucet()}
+          className="vault-cta deposit-modal-play"
+          data-testid="deposit-modal-play"
+          onClick={onPlay}
         >
-          <span>
-            {busy === "Faucet"
-              ? "REQUESTING…"
-              : faucetWait !== null
-                ? `FAUCET IN ${faucetWait}s`
-                : `GET TEST ${SYMBOL}`}
-          </span>
+          Play HEXO
         </button>
-      </PanelCard>
-
-      <PanelCard
-        wide
-        title="WITHDRAW"
-        aside={
-          <span className="dual-line-inline">withdrawable {fmt2(matched)}</span>
-        }
-      >
-        <p className="screen-copy">
-          A withdrawal takes the same amount off Principal and Tickets and pays
-          out {SYMBOL}. You can withdraw min(Principal, Tickets) — Tickets
-          staked in an open round lower it until that round settles.
-        </p>
-        <div className="vault-form">
-          <div className="volt-banner slim">
-            <input
-              value={withdrawText}
-              placeholder="0.00"
-              onChange={(event) =>
-                setWithdrawText(event.target.value.replace(/[^0-9.]/g, ""))
-              }
-              inputMode="decimal"
-              data-testid="withdraw-input"
-              aria-label="Withdraw amount"
-            />
-          </div>
-          <div className="quick-row">
-            <span
-              className="pill"
-              role="button"
-              onClick={() => setWithdrawText(fmt(matched))}
-            >
-              MAX
-            </span>
-            <span
-              className="pill"
-              role="button"
-              onClick={() => setWithdrawText("")}
-            >
-              CLEAR
-            </span>
-          </div>
-          {withdrawalPreview ? (
-            <div className="dual-line" data-testid="withdraw-preview">
-              <span>
-                before Principal {fmt2(principal)} / Tickets {fmt2(entries)} /
-                withdrawable {fmt2(withdrawalPreview.withdrawableBefore)}
-              </span>
-              <span className="dual-accent">
-                after Principal {fmt2(withdrawalPreview.principalAfter)} / Tickets{" "}
-                {fmt2(withdrawalPreview.entriesAfter)} / withdrawable{" "}
-                {fmt2(withdrawalPreview.withdrawableAfter)}
-              </span>
-            </div>
-          ) : null}
-          <button
-            type="button"
-            className="btn-deploy ghost"
-            disabled={
-              busy !== null ||
-              !withdrawAmount ||
-              withdrawAmount <= 0n ||
-              withdrawAmount > matched
-            }
-            data-testid="withdraw-submit"
-            onClick={() =>
-              void run("Withdraw", () =>
-                withdraw(program, signer, pool, withdrawAmount!),
-              )
-            }
-          >
-            <span>{busy === "Withdraw" ? "SIGNING…" : "WITHDRAW"}</span>
-          </button>
-          {withdrawAmount !== null && withdrawAmount > matched ? (
-            <div className="panel-note" data-testid="withdraw-over-matched">
-              Amount is more than what you can withdraw right now.
-            </div>
-          ) : null}
-        </div>
-      </PanelCard>
-
-      {note ? (
-        <div className={`screen-note ${note.tone}`} data-testid="vault-note">
-          {note.text}
-        </div>
-      ) : null}
+      </section>
     </div>
   );
 }

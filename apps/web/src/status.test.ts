@@ -17,6 +17,7 @@ const status = (overrides: Partial<StatusDto> = {}): StatusDto => ({
   cursor: { lastSlot: "1", lastSignature: "x", ageSeconds: 1 },
   rpcOk: true,
   slot: 1,
+  aprBps: 500,
   ...overrides,
 });
 

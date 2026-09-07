@@ -139,6 +139,8 @@ export interface StatusDto {
   };
   rpcOk: boolean;
   slot: number | null;
+  /** Simulated yield rate in basis points (500 = 5% APR). */
+  aprBps: number;
 }
 
 export interface PoolSummaryDto {

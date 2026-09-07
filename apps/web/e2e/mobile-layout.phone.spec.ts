@@ -53,7 +53,7 @@ async function assertNoHorizontalOverflow(page: Page): Promise<void> {
  * or `#root` clipped it back to zero, ABOUT's copy would be unreachable.
  */
 async function assertLongTabContentIsReachable(page: Page): Promise<void> {
-  await page.getByTestId("tab-about").click();
+  await page.goto("/#about");
   const screen = page.locator(".screen-vault");
   await expect(screen).toBeVisible();
   const scrolled = await screen.evaluate((el) => {
@@ -89,17 +89,13 @@ async function assertLayoutFacts(page: Page): Promise<void> {
 
 test.describe("phone layout: MINE tab, no wallet, no backend", () => {
   test("fits at the phone project's default viewport", async ({ page }) => {
-    await page.goto("/");
-    // HOME is the first screen now; these flows live on MINE.
-    await page.getByTestId("tab-mine").click();
+    await page.goto("/#play");
     await expect(page.getByTestId("tile-0")).toBeVisible();
     await assertLayoutFacts(page);
   });
 
   test("still fits at a 320px viewport", async ({ page }) => {
-    await page.goto("/");
-    // HOME is the first screen now; these flows live on MINE.
-    await page.getByTestId("tab-mine").click();
+    await page.goto("/#play");
     await page.setViewportSize({ width: 320, height: 568 });
     await expect(page.getByTestId("tile-0")).toBeVisible();
     await assertLayoutFacts(page);
@@ -108,10 +104,8 @@ test.describe("phone layout: MINE tab, no wallet, no backend", () => {
   test("a tab longer than the screen stays reachable by scrolling", async ({
     page,
   }) => {
-    await page.goto("/");
-    // HOME is the first screen now; these flows live on MINE.
-    await page.getByTestId("tab-mine").click();
-    await expect(page.getByTestId("tile-0")).toBeVisible();
+    // A hash-only goto after /#play is a same-document navigation and the
+    // app only reads the hash on mount, so load ABOUT directly.
     await assertLongTabContentIsReachable(page);
   });
 });

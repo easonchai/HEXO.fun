@@ -21,9 +21,7 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
   test("the control panel is hidden until the stake bar is tapped", async ({
     page,
   }) => {
-    await page.goto("/");
-    // HOME is the first screen now; these flows live on MINE.
-    await page.getByTestId("tab-mine").click();
+    await page.goto("/#play");
     await expect(page.getByTestId("tile-0")).toBeVisible();
 
     // Mounted (spec.md "Breakpoint" exception) but not visible.
@@ -39,9 +37,7 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
   });
 
   test("closes on backdrop tap", async ({ page }) => {
-    await page.goto("/");
-    // HOME is the first screen now; these flows live on MINE.
-    await page.getByTestId("tab-mine").click();
+    await page.goto("/#play");
     await openDrawer(page);
 
     // click({ position }) with { force: true } would still target the
@@ -52,9 +48,7 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
   });
 
   test("closes on Escape", async ({ page }) => {
-    await page.goto("/");
-    // HOME is the first screen now; these flows live on MINE.
-    await page.getByTestId("tab-mine").click();
+    await page.goto("/#play");
     await openDrawer(page);
 
     await page.keyboard.press("Escape");
@@ -64,9 +58,7 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
   test("a Tile tap through the open drawer does not change the Tile count", async ({
     page,
   }) => {
-    await page.goto("/");
-    // HOME is the first screen now; these flows live on MINE.
-    await page.getByTestId("tab-mine").click();
+    await page.goto("/#play");
     const tileCount = page.getByTestId("bet-drawer").getByTestId("tile-count");
 
     await openDrawer(page);
@@ -86,9 +78,7 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
   test("the page behind does not scroll while the drawer is open", async ({
     page,
   }) => {
-    await page.goto("/");
-    // HOME is the first screen now; these flows live on MINE.
-    await page.getByTestId("tab-mine").click();
+    await page.goto("/#play");
     await openDrawer(page);
 
     // mouse.wheel isn't supported on mobile WebKit (the "phone" project);

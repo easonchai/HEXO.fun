@@ -35,6 +35,7 @@ import {
 } from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { SoundIcon } from "./SoundIcon.js";
+import { WalletMenu } from "./WalletMenu.js";
 import { useChainState } from "./read.js";
 import { useChainClock } from "./useChainClock.js";
 import { useProgramEvents } from "./useProgramEvents.js";
@@ -42,7 +43,7 @@ import { useApiPoll } from "./useApiPoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
-import { TABS, type Tab } from "./tabs.js";
+import { TABS, tabFromHash, type Tab } from "./tabs.js";
 
 /** The accepted asset is hexUSDC (6 decimals) for every pool in this build. */
 const SYMBOL = "hexUSDC";
@@ -66,7 +67,9 @@ export function App() {
     () => (publicKey ? { publicKey, sendTransaction } : null),
     [publicKey, sendTransaction],
   );
-  const [tab, setTab] = useState<Tab>("HOME");
+  const [tab, setTab] = useState<Tab>(() =>
+    tabFromHash(window.location.hash),
+  );
   const [soundOn, setSoundOnState] = useState(isSoundOn());
   // Dark only: the toggle is gone, but the light tokens and the
   // `data-theme` attribute stay so re-enabling it is a one-line change.
@@ -363,18 +366,25 @@ export function App() {
           </span>
         </button>
         <nav className="nav" aria-label="Sections">
-          {TABS.map((candidate) => (
-            <button
-              key={candidate.id}
-              type="button"
-              className={`nav-item${tab === candidate.id ? " active" : ""}`}
-              data-testid={`tab-${candidate.id.toLowerCase().replace(" ", "-")}`}
-              onClick={() => setTab(candidate.id)}
-            >
-              <span className="nav-item-long">{candidate.long}</span>
-              <span className="nav-item-short">{candidate.short}</span>
-            </button>
-          ))}
+          {TABS.map((candidate) => {
+            // PLAY needs Tickets; aria-disabled (not `disabled`) keeps the
+            // button hoverable so the data-tip tooltip (styles.css) shows.
+            const locked = candidate.id === "MINE" && entries === 0n;
+            return (
+              <button
+                key={candidate.id}
+                type="button"
+                className={`nav-item${tab === candidate.id ? " active" : ""}`}
+                data-testid={`tab-${candidate.id.toLowerCase()}`}
+                aria-disabled={locked}
+                data-tip={locked ? "Deposit first to play" : undefined}
+                onClick={locked ? undefined : () => setTab(candidate.id)}
+              >
+                <span className="nav-item-long">{candidate.long}</span>
+                <span className="nav-item-short">{candidate.short}</span>
+              </button>
+            );
+          })}
         </nav>
         <div className="topbar-right">
           {connected ? (
@@ -401,32 +411,18 @@ export function App() {
           >
             <SoundIcon on={soundOn} />
           </button>
-          <span data-testid="wallet-connector">
-            {signer.connected && signer.publicKey ? (
-              <>
-                <button
-                  type="button"
-                  className="btn-connect"
-                  data-testid="connect-button"
-                  title={`Copy ${signer.publicKey.toBase58()}`}
-                  onClick={() => void copyAddress(signer.publicKey!.toBase58())}
-                >
-                  {addressCopied
-                    ? "COPIED"
-                    : `${signer.publicKey.toBase58().slice(0, 4)}…${signer.publicKey.toBase58().slice(-4)}`}
-                </button>
-                <button
-                  type="button"
-                  className="btn-disconnect"
-                  data-testid="disconnect-button"
-                  title="Disconnect"
-                  aria-label="Disconnect wallet"
-                  onClick={() => signer.disconnect()}
-                >
-                  ×
-                </button>
-              </>
-            ) : (
+          {signer.connected && signer.publicKey ? (
+            <WalletMenu
+              address={signer.publicKey.toBase58()}
+              tickets={fmt(entries)}
+              balance={fmt(state.walletBalance)}
+              symbol={SYMBOL}
+              addressCopied={addressCopied}
+              onCopy={(address) => void copyAddress(address)}
+              onDisconnect={() => signer.disconnect()}
+            />
+          ) : (
+            <span data-testid="wallet-connector">
               <button
                 type="button"
                 className="btn-connect"
@@ -437,8 +433,8 @@ export function App() {
               >
                 {signer.connected ? "DISCONNECT" : "CONNECT"}
               </button>
-            )}
-          </span>
+            </span>
+          )}
         </div>
       </header>
 
@@ -537,24 +533,22 @@ export function App() {
             </BetDrawer>
           </>
         ) : null}
-        {tab === "VAULT" && publicKey && pool ? (
+        {tab === "VAULT" ? (
           <Vault
-            program={program!}
-            owner={publicKey}
+            program={program}
+            owner={publicKey ?? null}
             sendTransaction={sendTransaction}
             pool={pool}
             principal={principal}
             entries={entries}
             walletBalance={state.walletBalance}
-            paused={pool.paused}
+            paused={pool?.paused ?? false}
             now={now}
+            aprBps={statusPoll.data?.aprBps ?? null}
+            onConnect={() => signer.connect()}
             onDone={refresh}
+            onPlay={() => setTab("MINE")}
           />
-        ) : null}
-        {tab === "VAULT" && (!publicKey || !pool) ? (
-          <div className="screen-note err">
-            Connect a wallet with a live pool to deposit or withdraw.
-          </div>
         ) : null}
         {tab === "WEEKLY DRAW" ? (
           <WeeklyDraw
