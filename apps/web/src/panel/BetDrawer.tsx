@@ -42,10 +42,7 @@ export function BetDrawer({
           className="bet-drawer-overlay"
           data-testid="bet-drawer-overlay"
         />
-        <Drawer.Content
-          className="bet-drawer-content"
-          data-testid="bet-drawer"
-        >
+        <Drawer.Content className="bet-drawer-content" data-testid="bet-drawer">
           <Drawer.Handle className="bet-drawer-handle" />
           <Drawer.Title className="bet-drawer-title">
             Place a position
@@ -63,12 +60,17 @@ export function BetDrawer({
                 onClick={onToggleSound}
                 aria-pressed={soundOn}
               >
-                <svg width="17" height="16" viewBox="0 0 20 18" aria-hidden="true">
-                  <path d="M2 6h4l5-4v14l-5-4H2z" fill="var(--primary)" />
+                <svg
+                  width="17"
+                  height="16"
+                  viewBox="0 0 20 18"
+                  aria-hidden="true"
+                >
+                  <path d="M2 6h4l5-4v14l-5-4H2z" fill="var(--accent-text)" />
                   {soundOn ? (
                     <path
                       d="M14 5c1.5 1 2.4 2.4 2.4 4s-.9 3-2.4 4"
-                      stroke="var(--primary)"
+                      stroke="var(--accent-text)"
                       strokeWidth="2.2"
                       fill="none"
                       strokeLinecap="round"
@@ -79,7 +81,7 @@ export function BetDrawer({
                       y1="4"
                       x2="18"
                       y2="14"
-                      stroke="#94a3b8"
+                      stroke="var(--text-muted)"
                       strokeWidth="2.2"
                       strokeLinecap="round"
                     />

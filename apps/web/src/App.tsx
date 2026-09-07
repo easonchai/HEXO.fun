@@ -4,7 +4,7 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { eventsToRows, liveEventToRow, mergeFeed } from "./activityRows.js";
-import { Arena, LogoCog } from "./arena/Arena.js";
+import { Arena, LogoCog, LogoWordmark } from "./arena/Arena.js";
 import { BetDrawer } from "./panel/BetDrawer.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
 import { StakeBarButton } from "./panel/StakeBarButton.js";
@@ -192,7 +192,10 @@ export function App() {
   const problems: string[] = [];
   if (!pool) problems.push("no pool found on chain yet");
   if (!openRound) problems.push("no open round (the operator opens rounds)");
-  if (openRound && phaseFor(openRound, now ?? 0n, pool?.closeBuffer ?? 0n) !== "mine")
+  if (
+    openRound &&
+    phaseFor(openRound, now ?? 0n, pool?.closeBuffer ?? 0n) !== "mine"
+  )
     problems.push("positions are closed for this round");
   if (locked && openRound)
     problems.push(`position already placed in round #${openRound.roundId}`);
@@ -360,8 +363,10 @@ export function App() {
     <main className="app">
       <header className="topbar">
         <div className="brand">
-          <LogoCog size={28} />
-          <span className="brand-logo">HEXO</span>
+          <LogoCog size={32} />
+          <span className="brand-logo">
+            <LogoWordmark height={13} />
+          </span>
         </div>
         <nav className="nav" aria-label="Sections">
           {TABS.map((candidate) => (
@@ -413,11 +418,11 @@ export function App() {
             aria-pressed={soundOn}
           >
             <svg width="17" height="16" viewBox="0 0 20 18" aria-hidden="true">
-              <path d="M2 6h4l5-4v14l-5-4H2z" fill="var(--primary)" />
+              <path d="M2 6h4l5-4v14l-5-4H2z" fill="var(--accent-text)" />
               {soundOn ? (
                 <path
                   d="M14 5c1.5 1 2.4 2.4 2.4 4s-.9 3-2.4 4"
-                  stroke="var(--primary)"
+                  stroke="var(--accent-text)"
                   strokeWidth="2.2"
                   fill="none"
                   strokeLinecap="round"
@@ -428,7 +433,7 @@ export function App() {
                   y1="4"
                   x2="18"
                   y2="14"
-                  stroke="#94a3b8"
+                  stroke="var(--text-muted)"
                   strokeWidth="2.2"
                   strokeLinecap="round"
                 />

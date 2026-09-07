@@ -38,10 +38,10 @@ export interface GameSigner {
   connect: () => void;
   disconnect: () => void;
   signTransaction:
-  | (<T extends Transaction | VersionedTransaction>(
-    transaction: T,
-  ) => Promise<T>)
-  | undefined;
+    | (<T extends Transaction | VersionedTransaction>(
+        transaction: T,
+      ) => Promise<T>)
+    | undefined;
   /**
    * Signs, sends and confirms in one step, returning the base58 signature.
    * Set only for the Privy embedded wallet, where Privy's own send path is
@@ -50,9 +50,7 @@ export interface GameSigner {
    * External wallets and the dev burner leave it unset and go through
    * Anchor's sign-and-broadcast, which pays fees from the user's SOL.
    */
-  sendTransaction?:
-    | ((transaction: Transaction) => Promise<string>)
-    | undefined;
+  sendTransaction?: ((transaction: Transaction) => Promise<string>) | undefined;
 }
 
 /**
@@ -135,8 +133,8 @@ export function WalletLayer({
         {...(clientId ? { clientId } : {})}
         config={{
           appearance: {
-            theme: "dark",
-            accentColor: "#ffd720",
+            theme: "#0E1B2B",
+            accentColor: "#B6FF3B",
             // Privy defaults to ethereum-only, which connects Phantom's EVM side.
             // walletChainType: "solana-only",
           },
@@ -287,9 +285,9 @@ function usePrivySigner(): GameSigner {
       const bytes = versioned
         ? (transaction as VersionedTransaction).serialize()
         : (transaction as Transaction).serialize({
-          requireAllSignatures: false,
-          verifySignatures: false,
-        });
+            requireAllSignatures: false,
+            verifySignatures: false,
+          });
       const { signedTransaction } = await privySign({
         transaction: bytes,
         wallet,
@@ -328,11 +326,11 @@ function useStandardSigner(): GameSigner {
 
   const adapter = wallet?.adapter as unknown as
     | {
-      signTransaction?: <T extends Transaction | VersionedTransaction>(
-        tx: T,
-      ) => Promise<T>;
-      disconnect?: () => Promise<void>;
-    }
+        signTransaction?: <T extends Transaction | VersionedTransaction>(
+          tx: T,
+        ) => Promise<T>;
+        disconnect?: () => Promise<void>;
+      }
     | undefined;
 
   return {
