@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatAtomic, parseAtomic } from "../lib/money.js";
+import { formatAtomic2, parseAtomic } from "../lib/money.js";
 import type { PositionLike } from "../engine.js";
 import { stakeBarModel } from "./stakeBar.js";
 
@@ -23,8 +23,8 @@ describe("stakeBarModel — editing state", () => {
     const model = stakeBarModel("0.01", [], null, "mine", DECIMALS);
     expect(model.state).toBe("editing");
     expect(model.tilesSelected).toBe("0");
-    expect(model.entriesPerTile).toBe(formatAtomic(parseAtomic("0.01", DECIMALS)!, DECIMALS));
-    expect(model.entriesIn).toBe(formatAtomic(0n, DECIMALS));
+    expect(model.entriesPerTile).toBe(formatAtomic2(parseAtomic("0.01", DECIMALS)!, DECIMALS));
+    expect(model.entriesIn).toBe(formatAtomic2(0n, DECIMALS));
     expect(model.label).toBe("DEPLOY");
   });
 
@@ -32,8 +32,8 @@ describe("stakeBarModel — editing state", () => {
     const model = stakeBarModel("0.5", [3], null, "mine", DECIMALS);
     expect(model.state).toBe("editing");
     expect(model.tilesSelected).toBe("1");
-    expect(model.entriesPerTile).toBe("0.500000");
-    expect(model.entriesIn).toBe(formatAtomic(panelTotal("0.5", 1), DECIMALS));
+    expect(model.entriesPerTile).toBe("0.50");
+    expect(model.entriesIn).toBe(formatAtomic2(panelTotal("0.5", 1), DECIMALS));
   });
 
   it("shows many tiles selected", () => {
@@ -41,7 +41,7 @@ describe("stakeBarModel — editing state", () => {
     const model = stakeBarModel("2", tiles, null, "mine", DECIMALS);
     expect(model.state).toBe("editing");
     expect(model.tilesSelected).toBe("10");
-    expect(model.entriesIn).toBe(formatAtomic(panelTotal("2", 10), DECIMALS));
+    expect(model.entriesIn).toBe(formatAtomic2(panelTotal("2", 10), DECIMALS));
   });
 
   it("matches the panel's existing cost computation exactly", () => {
@@ -49,7 +49,7 @@ describe("stakeBarModel — editing state", () => {
     const tiles = [1, 2, 3, 4, 5];
     const model = stakeBarModel(stakeText, tiles, null, "mine", DECIMALS);
     expect(model.entriesIn).toBe(
-      formatAtomic(panelTotal(stakeText, tiles.length), DECIMALS),
+      formatAtomic2(panelTotal(stakeText, tiles.length), DECIMALS),
     );
   });
 
@@ -68,8 +68,8 @@ describe("stakeBarModel — placed state", () => {
     const model = stakeBarModel("9", [], active, "mine", DECIMALS);
     expect(model.state).toBe("placed");
     expect(model.tilesSelected).toBe("3");
-    expect(model.entriesPerTile).toBe(formatAtomic(2_500_000n, DECIMALS));
-    expect(model.entriesIn).toBe(formatAtomic(7_500_000n, DECIMALS));
+    expect(model.entriesPerTile).toBe(formatAtomic2(2_500_000n, DECIMALS));
+    expect(model.entriesIn).toBe(formatAtomic2(7_500_000n, DECIMALS));
     expect(model.label).toBe("TOP UP");
   });
 
@@ -77,7 +77,7 @@ describe("stakeBarModel — placed state", () => {
     const active = position({ tiles: 1n, stakePerTile: 1_000_000n });
     const model = stakeBarModel("999", [1, 2, 3, 4], active, "mine", DECIMALS);
     expect(model.tilesSelected).toBe("1");
-    expect(model.entriesIn).toBe(formatAtomic(1_000_000n, DECIMALS));
+    expect(model.entriesIn).toBe(formatAtomic2(1_000_000n, DECIMALS));
   });
 });
 

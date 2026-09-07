@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatAddress,
   formatAtomic,
+  formatAtomic2,
   parseAtomic,
   previewBuy,
   withdrawable,
@@ -16,6 +17,13 @@ describe("atomic formatting", () => {
     expect(formatAtomic(0n, 6)).toBe("0.000000");
     expect(formatAtomic(123n, 0)).toBe("123");
     expect(formatAtomic(-2_500_000n, 6)).toBe("-2.500000");
+  });
+
+  it("truncates to two decimals for display, never rounding", () => {
+    expect(formatAtomic2(1_999_970_000n, 6)).toBe("1999.97");
+    expect(formatAtomic2(15_000n, 6)).toBe("0.01");
+    expect(formatAtomic2(0n, 6)).toBe("0.00");
+    expect(formatAtomic2(-1_999_970_000n, 6)).toBe("-1999.97");
   });
 
   it("parses decimal text into atomic units exactly", () => {

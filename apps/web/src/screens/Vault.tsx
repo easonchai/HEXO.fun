@@ -12,6 +12,7 @@ import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
 import {
   formatAtomic,
+  formatAtomic2,
   parseAtomic,
   previewWithdraw,
   withdrawable,
@@ -51,7 +52,10 @@ export function Vault(props: VaultScreenProps) {
     onDone,
   } = props;
   const signer: TxSigner = { publicKey: owner, sendTransaction };
+  // `fmt` keeps full mint precision: the two MAX pills below write it into an
+  // input. Everything else on this screen is a display and uses `fmt2`.
   const fmt = (value: bigint) => formatAtomic(value, DECIMALS);
+  const fmt2 = (value: bigint) => formatAtomic2(value, DECIMALS);
 
   const [amountText, setAmountText] = useState("");
   const [withdrawText, setWithdrawText] = useState("");
@@ -104,7 +108,7 @@ export function Vault(props: VaultScreenProps) {
     if (result.ok) {
       setNote({
         tone: "ok",
-        text: `faucet sent ${fmt(BigInt(result.data.amount))} ${SYMBOL}`,
+        text: `faucet sent ${fmt2(BigInt(result.data.amount))} ${SYMBOL}`,
       });
       onDone();
     } else if ("retryAfterSeconds" in result) {
@@ -137,11 +141,11 @@ export function Vault(props: VaultScreenProps) {
     <div className="screen-vault" data-testid="vault-screen">
       <PanelCard wide title="YOUR VAULT">
         <StatGrid>
-          <Stat label="Principal" value={`${fmt(principal)} ${SYMBOL}`} />
-          <Stat label="Entries" value={fmt(entries)} />
+          <Stat label="Principal" value={`${fmt2(principal)} ${SYMBOL}`} />
+          <Stat label="Tickets" value={fmt2(entries)} />
           <Stat
             label="Withdrawable now"
-            value={`${fmt(matched)} ${SYMBOL}`}
+            value={`${fmt2(matched)} ${SYMBOL}`}
             testid="withdrawable-now"
           />
           <Stat
@@ -161,12 +165,12 @@ export function Vault(props: VaultScreenProps) {
         title="DEPOSIT"
         aside={
           <span className="dual-line-inline">
-            wallet {SYMBOL} {fmt(walletBalance)}
+            wallet {SYMBOL} {fmt2(walletBalance)}
           </span>
         }
       >
         <p className="screen-copy">
-          A deposit credits equal Principal and Entries. Entries pay for
+          A deposit credits equal Principal and Tickets. Tickets pay for
           positions on the board and decide your odds in the draw; Principal is
           never at risk.
         </p>
@@ -245,7 +249,7 @@ export function Vault(props: VaultScreenProps) {
             </div>
           ) : null}
           <div className="panel-note">
-            Minimum deposit {fmt(pool.minDeposit)} {SYMBOL}.
+            Minimum deposit {fmt2(pool.minDeposit)} {SYMBOL}.
           </div>
         </div>
         <button
@@ -269,12 +273,12 @@ export function Vault(props: VaultScreenProps) {
         wide
         title="WITHDRAW"
         aside={
-          <span className="dual-line-inline">withdrawable {fmt(matched)}</span>
+          <span className="dual-line-inline">withdrawable {fmt2(matched)}</span>
         }
       >
         <p className="screen-copy">
-          A withdrawal takes the same amount off Principal and Entries and pays
-          out {SYMBOL}. You can withdraw min(Principal, Entries) — Entries
+          A withdrawal takes the same amount off Principal and Tickets and pays
+          out {SYMBOL}. You can withdraw min(Principal, Tickets) — Tickets
           staked in an open round lower it until that round settles.
         </p>
         <div className="vault-form">
@@ -309,13 +313,13 @@ export function Vault(props: VaultScreenProps) {
           {withdrawalPreview ? (
             <div className="dual-line" data-testid="withdraw-preview">
               <span>
-                before Principal {fmt(principal)} / Entries {fmt(entries)} /
-                withdrawable {fmt(withdrawalPreview.withdrawableBefore)}
+                before Principal {fmt2(principal)} / Tickets {fmt2(entries)} /
+                withdrawable {fmt2(withdrawalPreview.withdrawableBefore)}
               </span>
               <span className="dual-accent">
-                after Principal {fmt(withdrawalPreview.principalAfter)} / Entries{" "}
-                {fmt(withdrawalPreview.entriesAfter)} / withdrawable{" "}
-                {fmt(withdrawalPreview.withdrawableAfter)}
+                after Principal {fmt2(withdrawalPreview.principalAfter)} / Tickets{" "}
+                {fmt2(withdrawalPreview.entriesAfter)} / withdrawable{" "}
+                {fmt2(withdrawalPreview.withdrawableAfter)}
               </span>
             </div>
           ) : null}

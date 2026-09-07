@@ -163,8 +163,6 @@ export interface ChainState {
   position: PositionRow | null;
   /** The wallet's own hexUSDC balance, atomic units. */
   walletBalance: bigint;
-  /** The jackpot vault's hexUSDC balance: the hexpot under the board. */
-  hexpot: bigint;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -176,7 +174,6 @@ const POLL_MS = 10_000;
 /** What the last pool read told us the other addresses are. */
 interface ReadPlan {
   mint: string;
-  jackpotVault: PublicKey;
   roundId: bigint;
 }
 
@@ -186,7 +183,6 @@ const EMPTY: Omit<ChainState, "refresh"> = {
   round: null,
   position: null,
   walletBalance: 0n,
-  hexpot: 0n,
   loading: false,
   error: null,
 };
@@ -227,7 +223,6 @@ export function useChainState(
           ["round", round],
           ["position", owner && round ? positionAddress(round, owner) : null],
           ["wallet", owner && known ? acceptedAta(new PublicKey(known.mint), owner) : null],
-          ["jackpot", known?.jackpotVault ?? null],
         ];
         const keys = wanted.filter(
           (entry): entry is [string, PublicKey] => entry[1] !== null,
@@ -252,7 +247,6 @@ export function useChainState(
         }
         const next: ReadPlan = {
           mint: pool.acceptedMint.toBase58(),
-          jackpotVault: pool.jackpotVault,
           roundId: pool.openRoundId > 0n ? pool.openRoundId : (known?.roundId ?? 0n),
         };
         const stale =
@@ -270,7 +264,6 @@ export function useChainState(
           round: decodeAccount<RoundRow>(program, "round", infoOf("round")),
           position: decodeAccount<PositionRow>(program, "position", infoOf("position")),
           walletBalance: decodeTokenAmount(infoOf("wallet")),
-          hexpot: decodeTokenAmount(infoOf("jackpot")),
           loading: false,
           error: null,
         });

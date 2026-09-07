@@ -84,7 +84,7 @@ async function assertLayoutFacts(page: Page): Promise<void> {
   for (const testId of EDGE_TILE_TESTIDS) {
     await assertFullyInViewport(page, testId);
   }
-  await assertFullyInViewport(page, "hexpot-ticker");
+  await assertFullyInViewport(page, "round-pot-pill");
 }
 
 test.describe("phone layout: MINE tab, no wallet, no backend", () => {

@@ -26,10 +26,9 @@ import {
   buildFlyTokens,
   computeGeo,
   genPath,
-  lastFlyArrivalMs,
   type LaserPath,
 } from "./arena/geo.js";
-import { formatAtomic } from "./lib/money.js";
+import { formatAtomic2 } from "./lib/money.js";
 import { sfx } from "./sfx.js";
 import type { PositionRow, RoundRow } from "./read.js";
 
@@ -68,9 +67,6 @@ export interface EngineOutput {
   banner: string | null;
   takeover: Takeover | null;
   dismissTakeover: () => void;
-  /** Jackpot vault balance in hexUSDC + pulse flag for the odometer. */
-  hexpot: bigint;
-  hexpotPulse: boolean;
   /** True for 0.85 s when a freshly opened Round's core is fading in. */
   coreEnter: boolean;
   /** Round pot in Entries, for the stake panel. */
@@ -90,8 +86,6 @@ export interface EngineInput {
   clockNow: bigint | null;
   /** Live rows only — history from `GET /feed` is never held, so it bypasses the engine. */
   feed: FeedRow[];
-  /** Jackpot vault balance, atomic hexUSDC. */
-  hexpot: bigint;
 }
 
 export function useRoundEngine(input: EngineInput): EngineOutput {
@@ -102,14 +96,12 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     closeBuffer: buffer,
     clockNow,
     feed,
-    hexpot,
   } = input;
 
   const [selected, setSelected] = useState<number[]>([]);
   const [reveal, setRevealState] = useState<RevealState | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [takeover, setTakeover] = useState<Takeover | null>(null);
-  const [hexpotPulse, setHexpotPulse] = useState(false);
   const [lastWin, setLastWin] = useState<{ tile: number; kind: string } | null>(
     null,
   );
@@ -178,7 +170,6 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
         if (index < flyTokens.length - 1)
           flyMap[dotKey] = flyTokens[index]!.delay;
       });
-      const lastArrival = lastFlyArrivalMs(flyTokens);
 
       // The laser fires now, in step with the launch and dot-tick sounds; the
       // tile is only announced (boom, banner, fly tokens) once it lands at
@@ -205,15 +196,10 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
 
       for (const token of flyTokens) {
         later(
-          () => {
-            sfx("feed");
-            setHexpotPulse(true);
-            later(() => setHexpotPulse(false), 260);
-          },
+          () => sfx("feed"),
           Math.round((token.delay + 0.68) * 1000) + 900,
         );
       }
-      later(() => setHexpotPulse(false), lastArrival + 980);
 
       if (won) {
         const reward = expectedReward(target, own!);
@@ -221,7 +207,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
           sfx("win");
           setTakeover({
             title: "YOU WON",
-            amount: `+${formatAtomic(reward, 6)}`,
+            amount: `+${formatAtomic2(reward, 6)}`,
             tileText: `Tile ${displayTile(tileIndex)}`,
           });
         }, 1550);
@@ -311,16 +297,6 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     later(() => setCoreEnter(false), 850);
   }, [round, later]);
 
-  // --- Hexpot pulse on live vault movement (funding, payout, rollover) --------
-  const hexpotRef = useRef(hexpot);
-  useEffect(() => {
-    if (hexpotRef.current !== hexpot) {
-      hexpotRef.current = hexpot;
-      setHexpotPulse(true);
-      later(() => setHexpotPulse(false), 260);
-    }
-  }, [hexpot, later]);
-
   // --- Tick sound at 3, 2, 1 seconds, driven by the chain clock ---------------
   const tickedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -359,8 +335,6 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     banner,
     takeover,
     dismissTakeover: () => setTakeover(null),
-    hexpot,
-    hexpotPulse,
     coreEnter,
     pot: round?.pot ?? 0n,
     lastWin,

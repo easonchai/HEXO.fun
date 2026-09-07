@@ -2,7 +2,7 @@
  * Phone stake bar view model. Pure derivation so the bar's numbers and copy
  * cannot drift from the control panel's own inputs and cost computation
  * (`stake * tiles`, the same formula `ControlPanel` uses for "PER ROUND" /
- * "ENTRIES IN").
+ * "TICKETS IN").
  *
  * Phase copy for the closed state mirrors the deploy button in
  * `ControlPanel.tsx`, but those strings are inline JSX literals, not
@@ -14,7 +14,7 @@
  * the deploy button real awaiting copy too, or accept the two surfaces
  * differ here.
  */
-import { formatAtomic, parseAtomic } from "../lib/money.js";
+import { formatAtomic, formatAtomic2, parseAtomic } from "../lib/money.js";
 import type { Phase, PositionLike } from "../engine.js";
 
 export type StakeBarState = "editing" | "placed" | "closed";
@@ -50,7 +50,7 @@ export function stakeBarModel(
   phase: Phase,
   decimals: number,
 ): StakeBarModel {
-  const fmt = (value: bigint): string => formatAtomic(value, decimals);
+  const fmt = (value: bigint): string => formatAtomic2(value, decimals);
   const fmtCount = (count: number): string => formatAtomic(BigInt(count), 0);
 
   const editingNumbers = (): Omit<StakeBarModel, "state" | "label"> => {

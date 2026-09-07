@@ -43,7 +43,7 @@ export function Leaderboard({ owner }: LeaderboardScreenProps) {
             <div className="board-row board-head">
               <span>#</span>
               <span>player</span>
-              <span>entries</span>
+              <span>tickets</span>
               <span>weight</span>
               <span>odds</span>
             </div>

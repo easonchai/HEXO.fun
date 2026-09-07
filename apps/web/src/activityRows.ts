@@ -2,17 +2,14 @@
 import type { EventDto } from "./api.js";
 import { eventKey } from "./chain.js";
 import { displayTile, type FeedRow } from "./engine.js";
-import { formatAddress } from "./lib/money.js";
+import { formatAddress, formatAtomic2 } from "./lib/money.js";
 import { popcount } from "./lib/protocol.js";
 import type { LiveEvent } from "./useProgramEvents.js";
 
-/** Atomic string (6dp) → compact decimal text without floats. */
+/** Atomic string (6dp) → truncated two-decimal text without floats. */
 export function atomicShort(text: string): string {
   const clean = text.replace(/[^0-9]/g, "") || "0";
-  const padded = clean.padStart(7, "0");
-  const whole = padded.slice(0, padded.length - 6).replace(/^0+(?=\d)/, "");
-  const frac = padded.slice(padded.length - 6).replace(/0+$/, "");
-  return frac ? `${whole}.${frac}` : whole;
+  return formatAtomic2(BigInt(clean), 6);
 }
 
 /** Program fields arrive snake_case from the API and camelCase from a log. */
@@ -73,7 +70,7 @@ function toRow(
       return {
         key,
         who,
-        action: `−${atomicShort(field(data, "total"))} Entries`,
+        action: `−${atomicShort(field(data, "total"))} Tickets`,
         tileLabel: `${tiles} tiles`,
       };
     }
@@ -83,7 +80,7 @@ function toRow(
       return {
         key,
         who,
-        action: `+${atomicShort(reward)} Entries`,
+        action: `+${atomicShort(reward)} Tickets`,
         tileLabel: "round reward",
         roundId: field(data, "roundId", "round_id"),
       };
@@ -111,7 +108,7 @@ function toRow(
       return {
         key,
         who: "pool",
-        action: `${atomicShort(field(data, "jackpotAmount", "jackpot_amount"))} USDC stays in the hexpot`,
+        action: `${atomicShort(field(data, "jackpotAmount", "jackpot_amount"))} USDC stays in the jackpot`,
         tileLabel: "rollover",
       };
     default:

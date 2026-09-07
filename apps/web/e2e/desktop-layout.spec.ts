@@ -27,7 +27,7 @@ test("board scale and hexpot placement are unchanged above 960px", async ({ page
   // Desktop keeps the hexpot pill absolutely positioned just under the
   // hexagon's bottom edge (`bottom: -40px`, ~5px gap once scaled), not
   // pushed further down into flow the way the mobile override places it.
-  const hexpotBox = await page.getByTestId("hexpot-ticker").boundingBox();
+  const hexpotBox = await page.getByTestId("round-pot-pill").boundingBox();
   expect(hexpotBox).not.toBeNull();
   const gap = hexpotBox!.y - (stageBox!.y + stageBox!.height);
   expect(gap).toBeGreaterThanOrEqual(0);

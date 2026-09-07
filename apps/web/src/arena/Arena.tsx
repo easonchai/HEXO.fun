@@ -1,13 +1,14 @@
 /**
  * Hexagon arena — React port of the "HEX Voltage Refined" prototype stage:
  * countdown, hexagon outline, dot lattice, cog core, laser reveal, 36 tiles,
- * victory shockwaves, hexpot odometer ticker, and the win takeover modal.
+ * victory shockwaves, round pot pill, and the win takeover modal.
  */
 import { useEffect, useMemo, useRef } from "react";
 
 import { computeGeo } from "./geo.js";
 import { Textile } from "./Textile.js";
 import { timerText } from "../engine.js";
+import { formatAtomic2 } from "../lib/money.js";
 import type { EngineOutput } from "../useRoundEngine.js";
 
 const GEO = computeGeo();
@@ -89,78 +90,32 @@ export function LogoWordmark({
   );
 }
 
-/** Atomic (6dp) → ticker tenths, capped at the odometer's 999.9 capacity. */
-export const hexpotTenths = (atomic: bigint): number => {
-  const tenths = atomic / 100_000n;
-  return Number(tenths > 9999n ? 9999n : tenths);
-};
-
-const ODOMETER: number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-
-function Reel({ digit }: { digit: number }) {
+export function RoundPotPill({ value }: { value: bigint }) {
   return (
-    <span className="hp-reel">
-      <span
-        className="hp-strip"
-        style={{ transform: `translateY(${-digit * 22}px)` }}
-      >
-        {ODOMETER.map((value) => (
-          <span key={value} className="hp-digit">
-            {value}
-          </span>
-        ))}
-      </span>
-    </span>
-  );
-}
-
-export function HexpotTicker({
-  value,
-  pulse,
-  symbol,
-}: {
-  value: bigint;
-  pulse: boolean;
-  symbol: string;
-}) {
-  const tenths = hexpotTenths(value);
-  const hundreds = Math.floor(tenths / 1000) % 10;
-  const tens = Math.floor(tenths / 100) % 10;
-  const ones = Math.floor(tenths / 10) % 10;
-  const tenth = tenths % 10;
-  return (
-    <div className="hexpot" data-testid="hexpot-ticker" data-value={tenths}>
+    <div
+      className="hexpot"
+      data-testid="round-pot-pill"
+      data-value={value.toString()}
+    >
       <div className="hexpot-info-wrap">
-        <span className="hexpot-label">HEXPOT</span>
+        <span className="hexpot-label">ROUND POT</span>
         <span className="info-bubble-icon">i</span>
         <div className="hexpot-tooltip">
-          <div className="hexpot-tooltip-title">HEXPOT</div>
+          <div className="hexpot-tooltip-title">ROUND POT</div>
           <div>
-            The pool's prize vault: this week's simulated yield plus anything
-            held over from earlier draws. The weekly draw pays it to one winner.
-            Not your Principal.
+            Tickets everyone has staked on this round. Winning tiles split it;
+            the losing share goes to the House.
           </div>
         </div>
       </div>
-      <span
-        className="hp-value"
-        style={{ transform: pulse ? "scale(1.18)" : "scale(1)" }}
-      >
-        <Reel digit={hundreds} />
-        <Reel digit={tens} />
-        <Reel digit={ones} />
-        <span className="hp-sep">.</span>
-        <Reel digit={tenth} />
-      </span>
-      <span className="hexpot-symbol">{symbol}</span>
+      <span className="hp-value">{formatAtomic2(value, 6)}</span>
+      <span className="hexpot-symbol">Tickets</span>
     </div>
   );
 }
 
 export interface ArenaProps {
   engine: EngineOutput;
-  /** Unit under the hexpot odometer: the pool's accepted asset. */
-  symbol: string;
   canPick: boolean;
   onToggleTile: (displayNumber: number) => void;
   /** True when the backend status pill is amber: the operator isn't ticking. */
@@ -169,7 +124,6 @@ export interface ArenaProps {
 
 export function Arena({
   engine,
-  symbol,
   canPick,
   onToggleTile,
   operatorStale = false,
@@ -180,8 +134,7 @@ export function Arena({
     selected,
     reveal,
     banner,
-    hexpot,
-    hexpotPulse,
+    pot,
     coreEnter,
     takeover,
     dismissTakeover,
@@ -425,30 +378,9 @@ export function Arena({
               />
             </>
           ) : null}
-
-          {/* Fly tokens into the hexpot */}
-          {reveal
-            ? reveal.flyTokens.map((token, index) => (
-                <div
-                  key={index}
-                  className="fly-symbol-token"
-                  style={{
-                    offsetPath: `path("${token.pathD}")`,
-                    animationDelay: `${token.delay}s`,
-                  }}
-                >
-                  <div
-                    className="fly-symbol-art"
-                    style={{ animationDelay: `${token.delay}s` }}
-                  >
-                    <Textile sym={token.sym} />
-                  </div>
-                </div>
-              ))
-            : null}
         </div>
 
-        <HexpotTicker value={hexpot} pulse={hexpotPulse} symbol={symbol} />
+        <RoundPotPill value={pot} />
       </div>
 
       {/* Round win takeover */}

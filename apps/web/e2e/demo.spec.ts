@@ -98,7 +98,7 @@ test("faucet, deposit, play a round, settle, withdraw the matched amount", async
   await page.getByTestId("tab-mine").click();
   const entriesBefore = parseAfterLabel(
     await page.getByTestId("wallet-entries").innerText(),
-    "Entries",
+    "Tickets",
   );
   await page.getByTestId("stake-input").fill("1");
   await selectTile(page, 0);
@@ -124,19 +124,21 @@ test("faucet, deposit, play a round, settle, withdraw the matched amount", async
   // and withdrawable shows min(Principal, Entries): product-requirements.md §3.1.
   const entriesAfter = parseAfterLabel(
     await page.getByTestId("wallet-entries").innerText(),
-    "Entries",
+    "Tickets",
   );
   expect(entriesAfter).not.toBe(entriesBefore);
 
-  const balances = await page.getByTestId("vault-balances").innerText();
-  const principal = parseAfterLabel(balances, "Principal");
-  const entries = parseAfterLabel(balances, "Entries");
+  await page.getByTestId("tab-vault").click();
+  const vaultStats = await page.getByTestId("vault-screen").innerText();
+  const principal = parseAfterLabel(vaultStats, "Principal");
+  const entries = parseAfterLabel(vaultStats, "Tickets");
   const expectedWithdrawable = Math.min(principal, entries);
 
-  await page.getByTestId("tab-vault").click();
-  const withdrawAside = page.locator(
-    '[data-testid="vault-screen"] .dual-line-inline',
-  );
+  // DEPOSIT and WITHDRAW cards both use `.dual-line-inline` for their aside;
+  // WITHDRAW's ("withdrawable ...") renders second.
+  const withdrawAside = page
+    .locator('[data-testid="vault-screen"] .dual-line-inline')
+    .last();
   const shownWithdrawable = parseAfterLabel(
     await withdrawAside.innerText(),
     "withdrawable",

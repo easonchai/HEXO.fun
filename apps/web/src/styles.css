@@ -292,32 +292,6 @@ input::placeholder {
   }
 }
 
-@keyframes flyAlongArc {
-  from {
-    offset-distance: 0%;
-    opacity: 1;
-  }
-  to {
-    offset-distance: 100%;
-    opacity: 1;
-  }
-}
-
-@keyframes flyTokenDraw {
-  0% {
-    transform: translate(-10px, -10px) scale(1.15);
-    opacity: 1;
-  }
-  55% {
-    transform: translate(-10px, -10px) scale(1.25);
-    opacity: 1;
-  }
-  100% {
-    transform: translate(-10px, -10px) scale(0.35);
-    opacity: 0;
-  }
-}
-
 @keyframes spinSlow {
   from {
     transform: rotate(0deg);
@@ -1040,27 +1014,7 @@ input::placeholder {
   animation: shock 1.3s 0.12s ease-out forwards;
 }
 
-/* fly tokens */
-
-.fly-symbol-token {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 20px;
-  height: 20px;
-  pointer-events: none;
-  z-index: 35;
-  opacity: 0;
-  animation: flyAlongArc 0.68s cubic-bezier(0.4, 0.05, 0.35, 1) forwards;
-}
-
-.fly-symbol-art {
-  transform: translate(-10px, -10px);
-  filter: drop-shadow(0 0 8px var(--glow));
-  animation: flyTokenDraw 0.68s ease-out forwards;
-}
-
-/* hexpot pill */
+/* round pot pill */
 
 .hexpot {
   position: absolute;
@@ -1191,32 +1145,6 @@ input::placeholder {
   align-items: center;
   transform-origin: center center;
   transition: transform 0.38s cubic-bezier(0.2, 0.9, 0.25, 1.15);
-}
-
-.hp-reel {
-  display: inline-block;
-  height: 22px;
-  width: 12px;
-  overflow: hidden;
-  vertical-align: top;
-  text-align: center;
-  transition: width 0.35s ease;
-}
-
-.hp-strip {
-  display: block;
-  transition: transform 0.7s cubic-bezier(0.2, 0.75, 0.25, 1);
-}
-
-.hp-digit {
-  display: block;
-  height: 22px;
-}
-
-.hp-sep {
-  display: inline-block;
-  height: 22px;
-  vertical-align: top;
 }
 
 .hexpot-symbol {
@@ -1538,26 +1466,6 @@ input::placeholder {
   margin-left: 4px;
 }
 
-.cost-badge {
-  background: var(--primary);
-  color: var(--on-primary);
-  font-family: "Roboto Mono", monospace;
-  font-weight: 700;
-  font-size: 12px;
-  padding: 2px 7px;
-  border-radius: 4px;
-  letter-spacing: 0.02em;
-  line-height: 1.2;
-  display: inline-flex;
-  align-items: center;
-}
-
-.cost-badge-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .cost-row.deployed {
   border-top: 1px solid var(--divider);
   padding-top: 4px;
@@ -1722,28 +1630,6 @@ input::placeholder {
   font-size: 10.5px;
   color: var(--accent-text);
   font-weight: 600;
-}
-
-/* vault quick actions */
-
-.vault-row {
-  border-top: 1px solid var(--divider);
-  padding-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.vault-balances {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10.5px;
-  color: var(--text-secondary);
-}
-
-.vault-actions {
-  display: flex;
-  gap: 7px;
 }
 
 /* tier 3 — telemetry */

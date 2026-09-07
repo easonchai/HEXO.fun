@@ -21,6 +21,23 @@ export function formatAtomic(value: bigint, decimals: number): string {
   return `${negative ? "-" : ""}${whole}.${frac}`;
 }
 
+/**
+ * Render atomic units truncated (never rounded) to two decimal places, for
+ * display. `1999970000` @ 6dp -> "1999.97", never "1999.98". Inputs, and
+ * anything the app writes into one, use `formatAtomic` at full precision
+ * instead — truncating those would make the parsed value lossy.
+ */
+export function formatAtomic2(value: bigint, decimals: number): string {
+  const full = formatAtomic(value, decimals);
+  const negative = full.startsWith("-");
+  const unsigned = negative ? full.slice(1) : full;
+  const dot = unsigned.indexOf(".");
+  const whole = dot === -1 ? unsigned : unsigned.slice(0, dot);
+  const frac = dot === -1 ? "" : unsigned.slice(dot + 1);
+  const twoPlaces = `${frac}00`.slice(0, 2);
+  return `${negative ? "-" : ""}${whole}.${twoPlaces}`;
+}
+
 /** Parse user-entered decimal text into atomic units. Null when invalid. */
 export function parseAtomic(text: string, decimals: number): bigint | null {
   if (!Number.isInteger(decimals) || decimals < 0) {

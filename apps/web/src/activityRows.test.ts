@@ -37,7 +37,7 @@ describe("activity feed row mappers", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.tileLabel).toBe("deposit");
     expect(rows[0]?.who).toBe("you");
-    expect(rows[0]?.action).toBe("+1.5 USDC");
+    expect(rows[0]?.action).toBe("+1.50 USDC");
   });
 
   it("maps a Withdrawn history row to a feed row", () => {
@@ -62,7 +62,7 @@ describe("activity feed row mappers", () => {
       OWNER,
     );
     expect(rows[0]?.tileLabel).toBe("3 tiles");
-    expect(rows[0]?.action).toBe("−3 Entries");
+    expect(rows[0]?.action).toBe("−3.00 Tickets");
   });
 
   it("reads the same events off a live log, camelCased by Anchor", () => {
@@ -93,7 +93,7 @@ describe("activity feed row mappers", () => {
     expect(rows).toHaveLength(sent.length);
     expect(rows.map((row) => row.tileLabel)).toContain("rollover");
     expect(rows.find((row) => row.tileLabel === "rollover")?.action).toBe(
-      "12 USDC stays in the hexpot",
+      "12.00 USDC stays in the jackpot",
     );
   });
 
@@ -137,14 +137,14 @@ describe("isRowVisible (activity feed hold)", () => {
   const rewardRow: FeedRow = {
     key: "p1",
     who: "you",
-    action: "+1 Entries",
+    action: "+1 Tickets",
     tileLabel: "round reward",
     roundId: "7",
   };
   const boughtRow: FeedRow = {
     key: "b1",
     who: "you",
-    action: "−1 Entries",
+    action: "−1 Tickets",
     tileLabel: "3 tiles",
   };
 

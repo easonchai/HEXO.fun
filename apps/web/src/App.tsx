@@ -12,7 +12,7 @@ import { About } from "./screens/About.js";
 import { Leaderboard } from "./screens/Leaderboard.js";
 import { Vault } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
-import { buyPosition, deposit, settlePosition } from "./actions.js";
+import { buyPosition, settlePosition } from "./actions.js";
 import { apiBaseUrl, fetchFeed, fetchStatus } from "./api.js";
 import { type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
@@ -26,7 +26,12 @@ import {
   type FeedRow,
   type RememberedBoard,
 } from "./engine.js";
-import { formatAtomic, parseAtomic, withdrawable } from "./lib/money.js";
+import {
+  formatAtomic,
+  formatAtomic2,
+  parseAtomic,
+  withdrawable,
+} from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { useChainState } from "./read.js";
 import { useChainClock } from "./useChainClock.js";
@@ -56,13 +61,11 @@ export function App() {
   const [soundOn, setSoundOnState] = useState(isSoundOn());
   // The prototype ships dark-first ("Dark Gold Midnight"); light keeps the blue primary.
   const [theme, setTheme] = useState<"light" | "dark">("dark");
-  const [stakeText, setStakeText] = useState("0.01");
+  const [stakeText, setStakeText] = useState("1");
   const [autoRounds, setAutoRounds] = useState(0);
   const [addressCopied, setAddressCopied] = useState(false);
   const [deployBusy, setDeployBusy] = useState(false);
   const [deployNote, setDeployNote] = useState<string | null>(null);
-  const [depositBusy, setDepositBusy] = useState(false);
-  const [vaultNote, setVaultNote] = useState<string | null>(null);
   const [feedHistory, setFeedHistory] = useState<FeedRow[]>([]);
   // Phone bet drawer (spec.md "Drawer"): controlled here so the deploy
   // success path and the win takeover path can both close it.
@@ -135,7 +138,6 @@ export function App() {
     closeBuffer: pool?.closeBuffer ?? 0n,
     clockNow: now,
     feed: liveFeed,
-    hexpot: state.hexpot,
   });
 
   // `takeover` only ever fires for the Player's own Position (useRoundEngine
@@ -148,7 +150,7 @@ export function App() {
   const refresh = state.refresh;
   const principal = player?.principal ?? 0n;
   const entries = player?.entries ?? 0n;
-  const fmt = useCallback((value: bigint) => formatAtomic(value, DECIMALS), []);
+  const fmt = useCallback((value: bigint) => formatAtomic2(value, DECIMALS), []);
 
   // Header chip copies the full address; the truncated form is unusable for
   // funding. Clipboard needs a secure context, so fall back to a prompt.
@@ -200,7 +202,7 @@ export function App() {
   if (locked && openRound)
     problems.push(`position already placed in round #${openRound.roundId}`);
   if (spend > entries)
-    problems.push("not enough Entries — deposit to earn more");
+    problems.push("not enough Tickets — deposit to earn more");
 
   /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction was sent. */
   const deploy = useCallback(
@@ -226,7 +228,7 @@ export function App() {
         );
         const entriesAfter = entries - spendNow;
         setDeployNote(
-          `Entries in ${fmt(spendNow)} · Entries after ${fmt(entriesAfter)} · withdrawable after ${fmt(withdrawable(principal, entriesAfter))}`,
+          `Tickets in ${fmt(spendNow)} · Tickets after ${fmt(entriesAfter)} · withdrawable after ${fmt(withdrawable(principal, entriesAfter))}`,
         );
         lastDeployRef.current = { tiles: [...tiles], stake: stakeAmount };
         sfx("prime");
@@ -240,32 +242,6 @@ export function App() {
       }
     },
     [pool, openRound, txSigner, program, entries, principal, fmt, refresh],
-  );
-
-  const doDeposit = useCallback(
-    async (amount: bigint) => {
-      if (!pool || !txSigner || !program) {
-        setVaultNote("connect a wallet first");
-        return;
-      }
-      if (amount <= 0n) return;
-      setDepositBusy(true);
-      setVaultNote(null);
-      try {
-        sfx("click");
-        await deposit(program, txSigner, pool, amount);
-        setVaultNote(
-          `deposited ${fmt(amount)} ${SYMBOL} → +${fmt(amount)} Principal and Entries`,
-        );
-        sfx("feed");
-        refresh();
-      } catch (error) {
-        setVaultNote(error instanceof Error ? error.message : String(error));
-      } finally {
-        setDepositBusy(false);
-      }
-    },
-    [pool, txSigner, program, fmt, refresh],
   );
 
   // Auto-rounds: re-place the last board when a fresh round opens. The
@@ -334,7 +310,7 @@ export function App() {
   }, [round, position, publicKey]);
   const rewardHint = settleState
     ? settleState.reward > 0n
-      ? `round #${settleState.roundId}: you covered tile ${displayTile(settleState.winningTile)} — settle for +${fmt(settleState.reward)} Entries`
+      ? `round #${settleState.roundId}: you covered tile ${displayTile(settleState.winningTile)} — settle for +${fmt(settleState.reward)} Tickets`
       : `round #${settleState.roundId}: settle to close your position and get its rent back`
     : null;
 
@@ -347,7 +323,7 @@ export function App() {
       await settlePosition(program, txSigner, pool, settleState.roundId);
       setDeployNote(
         settleState.reward > 0n
-          ? `round reward settled: +${fmt(settleState.reward)} Entries`
+          ? `round reward settled: +${fmt(settleState.reward)} Tickets`
           : "position settled",
       );
       if (settleState.reward > 0n) sfx("win");
@@ -506,7 +482,6 @@ export function App() {
           <>
             <Arena
               engine={engine}
-              symbol={SYMBOL}
               canPick={canPick}
               operatorStale={status.stale}
               onToggleTile={(n) => {
@@ -522,9 +497,7 @@ export function App() {
               engine={engine}
               principal={principal}
               entries={entries}
-              walletBalance={state.walletBalance}
               decimals={DECIMALS}
-              symbol={SYMBOL}
               stakeText={stakeText}
               setStakeText={setStakeText}
               autoRounds={autoRounds}
@@ -541,9 +514,6 @@ export function App() {
               settleBusy={settleBusy}
               onSettle={() => void settle()}
               onDeploy={() => void deploy(engine.selected, stake)}
-              onDeposit={(amount) => void doDeposit(amount)}
-              depositBusy={depositBusy}
-              vaultNote={vaultNote}
             />
             <StakeBarButton
               stakeText={stakeText}
@@ -571,9 +541,7 @@ export function App() {
                 engine={engine}
                 principal={principal}
                 entries={entries}
-                walletBalance={state.walletBalance}
                 decimals={DECIMALS}
-                symbol={SYMBOL}
                 stakeText={stakeText}
                 setStakeText={setStakeText}
                 autoRounds={autoRounds}
@@ -597,9 +565,6 @@ export function App() {
                     if (placed) setDrawerOpen(false);
                   });
                 }}
-                onDeposit={(amount) => void doDeposit(amount)}
-                depositBusy={depositBusy}
-                vaultNote={vaultNote}
               />
             </BetDrawer>
           </>

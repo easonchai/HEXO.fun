@@ -10,22 +10,22 @@ export function About({ symbol }: { symbol: string }) {
       <PanelCard wide title="WHAT THIS IS" aside={<LogoCog size={22} />}>
         <p className="screen-copy">
           HexVault is a no-loss lottery prototype. You deposit {symbol} and the
-          pool credits you equal Principal and Entries. Principal is yours 1:1
-          against the deposit and is never at risk. Entries are lottery weight:
+          pool credits you equal Principal and Tickets. Principal is yours 1:1
+          against the deposit and is never at risk. Tickets are lottery weight:
           they decide your odds in the weekly draw, and you can risk them on
           the board against other depositors. The prize is the yield the pool
           earned during the week, simulated here at a published rate and
-          labelled as such. It sits in the hexpot under the board until the
-          draw pays it out.
+          labelled as such. The WEEKLY DRAW tab shows it until the draw pays
+          it out.
         </p>
         <HeadRow title="WHAT CAN GO WRONG" />
         <p className="screen-copy">
           Your balance is denominated in the accepted asset, so its issuer, peg
-          and liquidity risk flow straight through to you. Entries staked on the
+          and liquidity risk flow straight through to you. Tickets staked on the
           board can be lost to other players: a round pays only the positions
           covering the winning tile, pro rata, and a round nobody covered goes
-          to the House. Losing Entries lowers what you can withdraw until the
-          next week resets Entries to Principal. The pool has an authority key
+          to the House. Losing Tickets lowers what you can withdraw until the
+          next week resets Tickets to Principal. The pool has an authority key
           and depends on an off-chain operator and the ORAO VRF oracle, and this
           build runs on a local validator or devnet with test assets only.
         </p>

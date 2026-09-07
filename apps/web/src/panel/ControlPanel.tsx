@@ -1,13 +1,11 @@
 /**
  * Right control panel — port of the prototype's three tiers: amount/tile
- * config, cost summary + kinetic DEPLOY CTA, and round telemetry/feed. A
- * fourth tier adds the protocol's deposit surface in the same visual
- * language (the prototype predates custody wiring).
+ * config, cost summary + kinetic DEPLOY CTA, and round telemetry/feed.
  */
 import { useState } from "react";
 
 import { Textile } from "../arena/Textile.js";
-import { formatAtomic, parseAtomic, previewBuy } from "../lib/money.js";
+import { formatAtomic, formatAtomic2, parseAtomic, previewBuy } from "../lib/money.js";
 import type { EngineOutput } from "../useRoundEngine.js";
 import type { FeedRow } from "../engine.js";
 import { PanelCard } from "../ui.js";
@@ -20,10 +18,7 @@ export interface ControlPanelProps {
   principal: bigint;
   /** Player.entries, atomic units. */
   entries: bigint;
-  /** The wallet's own hexUSDC balance, atomic units. */
-  walletBalance: bigint;
   decimals: number;
-  symbol: string;
   stakeText: string;
   setStakeText: (value: string) => void;
   autoRounds: number;
@@ -40,9 +35,6 @@ export interface ControlPanelProps {
   settleBusy: boolean;
   onSettle: () => void;
   onDeploy: () => void;
-  onDeposit: (amount: bigint) => void;
-  depositBusy: boolean;
-  vaultNote: string | null;
 }
 
 export function ControlPanel(props: ControlPanelProps) {
@@ -50,9 +42,7 @@ export function ControlPanel(props: ControlPanelProps) {
     engine,
     principal,
     entries,
-    walletBalance,
     decimals,
-    symbol,
     stakeText,
     setStakeText,
     autoRounds,
@@ -69,21 +59,13 @@ export function ControlPanel(props: ControlPanelProps) {
     settleBusy,
     onSettle,
     onDeploy,
-    onDeposit,
-    depositBusy,
-    vaultNote,
   } = props;
 
   const tiles = engine.selected.length;
   const stake = parseAtomic(stakeText, decimals) ?? 0n;
   const perRound = stake * BigInt(Math.max(tiles, 0));
   const buyPreview = previewBuy(principal, entries, tiles, stake);
-  const fmt = (value: bigint) => formatAtomic(value, decimals);
-
-  // These are spans, not buttons, so `disabled` does nothing: gate the handler.
-  const depositClick = (amount: bigint) => (): void => {
-    if (!depositBusy) onDeposit(amount);
-  };
+  const fmt = (value: bigint) => formatAtomic2(value, decimals);
 
   const addAmount = (delta: number): void => {
     const current = stake;
@@ -180,13 +162,8 @@ export function ControlPanel(props: ControlPanelProps) {
           />
         </div>
 
-        <div className="dual-line">
-          <span data-testid="wallet-entries">Entries {fmt(entries)}</span>
-          <span className="dual-accent">
-            {tiles > 0 && stake > 0n
-              ? `${tiles} × ${fmt(stake)} Entries`
-              : "— Entries"}
-          </span>
+        <div className="dual-line" style={{ justifyContent: "flex-end" }}>
+          <span data-testid="wallet-entries">Tickets {fmt(entries)}</span>
         </div>
 
         <div className="quick-row">
@@ -286,25 +263,16 @@ export function ControlPanel(props: ControlPanelProps) {
           <span className="row-label">PER ROUND</span>
           <div>
             <span className="cost-value">{fmt(perRound)}</span>
-            <span className="cost-unit"> Entries</span>
+            <span className="cost-unit"> Tickets</span>
           </div>
         </div>
         <div className="cost-row">
-          <span className="row-label">ENTRIES IN</span>
-          <div className="cost-badge-wrap">
-            <span className="cost-badge" data-testid="total-cost">
+          <span className="row-label">TICKETS IN</span>
+          <div>
+            <span className="cost-value" data-testid="total-cost">
               {fmt(perRound)}
             </span>
-            <span className="cost-unit">ENTRIES</span>
-          </div>
-        </div>
-        <div className="cost-row">
-          <span className="row-label">ROUND POT</span>
-          <div>
-            <span className="cost-value" data-testid="round-pot">
-              {fmt(engine.pot)}
-            </span>
-            <span className="cost-unit"> Entries</span>
+            <span className="cost-unit"> Tickets</span>
           </div>
         </div>
         <div className="cost-row deployed">
@@ -316,7 +284,7 @@ export function ControlPanel(props: ControlPanelProps) {
         {tiles > 0 && stake > 0n ? (
           <div className="dual-line" data-testid="deploy-preview">
             <span>
-              Entries in {fmt(buyPreview.spend)} · Entries after{" "}
+              Tickets in {fmt(buyPreview.spend)} · Tickets after{" "}
               {fmt(buyPreview.entriesAfter)}
             </span>
             <span className="dual-accent">
@@ -415,51 +383,6 @@ export function ControlPanel(props: ControlPanelProps) {
             {deployNote}
           </div>
         ) : null}
-
-        {/* VAULT — deposit / withdraw in the same visual language */}
-        <div className="vault-row">
-          <div className="vault-balances" data-testid="vault-balances">
-            <span>
-              {symbol} {fmt(walletBalance)}
-            </span>
-            <span>Principal {fmt(principal)}</span>
-            <span>Entries {fmt(entries)}</span>
-          </div>
-          <div className="vault-actions">
-            <span
-              className="pill max"
-              role="button"
-              aria-disabled={depositBusy}
-              data-testid="quick-deposit-1"
-              onClick={depositClick(BigInt(1) * 10n ** BigInt(decimals))}
-            >
-              DEPOSIT 1
-            </span>
-            <span
-              className="pill max"
-              role="button"
-              aria-disabled={depositBusy}
-              data-testid="quick-deposit-10"
-              onClick={depositClick(BigInt(10) * 10n ** BigInt(decimals))}
-            >
-              DEPOSIT 10
-            </span>
-            <span
-              className="pill max"
-              role="button"
-              aria-disabled={depositBusy}
-              data-testid="quick-deposit-max"
-              onClick={depositClick(walletBalance)}
-            >
-              DEPOSIT ALL
-            </span>
-          </div>
-          {vaultNote ? (
-            <div className="panel-note" data-testid="vault-note">
-              {vaultNote}
-            </div>
-          ) : null}
-        </div>
       </PanelCard>
 
       {/* TIER 3 — telemetry + feed */}
