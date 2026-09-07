@@ -678,6 +678,12 @@ input::placeholder {
   filter: brightness(1.2);
 }
 
+[data-testid="wallet-connector"] {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
 .btn-connect {
   background: var(--primary);
   color: var(--on-primary);
