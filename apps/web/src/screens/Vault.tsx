@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
-import { deposit, withdraw } from "../actions.js";
+import { deposit, withdraw, type TxSigner } from "../actions.js";
 import { apiBaseUrl, requestFaucet } from "../api.js";
 import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
@@ -25,6 +25,8 @@ const SYMBOL = "hexUSDC";
 export interface VaultScreenProps {
   program: HexVaultProgram;
   owner: PublicKey;
+  /** Sponsored send path of the Privy embedded wallet; unset for the rest. */
+  sendTransaction?: TxSigner["sendTransaction"] | undefined;
   pool: PoolLike;
   principal: bigint;
   entries: bigint;
@@ -39,6 +41,7 @@ export function Vault(props: VaultScreenProps) {
   const {
     program,
     owner,
+    sendTransaction,
     pool,
     principal,
     entries,
@@ -47,6 +50,7 @@ export function Vault(props: VaultScreenProps) {
     now,
     onDone,
   } = props;
+  const signer: TxSigner = { publicKey: owner, sendTransaction };
   const fmt = (value: bigint) => formatAtomic(value, DECIMALS);
 
   const [amountText, setAmountText] = useState("");
@@ -218,7 +222,7 @@ export function Vault(props: VaultScreenProps) {
             data-testid="deposit-submit"
             onClick={() =>
               void run("Deposit", () =>
-                deposit(program, { publicKey: owner }, pool, depositAmount!),
+                deposit(program, signer, pool, depositAmount!),
               )
             }
           >
@@ -327,7 +331,7 @@ export function Vault(props: VaultScreenProps) {
             data-testid="withdraw-submit"
             onClick={() =>
               void run("Withdraw", () =>
-                withdraw(program, { publicKey: owner }, pool, withdrawAmount!),
+                withdraw(program, signer, pool, withdrawAmount!),
               )
             }
           >

@@ -12,7 +12,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import { atomicShort } from "../activityRows.js";
-import { register } from "../actions.js";
+import { register, type TxSigner } from "../actions.js";
 import {
   apiBaseUrl,
   fetchCurrentEpoch,
@@ -35,6 +35,8 @@ const WINNERS_SHOWN = 5;
 export interface WeeklyDrawScreenProps {
   program: HexVaultProgram | null;
   owner: PublicKey | undefined;
+  /** Sponsored send path of the Privy embedded wallet; unset for the rest. */
+  sendTransaction?: TxSigner["sendTransaction"] | undefined;
   pool: PoolLike | null;
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
@@ -42,7 +44,7 @@ export interface WeeklyDrawScreenProps {
 }
 
 export function WeeklyDraw(props: WeeklyDrawScreenProps) {
-  const { program, owner, pool, now, onDone } = props;
+  const { program, owner, sendTransaction, pool, now, onDone } = props;
   const ownerBase58 = owner?.toBase58();
 
   const loadCurrentEpoch = useCallback(
@@ -88,7 +90,7 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
     try {
       await register(
         program,
-        { publicKey: owner },
+        { publicKey: owner, sendTransaction },
         pool,
         BigInt(drawing.epochId),
       );
@@ -99,7 +101,7 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
     } finally {
       setRegisterBusy(false);
     }
-  }, [drawing, program, pool, owner, onDone]);
+  }, [drawing, program, pool, owner, sendTransaction, onDone]);
 
   const apiError = epoch.error ?? player.error ?? history.error;
 

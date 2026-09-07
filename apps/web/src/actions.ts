@@ -7,7 +7,7 @@
  * signer for them, so the connected wallet is only the fee payer.
  */
 import { createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { PublicKey, SystemProgram, type Transaction } from "@solana/web3.js";
 
 import {
   acceptedAta,
@@ -20,6 +20,7 @@ import {
   roundAddress,
   TOKEN_PROGRAM,
   type HexVaultProgram,
+  type TxBuilder,
 } from "./chain.js";
 import type { PoolLike } from "./read.js";
 
@@ -27,9 +28,32 @@ export type { PoolLike };
 
 export interface TxSigner {
   readonly publicKey: PublicKey;
+  /**
+   * Wallet-owned send path (sign, broadcast, confirm; returns the base58
+   * signature). When set, the transaction goes through it instead of
+   * Anchor's `.rpc()`, so a sponsoring wallet can swap in its own fee payer.
+   */
+  readonly sendTransaction?:
+    | ((transaction: Transaction) => Promise<string>)
+    | undefined;
 }
 
 const CONFIRMED = { commitment: "confirmed" } as const;
+
+/** Sends `builder` through the wallet's own path when it has one, else Anchor's. */
+async function send(
+  program: HexVaultProgram,
+  owner: TxSigner,
+  builder: TxBuilder,
+): Promise<string> {
+  if (!owner.sendTransaction) return builder.rpc(CONFIRMED);
+  const transaction = await builder.transaction();
+  transaction.feePayer = owner.publicKey;
+  const { blockhash } =
+    await program.provider.connection.getLatestBlockhash(CONFIRMED);
+  transaction.recentBlockhash = blockhash;
+  return owner.sendTransaction(transaction);
+}
 
 export async function deposit(
   program: HexVaultProgram,
@@ -39,7 +63,7 @@ export async function deposit(
 ): Promise<string> {
   const o = owner.publicKey;
   const ownerToken = acceptedAta(pool.acceptedMint, o);
-  return method(
+  const builder = method(
     program,
     "deposit",
   )(bn(amount))
@@ -62,8 +86,8 @@ export async function deposit(
         pool.acceptedMint,
         TOKEN_PROGRAM,
       ),
-    ])
-    .rpc(CONFIRMED);
+    ]);
+  return send(program, owner, builder);
 }
 
 export async function withdraw(
@@ -73,7 +97,7 @@ export async function withdraw(
   amount: bigint,
 ): Promise<string> {
   const o = owner.publicKey;
-  return method(
+  const builder = method(
     program,
     "withdraw",
   )(bn(amount))
@@ -85,8 +109,8 @@ export async function withdraw(
       ownerToken: acceptedAta(pool.acceptedMint, o),
       principalVault: principalVaultAddress(pool.address),
       tokenProgram: TOKEN_PROGRAM,
-    })
-    .rpc(CONFIRMED);
+    });
+  return send(program, owner, builder);
 }
 
 /** Stakes `stakePerTile` Entries on every tile set in `tilesMask`. */
@@ -100,7 +124,7 @@ export async function buyPosition(
 ): Promise<string> {
   const o = owner.publicKey;
   const round = roundAddress(pool.address, roundId);
-  return method(program, "buyPosition")(bn(tilesMask), bn(stakePerTile))
+  const builder = method(program, "buyPosition")(bn(tilesMask), bn(stakePerTile))
     .accounts({
       owner: o,
       pool: pool.address,
@@ -108,8 +132,8 @@ export async function buyPosition(
       round,
       position: positionAddress(round, o),
       systemProgram: SystemProgram.programId,
-    })
-    .rpc(CONFIRMED);
+    });
+  return send(program, owner, builder);
 }
 
 /** Credits the round reward as Entries and closes the Position (rent back). */
@@ -121,15 +145,15 @@ export async function settlePosition(
 ): Promise<string> {
   const o = owner.publicKey;
   const round = roundAddress(pool.address, roundId);
-  return method(program, "settlePosition")()
+  const builder = method(program, "settlePosition")()
     .accounts({
       pool: pool.address,
       round,
       player: playerAddress(pool.address, o),
       owner: o,
       position: positionAddress(round, o),
-    })
-    .rpc(CONFIRMED);
+    });
+  return send(program, owner, builder);
 }
 
 /** Records this Player's final Weight in an ended epoch that is Registering. */
@@ -140,11 +164,11 @@ export async function register(
   epochId: bigint,
 ): Promise<string> {
   const o = owner.publicKey;
-  return method(program, "register")()
+  const builder = method(program, "register")()
     .accounts({
       pool: pool.address,
       epoch: epochAddress(pool.address, epochId),
       player: playerAddress(pool.address, o),
-    })
-    .rpc(CONFIRMED);
+    });
+  return send(program, owner, builder);
 }

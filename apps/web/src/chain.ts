@@ -6,7 +6,7 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, type Transaction } from "@solana/web3.js";
 
 export type HexVaultProgram = Program<Idl>;
 
@@ -15,6 +15,8 @@ export interface TxBuilder {
   accounts(accounts: Record<string, unknown>): TxBuilder;
   preInstructions(instructions: unknown[]): TxBuilder;
   rpc(options?: { commitment?: string }): Promise<string>;
+  /** Unsigned legacy transaction; fee payer and blockhash left unset. */
+  transaction(): Promise<Transaction>;
 }
 
 /** Decoded-account accessor for one account type. */

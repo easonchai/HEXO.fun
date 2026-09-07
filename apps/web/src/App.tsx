@@ -44,7 +44,14 @@ const DECIMALS = 6;
 export function App() {
   const { connection } = useConnection();
   const signer = useGameSigner();
-  const { publicKey, connected } = signer;
+  const { publicKey, connected, sendTransaction } = signer;
+  // What the actions sign with: the address plus, for the Privy embedded
+  // wallet, its sponsored send path. Keyed on the two so the action
+  // callbacks below don't rebuild on every signer object Privy hands back.
+  const txSigner = useMemo(
+    () => (publicKey ? { publicKey, sendTransaction } : null),
+    [publicKey, sendTransaction],
+  );
   const [tab, setTab] = useState<Tab>("MINE");
   const [soundOn, setSoundOnState] = useState(isSoundOn());
   // The prototype ships dark-first ("Dark Gold Midnight"); light keeps the blue primary.
@@ -195,7 +202,7 @@ export function App() {
   /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction was sent. */
   const deploy = useCallback(
     async (tiles: number[], stakeAmount: bigint): Promise<boolean> => {
-      if (!pool || !openRound || !publicKey || !program) return false;
+      if (!pool || !openRound || !txSigner || !program) return false;
       if (tiles.length === 0 || stakeAmount <= 0n) return false;
       setDeployBusy(true);
       setDeployNote(null);
@@ -208,7 +215,7 @@ export function App() {
         const spendNow = stakeAmount * BigInt(tiles.length);
         await buyPosition(
           program,
-          { publicKey },
+          txSigner,
           pool,
           openRound.roundId,
           tileMask,
@@ -229,12 +236,12 @@ export function App() {
         setDeployBusy(false);
       }
     },
-    [pool, openRound, publicKey, program, entries, principal, fmt, refresh],
+    [pool, openRound, txSigner, program, entries, principal, fmt, refresh],
   );
 
   const doDeposit = useCallback(
     async (amount: bigint) => {
-      if (!pool || !publicKey || !program) {
+      if (!pool || !txSigner || !program) {
         setVaultNote("connect a wallet first");
         return;
       }
@@ -243,7 +250,7 @@ export function App() {
       setVaultNote(null);
       try {
         sfx("click");
-        await deposit(program, { publicKey }, pool, amount);
+        await deposit(program, txSigner, pool, amount);
         setVaultNote(
           `deposited ${fmt(amount)} ${SYMBOL} → +${fmt(amount)} Principal and Entries`,
         );
@@ -255,7 +262,7 @@ export function App() {
         setDepositBusy(false);
       }
     },
-    [pool, publicKey, program, fmt, refresh],
+    [pool, txSigner, program, fmt, refresh],
   );
 
   // Auto-rounds: re-place the last board when a fresh round opens. The
@@ -330,11 +337,11 @@ export function App() {
 
   const [settleBusy, setSettleBusy] = useState(false);
   const settle = useCallback(async () => {
-    if (!settleState || !pool || !publicKey || !program) return;
+    if (!settleState || !pool || !txSigner || !program) return;
     setSettleBusy(true);
     try {
       sfx("land");
-      await settlePosition(program, { publicKey }, pool, settleState.roundId);
+      await settlePosition(program, txSigner, pool, settleState.roundId);
       setDeployNote(
         settleState.reward > 0n
           ? `round reward settled: +${fmt(settleState.reward)} Entries`
@@ -347,7 +354,7 @@ export function App() {
     } finally {
       setSettleBusy(false);
     }
-  }, [settleState, pool, publicKey, program, fmt, refresh]);
+  }, [settleState, pool, txSigner, program, fmt, refresh]);
 
   return (
     <main className="app">
@@ -596,6 +603,7 @@ export function App() {
           <Vault
             program={program!}
             owner={publicKey}
+            sendTransaction={sendTransaction}
             pool={pool}
             principal={principal}
             entries={entries}
@@ -614,6 +622,7 @@ export function App() {
           <WeeklyDraw
             program={program}
             owner={publicKey ?? undefined}
+            sendTransaction={sendTransaction}
             pool={pool}
             now={now}
             onDone={refresh}
