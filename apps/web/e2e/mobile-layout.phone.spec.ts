@@ -90,12 +90,16 @@ async function assertLayoutFacts(page: Page): Promise<void> {
 test.describe("phone layout: MINE tab, no wallet, no backend", () => {
   test("fits at the phone project's default viewport", async ({ page }) => {
     await page.goto("/");
+    // HOME is the first screen now; these flows live on MINE.
+    await page.getByTestId("tab-mine").click();
     await expect(page.getByTestId("tile-0")).toBeVisible();
     await assertLayoutFacts(page);
   });
 
   test("still fits at a 320px viewport", async ({ page }) => {
     await page.goto("/");
+    // HOME is the first screen now; these flows live on MINE.
+    await page.getByTestId("tab-mine").click();
     await page.setViewportSize({ width: 320, height: 568 });
     await expect(page.getByTestId("tile-0")).toBeVisible();
     await assertLayoutFacts(page);
@@ -105,6 +109,8 @@ test.describe("phone layout: MINE tab, no wallet, no backend", () => {
     page,
   }) => {
     await page.goto("/");
+    // HOME is the first screen now; these flows live on MINE.
+    await page.getByTestId("tab-mine").click();
     await expect(page.getByTestId("tile-0")).toBeVisible();
     await assertLongTabContentIsReachable(page);
   });

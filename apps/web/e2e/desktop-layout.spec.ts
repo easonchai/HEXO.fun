@@ -12,6 +12,8 @@ test.use({ viewport: { width: 1280, height: 900 } });
 
 test("board scale and hexpot placement are unchanged above 960px", async ({ page }) => {
   await page.goto("/");
+  // HOME is the first screen now; these flows live on MINE.
+  await page.getByTestId("tab-mine").click();
   await expect(page.getByTestId("tile-0")).toBeVisible();
 
   const viewport = page.viewportSize();
@@ -37,6 +39,8 @@ test("board scale and hexpot placement are unchanged above 960px", async ({ page
 // Ticket 02: the stake bar and the bet drawer are phone-only.
 test("no stake bar and no drawer render above 960px", async ({ page }) => {
   await page.goto("/");
+  // HOME is the first screen now; these flows live on MINE.
+  await page.getByTestId("tab-mine").click();
   await expect(page.getByTestId("tile-0")).toBeVisible();
 
   // Mounted unconditionally on the MINE tab and hidden by CSS above 960px

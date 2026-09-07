@@ -5,6 +5,7 @@ import {
   covers,
   decideAutoRound,
   decideReveal,
+  dhmsParts,
   displayTile,
   expectedReward,
   hmText,
@@ -139,6 +140,18 @@ describe("round engine", () => {
     expect(hmText(90_000n)).toBe("25:00");
     // Already past: clamp, no sign.
     expect(hmText(-5n)).toBe("00:00");
+  });
+
+  it("splits a weekly countdown into DD HH MM SS", () => {
+    // 3d 23h 48m 18s, the Figma landing's sample clock.
+    expect(dhmsParts(3n * 86400n + 23n * 3600n + 48n * 60n + 18n)).toEqual([
+      "03",
+      "23",
+      "48",
+      "18",
+    ]);
+    expect(dhmsParts(0n)).toEqual(["00", "00", "00", "00"]);
+    expect(dhmsParts(-1n)).toEqual(["00", "00", "00", "00"]);
   });
 });
 

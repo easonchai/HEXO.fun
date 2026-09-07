@@ -608,10 +608,16 @@ input::placeholder {
   flex: none;
 }
 
+/* A button since the HOME tab: the lockup is the home link, so the phone
+   nav can drop the HOME item and keep its five short labels on one row. */
 .brand {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
 }
 
 .brand svg {
@@ -2230,6 +2236,11 @@ input::placeholder {
     white-space: nowrap;
   }
 
+  /* The logomark is the home link here; six labels overflow at 390px. */
+  .nav-item[data-testid="tab-home"] {
+    display: none;
+  }
+
   .nav-item-long {
     display: none;
   }
@@ -2255,5 +2266,289 @@ input::placeholder {
   .topbar-right .chip,
   .topbar-right .sound-toggle {
     display: none;
+  }
+}
+
+/* ---------- HOME tab: the Figma "Landing" frame ---------- */
+
+.home {
+  position: relative;
+  flex: 1;
+  min-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 41px;
+  padding: 40px 24px;
+  color: var(--brand-lime);
+  isolation: isolate;
+}
+
+/* Halftone coin: a lime dot grid faded by a radial mask, plus the 714px
+   glow ellipse from the frame. ponytail: CSS stand-in for the Figma
+   raster; drop the exported PNG in as a background-image if the exact art
+   matters. */
+.home::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(
+    circle,
+    rgba(182, 255, 59, 0.22) 1.2px,
+    transparent 1.7px
+  );
+  background-size: 8px 8px;
+  -webkit-mask-image: radial-gradient(
+    ellipse 40% 55% at 50% 60%,
+    #000 0%,
+    rgba(0, 0, 0, 0.45) 45%,
+    transparent 75%
+  );
+  mask-image: radial-gradient(
+    ellipse 40% 55% at 50% 60%,
+    #000 0%,
+    rgba(0, 0, 0, 0.45) 45%,
+    transparent 75%
+  );
+}
+
+.home::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  top: 50%;
+  width: 714px;
+  height: 714px;
+  transform: translate(-50%, -40%);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(182, 255, 59, 0.6) 0%,
+    rgba(14, 27, 43, 0) 70%
+  );
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.home-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.home-pill {
+  background: var(--brand-lime);
+  color: var(--brand-graphite);
+  border: 1px solid var(--brand-graphite);
+  border-radius: 17px;
+  padding: 3px 30px;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.035em;
+  line-height: 2;
+}
+
+.home-amount {
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: clamp(56px, 8.3vw, 128px);
+  line-height: 0.63;
+  letter-spacing: 0.025em;
+  padding-top: 0.2em;
+  white-space: nowrap;
+}
+
+.home-tagline {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: clamp(14px, 1.3vw, 20px);
+  line-height: 1.2;
+  color: var(--brand-mist);
+  text-align: center;
+}
+
+.home-tagline em {
+  font-style: normal;
+  color: var(--brand-lime);
+}
+
+.home-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.home-clock-label {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.14em;
+  opacity: 0.7;
+  text-align: center;
+}
+
+.home-clock-boxes {
+  display: flex;
+  gap: 12px;
+}
+
+.home-clock-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 82px;
+}
+
+.home-clock-box {
+  width: 100%;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(54, 62, 75, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 36px;
+  line-height: 1;
+  color: var(--brand-white);
+  font-variant-numeric: tabular-nums;
+}
+
+.home-clock-unit-label {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 600;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.home-drawing {
+  height: 76px;
+  display: grid;
+  place-items: center;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: 0.1em;
+  color: var(--brand-white);
+}
+
+.home-cta-row {
+  display: flex;
+  align-items: center;
+  gap: 21px;
+}
+
+.home-glyphs {
+  display: flex;
+  gap: 11px;
+}
+
+.home-glyphs svg {
+  transition: transform 0.4s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-glyphs svg {
+    transition: none;
+  }
+}
+
+/* The right-hand row is the left one read backwards. */
+.home-cta-row .home-glyphs:last-child {
+  transform: scaleX(-1);
+}
+
+.home-cta {
+  width: 422px;
+  max-width: 100%;
+  height: 86px;
+  border: none;
+  border-radius: 43px;
+  background: var(--brand-lime);
+  color: #07101c;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: 0.073em;
+  cursor: pointer;
+  transition:
+    filter 0.2s ease,
+    transform 0.2s ease;
+}
+
+.home-cta:hover {
+  filter: brightness(1.08);
+}
+
+.home-cta:active {
+  transform: scale(0.98);
+}
+
+.home-cta:focus-visible {
+  outline: 2px solid var(--brand-white);
+  outline-offset: 4px;
+}
+
+.home-footer {
+  display: flex;
+  align-items: center;
+  gap: 21px;
+  margin-top: 9px;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.023em;
+  text-align: center;
+}
+
+@media (max-width: 960px) {
+  .home {
+    min-height: calc(100dvh - 56px);
+    gap: 28px;
+  }
+
+  .home-glyphs {
+    display: none;
+  }
+
+  .home-cta {
+    height: 64px;
+    font-size: 18px;
+  }
+
+  .home-clock-boxes {
+    gap: 8px;
+  }
+
+  .home-clock-unit {
+    width: 64px;
+  }
+
+  .home-clock-box {
+    height: 48px;
+    font-size: 28px;
+  }
+
+  .home-footer {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px 14px;
   }
 }

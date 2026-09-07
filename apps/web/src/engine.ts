@@ -146,6 +146,21 @@ export function hmText(seconds: bigint): string {
   return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
 }
 
+/**
+ * [DD, HH, MM, SS] for the landing's weekly-draw clock. Negative (already
+ * past) clamps to all zeros. Days are not capped at two digits.
+ */
+export function dhmsParts(seconds: bigint): [string, string, string, string] {
+  const total = seconds > 0n ? seconds : 0n;
+  const pad = (n: bigint): string => n.toString().padStart(2, "0");
+  return [
+    pad(total / 86400n),
+    pad((total % 86400n) / 3600n),
+    pad((total % 3600n) / 60n),
+    pad(total % 60n),
+  ];
+}
+
 /** The tiles + uniform stake remembered from the last manual deploy. */
 export interface RememberedBoard {
   tiles: number[];
