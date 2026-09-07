@@ -2521,16 +2521,56 @@ input::placeholder {
 @media (max-width: 960px) {
   .home {
     min-height: calc(100dvh - 56px);
-    gap: 28px;
+    gap: 22px;
+    padding: 24px 16px;
+  }
+
+  .home-hero {
+    gap: 16px;
+  }
+
+  .home-pill-row {
+    gap: 10px;
+  }
+
+  .home-pill {
+    font-size: 12px;
+    padding: 2px 20px;
+  }
+
+  .home-tagline {
+    font-size: 12px;
+  }
+
+  .home-clock {
+    gap: 12px;
+  }
+
+  .home-clock-label {
+    font-size: 12px;
+    letter-spacing: 0.1em;
+  }
+
+  /* Glyph rows stack above and below the button instead of flanking it. */
+  .home-cta-row {
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
   }
 
   .home-glyphs {
-    display: none;
+    gap: 14px;
+  }
+
+  .home-glyphs svg {
+    width: 18px;
+    height: 18px;
   }
 
   .home-cta {
-    height: 64px;
-    font-size: 18px;
+    width: 300px;
+    height: 52px;
+    font-size: 16px;
   }
 
   .home-clock-boxes {
@@ -2549,6 +2589,13 @@ input::placeholder {
   .home-footer {
     flex-wrap: wrap;
     justify-content: center;
-    gap: 10px 14px;
+    gap: 8px 12px;
+    margin-top: 0;
+    font-size: 10px;
+  }
+
+  .home-footer svg {
+    width: 16px;
+    height: 16px;
   }
 }
