@@ -38,6 +38,19 @@ export function formatAtomic2(value: bigint, decimals: number): string {
   return `${negative ? "-" : ""}${whole}.${twoPlaces}`;
 }
 
+/**
+ * Keep typed amount text to digits, one dot and at most `places` decimals.
+ * "12.3456" -> "12.34", "1.2.3" -> "1.23", "abc" -> "".
+ */
+export function clampDecimals(text: string, places: number): string {
+  const clean = text.replace(/[^0-9.]/g, "");
+  const dot = clean.indexOf(".");
+  if (dot === -1) return clean;
+  const whole = clean.slice(0, dot);
+  const frac = clean.slice(dot + 1).replace(/\./g, "").slice(0, places);
+  return `${whole}.${frac}`;
+}
+
 /** Parse user-entered decimal text into atomic units. Null when invalid. */
 export function parseAtomic(text: string, decimals: number): bigint | null {
   if (!Number.isInteger(decimals) || decimals < 0) {
@@ -89,6 +102,20 @@ export function previewBuy(
     withdrawableAfter: withdrawable(principal, entriesAfter),
     affordable: entriesAfter >= 0n,
   };
+}
+
+/**
+ * A year of simulated yield on `amount` at `aprBps` basis points, in atomic
+ * units. Same integer math as the operator's `yieldAmount` over a full year.
+ */
+export function estimatedYield(amount: bigint, aprBps: number): bigint {
+  return (amount * BigInt(aprBps)) / 10_000n;
+}
+
+/** `current + step`, held at `cap` when one is given (the Vault's quick pills). */
+export function addCapped(current: bigint, step: bigint, cap: bigint | null): bigint {
+  const next = current + step;
+  return cap !== null && next > cap ? cap : next;
 }
 
 /** Preview a withdrawal in atomic units, including matched capacity before/after. */

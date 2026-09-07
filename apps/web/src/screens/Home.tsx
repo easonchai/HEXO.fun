@@ -54,7 +54,8 @@ function pickGlyphs(count: number): Set<number> {
   return picks;
 }
 
-function GlyphRow() {
+/** Six brand glyphs, two of which turn 45° every second. Shared with the Vault. */
+export function GlyphRow() {
   const [turns, setTurns] = useState(() => GLYPHS.map(() => 0));
 
   useEffect(() => {

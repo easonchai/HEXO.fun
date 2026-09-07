@@ -537,24 +537,21 @@ export function App() {
             </BetDrawer>
           </>
         ) : null}
-        {tab === "VAULT" && publicKey && pool ? (
+        {tab === "VAULT" ? (
           <Vault
-            program={program!}
-            owner={publicKey}
+            program={program}
+            owner={publicKey ?? null}
             sendTransaction={sendTransaction}
             pool={pool}
             principal={principal}
             entries={entries}
             walletBalance={state.walletBalance}
-            paused={pool.paused}
+            paused={pool?.paused ?? false}
             now={now}
+            aprBps={statusPoll.data?.aprBps ?? null}
+            onConnect={() => signer.connect()}
             onDone={refresh}
           />
-        ) : null}
-        {tab === "VAULT" && (!publicKey || !pool) ? (
-          <div className="screen-note err">
-            Connect a wallet with a live pool to deposit or withdraw.
-          </div>
         ) : null}
         {tab === "WEEKLY DRAW" ? (
           <WeeklyDraw

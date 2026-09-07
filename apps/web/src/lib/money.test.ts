@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addCapped,
+  clampDecimals,
+  estimatedYield,
   formatAddress,
   formatAtomic,
   formatAtomic2,
@@ -8,6 +11,27 @@ import {
   previewBuy,
   withdrawable,
 } from "./money.js";
+
+describe("vault widget math", () => {
+  it("estimates a year of yield at the APR", () => {
+    expect(estimatedYield(2_400_000_000n, 500)).toBe(120_000_000n);
+    expect(estimatedYield(0n, 500)).toBe(0n);
+  });
+
+  it("typed amounts stop at two decimals", () => {
+    expect(clampDecimals("12.3456", 2)).toBe("12.34");
+    expect(clampDecimals("1.2.3", 2)).toBe("1.23");
+    expect(clampDecimals("500", 2)).toBe("500");
+    expect(clampDecimals("5.", 2)).toBe("5.");
+    expect(clampDecimals("abc", 2)).toBe("");
+  });
+
+  it("quick pills add and stop at the cap", () => {
+    expect(addCapped(20n, 50n, 100n)).toBe(70n);
+    expect(addCapped(80n, 50n, 100n)).toBe(100n);
+    expect(addCapped(80n, 50n, null)).toBe(130n);
+  });
+});
 
 describe("atomic formatting", () => {
   it("renders atomic units with pool decimals and never uses floats", () => {

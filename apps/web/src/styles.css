@@ -2290,7 +2290,8 @@ input::placeholder {
    glow ellipse from the frame. ponytail: CSS stand-in for the Figma
    raster; drop the exported PNG in as a background-image if the exact art
    matters. */
-.home::before {
+.home::before,
+.vault::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -2315,7 +2316,8 @@ input::placeholder {
   );
 }
 
-.home::after {
+.home::after,
+.vault::after {
   content: "";
   position: absolute;
   z-index: -1;
@@ -2597,5 +2599,359 @@ input::placeholder {
   .home-footer svg {
     width: 16px;
     height: 16px;
+  }
+}
+
+/* ---------- VAULT tab (Figma "Deposit" frame) ---------- */
+
+/* Same halftone coin and glow as HOME; the ::before/::after rules above
+   list both selectors. */
+.vault {
+  position: relative;
+  flex: 1;
+  min-height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  color: var(--brand-lime);
+  isolation: isolate;
+}
+
+.vault-row {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  width: 100%;
+  max-width: 850px;
+}
+
+.vault-row .home-glyphs:last-child {
+  transform: scaleX(-1);
+}
+
+.vault-widget {
+  flex: 1;
+  min-width: 0;
+  max-width: 400px;
+  margin: 0 auto;
+  background: var(--brand-navy);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.vault-tabs {
+  display: flex;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.vault-tab {
+  flex: 1;
+  height: 53px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: rgba(255, 255, 255, 0.35);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.044em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.vault-tab:hover {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.vault-tab.active {
+  color: var(--brand-lime);
+  border-bottom-color: var(--brand-lime);
+}
+
+.vault-body {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+/* The lime amount box: "$ 0" on the left, the symbol and the available
+   line stacked on the right. */
+.vault-amount {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0 8px;
+  min-height: 118px;
+  padding: 20px 20px 16px;
+  background: var(--brand-lime);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  color: var(--brand-navy);
+  font-family: "Roboto Mono", monospace;
+  cursor: text;
+}
+
+.vault-amount-dollar {
+  font-size: 28px;
+  font-weight: 700;
+  opacity: 0.25;
+  align-self: start;
+  /* Figma sits the "$" 7px and the symbol 12px below the number's top. */
+  margin-top: 7px;
+  line-height: 1.5;
+}
+
+.vault-amount input {
+  min-width: 0;
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  color: var(--brand-navy);
+  caret-color: var(--brand-navy);
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 48px;
+  line-height: 60px;
+}
+
+.vault-amount input::placeholder {
+  color: rgba(14, 27, 43, 0.13);
+}
+
+.vault-amount-symbol {
+  align-self: start;
+  margin-top: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.vault-amount-available,
+.vault-amount-locked {
+  grid-column: 1 / -1;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  opacity: 0.5;
+}
+
+.vault-quick {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.vault-pill {
+  flex: 1;
+  height: 37px;
+  background: rgba(54, 62, 75, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.75);
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.vault-pill:hover {
+  background: var(--brand-lime-16);
+  color: var(--brand-lime);
+}
+
+.vault-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.vault-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #fcfcfc;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: 0.083em;
+}
+
+.vault-line dt,
+.vault-line dd {
+  margin: 0;
+}
+
+.vault-cta {
+  height: 43px;
+  border: none;
+  border-radius: 10px;
+  background: var(--brand-lime);
+  color: #07101c;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.11em;
+  cursor: pointer;
+  transition:
+    filter 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.vault-cta:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+.vault-cta:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.vault-cta:focus-visible {
+  outline: 2px solid var(--brand-white);
+  outline-offset: 3px;
+}
+
+.vault-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-mist-dim);
+}
+
+.vault-notes:empty {
+  display: none;
+}
+
+.vault-note.ok {
+  color: var(--brand-lime);
+  word-break: break-all;
+}
+
+.vault-note.err {
+  color: var(--danger-text);
+}
+
+@media (max-width: 960px) {
+  .vault {
+    min-height: calc(100dvh - 56px);
+    padding: 24px 16px;
+    align-items: flex-start;
+  }
+
+  /* Tablet: glyphs stay but shrink; type and padding step down one notch. */
+  .vault-row {
+    gap: 14px;
+    justify-content: center;
+  }
+
+  .vault-row .home-glyphs {
+    gap: 6px;
+  }
+
+  .vault-row .home-glyphs svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .vault-widget {
+    max-width: 420px;
+    margin: 0;
+  }
+
+  .vault-tab {
+    height: 48px;
+    font-size: 14px;
+  }
+
+  .vault-body,
+  .vault-amount {
+    padding: 16px;
+  }
+
+  .vault-amount {
+    min-height: 0;
+  }
+
+  .vault-amount input {
+    font-size: 40px;
+    line-height: 52px;
+  }
+
+  .vault-amount-dollar {
+    font-size: 24px;
+  }
+
+  .vault-amount-symbol {
+    font-size: 13px;
+  }
+
+  .vault-pill {
+    height: 34px;
+    font-size: 12px;
+  }
+
+  .vault-rows {
+    margin: 16px 0;
+  }
+
+  .vault-line {
+    font-size: 12px;
+  }
+
+  .vault-cta {
+    height: 40px;
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 720px) {
+  .vault-row .home-glyphs {
+    display: none;
+  }
+
+  .vault-tab {
+    height: 44px;
+    font-size: 13px;
+  }
+
+  .vault-body,
+  .vault-amount {
+    padding: 14px;
+  }
+
+  .vault-amount input {
+    font-size: 34px;
+    line-height: 44px;
+  }
+
+  .vault-amount-dollar {
+    font-size: 20px;
+  }
+
+  .vault-pill {
+    height: 32px;
+  }
+
+  .vault-cta {
+    height: 38px;
+    font-size: 13px;
   }
 }

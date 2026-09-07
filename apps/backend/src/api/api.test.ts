@@ -343,6 +343,7 @@ describe("API routes", () => {
     expect(body.cursor.ageSeconds).toBeLessThan(120);
     expect(body.rpcOk).toBe(true);
     expect(body.slot).toBe(1234);
+    expect(body.aprBps).toBe(500);
     assertNoLargeNumbers(body, "/status");
   });
 

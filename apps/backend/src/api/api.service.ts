@@ -1,8 +1,10 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Prisma, type Epoch, type Player, type Pool, type Round } from "@prisma/client";
 import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
+import type { HexVaultEnv } from "../config/env";
 import { clockUnixTimestamp } from "../operator/chain-state";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -83,10 +85,16 @@ export class ApiService {
   private readonly logger = new Logger(ApiService.name);
   private probe: { at: number; result: Promise<RpcHealth> } | undefined;
 
+  /** Simulated yield rate, so the Vault's "estimated yield" row is not hardcoded. */
+  private readonly aprBps: number;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly chain: ChainService,
-  ) {}
+    config: ConfigService<HexVaultEnv, true>,
+  ) {
+    this.aprBps = Number(config.get("APR_BPS", { infer: true }));
+  }
 
   async getPool() {
     const pool = await this.requirePool();
@@ -234,6 +242,7 @@ export class ApiService {
           cursor?.updatedAt == null ? null : Number(now - cursor.updatedAt),
       },
       ...rpc,
+      aprBps: this.aprBps,
     };
   }
 
