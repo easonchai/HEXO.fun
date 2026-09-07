@@ -40,5 +40,14 @@ export default defineConfig({
     global: "globalThis",
   },
   // Bigint money math and u64 LE encoding need ES2020+.
-  build: { target: "es2022" },
+  // `landing.html` is the marketing page; it is plain HTML with no React entry.
+  build: {
+    target: "es2022",
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("index.html", import.meta.url)),
+        landing: fileURLToPath(new URL("landing.html", import.meta.url)),
+      },
+    },
+  },
 });
