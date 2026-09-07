@@ -3,10 +3,11 @@
  * countdown, hexagon outline, dot lattice, cog core, laser reveal, 36 tiles,
  * victory shockwaves, hexpot odometer ticker, and the win takeover modal.
  */
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { computeGeo } from "./geo.js";
 import { Textile } from "./Textile.js";
+import { timerText } from "../engine.js";
 import type { EngineOutput } from "../useRoundEngine.js";
 
 const GEO = computeGeo();
@@ -88,10 +89,11 @@ export function HexpotTicker({
         <span className="hexpot-label">HEXPOT</span>
         <span className="info-bubble-icon">i</span>
         <div className="hexpot-tooltip">
-          <div className="hexpot-tooltip-title">ROUND REWARD POOL</div>
+          <div className="hexpot-tooltip-title">HEXPOT</div>
           <div>
-            Shared jackpot distributed to miners on the winning tile. This is a
-            game prize, not your personal wallet balance.
+            The pool's prize vault: this week's simulated yield plus anything
+            held over from earlier draws. The weekly draw pays it to one winner.
+            Not your Principal.
           </div>
         </div>
       </div>
@@ -112,12 +114,21 @@ export function HexpotTicker({
 
 export interface ArenaProps {
   engine: EngineOutput;
+  /** Unit under the hexpot odometer: the pool's accepted asset. */
   symbol: string;
   canPick: boolean;
   onToggleTile: (displayNumber: number) => void;
+  /** True when the backend status pill is amber: the operator isn't ticking. */
+  operatorStale?: boolean;
 }
 
-export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
+export function Arena({
+  engine,
+  symbol,
+  canPick,
+  onToggleTile,
+  operatorStale = false,
+}: ArenaProps) {
   const {
     phase,
     secondsLeft,
@@ -126,35 +137,75 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
     banner,
     hexpot,
     hexpotPulse,
+    coreEnter,
     takeover,
     dismissTakeover,
   } = engine;
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
-  const winDisplay = reveal ? reveal.winningTile + 1 : 0;
+  // The winner lights up when the laser lands (boom), not when it launches.
+  const winDisplay = reveal?.boom ? reveal.winningTile + 1 : 0;
   const revealDots = reveal?.laser.activeDotTimes ?? {};
   const flyMap = reveal?.flyMap ?? {};
   const seconds = Number(secondsLeft);
-  const showTimer = phase === "mine" || phase === "settling";
-  const timerText =
-    phase === "mine"
-      ? `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
-      : "00:00";
+  const showTimer =
+    phase === "mine" || phase === "locked" || phase === "settling";
+  // secondsLeft is already 0 outside "mine"/"locked", so this reads 00:00
+  // through "settling" for free.
+  const timerLabel = timerText(secondsLeft);
+  const timerRed = (phase === "mine" || phase === "locked") && seconds <= 2;
 
   const shake =
-    phase === "mine"
-      ? seconds <= 5
-        ? "hexShake .08s infinite"
-        : "hexShakeSubtle .25s infinite"
-      : "none";
+    phase === "settling"
+      ? "hexShake .08s infinite"
+      : phase === "mine" || phase === "locked"
+        ? seconds <= 5
+          ? "hexShake .08s infinite"
+          : "hexShakeSubtle .25s infinite"
+        : "none";
+
+  const arenaWrapRef = useRef<HTMLDivElement>(null);
+  // Phone board scale (spec.md "Board scale"): the smaller of a width-based
+  // and height-based factor, capped at the desktop scale. CSS `min()` with
+  // length division (`calc(100vw / 620)` producing a bare number) is the
+  // spec's preferred approach, but neither Chromium nor WebKit in this
+  // repo's Playwright accept it as a `scale()` argument (verified with
+  // `CSS.supports`), so it's computed here instead and handed to the
+  // `@media (max-width: 960px)` rule in styles.css as one custom property,
+  // read there as `scale(var(--board-scale, 0.64))`. Above 960px that
+  // property is never read, so this is a no-op on desktop.
+  useEffect(() => {
+    const wrap = arenaWrapRef.current;
+    if (!wrap) return;
+    const DESKTOP_SCALE = 0.64;
+    const SIDE_MARGIN = 24;
+    // ponytail: rounded estimate of the timer (~48px above the box) plus
+    // the in-flow hexpot pill below it (~50px incl. its gap), not a
+    // measured constant; revisit if either one's size changes.
+    const RESERVED_HEIGHT = 100;
+    const updateScale = () => {
+      const { width, height } = wrap.getBoundingClientRect();
+      const widthFactor = (width - SIDE_MARGIN) / 620;
+      const heightFactor = (height - RESERVED_HEIGHT) / 600;
+      const scale = Math.min(widthFactor, heightFactor, DESKTOP_SCALE);
+      wrap.style.setProperty("--board-scale", String(Math.max(scale, 0.01)));
+    };
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <div className="stage-arena-wrap" data-testid="arena">
+    <div className="stage-arena-wrap" data-testid="arena" ref={arenaWrapRef}>
       <div className="hex-stage-container">
         {/* Timer / win banner above the hexagon */}
         {showTimer && !banner ? (
-          <div className="stage-timer" data-testid="round-timer">
-            {timerText}
+          <div
+            className={`stage-timer${operatorStale ? " stage-timer-stale" : ""}${timerRed && !operatorStale ? " stage-timer-red" : ""}`}
+            data-testid="round-timer"
+          >
+            {operatorStale ? "OPERATOR PAUSED" : timerLabel}
           </div>
         ) : null}
         {banner ? (
@@ -180,8 +231,9 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
             const launch = flyMap[dot.key];
             let anim = "none";
             if (info) {
-              anim =
-                launch === undefined
+              anim = reveal?.clearing
+                ? "symbolFadeOut .65s ease-in forwards"
+                : launch === undefined
                   ? `symbolPop .36s cubic-bezier(.17,.89,.32,1.28) forwards ${info.delay}s`
                   : `symbolFadeOut .18s ease-in forwards ${launch}s`;
             }
@@ -203,18 +255,20 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
           })}
 
           {/* Central honeycomb core while the round is live */}
-          {phase === "mine" || phase === "settling" ? (
+          {phase === "mine" || phase === "locked" || phase === "settling" ? (
             <div
               className="stage-core"
               style={{
                 left: GEO.cx,
                 top: GEO.cy,
-                animation: phase === "mine" ? shake : "none",
+                animation: coreEnter
+                  ? "coreFadeIn .85s ease-out forwards"
+                  : shake,
               }}
             >
               <div
                 style={{
-                  transform: `scale(${phase === "mine" && seconds <= 5 ? (1 + (5 - Math.min(5, seconds)) * 0.25).toFixed(3) : 1})`,
+                  transform: `scale(${(phase === "mine" || phase === "locked") && seconds <= 5 ? (1 + (5 - Math.min(5, seconds)) * 0.25).toFixed(3) : 1})`,
                   transformOrigin: "center center",
                   transition: "transform .18s linear",
                   display: "flex",
@@ -224,6 +278,21 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
               >
                 <LogoCog size={60} />
               </div>
+            </div>
+          ) : reveal ? (
+            // The core detonates at the fire instant; coreHexExplode ends at
+            // opacity 0 and holds there ("forwards") for the rest of the
+            // reveal. Keyed on the reveal so a queued second reveal restarts it.
+            <div
+              key={reveal.key}
+              className="stage-core"
+              style={{
+                left: GEO.cx,
+                top: GEO.cy,
+                animation: "coreHexExplode .9s ease-out forwards",
+              }}
+            >
+              <LogoCog size={60} />
             </div>
           ) : null}
 
@@ -337,7 +406,7 @@ export function Arena({ engine, symbol, canPick, onToggleTile }: ArenaProps) {
         <HexpotTicker value={hexpot} pulse={hexpotPulse} symbol={symbol} />
       </div>
 
-      {/* Win / jackpot takeover */}
+      {/* Round win takeover */}
       {takeover ? (
         <div
           className="takeover"

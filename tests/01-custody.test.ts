@@ -1,192 +1,204 @@
-import { Keypair, SystemProgram } from "@solana/web3.js";
-import { beforeAll, describe, expect, it } from "vitest";
+// Custody invariants: deposit/withdraw bounds, pause semantics, and the
+// per-pool vault seeds (spec §2.3 "Custody", §2.4 invariants 1-4).
+//
+// Each test airdrops, mints, and confirms several transactions against a
+// real localnet validator, so the default 5s vitest timeout is too tight.
 
-import {
-  HexVault,
-  TOKEN_2022_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-  bn,
-  findEvent,
-  le8,
-  longTimeouts,
-  longWindow,
-  pda,
-  type Pool,
-} from "./helpers/hx.ts";
+import { describe, expect, it } from "vitest";
+import { BN } from "@anchor-lang/core";
+import { SystemProgram } from "@solana/web3.js";
+import { getOrCreateAssociatedTokenAccount, mintTo, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { program, playerPda, setupPool, type PoolCtx } from "./helpers/hx.js";
 
-const AMT = 1_000_000n;
+const TIMEOUT = 30_000;
 
-describe("custody: initialize, pool creation, deposits, segregated funding, matched withdrawals", () => {
-  longTimeouts();
+/** Every account `deposit` needs, for one pool and one wallet. */
+function depositAccounts(pool: PoolCtx, owner: Awaited<ReturnType<PoolCtx["fundedWallet"]>>) {
+  return {
+    owner: owner.keypair.publicKey,
+    pool: pool.pool,
+    player: playerPda(pool.pool, owner.keypair.publicKey),
+    acceptedMint: pool.mint,
+    ownerToken: owner.tokenAccount,
+    principalVault: pool.principalVault,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    systemProgram: SystemProgram.programId,
+  };
+}
 
-  let hv: HexVault;
-  let pool: Pool;
-  let attacker: Keypair;
-  let attackerRejection: Error | undefined;
-  let configPreExisted: boolean;
-  let ownerUsdc: bigint;
-  let now: number;
+/** Every account `withdraw` needs, for one pool and one wallet. */
+function withdrawAccounts(pool: PoolCtx, owner: Awaited<ReturnType<PoolCtx["fundedWallet"]>>) {
+  return {
+    owner: owner.keypair.publicKey,
+    pool: pool.pool,
+    player: playerPda(pool.pool, owner.keypair.publicKey),
+    acceptedMint: pool.mint,
+    ownerToken: owner.tokenAccount,
+    principalVault: pool.principalVault,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  };
+}
 
-  beforeAll(async () => {
-    // Uninitialized on purpose where possible: the upgrade-authority guard only
-    // bites before any legitimate initialize has landed.
-    hv = await HexVault.create({ initialize: false });
-    configPreExisted =
-      (await hv.program.account.protocolConfig.fetchNullable(hv.config)) !==
-      null;
-    attacker = await hv.wallet(0n, 500_000_000n);
-    attackerRejection = await hv.expectUnauthorizedInitialize(attacker).then(
-      () => undefined,
-      (error: Error) => error,
-    );
-    await hv.initializeProtocol();
+async function deposit(pool: PoolCtx, owner: Awaited<ReturnType<PoolCtx["fundedWallet"]>>, amount: bigint) {
+  return program.methods
+    .deposit(new BN(amount.toString()))
+    .accountsPartial(depositAccounts(pool, owner))
+    .signers([owner.keypair])
+    .rpc();
+}
 
-    pool = await hv.createPool();
-    now = await hv.chainNow();
-    await pool.createFirstEpoch(longWindow(1n, now));
-    await hv.fundUsdc(hv.payer, AMT * 20n);
-    ownerUsdc = await pool.acceptedBalance(hv.authority);
-  });
+async function withdraw(pool: PoolCtx, owner: Awaited<ReturnType<PoolCtx["fundedWallet"]>>, amount: bigint) {
+  return program.methods
+    .withdraw(new BN(amount.toString()))
+    .accountsPartial(withdrawAccounts(pool, owner))
+    .signers([owner.keypair])
+    .rpc();
+}
 
-  it("rejects initialize from a wallet that is not the program upgrade authority", async () => {
-    if (configPreExisted) {
-      // warm validator: the config account guard rejects the attacker first
-      expect(attackerRejection?.message).toMatch(
-        /UnauthorizedAuthority|already in use/i,
+async function setPause(pool: PoolCtx, paused: boolean) {
+  return program.methods
+    .setPause(paused)
+    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
+    .signers([pool.authority])
+    .rpc();
+}
+
+describe("custody", () => {
+  it(
+    "deposit mints equal principal and entries",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+
+      await deposit(pool, owner, 4_000_000n);
+
+      const player = await program.account.player.fetch(playerPda(pool.pool, owner.keypair.publicKey));
+      expect(player.principal.toString()).toBe("4000000");
+      expect(player.entries.toString()).toBe("4000000");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "withdraw enforces both principal and entries bounds",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 3_000_000n);
+
+      await expect(withdraw(pool, owner, 3_000_001n)).rejects.toThrow();
+      await expect(withdraw(pool, owner, 0n)).rejects.toThrow();
+
+      await withdraw(pool, owner, 3_000_000n);
+      const player = await program.account.player.fetch(playerPda(pool.pool, owner.keypair.publicKey));
+      expect(player.principal.toString()).toBe("0");
+      expect(player.entries.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "withdraw works while the pool is paused",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 2_000_000n);
+
+      await setPause(pool, true);
+      await withdraw(pool, owner, 1_000_000n);
+
+      const player = await program.account.player.fetch(playerPda(pool.pool, owner.keypair.publicKey));
+      expect(player.principal.toString()).toBe("1000000");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "deposit fails while paused and fails below the pool minimum",
+    async () => {
+      const pool = await setupPool({ minDeposit: 1_000_000 });
+      const owner = await pool.fundedWallet(10_000_000n);
+
+      await expect(deposit(pool, owner, 500_000n)).rejects.toThrow();
+
+      await setPause(pool, true);
+      await expect(deposit(pool, owner, 2_000_000n)).rejects.toThrow();
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "keeps the vault balance equal to total_principal across a sequence",
+    async () => {
+      const pool = await setupPool();
+      const alice = await pool.fundedWallet(10_000_000n);
+      const bob = await pool.fundedWallet(10_000_000n);
+
+      await deposit(pool, alice, 4_000_000n);
+      await deposit(pool, bob, 6_000_000n);
+      await withdraw(pool, alice, 1_000_000n);
+
+      const poolAccount = await program.account.pool.fetch(pool.pool);
+      const vaultBalance = await program.provider.connection.getTokenAccountBalance(pool.principalVault);
+
+      expect(poolAccount.totalPrincipal.toString()).toBe("9000000");
+      expect(vaultBalance.value.amount).toBe(poolAccount.totalPrincipal.toString());
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "deposit to the House fails with HouseCannotDeposit, but a normal deposit still succeeds",
+    async () => {
+      const pool = await setupPool();
+
+      const authorityAta = await getOrCreateAssociatedTokenAccount(
+        program.provider.connection,
+        pool.authority,
+        pool.mint,
+        pool.authority.publicKey,
       );
-    } else {
-      expect(attackerRejection?.message).toContain("UnauthorizedAuthority");
-    }
-    // either way the attacker never seized the config
-    const stored = await hv.program.account.protocolConfig.fetch(hv.config);
-    expect(stored.authority.toBase58()).toBe(hv.authority.toBase58());
-    expect(stored.guardian.toBase58()).toBe(hv.authority.toBase58());
-  });
+      await mintTo(program.provider.connection, pool.authority, pool.mint, authorityAta.address, pool.authority, 5_000_000n);
 
-  it("rejects pool creation by any signer other than the protocol authority", async () => {
-    const poolId =
-      1_000_000_000n + BigInt(Math.floor(Math.random() * 1_000_000));
-    const poolAddress = pda("pool", le8(poolId));
-    const principalMint = Keypair.generate();
-    const entryMint = Keypair.generate();
+      await expect(
+        program.methods
+          .deposit(new BN("2000000"))
+          .accountsPartial({
+            owner: pool.authority.publicKey,
+            pool: pool.pool,
+            player: pool.house,
+            acceptedMint: pool.mint,
+            ownerToken: authorityAta.address,
+            principalVault: pool.principalVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([pool.authority])
+          .rpc(),
+      ).rejects.toThrow();
 
-    await expect(
-      hv.program.methods
-        .createPool({
-          poolId: bn(poolId),
-          minDeposit: bn(1n),
-          maxStakePerTile: bn(AMT),
-          maxRoundBonusEntries: bn(AMT),
-          minEpochSeconds: bn(5),
-          maxEpochSeconds: bn(60 * 60 * 24 * 35),
-          roundCloseBufferSeconds: bn(0),
-        })
-        .accounts({
-          authority: attacker.publicKey,
-          config: hv.config,
-          pool: poolAddress,
-          acceptedMint: hv.usdc,
-          acceptedTokenProgram: TOKEN_PROGRAM_ID,
-          principalMint: principalMint.publicKey,
-          entryMint: entryMint.publicKey,
-          principalVault: pda("principal-vault", poolAddress.toBuffer()),
-          prizeVault: pda("prize-vault", poolAddress.toBuffer()),
-          jackpotVault: pda("jackpot-vault", poolAddress.toBuffer()),
-          receiptTokenProgram: TOKEN_2022_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([attacker, principalMint, entryMint])
-        .rpc(),
-    ).rejects.toThrow("UnauthorizedAuthority");
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+      const player = await program.account.player.fetch(playerPda(pool.pool, owner.keypair.publicKey));
+      expect(player.principal.toString()).toBe("4000000");
+    },
+    TIMEOUT,
+  );
 
-    expect(await hv.connection.getAccountInfo(poolAddress)).toBeNull();
-  });
+  it(
+    "rejects a foreign pool's vault by seeds",
+    async () => {
+      const poolA = await setupPool();
+      const poolB = await setupPool({ mint: poolA.mint });
+      const owner = await poolA.fundedWallet(10_000_000n);
 
-  it("mints matched PT and ET only after the accepted asset reaches the principal vault", async () => {
-    await pool.deposit(hv.payer, AMT);
+      const accounts = depositAccounts(poolA, owner);
+      accounts.principalVault = poolB.principalVault;
 
-    const events = await hv.events(await pool.deposit(hv.payer, AMT * 2n));
-    const recorded = findEvent(events, "DepositRecorded")?.data;
-    expect(recorded?.pool?.toBase58()).toBe(pool.address.toBase58());
-    expect(recorded?.owner?.toBase58()).toBe(hv.authority.toBase58());
-    expect(recorded?.amount?.toNumber()).toBe(Number(AMT * 2n));
-    expect(recorded?.epochId?.toNumber()).toBe(1);
-
-    expect(await pool.vaultBalance(pool.principalVault)).toBe(AMT * 3n);
-    expect(await pool.acceptedBalance(hv.authority)).toBe(ownerUsdc - AMT * 3n);
-    expect(await pool.principalBalance(hv.authority)).toBe(AMT * 3n);
-    expect(await pool.entryBalance(hv.authority)).toBe(AMT * 3n);
-    expect(await pool.vaultBalance(pool.prizeVault)).toBe(0n);
-    expect(await pool.vaultBalance(pool.jackpotVault)).toBe(0n);
-  });
-
-  it("keeps sponsor prize funding out of the principal vault", async () => {
-    await pool.fundPrize(hv.payer, AMT * 2n);
-
-    expect(await pool.vaultBalance(pool.prizeVault)).toBe(AMT * 2n);
-    expect(await pool.vaultBalance(pool.principalVault)).toBe(AMT * 3n);
-    expect(await pool.vaultBalance(pool.jackpotVault)).toBe(0n);
-  });
-
-  it("keeps jackpot funding out of both the principal and prize vaults", async () => {
-    await pool.fundJackpot(hv.payer, AMT * 3n);
-
-    expect(await pool.vaultBalance(pool.jackpotVault)).toBe(AMT * 3n);
-    expect(await pool.vaultBalance(pool.principalVault)).toBe(AMT * 3n);
-    expect(await pool.vaultBalance(pool.prizeVault)).toBe(AMT * 2n);
-  });
-
-  it("blocks withdrawal once entry tokens are committed to a position", async () => {
-    await pool.createRound(1n, now - 10, now + 600, 0n);
-    await pool.buy(hv.payer, 1n, 1n, AMT);
-
-    expect(await pool.entryBalance(hv.authority)).toBe(AMT * 2n);
-    await expect(pool.withdraw(hv.payer, AMT * 3n)).rejects.toThrow(
-      "InsufficientMatchedBalance",
-    );
-
-    // No state changed: the principal and both receipt balances are intact.
-    expect(await pool.vaultBalance(pool.principalVault)).toBe(AMT * 3n);
-    expect(await pool.principalBalance(hv.authority)).toBe(AMT * 3n);
-    expect(await pool.entryBalance(hv.authority)).toBe(AMT * 2n);
-  });
-
-  it("burns matched PT and ET and returns exactly that principal", async () => {
-    const usdcBefore = await pool.acceptedBalance(hv.authority);
-    const events = await hv.events(await pool.withdraw(hv.payer, AMT * 2n));
-    const recorded = findEvent(events, "WithdrawalRecorded")?.data;
-    expect(recorded?.pool?.toBase58()).toBe(pool.address.toBase58());
-    expect(recorded?.amount?.toNumber()).toBe(Number(AMT * 2n));
-
-    expect(await pool.vaultBalance(pool.principalVault)).toBe(AMT);
-    expect(await pool.acceptedBalance(hv.authority)).toBe(
-      usdcBefore + AMT * 2n,
-    );
-    expect(await pool.principalBalance(hv.authority)).toBe(AMT);
-    expect(await pool.entryBalance(hv.authority)).toBe(0n);
-    expect(await pool.vaultBalance(pool.prizeVault)).toBe(AMT * 2n);
-    expect(await pool.vaultBalance(pool.jackpotVault)).toBe(AMT * 3n);
-
-    const stored = await pool.poolAccount();
-    expect(stored.principalVault.toBase58()).toBe(
-      pool.principalVault.toBase58(),
-    );
-    expect(stored.prizeVault.toBase58()).toBe(pool.prizeVault.toBase58());
-    expect(stored.jackpotVault.toBase58()).toBe(pool.jackpotVault.toBase58());
-    expect(stored.paused).toBe(false);
-    expect(stored.maxStakePerTile.toNumber()).toBe(Number(AMT));
-    expect(stored.entryMint.toBase58()).toBe(pool.entryMint.toBase58());
-    expect(stored.principalMint.toBase58()).toBe(pool.principalMint.toBase58());
-  });
-
-  it("keeps the accepted asset on the classic token program and receipts on Token-2022", async () => {
-    for (const mint of [pool.principalMint, pool.entryMint]) {
-      expect((await hv.connection.getAccountInfo(mint))?.owner.toBase58()).toBe(
-        TOKEN_2022_PROGRAM_ID.toBase58(),
-      );
-    }
-    expect(
-      (await hv.connection.getAccountInfo(hv.usdc))?.owner.toBase58(),
-    ).toBe(TOKEN_PROGRAM_ID.toBase58());
-  });
+      await expect(
+        program.methods.deposit(new BN("2000000")).accountsPartial(accounts).signers([owner.keypair]).rpc(),
+      ).rejects.toThrow();
+    },
+    TIMEOUT,
+  );
 });

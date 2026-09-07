@@ -1,10 +1,22 @@
 packages:
   - apps/*
-  - packages/*
+
+# Every dependency whose install scripts pnpm is allowed to run. A package
+# missing from this map fails a fresh `pnpm install` with ERR_PNPM_IGNORED_BUILDS
+# and is silent on a machine that already has it, so a clean clone, CI, and
+# `docker build` break while local checks keep passing.
 allowBuilds:
-  "@reown/appkit": true
-  bigint-buffer: false
-  bufferutil: false
+  # Generates the client and downloads the query engine.
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true
+  # Native binaries.
+  '@swc/core': true
   esbuild: true
   keccak: true
+  # apps/web wallet layer.
+  '@reown/appkit': true
+  # Optional native accelerators; the pure-JS fallbacks are fine.
+  bigint-buffer: false
+  bufferutil: false
   utf-8-validate: false

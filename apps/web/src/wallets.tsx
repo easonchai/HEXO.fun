@@ -7,10 +7,20 @@
 import { PrivyProvider, useLogin, useLogout } from "@privy-io/react-auth";
 import {
   toSolanaWalletConnectors,
-  useStandardWallets,
+  useSignAndSendTransaction,
+  useSignTransaction,
+  useWallets,
 } from "@privy-io/react-auth/solana";
+import { utils as anchorUtils } from "@anchor-lang/core";
+import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { createContext, useContext, useCallback, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import {
   PublicKey,
@@ -28,9 +38,20 @@ export interface GameSigner {
   connect: () => void;
   disconnect: () => void;
   signTransaction:
-    | (<T extends Transaction | VersionedTransaction>(
-        transaction: T,
-      ) => Promise<T>)
+  | (<T extends Transaction | VersionedTransaction>(
+    transaction: T,
+  ) => Promise<T>)
+  | undefined;
+  /**
+   * Signs, sends and confirms in one step, returning the base58 signature.
+   * Set only for the Privy embedded wallet, where Privy's own send path is
+   * the one that applies dashboard gas sponsorship: a signed-then-broadcast
+   * transaction keeps the user as fee payer and fails on an empty wallet.
+   * External wallets and the dev burner leave it unset and go through
+   * Anchor's sign-and-broadcast, which pays fees from the user's SOL.
+   */
+  sendTransaction?:
+    | ((transaction: Transaction) => Promise<string>)
     | undefined;
 }
 
@@ -54,12 +75,46 @@ const privyAppIdFrom = (
 export interface WalletEnvironment extends Record<string, string | undefined> {
   VITE_PRIVY_APP_ID?: string;
   VITE_PRIVY_CLIENT_ID?: string;
-  VITE_CLUSTER?: string;
+  VITE_RPC_URL?: string;
 }
 
 /** Privy boots only when an App ID is configured; otherwise standard wallets. */
 export const walletModeFor = (env: WalletEnvironment): WalletMode =>
   privyAppIdFrom(env) ? "privy" : "standard";
+
+// Built once: connectors register wallet-standard listeners, and a fresh set
+// per render (or per StrictMode double-mount) can miss Phantom's injection.
+const SOLANA_CONNECTORS = toSolanaWalletConnectors({ shouldAutoConnect: true });
+
+const DEFAULT_RPC_URL = "http://127.0.0.1:8899";
+
+/**
+ * WebSocket endpoint for an HTTP RPC URL. The local validator serves
+ * subscriptions one port up (8899 -> 8900); hosted RPCs use the same host.
+ */
+export const rpcSubscriptionsUrlFor = (rpcUrl: string): string => {
+  const url = new URL(rpcUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (url.port === "8899") url.port = "8900";
+  return url.toString();
+};
+
+/**
+ * Privy's transaction UI (simulation, sign-and-send) reads the chain RPC
+ * from `config.solana.rpcs`; without a `solana:devnet` entry it throws
+ * "No RPC configuration found for chain solana:devnet". Every environment
+ * here answers to the devnet genesis (see SIGNING_CHAIN), so the app's own
+ * RPC is registered under that id.
+ */
+const solanaRpcsFor = (rpcUrl: string) => ({
+  [SIGNING_CHAIN]: {
+    rpc: createSolanaRpc(rpcUrl),
+    rpcSubscriptions: createSolanaRpcSubscriptions(
+      rpcSubscriptionsUrlFor(rpcUrl),
+    ),
+    blockExplorerUrl: "https://explorer.solana.com",
+  },
+});
 
 /** App root: wraps children in PrivyProvider only when Privy is configured. */
 export function WalletLayer({
@@ -71,21 +126,30 @@ export function WalletLayer({
 }) {
   const appId = privyAppIdFrom(env);
   const clientId = env.VITE_PRIVY_CLIENT_ID?.trim() || undefined;
+  const rpcUrl = env.VITE_RPC_URL?.trim() || DEFAULT_RPC_URL;
+  const rpcs = useMemo(() => solanaRpcsFor(rpcUrl), [rpcUrl]);
   if (appId) {
     return (
       <PrivyProvider
         appId={appId}
         {...(clientId ? { clientId } : {})}
         config={{
-          appearance: { theme: "dark", accentColor: "#ffd720" },
+          appearance: {
+            theme: "dark",
+            accentColor: "#ffd720",
+            // Privy defaults to ethereum-only, which connects Phantom's EVM side.
+            // walletChainType: "solana-only",
+          },
           externalWallets: {
-            solana: {
-              connectors: toSolanaWalletConnectors({ shouldAutoConnect: true }),
-            },
+            solana: { connectors: SOLANA_CONNECTORS },
           },
           embeddedWallets: {
-            solana: { createOnLogin: "users-without-wallets" },
+            showWalletUIs: false,
+            solana: {
+              createOnLogin: "users-without-wallets",
+            },
           },
+          solana: { rpcs },
         }}
       >
         {children}
@@ -129,33 +193,23 @@ export function useGameSigner(): GameSigner {
  * provider, so the mode decides which subtree renders — no conditional hook
  * calls anywhere.
  */
-export function GameSignerProvider({
-  env,
-  children,
-}: {
-  env: WalletEnvironment;
-  children: ReactNode;
-}) {
+export function GameSignerProvider({ children }: { children: ReactNode }) {
   const mode = useWalletMode();
   return mode === "privy" ? (
-    <PrivySignerSource env={env} mode={mode}>
-      {children}
-    </PrivySignerSource>
+    <PrivySignerSource mode={mode}>{children}</PrivySignerSource>
   ) : (
     <StandardSignerSource mode={mode}>{children}</StandardSignerSource>
   );
 }
 
 function PrivySignerSource({
-  env,
   mode,
   children,
 }: {
-  env: WalletEnvironment;
   mode: WalletMode;
   children: ReactNode;
 }) {
-  const signer = usePrivySigner(env);
+  const signer = usePrivySigner();
   return (
     <GameSignerContext.Provider value={{ ...signer, mode }}>
       {children}
@@ -178,58 +232,107 @@ function StandardSignerSource({
   );
 }
 
-function usePrivySigner(env: WalletEnvironment): GameSigner {
+/**
+ * Wallet-standard chain id. Nothing but devnet and a local validator is in
+ * scope, and the local validator answers to the devnet genesis in every
+ * wallet that supports it, so this is a constant.
+ */
+const SIGNING_CHAIN = "solana:devnet";
+
+function usePrivySigner(): GameSigner {
   const { login } = useLogin();
   const { logout } = useLogout();
-  const { wallets, ready } = useStandardWallets();
+  // `useWallets` is the wallet Privy actually connected for this session
+  // (embedded or external). `useStandardWallets` lists every Solana wallet
+  // Privy knows about, connected or not, so its first entry can be a wallet
+  // that cannot sign for the address the app then uses as fee payer.
+  const { wallets, ready } = useWallets();
+  const { signTransaction: privySign } = useSignTransaction();
+  const { signAndSendTransaction: privySend } = useSignAndSendTransaction();
   const wallet = wallets[0];
-  const account = wallet?.accounts[0];
+  // Privy's own wallet-standard implementation flags itself; Phantom and
+  // friends connected through Privy do not, and keep paying their own fees.
+  const embedded = Boolean(
+    wallet &&
+      (wallet.standardWallet as { isPrivyWallet?: boolean }).isPrivyWallet,
+  );
+
+  const sendTransaction = useCallback(
+    async (transaction: Transaction) => {
+      if (!wallet) throw new Error("no Privy Solana wallet connected");
+      const bytes = transaction.serialize({
+        requireAllSignatures: false,
+        verifySignatures: false,
+      });
+      const { signature } = await privySend({
+        transaction: bytes,
+        wallet,
+        chain: SIGNING_CHAIN,
+        options: { sponsor: true },
+      });
+      return anchorUtils.bytes.bs58.encode(signature);
+    },
+    [wallet, privySend],
+  );
 
   const signTransaction = useCallback(
     async <T extends Transaction | VersionedTransaction>(transaction: T) => {
-      if (!wallet || !account)
-        throw new Error("no Privy Solana wallet connected");
-      const feature = wallet.features["solana:signTransaction"];
-      if (!feature) throw new Error("wallet cannot sign Solana transactions");
-      const chain =
-        env.VITE_CLUSTER === "devnet" ? "solana:devnet" : "solana:mainnet";
-      // Wallet-standard methods are variadic: one input in, one output out.
-      const [output] = await feature.signTransaction({
-        transaction: transaction.serialize(),
-        account,
-        chain,
+      if (!wallet) throw new Error("no Privy Solana wallet connected");
+      // Anchor builds the tx with its own copy of web3.js (pnpm keeps two,
+      // split on a peer dep), so `instanceof Transaction` is false for a
+      // legacy tx. Anchor's own check: only VersionedTransaction has `version`.
+      const versioned = "version" in transaction;
+      // A legacy Transaction verifies signatures on serialize() by default,
+      // which throws "Missing signature" on the unsigned tx we hand to Privy.
+      const bytes = versioned
+        ? (transaction as VersionedTransaction).serialize()
+        : (transaction as Transaction).serialize({
+          requireAllSignatures: false,
+          verifySignatures: false,
+        });
+      const { signedTransaction } = await privySign({
+        transaction: bytes,
+        wallet,
+        chain: SIGNING_CHAIN,
       });
-      const signed = Uint8Array.from(output!.signedTransaction);
-      if (transaction instanceof Transaction) {
-        return Transaction.from(Buffer.from(signed)) as T;
-      }
-      return VersionedTransaction.deserialize(signed) as T;
+      const signed = Uint8Array.from(signedTransaction);
+      return (
+        versioned
+          ? VersionedTransaction.deserialize(signed)
+          : Transaction.from(Buffer.from(signed))
+      ) as T;
     },
-    [wallet, account, env.VITE_CLUSTER],
+    [wallet, privySign],
   );
 
   return {
     mode: "privy",
-    publicKey: account ? safePubkey(account.address) : undefined,
-    connected: ready && Boolean(account),
+    publicKey: wallet ? safePubkey(wallet.address) : undefined,
+    connected: ready && Boolean(wallet),
     connect: () => login(),
-    disconnect: () => void logout(),
+    // `logout()` only ends the Privy session. An external wallet Privy
+    // auto-connected through wallet-standard stays in `useWallets`, so the
+    // pill kept showing its address after the X. Drop the wallet too, and
+    // don't let one failing (a 400 on an already-dead session) skip the other.
+    disconnect: () => {
+      void Promise.allSettled([wallet?.disconnect(), logout()]);
+    },
     signTransaction,
+    ...(embedded ? { sendTransaction } : {}),
   };
 }
 
 function useStandardSigner(): GameSigner {
-  const { publicKey, wallet, connected, connect, disconnect, select } =
-    useWallet();
+  const { publicKey, wallet, connected, select } = useWallet();
   const { setVisible } = useWalletModal();
 
   const adapter = wallet?.adapter as unknown as
     | {
-        signTransaction?: <T extends Transaction | VersionedTransaction>(
-          tx: T,
-        ) => Promise<T>;
-        disconnect?: () => Promise<void>;
-      }
+      signTransaction?: <T extends Transaction | VersionedTransaction>(
+        tx: T,
+      ) => Promise<T>;
+      disconnect?: () => Promise<void>;
+    }
     | undefined;
 
   return {
@@ -252,18 +355,5 @@ const safePubkey = (address: string): PubkeyType | undefined => {
     return undefined;
   }
 };
-
-/** AnchorProvider-compatible wallet view of a GameSigner. */
-export const anchorWalletOf = (
-  signer: GameSigner,
-): {
-  publicKey: PubkeyType;
-  signTransaction: <T extends Transaction | VersionedTransaction>(
-    tx: T,
-  ) => Promise<T>;
-} | null =>
-  signer.publicKey && signer.signTransaction
-    ? { publicKey: signer.publicKey, signTransaction: signer.signTransaction }
-    : null;
 
 /** Convenience: `useConnection` re-export so App imports one wallet module. */

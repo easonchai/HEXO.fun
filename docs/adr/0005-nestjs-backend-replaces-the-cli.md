@@ -1,0 +1,3 @@
+# One NestJS + Prisma service replaces the operator CLI, the standalone indexer, and the Fastify API
+
+The first build drove the protocol lifecycle from a human-operated CLI and a 3 second demo script, with indexing and the read API in two more packages sharing hand-written `pg` code. A lottery that needs a human to run `epoch create` every day is not a product. The rebuild puts indexer, operator, and API in one NestJS process with Prisma on Postgres, deployed with `docker compose` on the Contabo VPS behind the existing Traefik. One process is a deliberate demo simplification; the modules are separable by an env flag later. Users still sign every transaction in their own wallet; the backend never relays or custodies.

@@ -8,6 +8,8 @@ target/
 # Local protocol runtime and generated E2E output
 .hexvault/
 screenshots/
+test-results/
+playwright-report/
 
 # Local secrets and deployment authority
 .env
@@ -20,3 +22,9 @@ screenshots/
 .idea/
 .vscode/
 .gstack/
+
+# Local feature plans and tickets (docs/plan/rebuild predates this and stays tracked)
+docs/plan/
+
+# local operator keypair, never commit
+operator.json

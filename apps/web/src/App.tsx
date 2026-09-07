@@ -3,130 +3,122 @@ import { AnchorProvider, Program } from "@anchor-lang/core";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { eventsToRows, liveEventToRow, mergeFeed } from "./activityRows.js";
 import { Arena, LogoCog } from "./arena/Arena.js";
+import { BetDrawer } from "./panel/BetDrawer.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
+import { StakeBarButton } from "./panel/StakeBarButton.js";
 import { About } from "./screens/About.js";
-import { Prizes } from "./screens/Prizes.js";
+import { Leaderboard } from "./screens/Leaderboard.js";
 import { Vault } from "./screens/Vault.js";
-import {
-  buyPosition,
-  claimRoundReward,
-  deposit,
-  requestRoundRandomness,
-} from "./actions.js";
-import { apiBaseUrl, fetchEvents, type EventRow } from "./api.js";
-import { epochAddress, type HexVaultProgram } from "./chain.js";
+import { WeeklyDraw } from "./screens/WeeklyDraw.js";
+import { buyPosition, deposit, settlePosition } from "./actions.js";
+import { apiBaseUrl, fetchFeed, fetchStatus } from "./api.js";
+import { type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
   covers,
-  currentRound,
+  decideAutoRound,
   displayTile,
   expectedReward,
+  isRevealed,
   phaseFor,
-  roundKey,
-  ROUND_OPEN,
   type FeedRow,
+  type RememberedBoard,
 } from "./engine.js";
-import { formatAddress, formatAtomic, parseAtomic } from "./lib/money.js";
+import { formatAtomic, parseAtomic, withdrawable } from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
-import { useVaultState, type VaultState } from "./state.js";
+import { useChainState } from "./read.js";
 import { useChainClock } from "./useChainClock.js";
-import { useProgramEvents, type LiveEvent } from "./useProgramEvents.js";
-import { useRoundEngine, type Takeover } from "./useRoundEngine.js";
-import { anchorWalletOf, useGameSigner } from "./wallets.js";
-import { clusterFromEnv, type Cluster } from "./wallet.js";
+import { useProgramEvents } from "./useProgramEvents.js";
+import { useApiPoll } from "./useApiPoll.js";
+import { useRoundEngine } from "./useRoundEngine.js";
+import { useGameSigner } from "./wallets.js";
+import { summarizeStatus } from "./status.js";
+import { TABS, type Tab } from "./tabs.js";
 
-const TABS = ["MINE", "STAKE", "EXPLORE", "ABOUT"] as const;
-type Tab = (typeof TABS)[number];
-
-const ENV: Record<string, string | undefined> = {
-  VITE_CLUSTER: import.meta.env.VITE_CLUSTER as string | undefined,
-  VITE_API_URL: import.meta.env.VITE_API_URL as string | undefined,
-  VITE_PRIVY_APP_ID: import.meta.env.VITE_PRIVY_APP_ID as string | undefined,
-};
-
-const symbolOf = (pool: VaultState["pool"]): string => "USDC";
+/** The accepted asset is hexUSDC (6 decimals) for every pool in this build. */
+const SYMBOL = "hexUSDC";
+const DECIMALS = 6;
 
 export function App() {
   const { connection } = useConnection();
   const signer = useGameSigner();
-  const { publicKey, connected } = signer;
+  const { publicKey, connected, sendTransaction } = signer;
+  // What the actions sign with: the address plus, for the Privy embedded
+  // wallet, its sponsored send path. Keyed on the two so the action
+  // callbacks below don't rebuild on every signer object Privy hands back.
+  const txSigner = useMemo(
+    () => (publicKey ? { publicKey, sendTransaction } : null),
+    [publicKey, sendTransaction],
+  );
   const [tab, setTab] = useState<Tab>("MINE");
   const [soundOn, setSoundOnState] = useState(isSoundOn());
   // The prototype ships dark-first ("Dark Gold Midnight"); light keeps the blue primary.
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [stakeText, setStakeText] = useState("0.01");
   const [autoRounds, setAutoRounds] = useState(0);
+  const [addressCopied, setAddressCopied] = useState(false);
   const [deployBusy, setDeployBusy] = useState(false);
   const [deployNote, setDeployNote] = useState<string | null>(null);
   const [depositBusy, setDepositBusy] = useState(false);
   const [vaultNote, setVaultNote] = useState<string | null>(null);
-  const [claimTakeover, setClaimTakeover] = useState<Takeover | null>(null);
   const [feedHistory, setFeedHistory] = useState<FeedRow[]>([]);
+  // Phone bet drawer (spec.md "Drawer"): controlled here so the deploy
+  // success path and the win takeover path can both close it.
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const cluster: Cluster = clusterFromEnv(ENV);
-  const poolId = null; // auto-discover; multiple pools arrive later.
-
-  const anchorWallet = useMemo(() => anchorWalletOf(signer), [signer]);
+  // Privy and wallet-adapter hand back a fresh signer object on every render,
+  // so memoizing the provider on it rebuilt the Program every render — and the
+  // chain reads keyed off that Program write state, so the app looped:
+  // read → render → new Program → read, as fast as the RPC answered. Key the
+  // provider on the address and reach the live signer through a ref, so one
+  // Program survives across renders.
+  const signerRef = useRef(signer);
+  useEffect(() => {
+    signerRef.current = signer;
+  }, [signer]);
+  const ownerAddress = signer.publicKey?.toBase58();
   const provider = useMemo(() => {
-    const walletArg = anchorWallet ?? ({ publicKey: undefined } as never);
-    return new AnchorProvider(connection, walletArg as never, {
+    const sign = async <T,>(tx: T): Promise<T> => {
+      const signTransaction = signerRef.current.signTransaction;
+      if (!signTransaction) throw new Error("wallet cannot sign transactions");
+      return (await signTransaction(tx as never)) as T;
+    };
+    const wallet = {
+      get publicKey() {
+        return signerRef.current.publicKey;
+      },
+      signTransaction: sign,
+      signAllTransactions: <T,>(txs: T[]) => Promise.all(txs.map(sign)),
+    };
+    return new AnchorProvider(connection, wallet as never, {
       commitment: "confirmed",
     });
-  }, [connection, anchorWallet]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ownerAddress stands in for the signer, on purpose
+  }, [connection, ownerAddress]);
   const program = useMemo<HexVaultProgram | null>(
-    () =>
-      provider
-        ? (new Program(idl, provider) as unknown as HexVaultProgram)
-        : null,
+    () => new Program(idl, provider) as unknown as HexVaultProgram,
     [provider],
   );
 
-  const state = useVaultState(
-    connection,
-    program,
-    publicKey ?? undefined,
-    poolId,
-  );
+  const state = useChainState(connection, program, publicKey ?? undefined);
   const pool = state.pool;
+  const player = state.player;
+  const round = state.round;
   const { now } = useChainClock(connection);
-  const { events, live } = useProgramEvents(program);
-  const engine = useRoundEngine({
-    rounds: state.rounds,
-    positions: state.positions,
-    owner: publicKey ?? undefined,
-    poolBufferSeconds: pool?.roundCloseBufferSeconds ?? 0n,
-    hexpot: state.vaults.jackpotVault,
-    clockNow: now,
-    feed: [],
-  });
-
-  const refresh = state.refresh;
-
-  // Poll fallback + resync after each live event (WS push is primary).
-  useEffect(() => {
-    const id = window.setInterval(() => refresh(), 4000);
-    return () => window.clearInterval(id);
-  }, [refresh]);
-
-  const eventCount = events.length;
-  useEffect(() => {
-    if (eventCount === 0) return;
-    const id = window.setTimeout(() => refresh(), 250);
-    return () => window.clearTimeout(id);
-  }, [eventCount, refresh]);
-
-  // Feed: /events history first, then live events on top.
-  useEffect(() => {
-    const controller = new AbortController();
-    void (async () => {
-      const result = await fetchEvents(apiBaseUrl(ENV), 12, controller.signal);
-      if (result.ok)
-        setFeedHistory(eventsToRows(result.data, publicKey?.toBase58()));
-    })();
-    return () => controller.abort();
-  }, [publicKey]);
-
+  const { events, live } = useProgramEvents(program, connection);
+  const loadStatus = useCallback(
+    (signal: AbortSignal) => fetchStatus(apiBaseUrl(), signal),
+    [],
+  );
+  const statusPoll = useApiPoll(loadStatus, 2000);
+  const status = useMemo(
+    () => summarizeStatus(statusPoll.data, Date.now()),
+    [statusPoll.data],
+  );
+  // Live rows only; GET /feed history is never held, so it joins after the
+  // engine below rather than passing through the hold filter.
   const ownerKey = publicKey?.toBase58();
   const liveFeed = useMemo<FeedRow[]>(() => {
     const rows: FeedRow[] = [];
@@ -136,86 +128,121 @@ export function App() {
     }
     return rows;
   }, [events, ownerKey]);
-  const feed = useMemo(
-    () => mergeFeed(liveFeed, feedHistory, ownerKey),
-    [liveFeed, feedHistory, ownerKey],
-  );
+  const engine = useRoundEngine({
+    round,
+    position: state.position,
+    owner: publicKey ?? undefined,
+    closeBuffer: pool?.closeBuffer ?? 0n,
+    clockNow: now,
+    feed: liveFeed,
+    hexpot: state.hexpot,
+  });
 
-  const latestEpoch = state.epochs.at(-1) ?? null;
-  const latestEpochKey =
-    pool && latestEpoch ? epochAddress(pool.address, latestEpoch.id) : null;
-  const active = currentRound(state.rounds);
+  // `takeover` only ever fires for the Player's own Position (useRoundEngine
+  // sets it inside `if (won)`), so this is exactly spec.md's "a win takeover
+  // for the Player's own Position closes the drawer".
+  useEffect(() => {
+    if (engine.takeover) setDrawerOpen(false);
+  }, [engine.takeover]);
+
+  const refresh = state.refresh;
+  const principal = player?.principal ?? 0n;
+  const entries = player?.entries ?? 0n;
+  const fmt = useCallback((value: bigint) => formatAtomic(value, DECIMALS), []);
+
+  // Header chip copies the full address; the truncated form is unusable for
+  // funding. Clipboard needs a secure context, so fall back to a prompt.
+  const copyAddress = useCallback(async (address: string) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setAddressCopied(true);
+      window.setTimeout(() => setAddressCopied(false), 1200);
+    } catch {
+      window.prompt("Copy address", address);
+    }
+  }, []);
+
+  // Feed: /feed history first, then live events on top.
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      const result = await fetchFeed(apiBaseUrl(), 12, controller.signal);
+      if (result.ok)
+        setFeedHistory(eventsToRows(result.data, publicKey?.toBase58()));
+    })();
+    return () => controller.abort();
+  }, [publicKey]);
+
+  const feed = useMemo(
+    () => mergeFeed(engine.feed, feedHistory),
+    [engine.feed, feedHistory],
+  );
 
   // --- Actions ---------------------------------------------------------------
-  const decimals = pool?.acceptedDecimals ?? 6;
-  const fmt = (value: bigint) => formatAtomic(value, decimals);
-  const stake = parseAtomic(stakeText, decimals) ?? 0n;
-  const mask = useMemo(
-    () =>
-      engine.selected.reduce((acc, tile) => acc | (1n << BigInt(tile - 1)), 0n),
-    [engine.selected],
-  );
+  const stake = parseAtomic(stakeText, DECIMALS) ?? 0n;
   const position = engine.activePosition;
-  const locked = Boolean(position);
+  const openRound = round && round.status === 0 ? round : null;
+  const locked = Boolean(position) && Boolean(openRound);
   const deployedTotal = position
     ? BigInt(position.tiles.toString(2).replace(/[^1]/g, "").length) *
       position.stakePerTile
     : 0n;
+  const spend = stake * BigInt(engine.selected.length);
 
   const problems: string[] = [];
-  if (!pool) problems.push("no pool discovered yet");
-  if (!active) problems.push("no active round (operator creates rounds)");
-  if (
-    active &&
-    phaseFor(active, now ?? 0n, pool?.roundCloseBufferSeconds ?? 0n) !== "mine"
-  )
-    problems.push("buying is closed for this round");
-  if (locked && active)
-    problems.push(`position already deployed on round #${active.id}`);
-  if (stake > (pool?.maxStakePerTile ?? 0n))
-    problems.push(`stake above pool max ${fmt(pool?.maxStakePerTile ?? 0n)}`);
-  if (
-    stake * BigInt(Math.max(engine.selected.length, 1)) >
-    state.balances.entries
-  )
-    problems.push("not enough ET — deposit to mint more entries");
+  if (!pool) problems.push("no pool found on chain yet");
+  if (!openRound) problems.push("no open round (the operator opens rounds)");
+  if (openRound && phaseFor(openRound, now ?? 0n, pool?.closeBuffer ?? 0n) !== "mine")
+    problems.push("positions are closed for this round");
+  if (locked && openRound)
+    problems.push(`position already placed in round #${openRound.roundId}`);
+  if (spend > entries)
+    problems.push("not enough Entries — deposit to earn more");
 
-  const deploy = useCallback(async () => {
-    if (!pool || !active || !publicKey || !program) return;
-    if (engine.selected.length === 0 || stake <= 0n) return;
-    setDeployBusy(true);
-    setDeployNote(null);
-    try {
-      sfx("click");
-      const signature = await buyPosition(
-        program,
-        { publicKey },
-        pool,
-        epochAddress(pool.address, active.epochId),
-        active.epochId,
-        active.id,
-        mask,
-        stake,
-      );
-      setDeployNote(
-        `deployed ${fmt(stake * BigInt(engine.selected.length))} ET on ${engine.selected.length} tiles`,
-      );
-      lastDeployRef.current = { tiles: [...engine.selected], stake };
-      sfx("prime");
-      void signature;
-      refresh();
-    } catch (error) {
-      setDeployNote(error instanceof Error ? error.message : String(error));
-    } finally {
-      setDeployBusy(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, active, publicKey, program, mask, stake, engine.selected, refresh]);
+  /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction was sent. */
+  const deploy = useCallback(
+    async (tiles: number[], stakeAmount: bigint): Promise<boolean> => {
+      if (!pool || !openRound || !txSigner || !program) return false;
+      if (tiles.length === 0 || stakeAmount <= 0n) return false;
+      setDeployBusy(true);
+      setDeployNote(null);
+      try {
+        sfx("click");
+        const tileMask = tiles.reduce(
+          (acc, tile) => acc | (1n << BigInt(tile - 1)),
+          0n,
+        );
+        const spendNow = stakeAmount * BigInt(tiles.length);
+        await buyPosition(
+          program,
+          txSigner,
+          pool,
+          openRound.roundId,
+          tileMask,
+          stakeAmount,
+        );
+        const entriesAfter = entries - spendNow;
+        setDeployNote(
+          `Entries in ${fmt(spendNow)} · Entries after ${fmt(entriesAfter)} · withdrawable after ${fmt(withdrawable(principal, entriesAfter))}`,
+        );
+        lastDeployRef.current = { tiles: [...tiles], stake: stakeAmount };
+        sfx("prime");
+        refresh();
+        return true;
+      } catch (error) {
+        setDeployNote(error instanceof Error ? error.message : String(error));
+        return false;
+      } finally {
+        setDeployBusy(false);
+      }
+    },
+    [pool, openRound, txSigner, program, entries, principal, fmt, refresh],
+  );
 
   const doDeposit = useCallback(
     async (amount: bigint) => {
-      if (!pool || !publicKey || !program || !latestEpochKey) {
-        setVaultNote("connect a wallet and make sure an epoch exists");
+      if (!pool || !txSigner || !program) {
+        setVaultNote("connect a wallet first");
         return;
       }
       if (amount <= 0n) return;
@@ -223,9 +250,9 @@ export function App() {
       setVaultNote(null);
       try {
         sfx("click");
-        await deposit(program, { publicKey }, pool, latestEpochKey, amount);
+        await deposit(program, txSigner, pool, amount);
         setVaultNote(
-          `deposited ${fmt(amount)} ${symbolOf(pool)} → PT + ET minted`,
+          `deposited ${fmt(amount)} ${SYMBOL} → +${fmt(amount)} Principal and Entries`,
         );
         sfx("feed");
         refresh();
@@ -235,61 +262,48 @@ export function App() {
         setDepositBusy(false);
       }
     },
-    [pool, publicKey, program, latestEpochKey, refresh],
+    [pool, txSigner, program, fmt, refresh],
   );
 
-  // Auto-request the round draw once buys close (permissionless instruction).
-  const autoRequestedRef = useRef<string | null>(publicKey?.toBase58() ?? null);
-  autoRequestedRef.current = null; // reset each render; set below per round
-  const autoKey =
-    active && active.status === ROUND_OPEN
-      ? roundKey(active.epochId, active.id)
-      : null;
-  const autoRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!program || !pool || !publicKey) return;
-    if (!autoKey) return;
-    if (autoRef.current.has(autoKey)) return;
-    // Only fire when the round is actually closed for buys.
-    if (
-      !active ||
-      phaseFor(active, now ?? 0n, pool.roundCloseBufferSeconds) === "mine"
-    )
-      return;
-    autoRef.current.add(autoKey);
-    void requestRoundRandomness(
-      program,
-      { publicKey },
-      pool,
-      epochAddress(pool.address, active.epochId),
-      active.epochId,
-      active.id,
-    )
-      .then(() => refresh())
-      .catch(() => {
-        // Operator may have raced us; the settle poll covers it either way.
-      });
-  }, [autoKey, active, now, program, pool, publicKey, refresh]);
-
-  // Auto-rounds: re-deploy the last board when a fresh round opens.
-  const lastDeployRef = useRef<{ tiles: number[]; stake: bigint } | null>(null);
+  // Auto-rounds: re-place the last board when a fresh round opens. The
+  // counter and the "handled this round" marker only move after deploy()
+  // reports the transaction was actually sent — a board that can't be
+  // placed (see decideAutoRound) leaves both alone, so it retries next
+  // round instead of silently eating one.
+  const lastDeployRef = useRef<RememberedBoard | null>(null);
   const autoRoundRef = useRef<string | null>(null);
   useEffect(() => {
-    if (autoRounds <= 0 || !lastDeployRef.current || !pool) return;
-    if (!active || active.status !== ROUND_OPEN) return;
-    const key = roundKey(active.epochId, active.id);
+    if (autoRounds <= 0 || !pool || !openRound || deployBusy) return;
+    const key = openRound.roundId.toString();
     if (autoRoundRef.current === key) return;
-    if (position) return;
-    if (phaseFor(active, now ?? 0n, pool.roundCloseBufferSeconds) !== "mine")
-      return;
-    autoRoundRef.current = key;
-    setAutoRounds((value) => value - 1);
-    const tiles = lastDeployRef.current.tiles;
-    const stakeForRound = lastDeployRef.current.stake;
-    setStakeText(formatAtomic(stakeForRound, decimals));
-    engine.setSelected(tiles);
-    void deploy();
-  }, [active, autoRounds, position, now, decimals, engine, deploy]);
+    const phase = phaseFor(openRound, now ?? 0n, pool.closeBuffer);
+    const decision = decideAutoRound(
+      lastDeployRef.current,
+      entries,
+      phase,
+      Boolean(position),
+    );
+    if (decision.action === "skip") return;
+    const { tiles, stake: stakeForRound } = decision;
+    void (async () => {
+      const placed = await deploy(tiles, stakeForRound);
+      if (!placed) return;
+      autoRoundRef.current = key;
+      setAutoRounds((value) => value - 1);
+      setStakeText(formatAtomic(stakeForRound, DECIMALS));
+      engine.setSelected(tiles);
+    })();
+  }, [
+    openRound,
+    autoRounds,
+    position,
+    now,
+    pool,
+    entries,
+    deployBusy,
+    engine,
+    deploy,
+  ]);
 
   // Theme attribute + sound subscription.
   useEffect(() => {
@@ -299,52 +313,48 @@ export function App() {
 
   const canPick = Boolean(
     pool &&
-      active &&
-      phaseFor(active, now ?? 0n, pool.roundCloseBufferSeconds) === "mine" &&
+      openRound &&
+      phaseFor(openRound, now ?? 0n, pool.closeBuffer) === "mine" &&
       !locked &&
       connected,
   );
-  const canDeploy = canPick;
 
-  const rewardState = useMemo(() => {
-    const settled = engine.settled;
-    if (!settled || !publicKey) return null;
-    const own = state.positions.get(roundKey(settled.epochId, settled.id));
-    if (!own || own.rewardClaimed) return null;
-    if (!covers(own.tiles, settled.winningTile)) return null;
-    const reward = expectedReward(settled, own);
-    if (reward <= 0n) return null;
-    return { round: settled, reward };
-  }, [engine.settled, state.positions, publicKey]);
-  const rewardHint = rewardState
-    ? `round #${rewardState.round.id}: you covered tile ${displayTile(rewardState.round.winningTile)} — ${fmt(rewardState.reward)} ET bonus`
+  // A revealed round leaves the Position open until it is settled; that is the
+  // permissionless instruction which credits the round reward as Entries.
+  const settleState = useMemo(() => {
+    if (!round || !position || !publicKey) return null;
+    if (!isRevealed(round)) return null;
+    const reward = covers(position.tiles, round.winningTile)
+      ? expectedReward(round, position)
+      : 0n;
+    return { roundId: round.roundId, winningTile: round.winningTile, reward };
+  }, [round, position, publicKey]);
+  const rewardHint = settleState
+    ? settleState.reward > 0n
+      ? `round #${settleState.roundId}: you covered tile ${displayTile(settleState.winningTile)} — settle for +${fmt(settleState.reward)} Entries`
+      : `round #${settleState.roundId}: settle to close your position and get its rent back`
     : null;
 
-  const [claimRewardBusy, setClaimRewardBusy] = useState(false);
-  const claimReward = useCallback(async () => {
-    if (!rewardState || !pool || !publicKey || !program) return;
-    setClaimRewardBusy(true);
+  const [settleBusy, setSettleBusy] = useState(false);
+  const settle = useCallback(async () => {
+    if (!settleState || !pool || !txSigner || !program) return;
+    setSettleBusy(true);
     try {
       sfx("land");
-      await claimRoundReward(
-        program,
-        { publicKey },
-        pool,
-        epochAddress(pool.address, rewardState.round.epochId),
-        rewardState.round.epochId,
-        rewardState.round.id,
+      await settlePosition(program, txSigner, pool, settleState.roundId);
+      setDeployNote(
+        settleState.reward > 0n
+          ? `round reward settled: +${fmt(settleState.reward)} Entries`
+          : "position settled",
       );
-      setDeployNote(`round reward claimed: +${fmt(rewardState.reward)} ET`);
-      sfx("win");
+      if (settleState.reward > 0n) sfx("win");
       refresh();
     } catch (error) {
       setDeployNote(error instanceof Error ? error.message : String(error));
     } finally {
-      setClaimRewardBusy(false);
+      setSettleBusy(false);
     }
-  }, [rewardState, pool, publicKey, program, refresh]);
-
-  const lastWinDisplay = engine.lastWin;
+  }, [settleState, pool, txSigner, program, fmt, refresh]);
 
   return (
     <main className="app">
@@ -355,20 +365,34 @@ export function App() {
         </div>
         <nav className="nav" aria-label="Sections">
           {TABS.map((candidate) => (
-            <span
-              key={candidate}
-              role="button"
-              className={`nav-item${tab === candidate ? " active" : ""}`}
-              data-testid={`tab-${candidate.toLowerCase()}`}
-              onClick={() => setTab(candidate)}
+            <button
+              key={candidate.id}
+              type="button"
+              className={`nav-item${tab === candidate.id ? " active" : ""}`}
+              data-testid={`tab-${candidate.id.toLowerCase().replace(" ", "-")}`}
+              onClick={() => setTab(candidate.id)}
             >
-              {candidate}
-            </span>
+              <span className="nav-item-long">{candidate.long}</span>
+              <span className="nav-item-short">{candidate.short}</span>
+            </button>
           ))}
         </nav>
         <div className="topbar-right">
-          <span className="chip" data-testid="cluster-label">
-            {cluster}
+          <span
+            className="chip"
+            data-testid="status-pill"
+            title={status.detail}
+            aria-label={status.label}
+          >
+            <span
+              className={`dot ${status.tone === "ok" ? "ok" : "warn"}`}
+              aria-hidden="true"
+            />
+            <span className="chip-label">
+              {status.label.length > 24
+                ? `${status.label.slice(0, 24)}…`
+                : status.label}
+            </span>
           </span>
           <span className="chip" data-testid="slot-chip">
             {now !== null ? `T+${now.toString()}` : "SYNC…"}
@@ -426,20 +450,42 @@ export function App() {
             </span>
           </button>
           <span data-testid="wallet-connector">
-            <button
-              type="button"
-              className="btn-connect"
-              data-testid="connect-button"
-              onClick={() =>
-                signer.connected ? signer.disconnect() : signer.connect()
-              }
-            >
-              {!signer.connected
-                ? "CONNECT"
-                : signer.publicKey
-                  ? `${signer.publicKey.toBase58().slice(0, 4)}…${signer.publicKey.toBase58().slice(-4)}`
-                  : "DISCONNECT"}
-            </button>
+            {signer.connected && signer.publicKey ? (
+              <>
+                <button
+                  type="button"
+                  className="btn-connect"
+                  data-testid="connect-button"
+                  title={`Copy ${signer.publicKey.toBase58()}`}
+                  onClick={() => void copyAddress(signer.publicKey!.toBase58())}
+                >
+                  {addressCopied
+                    ? "COPIED"
+                    : `${signer.publicKey.toBase58().slice(0, 4)}…${signer.publicKey.toBase58().slice(-4)}`}
+                </button>
+                <button
+                  type="button"
+                  className="btn-disconnect"
+                  data-testid="disconnect-button"
+                  title="Disconnect"
+                  aria-label="Disconnect wallet"
+                  onClick={() => signer.disconnect()}
+                >
+                  ×
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn-connect"
+                data-testid="connect-button"
+                onClick={() =>
+                  signer.connected ? signer.disconnect() : signer.connect()
+                }
+              >
+                {signer.connected ? "DISCONNECT" : "CONNECT"}
+              </button>
+            )}
           </span>
         </div>
       </header>
@@ -455,8 +501,9 @@ export function App() {
           <>
             <Arena
               engine={engine}
-              symbol={symbolOf(pool)}
+              symbol={SYMBOL}
               canPick={canPick}
+              operatorStale={status.stale}
               onToggleTile={(n) => {
                 sfx("click");
                 engine.setSelected(
@@ -468,207 +515,124 @@ export function App() {
             />
             <ControlPanel
               engine={engine}
-              balances={state.balances}
-              decimals={decimals}
-              symbol={symbolOf(pool)}
+              principal={principal}
+              entries={entries}
+              walletBalance={state.walletBalance}
+              decimals={DECIMALS}
+              symbol={SYMBOL}
               stakeText={stakeText}
               setStakeText={setStakeText}
               autoRounds={autoRounds}
               setAutoRounds={setAutoRounds}
-              canDeploy={canDeploy}
+              canDeploy={canPick}
               deployProblems={problems}
               deployBusy={deployBusy}
               deployNote={deployNote}
               locked={locked}
               deployedTotal={deployedTotal}
-              lastWin={lastWinDisplay}
+              lastWin={engine.lastWin}
               feed={feed}
               rewardHint={rewardHint}
-              claimRewardBusy={claimRewardBusy}
-              onClaimReward={() => void claimReward()}
-              onDeploy={() => void deploy()}
+              settleBusy={settleBusy}
+              onSettle={() => void settle()}
+              onDeploy={() => void deploy(engine.selected, stake)}
               onDeposit={(amount) => void doDeposit(amount)}
               depositBusy={depositBusy}
               vaultNote={vaultNote}
             />
+            <StakeBarButton
+              stakeText={stakeText}
+              selected={engine.selected}
+              position={position}
+              phase={engine.phase}
+              decimals={DECIMALS}
+              onOpen={() => setDrawerOpen(true)}
+            />
+            <BetDrawer
+              open={drawerOpen}
+              onOpenChange={setDrawerOpen}
+              soundOn={soundOn}
+              onToggleSound={() => {
+                const next = !soundOn;
+                setSoundOn(next);
+                setSoundOnState(next);
+              }}
+              theme={theme}
+              onToggleTheme={() =>
+                setTheme((value) => (value === "light" ? "dark" : "light"))
+              }
+            >
+              <ControlPanel
+                engine={engine}
+                principal={principal}
+                entries={entries}
+                walletBalance={state.walletBalance}
+                decimals={DECIMALS}
+                symbol={SYMBOL}
+                stakeText={stakeText}
+                setStakeText={setStakeText}
+                autoRounds={autoRounds}
+                setAutoRounds={setAutoRounds}
+                canDeploy={canPick}
+                deployProblems={problems}
+                deployBusy={deployBusy}
+                deployNote={deployNote}
+                locked={locked}
+                deployedTotal={deployedTotal}
+                lastWin={engine.lastWin}
+                feed={feed}
+                rewardHint={rewardHint}
+                settleBusy={settleBusy}
+                onSettle={() => void settle()}
+                onDeploy={() => {
+                  // Confirmed deploy closes the drawer; a failed one leaves
+                  // it open with deployNote's error visible (spec.md
+                  // "Drawer": close states).
+                  void deploy(engine.selected, stake).then((placed) => {
+                    if (placed) setDrawerOpen(false);
+                  });
+                }}
+                onDeposit={(amount) => void doDeposit(amount)}
+                depositBusy={depositBusy}
+                vaultNote={vaultNote}
+              />
+            </BetDrawer>
           </>
         ) : null}
-        {tab === "STAKE" && publicKey && pool ? (
+        {tab === "VAULT" && publicKey && pool ? (
           <Vault
             program={program!}
             owner={publicKey}
+            sendTransaction={sendTransaction}
             pool={pool}
-            latestEpoch={latestEpoch}
-            balances={state.balances}
-            player={state.player}
+            principal={principal}
+            entries={entries}
+            walletBalance={state.walletBalance}
             paused={pool.paused}
+            now={now}
             onDone={refresh}
           />
         ) : null}
-        {tab === "EXPLORE" && publicKey && pool ? (
-          <Prizes
-            program={program!}
-            owner={publicKey}
+        {tab === "VAULT" && (!publicKey || !pool) ? (
+          <div className="screen-note err">
+            Connect a wallet with a live pool to deposit or withdraw.
+          </div>
+        ) : null}
+        {tab === "WEEKLY DRAW" ? (
+          <WeeklyDraw
+            program={program}
+            owner={publicKey ?? undefined}
+            sendTransaction={sendTransaction}
             pool={pool}
-            epochs={state.epochs}
-            epochRandomness={state.epochRandomness}
-            vaults={state.vaults}
+            now={now}
             onDone={refresh}
-            onWon={setClaimTakeover}
-            key={pool.address.toBase58()}
           />
         ) : null}
-        {tab === "EXPLORE" && (!publicKey || !pool) ? (
-          <div className="screen-note err">
-            Connect a wallet with a live pool to view prizes.
-          </div>
+        {tab === "LEADERBOARD" ? (
+          <Leaderboard owner={publicKey ?? undefined} />
         ) : null}
-        {tab === "STAKE" && (!publicKey || !pool) ? (
-          <div className="screen-note err">
-            Connect a wallet with a live pool to manage custody.
-          </div>
-        ) : null}
-        {tab === "ABOUT" ? (
-          <About symbol={symbolOf(pool)} cluster={cluster} />
-        ) : null}
+        {tab === "ABOUT" ? <About symbol={SYMBOL} /> : null}
       </main>
-
-      {/* Claim takeovers (prize/jackpot claims fire these from PRIZES) */}
-      {claimTakeover ? (
-        <div
-          className="takeover"
-          data-testid="claim-takeover"
-          onClick={() => setClaimTakeover(null)}
-        >
-          <div className="takeover-shock" />
-          <div className="takeover-title">{claimTakeover.title}</div>
-          <div className="takeover-amount">{claimTakeover.amount}</div>
-          <div className="takeover-tile">{claimTakeover.tileText}</div>
-        </div>
-      ) : null}
     </main>
   );
-}
-
-// --- helpers -----------------------------------------------------------------
-
-function eventsToRows(rows: EventRow[], owner: string | undefined): FeedRow[] {
-  const out: FeedRow[] = [];
-  for (const row of rows) {
-    const payload = row.payload ?? {};
-    const ownerText = typeof payload.owner === "string" ? payload.owner : null;
-    const who = ownerText
-      ? ownerText === owner
-        ? "you"
-        : formatAddress(ownerText)
-      : "pool";
-    if (row.name === "PositionPurchased") {
-      const tilesMask = BigInt(String(payload.tiles ?? "0"));
-      let count = 0;
-      for (let tile = 0; tile < 36; tile += 1)
-        if ((tilesMask >> BigInt(tile)) & 1n) count += 1;
-      out.push({
-        key: `${row.slot}-${row.signature}-${row.eventIndex}`,
-        who,
-        action: `−${atomicShort(String(payload.total_stake ?? "0"))} ET`,
-        tileLabel: `${count} tiles`,
-      });
-    } else if (row.name === "Deposit") {
-      out.push({
-        key: `${row.slot}-${row.signature}-${row.eventIndex}`,
-        who,
-        action: `+${atomicShort(String(payload.amount ?? "0"))} USDC`,
-        tileLabel: "deposit",
-      });
-    } else if (row.name === "RoundSettled") {
-      out.push({
-        key: `${row.slot}-${row.signature}-${row.eventIndex}`,
-        who: "pool",
-        action: `tile ${displayTile(Number(payload.winning_tile ?? 0))}`,
-        tileLabel: "settled",
-      });
-    }
-  }
-  return out;
-}
-
-function liveEventToRow(
-  event: LiveEvent,
-  owner: string | undefined,
-): FeedRow | null {
-  const data = event.data ?? {};
-  const ownerKey =
-    typeof data.owner === "string"
-      ? data.owner
-      : typeof data.user === "string"
-        ? data.user
-        : null;
-  const who = ownerKey
-    ? ownerKey === owner
-      ? "you"
-      : formatAddress(ownerKey)
-    : "pool";
-  switch (event.name) {
-    case "PositionPurchased": {
-      const tilesMask = BigInt(String(data.tiles ?? "0"));
-      let count = 0;
-      for (let tile = 0; tile < 36; tile += 1)
-        if ((tilesMask >> BigInt(tile)) & 1n) count += 1;
-      return {
-        key: event.key,
-        who,
-        action: `−${atomicShort(String(data.totalStake ?? data.total_stake ?? "0"))} ET`,
-        tileLabel: `${count} tiles`,
-      };
-    }
-    case "Deposited":
-      return {
-        key: event.key,
-        who,
-        action: `+${atomicShort(String(data.amount ?? "0"))} USDC`,
-        tileLabel: "deposit",
-      };
-    case "RoundSettled":
-      return {
-        key: event.key,
-        who: "pool",
-        action: `tile ${displayTile(Number(data.winningTile ?? data.winning_tile ?? 0))}`,
-        tileLabel: "settled",
-      };
-    case "RoundRewardClaimed":
-      return {
-        key: event.key,
-        who,
-        action: `+${atomicShort(String(data.reward ?? "0"))} ET`,
-        tileLabel: "reward",
-      };
-    default:
-      return null;
-  }
-}
-
-function mergeFeed(
-  live: FeedRow[],
-  history: FeedRow[],
-  owner: string | undefined,
-): FeedRow[] {
-  void owner;
-  const seen = new Set<string>();
-  const out: FeedRow[] = [];
-  for (const row of [...live, ...history]) {
-    if (seen.has(row.key)) continue;
-    seen.add(row.key);
-    out.push(row);
-    if (out.length >= 12) break;
-  }
-  return out;
-}
-
-/** Atomic string (6dp) → compact decimal text without floats. */
-function atomicShort(text: string): string {
-  const clean = text.replace(/[^0-9]/g, "") || "0";
-  const padded = clean.padStart(7, "0");
-  const whole = padded.slice(0, padded.length - 6).replace(/^0+(?=\d)/, "");
-  const frac = padded.slice(padded.length - 6).replace(/0+$/, "");
-  return frac ? `${whole}.${frac}` : whole;
 }

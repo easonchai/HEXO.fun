@@ -8,14 +8,14 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-hex_vault = "6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB"
+hex_vault = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6"
 
 [programs.devnet]
-hex_vault = "6aDFSdwXESHF7UXJRCkHogNtUTbDPajmLupsfvzTSGvB"
+hex_vault = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6"
 
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "pnpm run test:unit && pnpm exec vitest run tests"
+test = "sh tests/run-local.sh"

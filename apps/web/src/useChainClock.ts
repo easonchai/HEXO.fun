@@ -1,12 +1,13 @@
 /**
  * Chain-anchored clock. Every countdown and window check derives from chain
  * block time, not the browser clock — local test validators run chain time
- * far faster than wall time, so wall-clock timers would lie. We anchor once
- * via getBlockTime on a recent slot, tick locally between resyncs, and resync
- * periodically (and on focus) to absorb drift.
+ * far faster than wall time, so wall-clock timers would lie. We anchor on the
+ * Clock sysvar (slot and unix_timestamp in one account read, the same source
+ * the program's `now()` uses), tick locally between resyncs, and resync every
+ * minute to absorb drift.
  */
 import { useEffect, useRef, useState } from "react";
-import type { Connection } from "@solana/web3.js";
+import { SYSVAR_CLOCK_PUBKEY, type Connection } from "@solana/web3.js";
 
 export interface ChainClock {
   /** Chain time in seconds, ticking ~4x/second. Null until first anchor. */
@@ -15,7 +16,16 @@ export interface ChainClock {
   slot: number | null;
 }
 
-const RESYNC_MS = 15_000;
+const RESYNC_MS = 60_000;
+
+/** Clock sysvar layout: slot u64 at 0, unix_timestamp i64 at 32. */
+const readClock = (data: Uint8Array): { slot: number; unixTimestamp: number } => {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    slot: Number(view.getBigUint64(0, true)),
+    unixTimestamp: Number(view.getBigInt64(32, true)),
+  };
+};
 
 export function useChainClock(connection: Connection): ChainClock {
   const [state, setState] = useState<ChainClock>({ now: null, slot: null });
@@ -27,12 +37,12 @@ export function useChainClock(connection: Connection): ChainClock {
 
     const anchor = async () => {
       try {
-        const slot = await connection.getSlot("confirmed");
-        const blockTime = await connection.getBlockTime(slot);
-        if (blockTime === null || cancelled) return;
-        offsetRef.current = blockTime * 1000 - performance.now();
+        const info = await connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY, "confirmed");
+        if (!info || cancelled) return;
+        const { slot, unixTimestamp } = readClock(info.data);
+        offsetRef.current = unixTimestamp * 1000 - performance.now();
         setState((current) => ({
-          now: BigInt(blockTime),
+          now: BigInt(unixTimestamp),
           slot: Math.max(current.slot ?? 0, slot),
         }));
       } catch {

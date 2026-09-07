@@ -40,5 +40,7 @@ export default defineConfig({
     global: "globalThis",
   },
   // Bigint money math and u64 LE encoding need ES2020+.
-  build: { target: "es2022" },
+  build: {
+    target: "es2022",
+  },
 });

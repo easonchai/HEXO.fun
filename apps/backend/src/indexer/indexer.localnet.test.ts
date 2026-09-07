@@ -1,0 +1,423 @@
+// The indexer against a real validator and a real Postgres, ticket 06's third
+// acceptance check. Skipped unless HEXVAULT_INDEXER_LOCALNET is set, because
+// it needs the program deployed:
+//
+//   HEXVAULT_SKIP_BUILD=1 HEXVAULT_RPC_PORT=9199 HEXVAULT_INDEXER_LOCALNET=1 \
+//     sh tests/run-local.sh --root apps/backend --config vitest.config.ts \
+//     src/indexer/indexer.localnet.test.ts
+//
+// run-local.sh ends in `pnpm exec vitest` from the repo root, so `--root`
+// points vitest at this package and `--config` is then relative to it.
+//
+// The chain setup is spelled out here rather than imported from
+// `tests/helpers/hx.ts`: that file is written for the root tsconfig and does
+// not typecheck under this package's, and pulling it in would also drag
+// `tests/` into `nest build`'s output.
+process.env.DATABASE_URL = "postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault_indexer";
+
+import { BN } from "@anchor-lang/core";
+import type { ConfigService } from "@nestjs/config";
+import {
+  createAccount,
+  createMint,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import {
+  Connection,
+  Keypair,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+} from "@solana/web3.js";
+import bs58 from "bs58";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { ChainService } from "../chain/chain.service";
+import { loadIdl } from "../chain/idl";
+import type { HexVaultEnv } from "../config/env";
+import { PrismaService } from "../prisma/prisma.service";
+import { IndexerService } from "./indexer.service";
+
+// Pinned at pool creation and forwarded to ORAO. The `test-vrf` build never
+// reads either, so any pubkey would do on localnet; these are the real devnet
+// ones so the setup matches what the operator will send.
+const VRF_NETWORK_STATE = new PublicKey("5ER1oENnV4srxYdAynUfRzWeQCPQaqMiAp4VqyMbSqnK");
+const VRF_TREASURY = new PublicKey("9ZTHWWZDpB36UFe1vszf2KEpt83vwi27jDqtHQ7NSXyR");
+const VRF_PROGRAM = new PublicKey("VRFzZoJdhFWL8rkvu87LpKM3RbcVezpMEc6X5GVDr7y");
+
+const ROUND_SECONDS = 15;
+const DEPOSIT = 5_000_000n;
+const STAKE = 1_000_000n;
+/** Bit 0 of the tile mask: the position covers tile 0 and nothing else. */
+const TILE_ZERO = 1n;
+
+/**
+ * `Program<Idl>` types every instruction as possibly undefined, because which
+ * ones exist is only known once the IDL is read. These are the shapes the
+ * builder actually has.
+ */
+interface MethodBuilder {
+  accountsPartial(accounts: Record<string, PublicKey>): MethodBuilder;
+  signers(signers: Keypair[]): MethodBuilder;
+  rpc(): Promise<string>;
+}
+type Instruction =
+  | "createPool"
+  | "beginEpoch"
+  | "deposit"
+  | "createRound"
+  | "buyPosition"
+  | "requestRoundRandomness"
+  | "testFulfill"
+  | "settleRound"
+  | "settlePosition";
+type Methods = { [K in Instruction]: (...args: unknown[]) => MethodBuilder };
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Polls until `check` holds, or fails saying what it was still waiting for. */
+async function waitFor(what: string, check: () => Promise<boolean>, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    if (await check()) return;
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}`);
+    }
+    await sleep(100);
+  }
+}
+
+describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on localnet", () => {
+  let connection: Connection;
+  let chain: ChainService;
+  let methods: Methods;
+  let prisma: PrismaService;
+  let indexer: IndexerService;
+
+  const authority = Keypair.generate();
+  const depositor = Keypair.generate();
+  const poolId = BigInt(Date.now());
+
+  let round: PublicKey;
+  let position: PublicKey;
+  let roundEndsAt: number;
+  let startedAt = 0;
+
+  /** The validator's slot-derived clock, which lags wall time under load. */
+  async function chainNow(): Promise<number> {
+    const slot = await connection.getSlot("confirmed");
+    const at = await connection.getBlockTime(slot);
+    if (at === null) throw new Error("validator has no block time yet");
+    return at;
+  }
+
+  async function waitUntil(seconds: number): Promise<void> {
+    for (;;) {
+      const remaining = seconds + 1 - (await chainNow());
+      if (remaining <= 0) return;
+      await sleep(Math.max(300, remaining * 1_000));
+    }
+  }
+
+  async function airdrop(to: PublicKey, sol: number): Promise<void> {
+    const signature = await connection.requestAirdrop(to, sol * LAMPORTS_PER_SOL);
+    await connection.confirmTransaction(signature, "confirmed");
+  }
+
+  /** The `test-vrf` stand-in randomness account for a request seed. */
+  function randomnessAddress(seed: Uint8Array): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("test-vrf"), Buffer.from(seed)],
+      chain.programId,
+    )[0];
+  }
+
+  beforeAll(async () => {
+    const rpcUrl = process.env.ANCHOR_PROVIDER_URL;
+    if (!rpcUrl) throw new Error("ANCHOR_PROVIDER_URL is unset; run this through tests/run-local.sh");
+    connection = new Connection(rpcUrl, "confirmed");
+
+    const env: Partial<HexVaultEnv> = {
+      AUTHORITY_KEYPAIR: bs58.encode(authority.secretKey),
+      POOL_ID: poolId.toString(),
+      // The address baked into the IDL snapshot is the one run-local.sh
+      // deploys, so the two cannot drift apart within a run.
+      PROGRAM_ID: loadIdl().address,
+      RPC_URL: rpcUrl,
+    };
+    // SAFETY: ChainService reads only those four keys through `get`.
+    const config = {
+      get: (key: keyof HexVaultEnv) => env[key],
+    } as unknown as ConfigService<HexVaultEnv, true>;
+    chain = new ChainService(connection, config);
+    // SAFETY: see MethodBuilder. A name the IDL does not have is undefined
+    // here and throws on the call, it never sends a wrong instruction.
+    methods = chain.program.methods as unknown as Methods;
+
+    await airdrop(authority.publicKey, 20);
+    await airdrop(depositor.publicKey, 5);
+
+    const mint = await createMint(connection, authority, authority.publicKey, null, 6);
+    // Two plain accounts with their own keypairs: treasury and buyback_reserve
+    // share (mint, owner), so both cannot be the ATA.
+    const treasury = await createAccount(
+      connection,
+      authority,
+      mint,
+      authority.publicKey,
+      Keypair.generate(),
+    );
+    const buybackReserve = await createAccount(
+      connection,
+      authority,
+      mint,
+      authority.publicKey,
+      Keypair.generate(),
+    );
+
+    const pool = chain.poolAddress();
+    await methods
+      .createPool({
+        poolId: new BN(poolId.toString()),
+        vrfNetworkState: VRF_NETWORK_STATE,
+        epochSeconds: new BN(3_600),
+        roundSeconds: new BN(ROUND_SECONDS),
+        closeBuffer: new BN(2),
+        vrfTimeout: new BN(5),
+        minDeposit: new BN(1_000_000),
+      })
+      .accountsPartial({
+        authority: authority.publicKey,
+        pool,
+        acceptedMint: mint,
+        principalVault: chain.principalVaultAddress(),
+        jackpotVault: chain.jackpotVaultAddress(),
+        house: chain.playerAddress(authority.publicKey),
+        treasury,
+        buybackReserve,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    await methods
+      .beginEpoch()
+      .accountsPartial({
+        authority: authority.publicKey,
+        pool,
+        currentEpoch: chain.epochAddress(0n),
+        newEpoch: chain.epochAddress(1n),
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const ata = await getOrCreateAssociatedTokenAccount(
+      connection,
+      authority,
+      mint,
+      depositor.publicKey,
+    );
+    await mintTo(connection, authority, mint, ata.address, authority, 10_000_000n);
+
+    await methods
+      .deposit(new BN(DEPOSIT.toString()))
+      .accountsPartial({
+        owner: depositor.publicKey,
+        pool,
+        player: chain.playerAddress(depositor.publicKey),
+        acceptedMint: mint,
+        ownerToken: ata.address,
+        principalVault: chain.principalVaultAddress(),
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([depositor])
+      .rpc();
+
+    const startsAt = await chainNow();
+    roundEndsAt = startsAt + ROUND_SECONDS;
+    round = chain.roundAddress(1n);
+    position = chain.positionAddress(round, depositor.publicKey);
+    await methods
+      .createRound(new BN(startsAt), new BN(roundEndsAt))
+      .accountsPartial({
+        authority: authority.publicKey,
+        pool,
+        currentEpoch: chain.epochAddress(1n),
+        round,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    await methods
+      .buyPosition(new BN(TILE_ZERO.toString()), new BN(STAKE.toString()))
+      .accountsPartial({
+        owner: depositor.publicKey,
+        pool,
+        player: chain.playerAddress(depositor.publicKey),
+        round,
+        position,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([depositor])
+      .rpc();
+
+    prisma = new PrismaService();
+    await prisma.$connect();
+    await wipe(prisma);
+
+    indexer = new IndexerService(prisma, chain);
+    // The real boot path: the boot sweep, the confirmed-log sync trigger and
+    // the finalized log subscription.
+    indexer.onModuleInit();
+    startedAt = Date.now();
+  }, 180_000);
+
+  afterAll(async () => {
+    if (indexer) await indexer.onModuleDestroy();
+    if (prisma) {
+      await wipe(prisma);
+      await prisma.$disconnect();
+    }
+  });
+
+  it("mirrors the player, the round and the position within 4 s", async () => {
+    await waitFor(
+      "the deposit and the round to reach Postgres",
+      async () =>
+        (await prisma.player.count()) > 0 &&
+        (await prisma.round.count()) > 0 &&
+        (await prisma.position.count()) > 0,
+      // The boot sweep runs at once; the ticket's 4 s budget covers one RPC round trip.
+      4_000 - (Date.now() - startedAt),
+    );
+    expect(Date.now() - startedAt).toBeLessThan(4_000);
+
+    expect(await prisma.player.findMany({ where: { isHouse: false } })).toMatchObject([
+      { owner: depositor.publicKey.toBase58(), principal: DEPOSIT, entries: DEPOSIT - STAKE },
+    ]);
+    expect(await prisma.round.findMany()).toMatchObject([
+      { id: 1n, epochId: 1n, status: 0, pot: STAKE, winningTile: null },
+    ]);
+    expect(await prisma.position.findMany()).toMatchObject([
+      {
+        address: position.toBase58(),
+        owner: depositor.publicKey.toBase58(),
+        roundId: 1n,
+        tiles: TILE_ZERO,
+        stakePerTile: STAKE,
+        settled: false,
+      },
+    ]);
+    expect(await prisma.pool.findMany()).toMatchObject([
+      { poolId, totalPrincipal: DEPOSIT, currentEpochId: 1n },
+    ]);
+  }, 30_000);
+
+  it("drops the Position row once settle_position closes the account", async () => {
+    await waitUntil(roundEndsAt);
+
+    const info = await connection.getAccountInfo(round);
+    if (!info) throw new Error("the round account vanished");
+    const decoded = chain.program.coder.accounts.decode<{ vrfSeed: number[] }>("round", info.data);
+    const seed = Uint8Array.from(decoded.vrfSeed);
+    const randomness = randomnessAddress(seed);
+
+    await methods
+      .requestRoundRandomness()
+      .accountsPartial({
+        payer: authority.publicKey,
+        pool: chain.poolAddress(),
+        round,
+        randomness,
+        vrfNetworkState: VRF_NETWORK_STATE,
+        vrfTreasury: VRF_TREASURY,
+        vrfProgram: VRF_PROGRAM,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    // Leading LE u64 zero, so tile 0 wins: the tile this position covers, so
+    // settle_position takes the reward path rather than the empty one.
+    const drawn = new Uint8Array(64).fill(0);
+    await methods
+      .testFulfill(Array.from(seed), Array.from(drawn))
+      .accountsPartial({
+        payer: authority.publicKey,
+        randomness,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    await methods
+      .settleRound()
+      .accountsPartial({
+        authority: authority.publicKey,
+        pool: chain.poolAddress(),
+        round,
+        randomness,
+        house: chain.playerAddress(authority.publicKey),
+      })
+      .rpc();
+
+    await waitFor(
+      "the settled round to reach Postgres",
+      async () => (await prisma.round.findUnique({ where: { id: 1n } }))?.winningTile === 0,
+      8_000,
+    );
+
+    await methods
+      .settlePosition()
+      .accountsPartial({
+        pool: chain.poolAddress(),
+        round,
+        player: chain.playerAddress(depositor.publicKey),
+        owner: depositor.publicKey,
+        position,
+      })
+      .rpc();
+
+    await waitFor(
+      "the closed Position row to be deleted",
+      async () => (await prisma.position.count()) === 0,
+      8_000,
+    );
+  }, 120_000);
+
+  it("stores the round's finalized events and leaves a cursor behind", async () => {
+    const wanted = ["Deposited", "RoundOpened", "PositionBought", "RoundSettled", "PositionSettled"];
+    await waitFor(
+      `events ${wanted.join(", ")}`,
+      async () => {
+        const stored = new Set((await prisma.event.findMany()).map((event) => event.name));
+        return wanted.every((name) => stored.has(name));
+      },
+      // Finalization on a test validator trails confirmation by a few slots.
+      90_000,
+    );
+
+    const deposited = await prisma.event.findFirstOrThrow({ where: { name: "Deposited" } });
+    expect(deposited.data).toMatchObject({
+      owner: depositor.publicKey.toBase58(),
+      amount: DEPOSIT.toString(),
+    });
+
+    const cursor = await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } });
+    expect(cursor.lastSignature).toBeTruthy();
+    expect(cursor.lastSlot).not.toBeNull();
+  }, 120_000);
+});
+
+async function wipe(prisma: PrismaService): Promise<void> {
+  await prisma.$transaction([
+    prisma.event.deleteMany(),
+    prisma.cursor.deleteMany(),
+    prisma.position.deleteMany(),
+    prisma.player.deleteMany(),
+    prisma.round.deleteMany(),
+    prisma.epoch.deleteMany(),
+    prisma.pool.deleteMany(),
+  ]);
+}

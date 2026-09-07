@@ -9,24 +9,28 @@
     "preview": "vite preview",
     "sync-idl": "node scripts/sync-idl.mjs",
     "check": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@anchor-lang/core": "1.1.2",
     "@privy-io/react-auth": "^3.39.0",
     "@solana-program/memo": "^0.13.1",
+    "@solana/kit": "^8.2.0",
     "@solana/spl-token": "0.4.14",
     "@solana/wallet-adapter-base": "0.9.27",
     "@solana/wallet-adapter-react": "0.15.39",
     "@solana/wallet-adapter-react-ui": "0.9.39",
     "@solana/web3.js": "1.98.4",
     "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "react-dom": "19.1.1",
+    "vaul": "^1.1.2"
   },
   "devDependencies": {
     "@types/react": "19.1.13",
     "@types/react-dom": "19.1.9",
     "@vitejs/plugin-react": "5.0.2",
+    "playwright": "1.62.1",
     "typescript": "5.9.2",
     "vite": "8.2.2",
     "vitest": "3.2.4"

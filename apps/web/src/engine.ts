@@ -6,63 +6,40 @@
 export const ROUND_OPEN = 0;
 export const ROUND_REQUESTED = 1;
 export const ROUND_SETTLED = 2;
+export const ROUND_FORFEITED = 3;
+export const ROUND_VOIDED = 4;
 
 export type Phase =
   | /** no round exists yet */ "idle"
-  /** buys open: countdown to the close */
+  /** positions open: countdown to ends_at */
   | "mine"
-  /** closed (or draw requested): waiting for the settle */
+  /** positions closed, not yet revealed: countdown continues to ends_at */
+  | "locked"
+  /** past ends_at, not yet revealed: countdown holds at zero */
   | "settling"
-  /** settled and revealed; waiting for the next round to be created */
+  /** settled, forfeited or voided; waiting for the next round to open */
   | "awaiting";
 
 export interface RoundLike {
+  roundId: bigint;
   epochId: bigint;
-  id: bigint;
   startsAt: bigint;
   endsAt: bigint;
   status: number;
   winningTile: number;
-  bonusEntries: bigint;
-  totalStake: bigint;
-  tileStakes: bigint[];
+  pot: bigint;
+  tileTotals: bigint[];
 }
 
 export interface PositionLike {
-  roundId: bigint;
   tiles: bigint;
   stakePerTile: bigint;
-  rewardClaimed: boolean;
 }
 
-/** Identity for a round; round ids restart in each epoch. */
-export const roundKey = (epochId: bigint, roundId: bigint): string =>
-  `${epochId}:${roundId}`;
+/** Identity for a round; round ids are unique per pool. */
+export const roundKey = (roundId: bigint): string => roundId.toString();
 
-/** Highest (epoch, round) pair (the live one), null if none. */
-export function currentRound(rounds: RoundLike[]): RoundLike | null {
-  if (rounds.length === 0) return null;
-  return rounds.reduce((latest, round) =>
-    round.epochId > latest.epochId ||
-    (round.epochId === latest.epochId && round.id > latest.id)
-      ? round
-      : latest,
-  );
-}
-
-/** Most recently settled round by (epochId, roundId), for reveal triggers. */
-export function latestSettled(rounds: RoundLike[]): RoundLike | null {
-  const settled = rounds.filter((round) => round.status === ROUND_SETTLED);
-  if (settled.length === 0) return null;
-  return settled.reduce((latest, round) =>
-    round.epochId > latest.epochId ||
-    (round.epochId === latest.epochId && round.id > latest.id)
-      ? round
-      : latest,
-  );
-}
-
-/** Protocol buys stop `buffer` seconds before the round's ends_at. */
+/** Positions stop `buffer` seconds before the round's ends_at. */
 export function buyClosesAt(round: RoundLike, bufferSeconds: bigint): bigint {
   const close = round.endsAt - bufferSeconds;
   return close > round.startsAt ? close : round.startsAt;
@@ -74,33 +51,75 @@ export function phaseFor(
   bufferSeconds: bigint,
 ): Phase {
   if (!round) return "idle";
-  if (round.status === ROUND_OPEN)
-    return now < buyClosesAt(round, bufferSeconds) ? "mine" : "settling";
-  if (round.status === ROUND_REQUESTED) return "settling";
-  return "awaiting";
+  // The clock decides first. The draw now lands during the countdown, so a
+  // round that is already Settled before ends_at stays "locked": the timer
+  // keeps running and the build-up keeps playing, and the reveal fires at
+  // zero. Reading the status first would blank the stage for those seconds,
+  // which is the dead stage this whole effort removes.
+  if (now < buyClosesAt(round, bufferSeconds)) return "mine";
+  if (now < round.endsAt) return "locked";
+  if (isRevealed(round) || round.status === ROUND_VOIDED) return "awaiting";
+  return "settling";
+}
+
+/** True once the round has a winning tile the program will pay against. */
+export const isRevealed = (round: RoundLike): boolean =>
+  round.status === ROUND_SETTLED || round.status === ROUND_FORFEITED;
+
+/** What the reveal choreography should do right now for the remembered round. */
+export type RevealDecision = "fire" | "wait" | "nothing";
+
+/**
+ * Pure reveal-firing rule: no timers, no refs. `remembered` is the first
+ * revealed (Settled or Forfeited) Round the engine ever saw for this id,
+ * kept independent of whatever Round the chain read currently returns.
+ *
+ * - No remembered result yet → "wait" (nothing to fire).
+ * - The Round is already in `played` → "nothing" (never re-animate it).
+ * - Otherwise fire once the chain clock reaches `endsAt`: at `endsAt` when
+ *   the result was known earlier, or immediately when it is checked after
+ *   `endsAt` because the result only just arrived — "wait" until then.
+ */
+export function decideReveal(
+  remembered: RoundLike | null,
+  now: bigint,
+  endsAt: bigint,
+  played: ReadonlySet<string>,
+): RevealDecision {
+  if (!remembered) return "wait";
+  if (played.has(roundKey(remembered.roundId))) return "nothing";
+  return now >= endsAt ? "fire" : "wait";
 }
 
 export const covers = (mask: bigint, tile: number): boolean =>
   ((mask >> BigInt(tile)) & 1n) === 1n;
 
-/** Expected ET reward: bonus * stake / staked-on-winning-tile (floor division). */
+/** Round reward in Entries: pot × stake / staked-on-winning-tile, floored. */
 export function expectedReward(
   round: RoundLike,
   position: PositionLike,
 ): bigint {
+  if (round.status !== ROUND_SETTLED) return 0n;
   if (!covers(position.tiles, round.winningTile)) return 0n;
-  const winningTotal = round.tileStakes[round.winningTile] ?? 0n;
+  const winningTotal = round.tileTotals[round.winningTile] ?? 0n;
   if (winningTotal === 0n) return 0n;
-  return (round.bonusEntries * position.stakePerTile) / winningTotal;
+  return (round.pot * position.stakePerTile) / winningTotal;
 }
 
-/** Seconds until buys close, clamped at zero. */
+/**
+ * Seconds until the round's ends_at, counting down through both "mine" and
+ * "locked". Zero in every other phase (idle, settling, awaiting) — settling
+ * holds at zero rather than going negative, and a revealed or voided round
+ * has nothing left to count down to.
+ */
 export function secondsLeft(
   round: RoundLike,
   bufferSeconds: bigint,
   now: bigint,
 ): bigint {
-  const left = buyClosesAt(round, bufferSeconds) - now;
+  const phase = phaseFor(round, now, bufferSeconds);
+  if (phase !== "mine" && phase !== "locked") return 0n;
+  const left = round.endsAt - now;
   return left > 0n ? left : 0n;
 }
 
@@ -115,11 +134,65 @@ export function timerText(seconds: bigint): string {
   return `${mm}:${ss}`;
 }
 
+/**
+ * HH:MM for a duration longer than a round: epoch countdowns and the
+ * Vault's "unlocks in" note. Floors to the minute; negative (already past)
+ * clamps to 00:00 rather than showing a sign.
+ */
+export function hmText(seconds: bigint): string {
+  const total = seconds > 0n ? seconds : 0n;
+  const hh = total / 3600n;
+  const mm = (total % 3600n) / 60n;
+  return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
+}
+
+/** The tiles + uniform stake remembered from the last manual deploy. */
+export interface RememberedBoard {
+  tiles: number[];
+  stake: bigint;
+}
+
+export type AutoRoundDecision =
+  | { action: "place"; tiles: number[]; stake: bigint }
+  | { action: "skip"; reason: string };
+
+/**
+ * Whether auto-rounds should re-place the remembered board in a freshly
+ * opened Round. Pure: no chain I/O, no React state.
+ */
+export function decideAutoRound(
+  board: RememberedBoard | null,
+  entries: bigint,
+  phase: Phase,
+  hasPosition: boolean,
+): AutoRoundDecision {
+  if (!board) return { action: "skip", reason: "no remembered board" };
+  if (board.tiles.length === 0)
+    return { action: "skip", reason: "remembered board has no tiles" };
+  if (board.stake <= 0n)
+    return { action: "skip", reason: "remembered stake is zero" };
+  if (hasPosition)
+    return { action: "skip", reason: "position already placed this round" };
+  if (phase !== "mine")
+    return { action: "skip", reason: "round is not open for positions" };
+  const spend = board.stake * BigInt(board.tiles.length);
+  if (spend > entries)
+    return { action: "skip", reason: "stake exceeds Entries" };
+  return { action: "place", tiles: board.tiles, stake: board.stake };
+}
+
 export interface FeedRow {
   key: string;
   /** Short address label; "you" when it is the connected wallet. */
   who: string;
-  /** Orange gain column, e.g. entry spend or "+reward". */
+  /** Orange gain column, e.g. Entries staked or "+reward". */
   action: string;
   tileLabel: string;
+  /**
+   * Round this row is about, set only for a RoundSettled or a rewarded
+   * PositionSettled row — the only rows the activity feed ever holds for a
+   * reveal. Absent on every other row, which is how the hold predicate knows
+   * to never hold it.
+   */
+  roundId?: string;
 }

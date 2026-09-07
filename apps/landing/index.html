@@ -1,0 +1,2499 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HEXO.fun — Save your money. Play your luck.</title>
+    <meta
+      name="description"
+      content="Deposit USDC and earn a 5% base yield. Everything the pool earns above that goes into the weekly jackpot. Every dollar you deposit is a ticket."
+    />
+    <link rel="canonical" href="https://hexo-landing.vercel.app/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="HEXO.fun" />
+    <meta property="og:url" content="https://hexo-landing.vercel.app/" />
+    <meta property="og:title" content="Earn 5%. Play for jackpot." />
+    <meta
+      property="og:description"
+      content="Prize-linked savings on Solana. Your deposit earns 5% and never goes into the game — every dollar is a ticket in the weekly jackpot."
+    />
+    <meta property="og:image" content="https://hexo-landing.vercel.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="HEXO.fun — Earn 5%. Play for jackpot."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Earn 5%. Play for jackpot." />
+    <meta
+      name="twitter:description"
+      content="Prize-linked savings on Solana. Your deposit earns 5% and never goes into the game."
+    />
+    <meta
+      name="twitter:image"
+      content="https://hexo-landing.vercel.app/og.png"
+    />
+    <meta name="theme-color" content="#0e1b2b" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://eu-assets.i.posthog.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&family=Syncopate:wght@400;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- PostHog. Autocapture covers pageviews, clicks, rage clicks, web vitals
+         and session replay on its own; the funnel events the form fires are
+         named in the submit handler at the bottom of this file.
+         This is PostHog's own bootstrap verbatim. Its stub queues calls made
+         before array.js lands, which is why capture() can be called anywhere
+         below without a readiness check. -->
+    <script>
+      !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],Object.defineProperty(u,"toString",{configurable:!0,enumerable:!0,writable:!0,value:function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e}}),Object.defineProperty(u.people,"toString",{configurable:!0,enumerable:!0,writable:!0,value:function(){return u.toString(1)+".people (stub)"}}),o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagResult isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+      posthog.init("phc_kKKDDiifbNXJP46pA4iqnPJ32kijcbWPEePcaVN8vHUk", {
+        api_host: "https://eu.i.posthog.com",
+        defaults: "2026-05-30",
+        person_profiles: "always",
+      });
+    </script>
+
+    <style>
+      /* ---------------------------------------------------------------
+         HEXO.fun landing — navy + lime.
+
+         Grid: 16 columns in a 1264px wrap. 60px columns, 16px gutters,
+         76px pitch. Column 1 and column 9 are the only two left edges.
+
+         Motion personality: Corporate base (this is a savings product —
+         trust reads as calm and decisive), Energetic only on the round
+         reveal, which is the game. Signature easing cubic-bezier(.2,0,0,1).
+         Duration palette: quick 160ms / standard 320ms / slow 620ms.
+         Entrance pattern everywhere: rise 18px + fade, decelerating.
+         --------------------------------------------------------------- */
+      :root {
+        --navy-900: #081120;
+        --navy-850: #0b1726;
+        --navy-800: #0e1b2b;
+        --navy-700: #132133;
+        --line: rgba(226, 228, 233, 0.1);
+        --line-2: rgba(226, 228, 233, 0.18);
+        --line-3: rgba(226, 228, 233, 0.34);
+        --ink: #f0f3f7;
+        --ink-2: #d3dae4;
+        --ink-3: #93a1b5;
+        --lime: #b6ff3b;
+        --lime-08: rgba(182, 255, 59, 0.08);
+        --lime-30: rgba(182, 255, 59, 0.3);
+        --glow: rgba(182, 255, 59, 0.75);
+        --mono: "Roboto Mono", monospace;
+        --data: "JetBrains Mono", monospace;
+        --display: "Syncopate", sans-serif;
+        --wrap: 1264px;
+        --pad: 32px;
+        --r: 2px;
+        /* motion */
+        --ease: cubic-bezier(0.2, 0, 0, 1);
+        --quick: 160ms;
+        --std: 320ms;
+        --slow: 620ms;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--navy-800);
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 16px;
+        line-height: 1.62;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .wrap {
+        max-width: var(--wrap);
+        margin: 0 auto;
+        padding-left: var(--pad);
+        padding-right: var(--pad);
+      }
+
+      .g16 {
+        display: grid;
+        grid-template-columns: repeat(16, 1fr);
+        gap: 16px;
+      }
+
+      .L {
+        grid-column: 1 / 9;
+      }
+
+      /* Right column: on column 9, with breathing room, and its first line
+         set to the headline's first line rather than the eyebrow. */
+      .R {
+        grid-column: 9 / 17;
+        padding-left: 26px;
+      }
+
+      .rules-bg {
+        position: absolute;
+        inset: 0;
+        max-width: var(--wrap);
+        margin: 0 auto;
+        padding-left: var(--pad);
+        padding-right: var(--pad);
+        display: grid;
+        grid-template-columns: repeat(16, 1fr);
+        gap: 16px;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      .rules-bg i {
+        display: block;
+        margin-left: -8px;
+        border-left: 1px solid rgba(226, 228, 233, 0.04);
+      }
+
+      .rules-bg i.spine {
+        border-left-color: rgba(226, 228, 233, 0.1);
+      }
+
+      section {
+        position: relative;
+      }
+
+      section > .wrap {
+        position: relative;
+        z-index: 2;
+      }
+
+      /* ------------------------- scroll reveal -------------------------- */
+      /* Primary layer: everything enters the same way, 18px rise + fade,
+         decelerating. Stagger caps at 5 steps so no group exceeds 300ms. */
+
+      .rv {
+        opacity: 0;
+        transform: translateY(18px);
+        transition:
+          opacity var(--slow) var(--ease),
+          transform var(--slow) var(--ease);
+        transition-delay: var(--d, 0ms);
+      }
+
+      .rv.in {
+        opacity: 1;
+        transform: none;
+      }
+
+      /* ------------------------------ type ------------------------------ */
+
+      .eyebrow,
+      .micro,
+      .k {
+        font-family: var(--data);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.19em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        margin: 0;
+      }
+
+      h1,
+      h2 {
+        font-family: var(--display);
+        font-weight: 700;
+        text-transform: uppercase;
+        margin: 0;
+        letter-spacing: 0.003em;
+      }
+
+      h1 {
+        font-size: clamp(30px, 4vw, 60px);
+        line-height: 1.08;
+      }
+
+      h2 {
+        font-size: clamp(22px, 2.1vw, 30px);
+        line-height: 1.28;
+      }
+
+      h3 {
+        font-family: var(--mono);
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        line-height: 1.45;
+        margin: 0;
+        color: var(--ink);
+      }
+
+      p {
+        margin: 0;
+        color: var(--ink-2);
+      }
+
+      .lead {
+        font-size: 16px;
+        line-height: 1.68;
+        max-width: 440px;
+      }
+
+      .body {
+        font-size: 15px;
+        line-height: 1.62;
+        max-width: 56ch;
+      }
+
+      .n {
+        font-family: var(--data);
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        color: var(--ink-3);
+      }
+
+      /* ------------------------------ nav ------------------------------- */
+
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 60;
+        background: rgba(14, 27, 43, 0.9);
+        backdrop-filter: blur(14px);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .nav-in {
+        height: 70px;
+        display: flex;
+        align-items: center;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+      }
+
+      .brand-mark {
+        color: var(--ink);
+        display: block;
+        transition: color var(--std) var(--ease);
+      }
+
+      .brand:hover .brand-mark {
+        color: var(--lime);
+      }
+
+      .brand-word {
+        font-family: var(--display);
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        color: var(--ink);
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 32px;
+        margin-left: 52px;
+      }
+
+      .nav-links a {
+        position: relative;
+        font-size: 13px;
+        color: var(--ink-3);
+        padding-bottom: 3px;
+        transition: color var(--quick) var(--ease);
+      }
+
+      /* Underline wipes in from the left rather than switching on. */
+      .nav-links a::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 1px;
+        width: 100%;
+        background: var(--lime);
+        transform: scaleX(0);
+        transform-origin: left;
+        transition: transform var(--std) var(--ease);
+      }
+
+      .nav-links a:hover {
+        color: var(--ink);
+      }
+
+      .nav-links a:hover::after {
+        transform: scaleX(1);
+      }
+
+      .nav-cta {
+        margin-left: auto;
+        font-family: var(--data);
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ink);
+        background: transparent;
+        border: 1px solid var(--line-2);
+        border-radius: var(--r);
+        padding: 11px 20px;
+        cursor: pointer;
+        transition:
+          border-color var(--std) var(--ease),
+          color var(--std) var(--ease);
+      }
+
+      .nav-cta:hover {
+        border-color: var(--lime);
+        color: var(--lime);
+      }
+
+      /* ------------------------------ buttons --------------------------- */
+      /* Press: anticipation is skipped (Corporate), but the release settles
+         with a shadow that arrives after the lift — secondary layer. */
+
+      .btn {
+        position: relative;
+        overflow: hidden;
+        font-family: var(--display);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        width: 196px;
+        flex: 0 0 196px;
+        padding: 15px 0;
+        border-radius: var(--r);
+        border: 1px solid var(--lime);
+        background: var(--lime);
+        color: var(--navy-800);
+        cursor: pointer;
+        transition:
+          transform var(--quick) var(--ease),
+          box-shadow var(--std) var(--ease),
+          filter var(--quick) var(--ease);
+      }
+
+      .btn span {
+        position: relative;
+        z-index: 1;
+      }
+
+      /* Sheen: ambient layer, one pass on hover, never looping. */
+      .btn::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          100deg,
+          transparent 30%,
+          rgba(255, 255, 255, 0.55) 50%,
+          transparent 70%
+        );
+        transform: translateX(-100%);
+        transition: transform var(--slow) var(--ease);
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 26px -10px var(--glow);
+      }
+
+      .btn:hover::before {
+        transform: translateX(100%);
+      }
+
+      .btn:active {
+        transform: translateY(0) scale(0.985);
+        box-shadow: 0 2px 10px -6px var(--glow);
+        transition-duration: 80ms;
+      }
+
+      /* ------------------------------ hero ------------------------------ */
+
+      .hero {
+        overflow: hidden;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .stage {
+        position: absolute;
+        top: 54px;
+        right: -340px;
+        width: 880px;
+        z-index: 1;
+        pointer-events: none;
+      }
+
+      .stage-svg {
+        display: block;
+        width: 100%;
+        height: auto;
+        overflow: visible;
+      }
+
+      .hero-in {
+        padding-top: 62px;
+        padding-bottom: 76px;
+      }
+
+      .hero h1 {
+        margin: 24px 0 0;
+      }
+
+      .hero h1 .hl {
+        color: var(--lime);
+      }
+
+      .hero-copy {
+        margin-top: 50px;
+        display: flex;
+        flex-direction: column;
+        gap: 26px;
+        max-width: 592px;
+      }
+
+      .proof {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 16px;
+        margin-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+
+      .proof div {
+        grid-column: span 4;
+        position: relative;
+        padding-top: 28px;
+        padding-bottom: 28px;
+      }
+
+      .proof div:nth-child(even)::before {
+        content: "";
+        position: absolute;
+        left: -8px;
+        top: 0;
+        bottom: 0;
+        border-left: 1px solid var(--line);
+      }
+
+      .proof div:nth-child(n + 3) {
+        border-top: 1px solid var(--line);
+      }
+
+      .proof b {
+        display: block;
+        font-family: var(--data);
+        font-size: 40px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        color: var(--ink);
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .proof span {
+        display: block;
+        margin-top: 14px;
+        max-width: 26ch;
+      }
+
+      /* ------------------------------ form ------------------------------ */
+
+      .form {
+        display: flex;
+        gap: 16px;
+        max-width: 592px;
+      }
+
+      .form input {
+        flex: 1;
+        min-width: 0;
+        background: var(--navy-850);
+        border: 1px solid var(--line-2);
+        border-radius: var(--r);
+        padding: 14px 16px;
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 14px;
+        outline: none;
+        transition:
+          border-color var(--std) var(--ease),
+          box-shadow var(--std) var(--ease);
+      }
+
+      .form input::placeholder {
+        color: var(--ink-3);
+      }
+
+      .form input:focus {
+        border-color: var(--lime);
+        box-shadow: 0 0 0 3px var(--lime-08);
+      }
+
+      .form.is-done {
+        display: none;
+      }
+
+      .form-done {
+        display: none;
+        max-width: 592px;
+        border: 1px solid var(--lime-30);
+        border-radius: var(--r);
+        padding: 14px 18px;
+        font-size: 14px;
+        color: var(--lime);
+        background: var(--lime-08);
+      }
+
+      .form-done.is-done {
+        display: block;
+        animation: popIn 380ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+      }
+
+      /* --- the one follow-up question --- */
+      /* The email is already saved by the time this appears, so skipping or
+         closing the tab here costs the signup nothing. */
+
+      .done-line {
+        margin: 0;
+      }
+
+      .ask {
+        display: none;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid var(--lime-30);
+      }
+
+      .form-done.is-asking .ask {
+        display: block;
+        animation: popIn 320ms var(--ease) both;
+      }
+
+      .ask-q {
+        display: block;
+        color: var(--ink-2);
+        line-height: 1.5;
+      }
+
+      .ask-in {
+        display: block;
+        width: 100%;
+        margin-top: 12px;
+        background: var(--navy-850);
+        border: 1px solid var(--line-2);
+        border-radius: var(--r);
+        padding: 12px 14px;
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 14px;
+        line-height: 1.6;
+        resize: vertical;
+        outline: none;
+        transition:
+          border-color var(--std) var(--ease),
+          box-shadow var(--std) var(--ease);
+      }
+
+      .ask-in::placeholder {
+        color: var(--ink-3);
+      }
+
+      .ask-in:focus {
+        border-color: var(--lime);
+        box-shadow: 0 0 0 3px var(--lime-08);
+      }
+
+      .ask-row {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-top: 12px;
+      }
+
+      .btn-sm {
+        flex: none;
+        padding: 10px 22px;
+        font-size: 12px;
+      }
+
+      .ask-skip {
+        background: none;
+        border: 0;
+        padding: 0;
+        color: var(--ink-3);
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: color var(--quick) var(--ease);
+      }
+
+      .ask-skip:hover {
+        color: var(--ink-2);
+      }
+
+      .ask-thanks {
+        display: none;
+        margin: 16px 0 0;
+        padding-top: 16px;
+        border-top: 1px solid var(--lime-30);
+        color: var(--ink-2);
+      }
+
+      .form-done.is-thanked .ask-thanks {
+        display: block;
+        animation: popIn 320ms var(--ease) both;
+      }
+
+      @keyframes popIn {
+        0% {
+          opacity: 0;
+          transform: scale(0.96) translateY(6px);
+        }
+        100% {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      .form-err {
+        color: #ff8a6a;
+      }
+
+      /* Errors feel firm: two oscillations, no overshoot. */
+      .shake {
+        animation: shake 320ms ease-in-out;
+      }
+
+      @keyframes shake {
+        0%,
+        100% {
+          transform: translateX(0);
+        }
+        25% {
+          transform: translateX(-7px);
+        }
+        50% {
+          transform: translateX(6px);
+        }
+        75% {
+          transform: translateX(-3px);
+        }
+      }
+
+      /* ------------------------------ sections -------------------------- */
+
+      .sec {
+        padding-top: 96px;
+        padding-bottom: 96px;
+      }
+
+      .sec-head {
+        align-items: start;
+        margin-bottom: 54px;
+      }
+
+      /* Sets the right paragraph's first line on the headline's first line. */
+      .sec-head .R {
+        padding-top: 42px;
+      }
+
+      .sec-head h2 {
+        margin-top: 18px;
+      }
+
+      /* --- 01 · steps --- */
+
+      #how {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .steps {
+        border-top: 1px solid var(--line);
+      }
+
+      .step {
+        align-items: baseline;
+        padding-top: 20px;
+        padding-bottom: 21px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .step .n {
+        grid-column: 1 / 2;
+        transition: color var(--std) var(--ease);
+      }
+
+      .step h3 {
+        grid-column: 2 / 9;
+      }
+
+      .step p {
+        grid-column: 9 / 17;
+        padding-left: 26px;
+      }
+
+      .step:hover .n {
+        color: var(--lime);
+      }
+
+      /* --- 02 · the round --- */
+
+      #play {
+        background: var(--navy-900);
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        padding-top: 88px;
+        padding-bottom: 0;
+      }
+
+      .play-head {
+        align-items: start;
+        padding-bottom: 74px;
+      }
+
+      .play-head .R {
+        padding-top: 42px;
+      }
+
+      .ruler {
+        position: relative;
+        height: 132px;
+        overflow: hidden;
+        border-bottom: 1px solid var(--line-2);
+      }
+
+      .ruler i {
+        position: absolute;
+        bottom: 0;
+        width: 1px;
+        height: 20px;
+        background: rgba(226, 228, 233, 0.26);
+        transform-origin: bottom;
+        transform: scaleY(0);
+        transition: transform 420ms var(--ease);
+        transition-delay: var(--d, 0ms);
+      }
+
+      .ruler.in i {
+        transform: scaleY(1);
+      }
+
+      .ruler i.big {
+        height: 62px;
+        background: rgba(226, 228, 233, 0.44);
+      }
+
+      /* --- the round clock -------------------------------------------------
+         One 30s loop shared by four animations, all on the same negative
+         delay so they stay in phase: the head sweeps, the close zone arms
+         green as the head enters it, and at zero the whole instrument
+         pulses to mark the draw. Copy above the ruler never moves. */
+
+      .ruler .closed {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 91.666%;
+        right: 0;
+        background: rgba(226, 228, 233, 0.06);
+        border-left: 1px solid var(--line-3);
+        opacity: 0;
+        transition: opacity var(--slow) var(--ease) 600ms;
+      }
+
+      .ruler.in .closed {
+        opacity: 1;
+      }
+
+      /* Armed the moment the head actually crosses into the zone — read
+         from its measured position each frame, never from a timestamp. */
+      .ruler.armed .closed {
+        background: var(--lime-08);
+        border-left-color: var(--lime);
+      }
+
+      .ruler .closed b {
+        position: absolute;
+        top: 4px;
+        right: 100%;
+        padding-right: 16px;
+        font-family: var(--data);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.19em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        white-space: nowrap;
+      }
+
+      .ruler.armed .closed b {
+        color: var(--lime);
+      }
+
+      .ruler .now {
+        position: absolute;
+        top: 0;
+        bottom: -1px;
+        width: 1px;
+        background: var(--lime);
+        animation: sweep 30s linear -24s infinite;
+      }
+
+      .ruler .now::after {
+        content: "";
+        position: absolute;
+        left: -3.5px;
+        bottom: -4px;
+        width: 8px;
+        height: 8px;
+        background: var(--lime);
+      }
+
+      @keyframes sweep {
+        from {
+          left: 0;
+        }
+        to {
+          left: 100%;
+        }
+      }
+
+      /* The draw lands: every tick flashes lime, then falls back. */
+      .ruler.drew i {
+        animation: tickFlash 0.85s ease-out;
+      }
+
+      @keyframes tickFlash {
+        0%,
+        22% {
+          background: var(--lime);
+          box-shadow: 0 0 10px var(--glow);
+        }
+        100% {
+          background: rgba(226, 228, 233, 0.26);
+          box-shadow: none;
+        }
+      }
+
+      .ruler.drew i.big {
+        animation-name: tickFlashBig;
+      }
+
+      @keyframes tickFlashBig {
+        0%,
+        22% {
+          background: var(--lime);
+          box-shadow: 0 0 12px var(--glow);
+        }
+        100% {
+          background: rgba(226, 228, 233, 0.44);
+          box-shadow: none;
+        }
+      }
+
+      .ruler-lbl {
+        position: relative;
+        height: 18px;
+        margin-top: 14px;
+        padding-bottom: 40px;
+      }
+
+      .ruler-lbl span {
+        position: absolute;
+        transform: translateX(-50%);
+        white-space: nowrap;
+      }
+
+      .ruler-lbl.drew span {
+        animation: lblFlash 0.85s ease-out;
+      }
+
+      @keyframes lblFlash {
+        0%,
+        22% {
+          color: var(--lime);
+          text-shadow: 0 0 12px var(--glow);
+        }
+        100% {
+          color: var(--ink-3);
+          text-shadow: none;
+        }
+      }
+
+      .ruler-lbl span:first-child {
+        transform: none;
+      }
+
+      .ruler-lbl span:last-child {
+        transform: translateX(-100%);
+      }
+
+      /* --- 03 · the draw --- */
+
+      #draw {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .figure {
+        margin-top: 68px;
+        border-top: 1px solid var(--line-2);
+        padding-top: 34px;
+        align-items: end;
+      }
+
+      .figure .fig {
+        grid-column: 1 / 9;
+        display: flex;
+        align-items: baseline;
+        gap: 26px;
+      }
+
+      .figure b {
+        font-family: var(--data);
+        font-size: clamp(88px, 13.4vw, 196px);
+        font-weight: 600;
+        letter-spacing: -0.05em;
+        line-height: 0.78;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .figure em {
+        font-family: var(--display);
+        font-style: normal;
+        font-size: clamp(24px, 3vw, 44px);
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--ink);
+      }
+
+      .figure .note {
+        grid-column: 9 / 17;
+        padding-left: 26px;
+        padding-bottom: 12px;
+      }
+
+      /* --- 04 · rulebook --- */
+
+      #rules {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .book {
+        border-top: 1px solid var(--line-2);
+        border-bottom: 1px solid var(--line-2);
+      }
+
+      .book-top > div {
+        grid-column: span 8;
+        position: relative;
+        padding-top: 36px;
+        padding-bottom: 38px;
+      }
+
+      .book-top > div + div {
+        padding-left: 26px;
+      }
+
+      .book-top > div + div::before {
+        content: "";
+        position: absolute;
+        left: -8px;
+        top: 0;
+        bottom: 0;
+        border-left: 1px solid var(--line-2);
+      }
+
+      .book-top .v {
+        display: block;
+        margin-top: 16px;
+        font-family: var(--display);
+        font-weight: 700;
+        text-transform: uppercase;
+        line-height: 1.22;
+        font-size: clamp(21px, 2.2vw, 31px);
+      }
+
+      .book-top .can .v {
+        color: var(--ink-3);
+      }
+
+      .book-top .cant .v {
+        color: var(--ink);
+      }
+
+      .book-row {
+        align-items: baseline;
+        padding-top: 20px;
+        padding-bottom: 21px;
+        border-top: 1px solid var(--line);
+      }
+
+      .book-row .n {
+        grid-column: 1 / 2;
+        transition: color var(--std) var(--ease);
+      }
+
+      .book-row h3 {
+        grid-column: 2 / 9;
+      }
+
+      .book-row p {
+        grid-column: 9 / 17;
+        padding-left: 26px;
+      }
+
+      .book-row:hover .n {
+        color: var(--lime);
+      }
+
+      /* --- 05 · questions --- */
+
+      #faq {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .faq {
+        border-top: 1px solid var(--line);
+        margin: 0;
+      }
+
+      .qa {
+        padding-top: 14px;
+        padding-bottom: 15px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .qa dt {
+        grid-column: 1 / 9;
+        font-weight: 700;
+        font-size: 15px;
+        color: var(--ink);
+      }
+
+      .qa dd {
+        grid-column: 9 / 17;
+        padding-left: 26px;
+        margin: 0;
+        color: var(--ink-2);
+        font-size: 15px;
+        line-height: 1.62;
+        max-width: 58ch;
+      }
+
+      /* --- closing --- */
+
+      .close-in {
+        padding-top: 104px;
+        padding-bottom: 108px;
+        align-items: start;
+      }
+
+      .close h2 {
+        font-size: clamp(26px, 3vw, 43px);
+        margin-top: 20px;
+      }
+
+      .close .lead {
+        margin-top: 22px;
+      }
+
+      .close .R {
+        padding-top: 60px;
+      }
+
+      /* --- footer --- */
+
+      footer {
+        position: relative;
+        background: var(--navy-850);
+        border-top: 1px solid var(--line);
+      }
+
+      .foot {
+        padding-top: 40px;
+        padding-bottom: 22px;
+        display: flex;
+        align-items: center;
+        gap: 26px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 2;
+      }
+
+      .foot-links {
+        display: flex;
+        gap: 28px;
+        margin-left: auto;
+      }
+
+      .foot-links a {
+        font-size: 13px;
+        color: var(--ink-3);
+        transition: color var(--quick) var(--ease);
+      }
+
+      .foot-links a:hover {
+        color: var(--ink);
+      }
+
+      .disclaim {
+        padding-bottom: 44px;
+        font-size: 12.5px;
+        line-height: 1.7;
+        color: var(--ink-3);
+        max-width: 58ch;
+        position: relative;
+        z-index: 2;
+      }
+
+      /* =================================================================
+         THE ARENA — ported verbatim from the app (src/arena/*, styles.css)
+         so the landing page and the product run the same reveal: the same
+         dot lattice, the same laser walk, the same textile symbols, the
+         same tile win and shockwaves. Only the accent differs.
+         ================================================================= */
+
+      @keyframes fixedLineTravel {
+        0% {
+          stroke-dashoffset: 26;
+          opacity: 1;
+        }
+        94% {
+          stroke-dashoffset: -100;
+          opacity: 1;
+        }
+        100% {
+          stroke-dashoffset: -100;
+          opacity: 0;
+        }
+      }
+
+      @keyframes symbolPop {
+        0% {
+          transform: scale(0) rotate(-45deg);
+          opacity: 0;
+        }
+        60% {
+          transform: scale(1.3) rotate(6deg);
+          opacity: 1;
+        }
+        100% {
+          transform: scale(1) rotate(0deg);
+          opacity: 1;
+        }
+      }
+
+      @keyframes symbolFadeOut {
+        0% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        100% {
+          opacity: 0;
+          transform: scale(0.4);
+        }
+      }
+
+      @keyframes tileWin {
+        0% {
+          transform: scale(1.22);
+        }
+        40% {
+          transform: scale(1.16);
+        }
+        100% {
+          transform: scale(1.18);
+        }
+      }
+
+      @keyframes shock {
+        from {
+          transform: scale(0.15);
+          opacity: 0.85;
+        }
+        to {
+          transform: scale(3.5);
+          opacity: 0;
+        }
+      }
+
+      /* Positions accumulate before the draw — one tile lands at a time and
+         nothing is ever taken back, so the board fills up to the reveal. */
+      @keyframes tilePick {
+        0% {
+          transform: scale(0.86);
+        }
+        60% {
+          transform: scale(1.1);
+        }
+        100% {
+          transform: scale(1);
+        }
+      }
+
+      .stage-svg .laser path {
+        stroke-dasharray: 26 100;
+        stroke-dashoffset: 26;
+        animation: fixedLineTravel 0.9s cubic-bezier(0.2, 0.85, 0.2, 1) forwards;
+      }
+
+      .stage-svg .dot-sym,
+      .stage-svg .tile-inner,
+      .stage-svg .shock {
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+
+      .stage-svg .tile-inner.sel {
+        animation: tilePick 0.34s cubic-bezier(0.17, 0.89, 0.32, 1.28) both;
+      }
+
+      .stage-svg .tile-inner.win {
+        animation: tileWin 0.6s ease-out forwards;
+      }
+
+      .stage-svg .shock {
+        animation: shock 0.9s ease-out forwards;
+      }
+
+      .stage-svg .shock.alt {
+        animation: shock 1.3s 0.12s ease-out forwards;
+      }
+
+      /* ------------------------------ responsive ------------------------ */
+
+      @media (max-width: 1180px) {
+        .stage {
+          right: -420px;
+          top: 130px;
+          opacity: 0.5;
+        }
+      }
+
+      @media (max-width: 1080px) {
+        h1 {
+          font-size: clamp(30px, 5.4vw, 52px);
+        }
+        /* Stacked layout: crop the board at its centre line (viewBox CY=300)
+           and dissolve the cut edge, so the copy reads under the top half of
+           the hex instead of below a full-height board. */
+        .stage {
+          position: relative;
+          right: auto;
+          top: auto;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 100%;
+          max-width: 520px;
+          opacity: 1;
+          margin: 10px 0 -18px;
+          aspect-ratio: 620 / 300;
+          overflow: hidden;
+          -webkit-mask-image: linear-gradient(
+            180deg,
+            #000 0 58%,
+            transparent 100%
+          );
+          mask-image: linear-gradient(180deg, #000 0 58%, transparent 100%);
+        }
+        .hero-in {
+          padding-top: 0;
+          padding-bottom: 48px;
+        }
+        .hero h1 {
+          margin-top: 14px;
+        }
+        .hero-copy {
+          max-width: none;
+          margin-top: 26px;
+          gap: 18px;
+        }
+        .R,
+        .step p,
+        .book-row p,
+        .qa dd,
+        .figure .note,
+        .book-top > div + div {
+          padding-left: 0;
+        }
+        .sec-head .L,
+        .sec-head .R,
+        .play-head .L,
+        .play-head .R,
+        .close-in .L,
+        .close-in .R,
+        .step .n,
+        .step h3,
+        .step p,
+        .book-row .n,
+        .book-row h3,
+        .book-row p,
+        .qa dt,
+        .qa dd,
+        .book-top > div,
+        .figure .fig,
+        .figure .note {
+          grid-column: 1 / 17;
+        }
+        .rules-bg {
+          display: none;
+        }
+        .sec-head .R,
+        .play-head .R,
+        .close .R {
+          padding-top: 26px;
+        }
+        .step .n,
+        .step h3,
+        .book-row .n,
+        .book-row h3 {
+          margin-bottom: 6px;
+        }
+        .qa dt {
+          margin-bottom: 6px;
+        }
+        .figure .note {
+          padding-bottom: 0;
+          margin-top: 22px;
+        }
+        .book-top > div + div::before {
+          display: none;
+        }
+        .book-top > div + div {
+          border-top: 1px solid var(--line-2);
+        }
+      }
+
+      @media (max-width: 760px) {
+        :root {
+          --pad: 20px;
+        }
+        .nav-links {
+          display: none;
+        }
+        .form {
+          flex-direction: column;
+        }
+        .btn {
+          width: 100%;
+          flex: none;
+        }
+        /* Send sits beside "No thanks", so it keeps its intrinsic width. */
+        .btn-sm {
+          width: auto;
+        }
+        .sec,
+        .close-in {
+          padding-top: 64px;
+          padding-bottom: 64px;
+        }
+        #play {
+          padding-top: 64px;
+        }
+        .play-head {
+          padding-bottom: 52px;
+        }
+        .hero-in {
+          padding-bottom: 40px;
+        }
+        .hero-copy {
+          margin-top: 22px;
+        }
+        .hero .lead {
+          font-size: 15px;
+          line-height: 1.58;
+        }
+        .proof b {
+          font-size: 32px;
+        }
+        .proof div {
+          padding-top: 18px;
+          padding-bottom: 18px;
+        }
+        /* "10" collides with the right-aligned "Reveal" at this width. */
+        .ruler-lbl span:nth-last-child(2) {
+          display: none;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        .rv {
+          opacity: 1;
+          transform: none;
+          transition: none;
+        }
+        .ruler i {
+          transform: scaleY(1);
+          transition: none;
+        }
+        .ruler .closed {
+          opacity: 1;
+          transition: none;
+        }
+        .ruler .now,
+        .stage-svg .core,
+        .btn::before {
+          animation: none;
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <nav class="nav">
+      <div class="wrap nav-in">
+        <a class="brand" href="#top">
+          <svg class="brand-mark" width="19" height="23" viewBox="0 0 21 25.2" fill="none" aria-hidden="true">
+            <path d="M10.5 0L14 2.1V6.3L10.5 8.4L7 6.3V2.1L10.5 0Z" fill="currentColor" />
+            <path d="M17.5 4.2L21 6.3V10.5L17.5 12.6L14 10.5V6.3L17.5 4.2Z" fill="currentColor" />
+            <path d="M17.5 12.6L21 14.7V18.9L17.5 21L14 18.9V14.7L17.5 12.6Z" fill="currentColor" />
+            <path d="M10.5 16.8L14 18.9V23.1L10.5 25.2L7 23.1V18.9L10.5 16.8Z" fill="currentColor" />
+            <path d="M3.5 12.6L7 14.7V18.9L3.5 21L0 18.9V14.7L3.5 12.6Z" fill="currentColor" />
+            <path d="M3.5 4.2L7 6.3V10.5L3.5 12.6L0 10.5V6.3L3.5 4.2Z" fill="currentColor" />
+          </svg>
+          <span class="brand-word">HEXO</span>
+        </a>
+        <div class="nav-links">
+          <a href="#how">How it works</a>
+          <a href="#play">The play</a>
+          <a href="#draw">The draw</a>
+          <a href="#rules">The rules</a>
+        </div>
+        <button class="nav-cta" data-scroll="#top">Join the waitlist</button>
+      </div>
+    </nav>
+
+    <!-- ------------------------------ hero ------------------------------ -->
+    <section class="hero" id="top">
+      <div class="rules-bg"></div>
+
+      <div class="stage">
+        <svg class="stage-svg" viewBox="0 0 620 600" fill="none" aria-hidden="true"></svg>
+      </div>
+
+      <div class="wrap hero-in">
+        <p class="eyebrow rv">Prize-linked savings on Solana</p>
+        <h1 class="rv" style="--d: 70ms">
+          Earn <span class="hl">5%</span>.<br />Play for jackpot.
+        </h1>
+
+        <div class="hero-copy">
+          <p class="lead rv" style="--d: 150ms">
+            Deposit USDC and earn a 5% base yield. Everything the pool earns
+            above that goes into the weekly jackpot. Every dollar equals a
+            ticket for the jackpot, and use them to play games to earn more.
+            Your deposits are never touched.
+          </p>
+
+          <form class="form rv" style="--d: 220ms" data-waitlist novalidate>
+            <input
+              type="email"
+              name="email"
+              placeholder="you@email.com"
+              aria-label="Email address"
+              required
+            />
+            <button class="btn" type="submit">
+              <span>Join the waitlist</span>
+            </button>
+          </form>
+          <div class="form-done" role="status">
+            <p class="done-line">
+              You're on the list. We'll email you when the pool opens.
+            </p>
+            <div class="ask">
+              <label class="ask-q"
+                >One quick thing. What would make you trust us with your
+                money?</label
+              >
+              <textarea
+                class="ask-in"
+                rows="3"
+                maxlength="2000"
+                placeholder="Anything at all. One line is plenty."
+                aria-label="What would make you trust us with your money?"
+              ></textarea>
+              <div class="ask-row">
+                <button type="button" class="btn btn-sm" data-send>
+                  <span>Send</span>
+                </button>
+                <button type="button" class="ask-skip" data-skip>
+                  No thanks
+                </button>
+              </div>
+            </div>
+            <p class="ask-thanks">Thank you. That genuinely helps.</p>
+          </div>
+
+          <p class="micro form-note rv" style="--d: 280ms">
+            No-loss · Weekly jackpot · Your deposit is never touched
+          </p>
+
+          <div class="proof">
+            <div class="rv" style="--d: 0ms">
+              <b data-count="5" data-suffix="%">5%</b>
+              <span class="k">APR base yield, paid out weekly</span>
+            </div>
+            <div class="rv" style="--d: 70ms">
+              <b data-count="100" data-suffix="%">100%</b>
+              <span class="k">Of your principal, protected</span>
+            </div>
+            <div class="rv" style="--d: 140ms">
+              <b data-count="1" data-suffix="">1</b>
+              <span class="k">Jackpot draw, every week</span>
+            </div>
+            <div class="rv" style="--d: 210ms">
+              <b data-count="60" data-suffix="s">60s</b>
+              <span class="k">Mini games to boost your chances</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------ how ------------------------------- -->
+    <section id="how">
+      <div class="rules-bg"></div>
+      <div class="wrap sec">
+        <div class="g16 sec-head">
+          <div class="L rv">
+            <p class="eyebrow">How it works</p>
+            <h2>All it takes is just one deposit.</h2>
+          </div>
+          <p class="lead R rv" style="--d: 90ms">
+            Your money always sits in the pool earning, while tickets are used
+            for playing. Your deposits are never at risk.
+          </p>
+        </div>
+
+        <div class="steps">
+          <div class="g16 step rv">
+            <div class="n">01</div>
+            <h3>Deposit USDC</h3>
+            <p class="body">
+              Your money goes into the pool and stays yours. It starts earning
+              straight away.
+            </p>
+          </div>
+          <div class="g16 step rv" style="--d: 60ms">
+            <div class="n">02</div>
+            <h3>Earn 5%</h3>
+            <p class="body">
+              You earn 5% APR yield, paid out every week, whether you play or
+              not.
+            </p>
+          </div>
+          <div class="g16 step rv" style="--d: 120ms">
+            <div class="n">03</div>
+            <h3>Every dollar is a ticket</h3>
+            <p class="body">
+              $1 deposited is 1 ticket in the weekly jackpot. The jackpot is
+              funded by everyone's additional yield.
+            </p>
+          </div>
+          <div class="g16 step rv" style="--d: 180ms">
+            <div class="n">04</div>
+            <h3>Sit tight, or play for more</h3>
+            <p class="body">
+              Do nothing and your tickets are already in this week's draw. Or
+              spend them in one-minute games to win more tickets and more
+              chances. Either way your deposit never moves.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------ play ------------------------------ -->
+    <section id="play">
+      <div class="wrap">
+        <div class="g16 play-head">
+          <div class="L rv">
+            <p class="eyebrow">The play</p>
+            <h2 style="margin-top: 18px">Rounds run every minute.</h2>
+          </div>
+          <div class="R rv" style="--d: 90ms">
+            <p class="lead">
+              Tickets are all that's at stake. Put tickets into a round. Win, and
+              you take more tickets. Lose, and you lose tickets, not dollars.
+            </p>
+            <p class="lead" style="margin-top: 20px">
+              Your deposit earns its 5% even if you lose every ticket you hold.
+              And tickets refresh every week, so a bad run is never permanent.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="ruler" id="ruler"></div>
+      <div class="wrap">
+        <div class="ruler-lbl micro" id="rulerLbl"></div>
+      </div>
+    </section>
+
+    <!-- ------------------------------ draw ------------------------------ -->
+    <section id="draw">
+      <div class="rules-bg"></div>
+      <div class="wrap sec">
+        <div class="g16 sec-head" style="margin-bottom: 0">
+          <div class="L rv">
+            <p class="eyebrow">The weekly draw</p>
+            <h2>Every week, one ticket wins the jackpot.</h2>
+          </div>
+          <p class="lead R rv" style="--d: 90ms">
+            The winner takes the jackpot. Everyone else keeps their deposit and
+            their 5%. Nobody goes home with less than they arrived with.
+          </p>
+        </div>
+
+        <div class="g16 figure">
+          <div class="fig rv">
+            <b data-count="1" data-suffix="">1</b><em>Jackpot</em>
+          </div>
+          <p class="note micro rv" style="--d: 120ms">
+            All the yield above 5%, drawn from every ticket in the pool
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------ rules ----------------------------- -->
+    <section id="rules">
+      <div class="rules-bg"></div>
+      <div class="wrap sec">
+        <div class="g16 sec-head">
+          <div class="L rv">
+            <p class="eyebrow">The rules</p>
+            <h2>Where your money sits, and what protects it.</h2>
+          </div>
+          <p class="lead R rv" style="--d: 90ms">
+            Everything that touches your money is written out below, in plain
+            words. Nothing that matters is hidden in a document somewhere else.
+          </p>
+        </div>
+
+        <div class="book">
+          <div class="g16 book-top">
+            <div class="can rv">
+              <div class="k">What you can lose</div>
+              <div class="v">Tickets</div>
+            </div>
+            <div class="cant rv" style="--d: 90ms">
+              <div class="k">What you can't lose</div>
+              <div class="v">Your deposit, or your 5%</div>
+            </div>
+          </div>
+
+          <div class="g16 book-row rv">
+            <div class="n">01</div>
+            <h3>Where your deposit sits</h3>
+            <p class="body">
+              Your USDC is lent out through established lending protocols. That
+              lending is where the 5% comes from. It is never used to fund the
+              jackpot, pay winners, or run games.
+            </p>
+          </div>
+          <div class="g16 book-row rv" style="--d: 60ms">
+            <div class="n">02</div>
+            <h3>Withdrawals</h3>
+            <p class="body">
+              You can withdraw at any time by burning that week's tickets.
+              Spent half your tickets? Half your deposit is still free to go.
+              Spent them all? The rest is yours again at next week's reset,
+              when tickets refresh.
+            </p>
+          </div>
+          <div class="g16 book-row rv" style="--d: 120ms">
+            <div class="n">03</div>
+            <h3>We play too</h3>
+            <p class="body">
+              We hold tickets in the weekly draw like everyone else. If our
+              ticket wins, the jackpot goes to the treasury and to buying back
+              our token. It always goes back to the community.
+            </p>
+          </div>
+          <div class="g16 book-row rv" style="--d: 180ms">
+            <div class="n">04</div>
+            <h3>Game fees</h3>
+            <p class="body">
+              A 6% fee, paid in tickets, is taken from game winnings. Your
+              deposit is never charged.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------ faq ------------------------------- -->
+    <section id="faq">
+      <div class="rules-bg"></div>
+      <div class="wrap sec">
+        <div class="g16 sec-head" style="margin-bottom: 40px">
+          <div class="L rv">
+            <p class="eyebrow">Questions</p>
+            <h2>The short answers.</h2>
+          </div>
+        </div>
+
+        <dl class="faq">
+          <div class="g16 qa rv">
+            <dt>Can I lose my deposit?</dt>
+            <dd>No. Your deposit is never at stake. Only tickets are.</dd>
+          </div>
+          <div class="g16 qa rv" style="--d: 50ms">
+            <dt>Do I have to play?</dt>
+            <dd>
+              No. Every dollar you deposit is already a ticket in the weekly
+              draw. Playing is how you win more tickets, not how you enter.
+            </dd>
+          </div>
+          <div class="g16 qa rv" style="--d: 100ms">
+            <dt>What happens if I lose a game?</dt>
+            <dd>
+              You lose the tickets you put in. Your deposit and your 5% aren't
+              touched, and your tickets refresh next week.
+            </dd>
+          </div>
+          <div class="g16 qa rv" style="--d: 150ms">
+            <dt>Where does the jackpot come from?</dt>
+            <dd>From the yield the pool earns above 5%. Nothing else.</dd>
+          </div>
+          <div class="g16 qa rv" style="--d: 200ms">
+            <dt>Is the 5% guaranteed?</dt>
+            <dd>
+              It's the base yield the pool pays before any of it becomes the
+              jackpot. It comes from lending your USDC out to earn yield, so if
+              that yield ever dropped below 5%, the base would too. Your deposit
+              still wouldn't be touched.
+            </dd>
+          </div>
+          <div class="g16 qa rv" style="--d: 250ms">
+            <dt>Can I withdraw anytime?</dt>
+            <dd>
+              Yes. Withdrawing burns that week's tickets, so you can take out
+              whatever share of your tickets you still hold. Spend them all and
+              the rest comes back to you at the weekly reset.
+            </dd>
+          </div>
+          <div class="g16 qa rv" style="--d: 300ms">
+            <dt>Do you ever win the draw?</dt>
+            <dd>
+              Yes. We hold tickets like any other player. If we win, the jackpot
+              goes to the treasury and buybacks.
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- ------------------------------ close ----------------------------- -->
+    <section class="close">
+      <div class="rules-bg"></div>
+      <div class="wrap g16 close-in">
+        <div class="L rv">
+          <p class="eyebrow">Waitlist open</p>
+          <h2>The shot, without the loss.</h2>
+          <p class="lead">
+            Put your USDC somewhere it earns 5% and gives you a ticket to
+            something bigger.
+          </p>
+        </div>
+        <div class="R rv" style="--d: 90ms">
+          <form class="form" data-waitlist novalidate>
+            <input
+              type="email"
+              name="email"
+              placeholder="you@email.com"
+              aria-label="Email address"
+              required
+            />
+            <button class="btn" type="submit">
+              <span>Join the waitlist</span>
+            </button>
+          </form>
+          <div class="form-done" role="status">
+            <p class="done-line">
+              You're on the list. We'll email you when the pool opens.
+            </p>
+            <div class="ask">
+              <label class="ask-q"
+                >One quick thing. What would make you trust us with your
+                money?</label
+              >
+              <textarea
+                class="ask-in"
+                rows="3"
+                maxlength="2000"
+                placeholder="Anything at all. One line is plenty."
+                aria-label="What would make you trust us with your money?"
+              ></textarea>
+              <div class="ask-row">
+                <button type="button" class="btn btn-sm" data-send>
+                  <span>Send</span>
+                </button>
+                <button type="button" class="ask-skip" data-skip>
+                  No thanks
+                </button>
+              </div>
+            </div>
+            <p class="ask-thanks">Thank you. That genuinely helps.</p>
+          </div>
+          <p class="micro form-note" style="margin-top: 16px">
+            Save your money. Play your luck.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="rules-bg"></div>
+      <div class="wrap foot">
+        <a class="brand" href="#top">
+          <svg class="brand-mark" width="17" height="20" viewBox="0 0 21 25.2" fill="none" aria-hidden="true">
+            <path d="M10.5 0L14 2.1V6.3L10.5 8.4L7 6.3V2.1L10.5 0Z" fill="currentColor" />
+            <path d="M17.5 4.2L21 6.3V10.5L17.5 12.6L14 10.5V6.3L17.5 4.2Z" fill="currentColor" />
+            <path d="M17.5 12.6L21 14.7V18.9L17.5 21L14 18.9V14.7L17.5 12.6Z" fill="currentColor" />
+            <path d="M10.5 16.8L14 18.9V23.1L10.5 25.2L7 23.1V18.9L10.5 16.8Z" fill="currentColor" />
+            <path d="M3.5 12.6L7 14.7V18.9L3.5 21L0 18.9V14.7L3.5 12.6Z" fill="currentColor" />
+            <path d="M3.5 4.2L7 6.3V10.5L3.5 12.6L0 10.5V6.3L3.5 4.2Z" fill="currentColor" />
+          </svg>
+          <span class="brand-word" style="font-size: 14px">HEXO</span>
+        </a>
+        <span class="micro">Save your money. Play your luck.</span>
+        <div class="foot-links">
+          <a href="#rules">Rules</a>
+          <a href="#faq">FAQ</a>
+          <a href="#draw">The draw</a>
+        </div>
+      </div>
+      <div class="wrap">
+        <p class="disclaim">
+          We're on devnet. Yield shown is simulated and the 5% base rate is the
+          rate the pool targets before yield becomes tickets — it is not a
+          guarantee. Nothing here is financial advice.
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      // =================================================================
+      // THE ARENA — geometry from src/arena/geo.ts, symbols from
+      // src/arena/Textile.tsx, sequence from src/arena/Arena.tsx.
+      // Same lattice, same laser walk, same pops. Lime instead of gold.
+      // =================================================================
+      const R = 265,
+        CX = 310,
+        CY = 300;
+
+      /** The six textile symbols, ported from Textile.tsx (20x20 art). */
+      const SYMBOLS = [
+        `<path d="M3.5 3.5 L16.5 16.5 M16.5 3.5 L3.5 16.5" stroke="#B6FF3B" stroke-width="3.6" stroke-linecap="round" fill="none"/>`,
+        `<circle cx="10" cy="10" r="8" fill="none" stroke="#B6FF3B" stroke-width="2.6"/><circle cx="10" cy="10" r="3.4" fill="#B6FF3B"/>`,
+        `<rect x="2" y="2" width="16" height="16" rx="3.5" fill="none" stroke="#B6FF3B" stroke-width="2.6"/><rect x="7" y="7" width="6" height="6" rx="1.2" fill="#B6FF3B"/>`,
+        `<rect x="2.5" y="7" width="15" height="6" rx="2.2" fill="#B6FF3B"/><rect x="7" y="2.5" width="6" height="15" rx="2.2" fill="#B6FF3B"/><circle cx="10" cy="10" r="2" fill="#0E1B2B"/>`,
+        `<path fill="#B6FF3B" fill-rule="evenodd" d="M6.5 2 h7 a4.5 4.5 0 0 1 4.5 4.5 v7 a4.5 4.5 0 0 1 -4.5 4.5 h-7 a4.5 4.5 0 0 1 -4.5 -4.5 v-7 a4.5 4.5 0 0 1 4.5 -4.5 z M10 5.6 a4.4 4.4 0 1 0 0 8.8 a4.4 4.4 0 1 0 0 -8.8 z"/>`,
+        `<polygon points="10,2.4 12.35,7 17.5,7.7 13.8,11.3 14.7,16.4 10,13.9 5.3,16.4 6.2,11.3 2.5,7.7 7.65,7" fill="#B6FF3B" stroke="#B6FF3B" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>`,
+      ];
+
+      const dotKey = (x, y) => `${Math.round(x)}_${Math.round(y)}`;
+
+      /** computeGeo() from geo.ts. */
+      function computeGeo() {
+        const verts = [];
+        for (let k = 0; k < 6; k++) {
+          const a = ((-90 + 60 * k) * Math.PI) / 180;
+          verts.push([CX + R * Math.cos(a), CY + R * Math.sin(a)]);
+        }
+
+        const tiles = [];
+        let n = 1;
+        for (let k = 0; k < 6; k++) {
+          const [ax, ay] = verts[k];
+          const [bx, by] = verts[(k + 1) % 6];
+          const rot = (Math.atan2(by - ay, bx - ax) * 180) / Math.PI;
+          for (let i = 0; i < 6; i++) {
+            const t = 0.1481 + i * 0.1407;
+            tiles.push({
+              n: n++,
+              x: +(ax + (bx - ax) * t).toFixed(1),
+              y: +(ay + (by - ay) * t).toFixed(1),
+              rot: +rot.toFixed(1),
+            });
+          }
+        }
+
+        const iR = R - 52;
+        const iv = [];
+        for (let k = 0; k < 6; k++) {
+          const a = ((-90 + 60 * k) * Math.PI) / 180;
+          iv.push([CX + iR * Math.cos(a), CY + iR * Math.sin(a)]);
+        }
+        const inside = (x, y) => {
+          let c = false;
+          for (let i = 0, j = 5; i < 6; j = i++) {
+            const [xi, yi] = iv[i],
+              [xj, yj] = iv[j];
+            if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)
+              c = !c;
+          }
+          return c;
+        };
+
+        const dots = [];
+        let row = 0;
+        for (let y = CY - 195; y <= CY + 195; y += 26, row++) {
+          for (let x = CX - 210 + (row % 2 ? 14 : 0); x <= CX + 210; x += 28) {
+            if (inside(x, y)) dots.push({ x, y, key: dotKey(x, y) });
+          }
+        }
+
+        return {
+          tiles,
+          dots,
+          hexPts: verts.map((v) => `${v[0].toFixed(1)},${v[1].toFixed(1)}`).join(" "),
+          cx: CX,
+          cy: CY,
+        };
+      }
+
+      /** genPath() from geo.ts — the laser wanders the lattice, then homes. */
+      function genPath(geo, tx, ty) {
+        const { dots, cx, cy } = geo;
+        let cur = dots.reduce((best, d) =>
+          (d.x - cx) ** 2 + (d.y - cy) ** 2 < (best.x - cx) ** 2 + (best.y - cy) ** 2
+            ? d
+            : best,
+        );
+        const pts = [cur];
+        const wander = 8 + Math.floor(Math.random() * 5);
+        const hops = (exclude) =>
+          dots.filter(
+            (d) =>
+              d !== cur &&
+              Math.hypot(d.x - cur.x, d.y - cur.y) < 52 &&
+              !pts.slice(-exclude).includes(d),
+          );
+
+        for (let i = 0; i < wander; i++) {
+          const ns = hops(4);
+          if (!ns.length) break;
+          cur = ns[Math.floor(Math.random() * ns.length)];
+          pts.push(cur);
+        }
+
+        let guard = 0;
+        while (Math.hypot(cur.x - tx, cur.y - ty) > 75 && guard++ < 40) {
+          const ns = hops(3);
+          if (!ns.length) break;
+          ns.sort(
+            (a, b) => Math.hypot(a.x - tx, a.y - ty) - Math.hypot(b.x - tx, b.y - ty),
+          );
+          cur = ns[Math.min(ns.length - 1, Math.floor(Math.random() * 2))];
+          pts.push(cur);
+        }
+        pts.push({ x: tx, y: ty, key: dotKey(tx, ty) });
+
+        const all = [{ x: cx, y: cy, key: "origin" }, ...pts];
+        const segs = [];
+        let total = 0;
+        for (let i = 1; i < all.length; i++) {
+          const s = Math.hypot(all[i].x - all[i - 1].x, all[i].y - all[i - 1].y);
+          segs.push(s);
+          total += s;
+        }
+
+        const active = {};
+        let cum = 0;
+        for (let i = 0; i < segs.length; i++) {
+          cum += segs[i];
+          const pt = all[i + 1];
+          if (i + 1 < all.length - 1 && active[pt.key] === undefined) {
+            active[pt.key] = {
+              delay: +((cum / total) * 0.9).toFixed(3),
+              sym: (i - 1 + 6) % 6,
+            };
+          }
+        }
+
+        return {
+          pathD: "M" + all.map((p) => `${Math.round(p.x)} ${Math.round(p.y)}`).join(" L"),
+          active,
+        };
+      }
+
+      (function arena() {
+        const svg = document.querySelector(".stage-svg");
+        if (!svg) return;
+        const geo = computeGeo();
+
+        const tileMarkup = geo.tiles
+          .map(
+            (t) => `
+          <g transform="translate(${t.x} ${t.y})">
+            <g class="tile-inner" data-tile="${t.n}">
+              <rect transform="rotate(${t.rot})" x="-17" y="-17" width="34" height="34" rx="2"
+                fill="#132133" stroke="rgba(226,228,233,.13)" stroke-width="1.2"/>
+              <text x="0" y="0" text-anchor="middle" dominant-baseline="central"
+                font-family="JetBrains Mono, monospace" font-size="14" font-weight="600"
+                fill="#93a1b5">${t.n}</text>
+            </g>
+          </g>`,
+          )
+          .join("");
+
+        const dotMarkup = geo.dots
+          .map(
+            (d) =>
+              `<g data-dot="${d.key}" transform="translate(${d.x} ${d.y})">
+                 <circle class="dot-plain" r="1.75" fill="rgba(182,255,59,.22)"/>
+               </g>`,
+          )
+          .join("");
+
+        svg.innerHTML = `
+          <polygon points="${geo.hexPts}" fill="none" stroke="rgba(226,228,233,.14)" stroke-width="1.2"/>
+          <g class="dots">${dotMarkup}</g>
+          <g class="laser"></g>
+          <g class="tiles">${tileMarkup}</g>
+          <g class="shocks"></g>`;
+
+        if (REDUCED) return;
+
+        const laserG = svg.querySelector(".laser");
+        const shockG = svg.querySelector(".shocks");
+        const dotEls = new Map(
+          [...svg.querySelectorAll("[data-dot]")].map((el) => [
+            el.dataset.dot,
+            el,
+          ]),
+        );
+        const tileEls = new Map(
+          [...svg.querySelectorAll("[data-tile]")].map((el) => [
+            +el.dataset.tile,
+            el,
+          ]),
+        );
+
+        let timers = [];
+        const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+
+        function resetBoard() {
+          laserG.innerHTML = "";
+          shockG.innerHTML = "";
+          dotEls.forEach((el) => {
+            el.innerHTML = `<circle class="dot-plain" r="1.75" fill="rgba(182,255,59,.22)"/>`;
+          });
+          tileEls.forEach((el) => {
+            el.classList.remove("win", "sel");
+            const rect = el.querySelector("rect");
+            const text = el.querySelector("text");
+            rect.setAttribute("fill", "#132133");
+            rect.setAttribute("stroke", "rgba(226,228,233,.13)");
+            text.setAttribute("fill", "#93a1b5");
+          });
+        }
+
+        /** A position lands on a tile. Selections only ever accumulate. */
+        function select(n) {
+          const el = tileEls.get(n);
+          if (!el || el.classList.contains("sel")) return;
+          el.classList.add("sel");
+          el.querySelector("rect").setAttribute("fill", "rgba(182,255,59,.2)");
+          el.querySelector("rect").setAttribute("stroke", "#B6FF3B");
+          el.querySelector("text").setAttribute("fill", "#B6FF3B");
+        }
+
+        function fire() {
+          const win = geo.tiles[Math.floor(Math.random() * 36)];
+          const { pathD, active } = genPath(geo, win.x, win.y);
+
+          laserG.innerHTML = `
+            <path d="${pathD}" pathLength="100" fill="none" stroke="#B6FF3B"
+              stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle r="4.5" fill="#B6FF3B">
+              <animateMotion dur="0.9s" fill="freeze" path="${pathD}"/>
+            </circle>`;
+
+          // Action → each struck dot stamps its symbol as the beam passes.
+          Object.entries(active).forEach(([key, info]) => {
+            const el = dotEls.get(key);
+            if (!el) return;
+            el.innerHTML = `<g class="dot-sym" transform="translate(-10 -10)"
+              style="animation: symbolPop .36s cubic-bezier(.17,.89,.32,1.28) forwards ${info.delay}s; opacity:0">
+              ${SYMBOLS[info.sym]}</g>`;
+          });
+
+          // Resolution → the tile lands, then two rings.
+          at(900, () => {
+            const el = tileEls.get(win.n);
+            if (!el) return;
+            el.classList.remove("sel");
+            el.classList.add("win");
+            el.querySelector("rect").setAttribute("fill", "#B6FF3B");
+            el.querySelector("rect").setAttribute("stroke", "#B6FF3B");
+            el.querySelector("text").setAttribute("fill", "#0E1B2B");
+            shockG.innerHTML = `
+              <circle class="shock" cx="${win.x}" cy="${win.y}" r="60" fill="none" stroke="#B6FF3B" stroke-width="3"/>
+              <circle class="shock alt" cx="${win.x}" cy="${win.y}" r="60" fill="none" stroke="#ff4444" stroke-width="2"/>`;
+          });
+
+          // Clear → symbols drain, board returns to rest.
+          at(3400, () => {
+            dotEls.forEach((el) => {
+              const sym = el.querySelector(".dot-sym");
+              if (sym) sym.style.animation = "symbolFadeOut .65s ease-in forwards";
+            });
+            laserG.innerHTML = "";
+          });
+          at(4300, resetBoard);
+        }
+
+        /* One cycle: positions land one at a time for ~4s, then the draw
+           fires. The reveal itself is untouched — same laser, same pops,
+           same timings as the arena. */
+        const PICKS = 13;
+        const PICK_EVERY = 300;
+        const FIRE_AT = PICKS * PICK_EVERY;
+        const CYCLE = FIRE_AT + 4800;
+
+        function cycle() {
+          const order = geo.tiles.map((t) => t.n).sort(() => Math.random() - 0.5);
+          for (let i = 0; i < PICKS; i++) {
+            at(i * PICK_EVERY, () => select(order[i]));
+          }
+          at(FIRE_AT, fire);
+        }
+
+        function start(delay) {
+          at(delay, function loop() {
+            cycle();
+            timers.push(setTimeout(loop, CYCLE));
+          });
+        }
+
+        start(700);
+
+        // Stop when off-screen so the tab stays cheap.
+        new IntersectionObserver(
+          ([e]) => {
+            if (!e.isIntersecting) {
+              timers.forEach(clearTimeout);
+              timers = [];
+              resetBoard();
+            } else if (!timers.length) {
+              start(400);
+            }
+          },
+          { threshold: 0 },
+        ).observe(svg);
+      })();
+
+      // ----------------------------- round ruler ---------------------------
+      (function ruler() {
+        const el = document.getElementById("ruler");
+        const lbl = document.getElementById("rulerLbl");
+        if (!el || !lbl) return;
+        let out = "";
+        for (let i = 0; i <= 60; i++) {
+          // Ticks wipe up left-to-right, whole sweep inside 500ms.
+          out += `<i class="${i % 10 === 0 ? "big" : ""}" style="left:${(i / 60) * 100}%;--d:${i * 7}ms"></i>`;
+        }
+        out += `<span class="closed"><b>Positions close</b></span><span class="now"></span>`;
+        el.innerHTML = out;
+
+        lbl.innerHTML = ["60s", "50", "40", "30", "20", "10", "Reveal"]
+          .map((s, i) => `<span style="left:${(i / 6) * 100}%">${s}</span>`)
+          .join("");
+      })();
+
+      // ----------------------------- column rules --------------------------
+      (function columnRules() {
+        document.querySelectorAll(".rules-bg").forEach((el) => {
+          let out = "";
+          for (let i = 0; i < 16; i++)
+            out += `<i class="${i === 8 ? "spine" : ""}"></i>`;
+          el.innerHTML = out;
+        });
+      })();
+
+      // ----------------------------- scroll reveal -------------------------
+      (function reveal() {
+        const io = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((e) => {
+              if (!e.isIntersecting) return;
+              e.target.classList.add("in");
+              io.unobserve(e.target);
+            });
+          },
+          { rootMargin: "0px 0px -12% 0px", threshold: 0.01 },
+        );
+        // Anything already on screen at load plays straight away — the bottom
+        // rootMargin would otherwise hold back copy that needs no scroll.
+        document.querySelectorAll(".rv").forEach((el) => {
+          if (el.getBoundingClientRect().top < innerHeight) el.classList.add("in");
+          else io.observe(el);
+        });
+
+        const rulerEl = document.getElementById("ruler");
+        const rulerLbl = document.getElementById("rulerLbl");
+        if (rulerEl) {
+          new IntersectionObserver(
+            ([e], obs) => {
+              if (!e.isIntersecting) return;
+              rulerEl.classList.add("in");
+              // Ticks finish wiping up before the clock takes them over.
+              setTimeout(() => {
+                rulerEl.classList.add("live");
+                rulerLbl?.classList.add("in");
+                watchRound(rulerEl, rulerLbl);
+              }, 950);
+              obs.disconnect();
+            },
+            { threshold: 0.2 },
+          ).observe(rulerEl);
+        }
+      })();
+
+      /* The round head drives its own state. Rather than trusting the clock,
+         measure where the head actually is each frame: arm the zone when it
+         is genuinely inside it, and fire the draw when it wraps past the end.
+         Reads only — the sweep itself stays a plain CSS animation. */
+      function watchRound(ruler, lbl) {
+        if (REDUCED) return;
+        const head = ruler.querySelector(".now");
+        const zone = ruler.querySelector(".closed");
+        if (!head || !zone) return;
+
+        let inside = false;
+        let running = true;
+        let raf = 0;
+
+        const frame = () => {
+          const r = ruler.getBoundingClientRect();
+          const h = head.getBoundingClientRect();
+          const z = zone.getBoundingClientRect();
+          const now = inside
+            ? h.left + h.width >= z.left - 1 // hysteresis: don't flicker on the edge
+            : h.left >= z.left;
+
+          if (now !== inside) {
+            if (now) {
+              ruler.classList.add("armed");
+            } else {
+              // Left the zone the only way it can: the round ended.
+              ruler.classList.remove("armed");
+              ruler.classList.remove("drew");
+              lbl?.classList.remove("drew");
+              void ruler.offsetWidth;
+              ruler.classList.add("drew");
+              lbl?.classList.add("drew");
+              setTimeout(() => {
+                ruler.classList.remove("drew");
+                lbl?.classList.remove("drew");
+              }, 900);
+            }
+            inside = now;
+          }
+          if (running) raf = requestAnimationFrame(frame);
+        };
+        raf = requestAnimationFrame(frame);
+
+        // Only measure while the instrument is on screen.
+        new IntersectionObserver(
+          ([e]) => {
+            if (e.isIntersecting && !running) {
+              running = true;
+              raf = requestAnimationFrame(frame);
+            } else if (!e.isIntersecting && running) {
+              running = false;
+              cancelAnimationFrame(raf);
+            }
+          },
+          { threshold: 0 },
+        ).observe(ruler);
+      }
+
+      // ----------------------------- number count-up -----------------------
+      // Numbers land with the block they belong to, decelerating into place.
+      (function counters() {
+        const io = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((e) => {
+              if (!e.isIntersecting) return;
+              io.unobserve(e.target);
+              const el = e.target;
+              const target = +el.dataset.count;
+              const suffix = el.dataset.suffix ?? "";
+              if (REDUCED) {
+                el.textContent = target + suffix;
+                return;
+              }
+              const dur = 1000;
+              const t0 = performance.now();
+              const step = (now) => {
+                const p = Math.min(1, (now - t0) / dur);
+                const eased = 1 - Math.pow(1 - p, 3);
+                el.textContent = Math.round(target * eased) + suffix;
+                if (p < 1) requestAnimationFrame(step);
+              };
+              el.textContent = "0" + suffix;
+              requestAnimationFrame(step);
+            });
+          },
+          { threshold: 0.4 },
+        );
+        document.querySelectorAll("[data-count]").forEach((el) => io.observe(el));
+      })();
+
+      // ----------------------------- waitlist ------------------------------
+      // Two steps against one route. Step one commits the email and hands back
+      // its id; step two attaches the answer to that id. Nothing about step two
+      // can lose the signup, which is why the question is asked after the save
+      // rather than beside it.
+
+      const UTM = (() => {
+        const q = new URLSearchParams(location.search);
+        const out = {};
+        for (const k of [
+          "utm_source",
+          "utm_medium",
+          "utm_campaign",
+          "utm_content",
+          "utm_term",
+          "ref",
+        ]) {
+          const v = q.get(k);
+          if (v) out[k] = v.slice(0, 200);
+        }
+        return Object.keys(out).length ? out : null;
+      })();
+
+      async function post(body) {
+        const r = await fetch("/api/waitlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || "Request failed");
+        return data;
+      }
+
+      document.querySelectorAll("form[data-waitlist]").forEach((form) => {
+        const scope = form.parentElement;
+        const where = form.closest("#top") ? "hero" : "closing";
+        const note = scope.querySelector(".form-note");
+        const noteDefault = note.textContent;
+        const done = scope.querySelector(".form-done");
+        const ask = done.querySelector(".ask-in");
+        const send = done.querySelector("[data-send]");
+        const skip = done.querySelector("[data-skip]");
+        const submit = form.querySelector("button[type=submit]");
+        let signupId = null;
+
+        const fail = (msg) => {
+          note.textContent = msg;
+          note.classList.add("form-err");
+          form.classList.remove("shake");
+          void form.offsetWidth;
+          form.classList.add("shake");
+        };
+
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const input = form.querySelector("input");
+          const email = input.value.trim();
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+            input.focus();
+            return fail("That email doesn't look right.");
+          }
+          note.classList.remove("form-err");
+          submit.disabled = true;
+          try {
+            const r = await post({
+              email,
+              referrer: document.referrer || null,
+              utm: UTM,
+            });
+            signupId = r.id;
+          } catch (err) {
+            submit.disabled = false;
+            posthog.capture("waitlist_failed", { where, reason: String(err.message) });
+            return fail("Couldn't reach the list. Try again in a moment.");
+          }
+          posthog.capture("waitlist_submitted", { where, has_utm: !!UTM });
+          posthog.identify(signupId, { email });
+          form.classList.add("is-done");
+          done.classList.add("is-done", "is-asking");
+          note.textContent = noteDefault;
+          setTimeout(() => ask.focus(), 420);
+        });
+
+        send.addEventListener("click", async () => {
+          const answer = ask.value.trim();
+          if (!answer || !signupId) return;
+          send.disabled = true;
+          try {
+            await post({ id: signupId, answer });
+          } catch {
+            send.disabled = false;
+            return;
+          }
+          posthog.capture("waitlist_answered", { where, length: answer.length });
+          done.classList.remove("is-asking");
+          done.classList.add("is-thanked");
+        });
+
+        skip.addEventListener("click", () => {
+          posthog.capture("waitlist_answer_skipped", { where });
+          done.classList.remove("is-asking");
+        });
+      });
+
+      // ----------------------------- nav cta -------------------------------
+      document.querySelectorAll("[data-scroll]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelector(btn.dataset.scroll).scrollIntoView({ behavior: "smooth" });
+          setTimeout(
+            () => document.querySelector("form[data-waitlist] input").focus(),
+            420,
+          );
+        });
+      });
+    </script>
+  </body>
+</html>
