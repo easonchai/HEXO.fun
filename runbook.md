@@ -40,7 +40,21 @@
   requests. The operator's first tick step requests randomness the moment that window opens, so ORAO's round trip runs inside the
   countdown instead of after it.
 
-  Measured on devnet over 16 Rounds: request to settle takes 2s minimum, 4s median, 18s maximum. close_buffer is set to 8s. That covers
-  the median draw with room for tick lag; the timer holding at 00:00 covers the rare 18s tail instead of the buffer trying to.
+  Measured on devnet over 40 Rounds: request to settle takes 4s to 7s on 39 of them and 71s once (ORAO's tail). The request itself
+  lands about 2s after the window opens (blockhash fetch, send, confirm). close_buffer is set to 15s: 2s to land the request, 4s to
+  7s for the draw, and the rest is margin so the reveal fires at zero instead of after it. The timer holding at 00:00 covers the
+  rare 70s tail instead of the buffer trying to; vrf_timeout (120s) bounds it.
+
+  The buffer only works once the program that honours it is deployed. Until 2026-09-06 devnet ran the program from before ff22d53,
+  whose request_round_randomness required `now >= ends_at`, so every draw request was rejected with RoundNotEnded until the round
+  ended and settled 4s to 7s after zero no matter what close_buffer said. The tell in the operator log is a run of
+  `skipped: RoundNotEnded` right before each `sent request_round_randomness`; the tell on chain is the AnchorError line number,
+  rounds.rs:162, which the current source does not have. The pool also ran at close_buffer 5 while this note said 8; nobody had run
+  set-params.
 
   Tune it with set-params if ORAO's latency changes, no redeploy needed. The program still enforces 0 <= close_buffer < round_seconds.
+  Run it with the root .env exported first: the CLI loads apps/backend/.env, which is the template with an empty mint, and exported
+  variables win over the file. (The docker `run --rm backend ... tsx` form in docs/plan does not work: the runtime image has no tsx
+  and no decorator config.)
+
+    set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --close-buffer 15
