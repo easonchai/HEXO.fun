@@ -99,9 +99,11 @@ test("faucet, deposit, play a round, settle, withdraw the matched amount", async
   const depositSubmit = page.getByTestId("deposit-submit");
   await expect(depositSubmit).toBeEnabled({ timeout: 15_000 });
   await depositSubmit.click();
-  await expect(page.getByTestId("vault-note")).toContainText(/deposit confirmed/i, {
+  await expect(page.getByTestId("deposit-modal-amount")).toContainText("100.00", {
     timeout: 30_000,
   });
+  await page.getByTestId("deposit-modal-play").click();
+  await expect(page.getByTestId("deposit-modal")).toHaveCount(0);
 
   // 3. Buy a position on 3 tiles.
   await page.getByTestId("tab-mine").click();

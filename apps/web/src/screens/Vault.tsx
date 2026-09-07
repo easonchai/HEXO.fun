@@ -3,10 +3,11 @@
  * tabs on the HOME halftone background. The program is the custody boundary:
  * Principal and Tickets move together, so a withdrawal needs both.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import { deposit, withdraw, type TxSigner } from "../actions.js";
+import { LogoCog } from "../arena/Arena.js";
 import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
 import {
@@ -52,6 +53,8 @@ export interface VaultScreenProps {
   aprBps: number | null;
   onConnect: () => void;
   onDone: () => void;
+  /** "Play HEXO" on the deposit-confirmed modal: App switches to the MINE tab. */
+  onPlay: () => void;
 }
 
 export function Vault(props: VaultScreenProps) {
@@ -68,6 +71,7 @@ export function Vault(props: VaultScreenProps) {
     aprBps,
     onConnect,
     onDone,
+    onPlay,
   } = props;
   // Two decimals everywhere, including what the pills write into the input
   // (see INPUT_DECIMALS).
@@ -79,6 +83,8 @@ export function Vault(props: VaultScreenProps) {
   const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(
     null,
   );
+  /** Atomic amount of the deposit that just landed; null closes the modal. */
+  const [confirmed, setConfirmed] = useState<bigint | null>(null);
 
   const connected = owner !== null && program !== null && pool !== null;
   const matched = withdrawable(principal, entries);
@@ -101,10 +107,15 @@ export function Vault(props: VaultScreenProps) {
     setNote(null);
     try {
       const signature = await action();
-      setNote({
-        tone: "ok",
-        text: `${label} confirmed: ${signature.slice(0, 16)}…`,
-      });
+      // Deposit gets the confirmed modal; withdraw keeps the inline note.
+      if (label === "Deposit" && amount !== null) {
+        setConfirmed(amount);
+      } else {
+        setNote({
+          tone: "ok",
+          text: `${label} confirmed: ${signature.slice(0, 16)}…`,
+        });
+      }
       setAmountText("");
       onDone();
     } catch (error) {
@@ -303,6 +314,86 @@ export function Vault(props: VaultScreenProps) {
         </section>
         <GlyphRow />
       </div>
+      {confirmed !== null ? (
+        <DepositConfirmed
+          amount={`$${fmt2(confirmed)} ${SYMBOL}`}
+          tickets={fmt2(entries)}
+          onClose={() => setConfirmed(null)}
+          onPlay={onPlay}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+interface DepositConfirmedProps {
+  amount: string;
+  /** Live Tickets balance; refreshes in place once the chain read lands. */
+  tickets: string;
+  onClose: () => void;
+  onPlay: () => void;
+}
+
+/** The Figma "deposit confirmed" popup: backdrop, ×, and Escape dismiss. */
+function DepositConfirmed({ amount, tickets, onClose, onPlay }: DepositConfirmedProps) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    closeRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="deposit-modal-backdrop" onClick={onClose} data-testid="deposit-modal">
+      <section
+        className="deposit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="deposit-modal-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="deposit-modal-head">
+          <span className="deposit-modal-brand">
+            <LogoCog size={18} />
+            DEPOSIT
+          </span>
+          <button
+            ref={closeRef}
+            type="button"
+            className="deposit-modal-close"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </header>
+        <img
+          className="deposit-modal-coin"
+          src="/deposit-check.png"
+          alt=""
+          width={188}
+          height={188}
+        />
+        <p className="deposit-modal-kicker">DEPOSIT CONFIRMED</p>
+        <p className="deposit-modal-amount" id="deposit-modal-title" data-testid="deposit-modal-amount">
+          {amount}
+        </p>
+        <p className="deposit-modal-sub">
+          You have <strong>{tickets} Tickets</strong> to play
+        </p>
+        <button
+          type="button"
+          className="vault-cta deposit-modal-play"
+          data-testid="deposit-modal-play"
+          onClick={onPlay}
+        >
+          Play HEXO
+        </button>
+      </section>
     </div>
   );
 }

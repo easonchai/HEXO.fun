@@ -551,6 +551,7 @@ export function App() {
             aprBps={statusPoll.data?.aprBps ?? null}
             onConnect={() => signer.connect()}
             onDone={refresh}
+            onPlay={() => setTab("MINE")}
           />
         ) : null}
         {tab === "WEEKLY DRAW" ? (

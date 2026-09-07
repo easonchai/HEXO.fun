@@ -2955,3 +2955,122 @@ input::placeholder {
     font-size: 13px;
   }
 }
+
+/* Deposit confirmed modal (Figma 177:108900) */
+
+.deposit-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.8);
+  animation: flashIn 0.2s ease-out;
+}
+
+.deposit-modal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(480px, 100%);
+  padding: 0 16px 16px;
+  background: var(--brand-slate);
+  border: 1px solid rgba(182, 255, 59, 0.18);
+  border-radius: 16px;
+  color: var(--brand-white);
+  text-align: center;
+}
+
+.deposit-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 48px;
+  padding: 0 8px;
+}
+
+.deposit-modal-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--brand-lime);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.15em;
+}
+
+.deposit-modal-close {
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.deposit-modal-close:hover,
+.deposit-modal-close:focus-visible {
+  color: var(--brand-white);
+}
+
+.deposit-modal-coin {
+  display: block;
+  width: 188px;
+  height: 188px;
+  margin: 36px 0 28px;
+}
+
+.deposit-modal-kicker {
+  margin: 0;
+  color: rgba(182, 255, 59, 0.6);
+  font-family: "Roboto Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+}
+
+.deposit-modal-amount {
+  margin: 10px 0 0;
+  color: var(--brand-lime);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 26px;
+  letter-spacing: 0.06em;
+}
+
+.deposit-modal-sub {
+  margin: 6px 0 32px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+}
+
+.deposit-modal-sub strong {
+  color: var(--brand-white);
+}
+
+.deposit-modal-play {
+  width: 100%;
+  font-size: 14px;
+  letter-spacing: 0.125em;
+}
+
+@media (max-width: 600px) {
+  .deposit-modal-coin {
+    width: 140px;
+    height: 140px;
+    margin: 24px 0 20px;
+  }
+
+  .deposit-modal-amount {
+    font-size: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deposit-modal-backdrop {
+    animation: none;
+  }
+}
