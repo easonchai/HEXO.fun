@@ -42,7 +42,7 @@ import { useApiPoll } from "./useApiPoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
-import { TABS, type Tab } from "./tabs.js";
+import { TABS, tabFromHash, type Tab } from "./tabs.js";
 
 /** The accepted asset is hexUSDC (6 decimals) for every pool in this build. */
 const SYMBOL = "hexUSDC";
@@ -66,7 +66,9 @@ export function App() {
     () => (publicKey ? { publicKey, sendTransaction } : null),
     [publicKey, sendTransaction],
   );
-  const [tab, setTab] = useState<Tab>("HOME");
+  const [tab, setTab] = useState<Tab>(() =>
+    tabFromHash(window.location.hash),
+  );
   const [soundOn, setSoundOnState] = useState(isSoundOn());
   // Dark only: the toggle is gone, but the light tokens and the
   // `data-theme` attribute stay so re-enabling it is a one-line change.
@@ -363,18 +365,25 @@ export function App() {
           </span>
         </button>
         <nav className="nav" aria-label="Sections">
-          {TABS.map((candidate) => (
-            <button
-              key={candidate.id}
-              type="button"
-              className={`nav-item${tab === candidate.id ? " active" : ""}`}
-              data-testid={`tab-${candidate.id.toLowerCase().replace(" ", "-")}`}
-              onClick={() => setTab(candidate.id)}
-            >
-              <span className="nav-item-long">{candidate.long}</span>
-              <span className="nav-item-short">{candidate.short}</span>
-            </button>
-          ))}
+          {TABS.map((candidate) => {
+            // PLAY needs Tickets; aria-disabled (not `disabled`) keeps the
+            // button hoverable so the data-tip tooltip (styles.css) shows.
+            const locked = candidate.id === "MINE" && entries === 0n;
+            return (
+              <button
+                key={candidate.id}
+                type="button"
+                className={`nav-item${tab === candidate.id ? " active" : ""}`}
+                data-testid={`tab-${candidate.id.toLowerCase()}`}
+                aria-disabled={locked}
+                data-tip={locked ? "Deposit first to play" : undefined}
+                onClick={locked ? undefined : () => setTab(candidate.id)}
+              >
+                <span className="nav-item-long">{candidate.long}</span>
+                <span className="nav-item-short">{candidate.short}</span>
+              </button>
+            );
+          })}
         </nav>
         <div className="topbar-right">
           {connected ? (

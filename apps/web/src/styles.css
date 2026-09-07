@@ -657,6 +657,46 @@ input::placeholder {
   border-bottom-color: var(--primary);
 }
 
+/* PLAY with no Tickets: aria-disabled rather than `disabled` so it still
+   gets hover, and the data-tip tooltip below shows at once (a native
+   `title` waits about a second). */
+.nav-item[aria-disabled="true"],
+.nav-item[aria-disabled="true"]:hover {
+  /* color-mix, not opacity: opacity would fade the ::after tooltip too. */
+  color: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  cursor: not-allowed;
+}
+
+.nav-item[data-tip] {
+  position: relative;
+}
+
+.nav-item[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: var(--bg-surface);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.nav-item[data-tip]:hover::after,
+.nav-item[data-tip]:focus-visible::after {
+  opacity: 1;
+}
+
 .topbar-right {
   margin-left: auto;
   display: flex;
@@ -2234,11 +2274,6 @@ input::placeholder {
   .nav-item {
     flex: none;
     white-space: nowrap;
-  }
-
-  /* The logomark is the home link here; six labels overflow at 390px. */
-  .nav-item[data-testid="tab-home"] {
-    display: none;
   }
 
   .nav-item-long {

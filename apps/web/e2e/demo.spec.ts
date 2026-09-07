@@ -41,9 +41,7 @@ const SETTLE_TIMEOUT_MS = (ROUND_SECONDS + VRF_TIMEOUT_SECONDS + 60) * 1000;
 const API_URL = process.env.VITE_API_URL ?? "http://127.0.0.1:8080";
 
 async function connectBurnerWallet(page: Page): Promise<void> {
-  await page.goto("/");
-  // HOME is the first screen now; these flows live on MINE.
-  await page.getByTestId("tab-mine").click();
+  await page.goto("/#play");
   await page.getByTestId("connect-button").click();
   // Standard wallet-adapter-react-ui modal. With VITE_BURNER_WALLET=1 and a
   // local RPC (see src/dev-burner.ts's isLocalRpc gate), the burner is the
