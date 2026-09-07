@@ -70,8 +70,6 @@
   --dot-untouched: rgba(54, 62, 75, 0.28);
   --stepper-border: #ccd0d8;
   --stepper-color: #5f6675;
-  --toggle-bg: #dfe2e8;
-  --toggle-color: var(--brand-navy);
   --modal-bg: rgba(255, 255, 255, 0.96);
   --dim-btn-bg: #eceef2;
   --dim-btn-border: #d6dae1;
@@ -94,7 +92,7 @@
   --bg-surface: var(--brand-navy-lift);
   --card-border: var(--brand-navy);
   --border-subtle: var(--brand-navy-line);
-  --border-header: var(--brand-navy-line);
+  --border-header: rgba(255, 255, 255, 0.3);
   --divider: var(--brand-navy);
   --primary: var(--brand-lime);
   --on-primary: var(--brand-navy);
@@ -115,8 +113,6 @@
   --dot-untouched: rgba(182, 255, 59, 0.22);
   --stepper-border: var(--brand-navy);
   --stepper-color: var(--brand-mist);
-  --toggle-bg: var(--brand-navy-line);
-  --toggle-color: var(--brand-lime);
   --modal-bg: rgba(14, 27, 43, 0.96);
   --dim-btn-bg: var(--brand-lime-08);
   --dim-btn-border: var(--brand-navy);
@@ -601,7 +597,7 @@ input::placeholder {
 
 .topbar {
   width: 100%;
-  height: 56px;
+  height: 60px;
   display: flex;
   align-items: center;
   padding: 0 36px;
@@ -659,7 +655,7 @@ input::placeholder {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 22px;
   font-family: "Roboto Mono", monospace;
   font-size: 13px;
   font-weight: 600;
@@ -670,41 +666,23 @@ input::placeholder {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
-.chip .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-muted);
-}
-
-.chip .dot.ok {
-  background: var(--accent-text);
-}
-
-.chip .dot.warn {
-  background: var(--danger);
-}
-
-.toggle {
+/* Bare glyph, no box: the Figma bar draws the speaker straight on the ground. */
+.sound-toggle {
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 7px 9px;
+  padding: 7px;
   border: none;
   border-radius: 8px;
-  background: var(--toggle-bg);
-  color: var(--toggle-color);
-  font-family: "Roboto Mono", monospace;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  background: none;
+  color: var(--accent-text);
 }
 
-.toggle:hover {
-  filter: brightness(1.2);
+.sound-toggle:hover {
+  background: var(--pill-bg);
 }
 
 [data-testid="wallet-connector"] {
@@ -2271,18 +2249,11 @@ input::placeholder {
     letter-spacing: 0.06em;
   }
 
-  /* Slot chip and both toggles move into the drawer footer (ticket 02);
-     scoped to .topbar-right so their drawer copies, which share the same
-     data-testid, stay visible. */
-  .topbar-right [data-testid="slot-chip"],
-  .topbar-right [data-testid="sound-toggle"],
-  .topbar-right [data-testid="theme-toggle"] {
-    display: none;
-  }
-
-  /* Status pill collapses to its dot; the label stays as the accessible
-     name via aria-label on the chip. */
-  [data-testid="status-pill"] .chip-label {
+  /* Balances already sit in the control panel and the vault screen, and the
+     sound toggle moves into the drawer footer (ticket 02). Scoped to
+     .topbar-right so the drawer copy stays visible. */
+  .topbar-right .chip,
+  .topbar-right .sound-toggle {
     display: none;
   }
 }

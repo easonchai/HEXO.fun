@@ -1,7 +1,7 @@
 /**
  * Phone bet drawer: the vaul bottom sheet wrapping the existing control
  * panel (`children`, props unchanged — spec.md "Drawer") plus a footer row
- * with the sound and theme toggles copied from the topbar. Controlled from
+ * with the sound toggle the topbar hides at phone width. Controlled from
  * App's `drawerOpen` state; closing (swipe, backdrop, Escape, confirmed
  * deploy, own-Position win takeover) is all `onOpenChange(false)` or a
  * parent effect setting the same state.
@@ -9,13 +9,13 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Drawer } from "vaul";
 
+import { SoundIcon } from "../SoundIcon.js";
+
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   soundOn: boolean;
   onToggleSound: () => void;
-  theme: "light" | "dark";
-  onToggleTheme: () => void;
   children: ReactNode;
 };
 
@@ -24,8 +24,6 @@ export function BetDrawer({
   onOpenChange,
   soundOn,
   onToggleSound,
-  theme,
-  onToggleTheme,
   children,
 }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -55,50 +53,13 @@ export function BetDrawer({
             <div className="bet-drawer-toggles">
               <button
                 type="button"
-                className="toggle"
+                className="sound-toggle"
                 data-testid="drawer-sound-toggle"
                 onClick={onToggleSound}
                 aria-pressed={soundOn}
+                aria-label="Sound"
               >
-                <svg
-                  width="17"
-                  height="16"
-                  viewBox="0 0 20 18"
-                  aria-hidden="true"
-                >
-                  <path d="M2 6h4l5-4v14l-5-4H2z" fill="var(--accent-text)" />
-                  {soundOn ? (
-                    <path
-                      d="M14 5c1.5 1 2.4 2.4 2.4 4s-.9 3-2.4 4"
-                      stroke="var(--accent-text)"
-                      strokeWidth="2.2"
-                      fill="none"
-                      strokeLinecap="round"
-                    />
-                  ) : (
-                    <line
-                      x1="13"
-                      y1="4"
-                      x2="18"
-                      y2="14"
-                      stroke="var(--text-muted)"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                    />
-                  )}
-                </svg>
-              </button>
-              <button
-                type="button"
-                className="toggle"
-                data-testid="drawer-theme-toggle"
-                onClick={onToggleTheme}
-                aria-pressed={theme === "dark"}
-              >
-                {theme === "dark" ? "☀" : "☾"}
-                <span className="toggle-label">
-                  {theme === "dark" ? "LIGHT" : "DARK"}
-                </span>
+                <SoundIcon on={soundOn} />
               </button>
             </div>
           </div>

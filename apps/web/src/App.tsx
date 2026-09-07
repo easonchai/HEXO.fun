@@ -33,6 +33,7 @@ import {
   withdrawable,
 } from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
+import { SoundIcon } from "./SoundIcon.js";
 import { useChainState } from "./read.js";
 import { useChainClock } from "./useChainClock.js";
 import { useProgramEvents } from "./useProgramEvents.js";
@@ -66,8 +67,9 @@ export function App() {
   );
   const [tab, setTab] = useState<Tab>("MINE");
   const [soundOn, setSoundOnState] = useState(isSoundOn());
-  // The prototype ships dark-first ("Dark Gold Midnight"); light keeps the blue primary.
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
+  // Dark only: the toggle is gone, but the light tokens and the
+  // `data-theme` attribute stay so re-enabling it is a one-line change.
+  const [theme] = useState<"light" | "dark">("dark");
   const [stakeText, setStakeText] = useState("1");
   const [autoRounds, setAutoRounds] = useState(0);
   const [addressCopied, setAddressCopied] = useState(false);
@@ -117,7 +119,7 @@ export function App() {
   const player = state.player;
   const round = state.round;
   const { now } = useChainClock(connection);
-  const { events, live } = useProgramEvents(program, connection);
+  const { events } = useProgramEvents(program, connection);
   const loadStatus = useCallback(
     (signal: AbortSignal) => fetchStatus(apiBaseUrl(), signal),
     [],
@@ -349,9 +351,9 @@ export function App() {
     <main className="app">
       <header className="topbar">
         <div className="brand">
-          <LogoCog size={32} />
+          <LogoCog size={34} />
           <span className="brand-logo">
-            <LogoWordmark height={13} />
+            <LogoWordmark height={15} />
           </span>
         </div>
         <nav className="nav" aria-label="Sections">
@@ -369,32 +371,19 @@ export function App() {
           ))}
         </nav>
         <div className="topbar-right">
-          <span
-            className="chip"
-            data-testid="status-pill"
-            title={status.detail}
-            aria-label={status.label}
-          >
-            <span
-              className={`dot ${status.tone === "ok" ? "ok" : "warn"}`}
-              aria-hidden="true"
-            />
-            <span className="chip-label">
-              {status.label.length > 24
-                ? `${status.label.slice(0, 24)}…`
-                : status.label}
-            </span>
-          </span>
-          <span className="chip" data-testid="slot-chip">
-            {now !== null ? `T+${now.toString()}` : "SYNC…"}
-            <span
-              className={`dot ${live ? "ok" : ""}`}
-              title={live ? "live events" : "polling fallback"}
-            />
-          </span>
+          {connected ? (
+            <>
+              <span className="chip" data-testid="topbar-tickets">
+                Tickets: {fmt(entries)}
+              </span>
+              <span className="chip" data-testid="topbar-balance">
+                {SYMBOL}: {fmt(state.walletBalance)}
+              </span>
+            </>
+          ) : null}
           <button
             type="button"
-            className="toggle"
+            className="sound-toggle"
             data-testid="sound-toggle"
             onClick={() => {
               const next = !soundOn;
@@ -402,43 +391,9 @@ export function App() {
               setSoundOnState(next);
             }}
             aria-pressed={soundOn}
+            aria-label="Sound"
           >
-            <svg width="17" height="16" viewBox="0 0 20 18" aria-hidden="true">
-              <path d="M2 6h4l5-4v14l-5-4H2z" fill="var(--accent-text)" />
-              {soundOn ? (
-                <path
-                  d="M14 5c1.5 1 2.4 2.4 2.4 4s-.9 3-2.4 4"
-                  stroke="var(--accent-text)"
-                  strokeWidth="2.2"
-                  fill="none"
-                  strokeLinecap="round"
-                />
-              ) : (
-                <line
-                  x1="13"
-                  y1="4"
-                  x2="18"
-                  y2="14"
-                  stroke="var(--text-muted)"
-                  strokeWidth="2.2"
-                  strokeLinecap="round"
-                />
-              )}
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="toggle"
-            data-testid="theme-toggle"
-            onClick={() =>
-              setTheme((value) => (value === "light" ? "dark" : "light"))
-            }
-            aria-pressed={theme === "dark"}
-          >
-            {theme === "dark" ? "☀" : "☾"}
-            <span className="toggle-label">
-              {theme === "dark" ? "LIGHT" : "DARK"}
-            </span>
+            <SoundIcon on={soundOn} />
           </button>
           <span data-testid="wallet-connector">
             {signer.connected && signer.publicKey ? (
@@ -541,10 +496,6 @@ export function App() {
                 setSoundOn(next);
                 setSoundOnState(next);
               }}
-              theme={theme}
-              onToggleTheme={() =>
-                setTheme((value) => (value === "light" ? "dark" : "light"))
-              }
             >
               <ControlPanel
                 engine={engine}
