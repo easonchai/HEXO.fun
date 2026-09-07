@@ -10,7 +10,7 @@ import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
 import { Prisma, type Player } from "@prisma/client";
-import { Keypair, type TransactionInstruction } from "@solana/web3.js";
+import { Keypair, type PublicKey, type TransactionInstruction } from "@solana/web3.js";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -44,6 +44,8 @@ const HUGE_U64 = "9007199254740993";
 const HUGE_U128 = "123456789012345678901234567890";
 
 const FAKE_SIGNATURE = "FakeSignature1111111111111111111111111111111";
+/** What the fake RPC says sits in the jackpot vault while epoch 7 is open. */
+const VAULT_BALANCE = 5_000_000n;
 
 /** A Clock sysvar account's data, `unix_timestamp` at byte offset 32 (see
  *  operator/chain-state.ts `clockUnixTimestamp`). The other fields are unused. */
@@ -61,7 +63,11 @@ const fakeChain = {
     getAccountInfo: async (): Promise<{ data: Buffer }> => ({
       data: clockSysvarData(CHAIN_NOW),
     }),
+    getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => ({
+      value: { amount: VAULT_BALANCE.toString() },
+    }),
   },
+  jackpotVaultAddress: (): PublicKey => Keypair.generate().publicKey,
   keypair: Keypair.generate(),
   send: async (instructions: TransactionInstruction[]): Promise<string> => {
     sentInstructions.push(instructions);
@@ -242,6 +248,8 @@ describe("API routes", () => {
   it("GET /epochs/current reports draw progress for the epoch that just ended", async () => {
     const { body } = await http.get("/epochs/current").expect(200);
     expect(body.id).toBe("7");
+    // Open epoch: the indexed snapshot is 0, the vault balance is what shows.
+    expect(body.jackpotAmount).toBe(VAULT_BALANCE.toString());
     expect(body.drawing).toEqual({
       epochId: "6",
       registeredCount: 1,
