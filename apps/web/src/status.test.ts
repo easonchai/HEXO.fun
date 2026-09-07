@@ -87,14 +87,23 @@ describe("summarizeStatus", () => {
     expect(result.label).toBe("SYNCING");
   });
 
-  it("goes amber when the indexer cursor lags even though the operator ticked", () => {
+  it("stays green through a quiet round: the cursor only moves on events and the 60 s sweep", () => {
+    const quietRound = status({
+      cursor: { lastSlot: "1", lastSignature: "x", ageSeconds: 45 },
+    });
+    const result = summarizeStatus(quietRound, NOW);
+    expect(result.tone).toBe("ok");
+    expect(result.stale).toBe(false);
+  });
+
+  it("goes amber when the indexer cursor outlives a sweep even though the operator ticked", () => {
     const laggingCursor = status({
-      cursor: { lastSlot: "1", lastSignature: "x", ageSeconds: 30 },
+      cursor: { lastSlot: "1", lastSignature: "x", ageSeconds: 120 },
     });
     const result = summarizeStatus(laggingCursor, NOW);
     expect(result.tone).toBe("warn");
     expect(result.stale).toBe(true);
     expect(result.label).toBe("SYNCING");
-    expect(result.detail).toBe("indexer lag 30s");
+    expect(result.detail).toBe("indexer lag 120s");
   });
 });

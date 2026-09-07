@@ -2718,8 +2718,9 @@
           {
             "name": "previous_epoch_start",
             "docs": [
-              "Start of the epoch before the current one. Epochs are contiguous, so",
-              "this plus `current_epoch_start` bounds the previous epoch exactly."
+              "Start of the epoch before the current one; it ended `epoch_seconds`",
+              "later. Usually that is `current_epoch_start` too, except after a",
+              "`begin_epoch` that ran a whole epoch late and started at `now`."
             ],
             "type": "i64"
           },

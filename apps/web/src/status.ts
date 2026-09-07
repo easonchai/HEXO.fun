@@ -24,6 +24,13 @@ export interface StatusSummary {
 
 /** Ticket 11: "green when the last tick is under 10 s old and no error". */
 const FRESH_SECONDS = 10;
+/**
+ * The indexer stamps its cursor when it ingests an event and after each 60 s
+ * catch-up sweep, so on an empty Round the age climbs for most of the
+ * countdown. Measured against the sweep, plus a margin for a slow RPC, the
+ * age means "the sweep is running", not "an event just landed".
+ */
+const CURSOR_FRESH_SECONDS = 90;
 
 const warn = (label: string, detail: string): StatusSummary => ({
   tone: "warn",
@@ -50,7 +57,7 @@ export function summarizeStatus(
     Number.isFinite(tickAge) && tickAge >= 0 && tickAge < FRESH_SECONDS;
 
   const cursorAge = status.cursor.ageSeconds;
-  const cursorFresh = cursorAge !== null && cursorAge < FRESH_SECONDS;
+  const cursorFresh = cursorAge !== null && cursorAge < CURSOR_FRESH_SECONDS;
 
   if (tickFresh && cursorFresh && !error) {
     return {

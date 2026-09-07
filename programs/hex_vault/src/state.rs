@@ -38,8 +38,9 @@ pub struct Pool {
     /// 0 before the first epoch.
     pub current_epoch_id: u64,
     pub current_epoch_start: i64,
-    /// Start of the epoch before the current one. Epochs are contiguous, so
-    /// this plus `current_epoch_start` bounds the previous epoch exactly.
+    /// Start of the epoch before the current one; it ended `epoch_seconds`
+    /// later. Usually that is `current_epoch_start` too, except after a
+    /// `begin_epoch` that ran a whole epoch late and started at `now`.
     pub previous_epoch_start: i64,
     pub next_round_id: u64,
     /// 0 when no round is Open or Requested.
