@@ -2158,8 +2158,7 @@ input::placeholder {
     bottom: 0;
     z-index: 71;
     max-height: 90dvh;
-    background: var(--bg-surface);
-    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-sidebar);
     border-top-left-radius: 20px;
     border-top-right-radius: 20px;
     outline: none;
