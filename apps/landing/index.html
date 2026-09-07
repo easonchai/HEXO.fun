@@ -45,37 +45,19 @@
       rel="stylesheet"
     />
 
-    <!-- PostHog. Autocapture covers pageviews, clicks and rage clicks on its
-         own; the funnel events the form fires are named in the submit
-         handler at the bottom of this file. -->
+    <!-- PostHog. Autocapture covers pageviews, clicks, rage clicks, web vitals
+         and session replay on its own; the funnel events the form fires are
+         named in the submit handler at the bottom of this file.
+         This is PostHog's own bootstrap verbatim. Its stub queues calls made
+         before array.js lands, which is why capture() can be called anywhere
+         below without a readiness check. -->
     <script>
-      window.__ph = function (name, props) {
-        (window.__phq = window.__phq || []).push([name, props]);
-        if (window.posthog && window.posthog.__loaded) flushPh();
-      };
-      function flushPh() {
-        var q = window.__phq || [];
-        window.__phq = [];
-        for (var i = 0; i < q.length; i++)
-          window.posthog.capture(q[i][0], q[i][1]);
-      }
-      (function () {
-        var s = document.createElement("script");
-        s.src = "https://eu-assets.i.posthog.com/static/array.js";
-        s.async = true;
-        s.onload = function () {
-          window.posthog.init(
-            "phc_kKKDDiifbNXJP46pA4iqnPJ32kijcbWPEePcaVN8vHUk",
-            {
-              api_host: "https://eu.i.posthog.com",
-              defaults: "2026-05-30",
-              person_profiles: "always",
-            },
-          );
-          flushPh();
-        };
-        document.head.appendChild(s);
-      })();
+      !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],Object.defineProperty(u,"toString",{configurable:!0,enumerable:!0,writable:!0,value:function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e}}),Object.defineProperty(u.people,"toString",{configurable:!0,enumerable:!0,writable:!0,value:function(){return u.toString(1)+".people (stub)"}}),o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagResult isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+      posthog.init("phc_kKKDDiifbNXJP46pA4iqnPJ32kijcbWPEePcaVN8vHUk", {
+        api_host: "https://eu.i.posthog.com",
+        defaults: "2026-05-30",
+        person_profiles: "always",
+      });
     </script>
 
     <style>
@@ -2463,12 +2445,11 @@
             signupId = r.id;
           } catch (err) {
             submit.disabled = false;
-            window.__ph("waitlist_failed", { where, reason: String(err.message) });
+            posthog.capture("waitlist_failed", { where, reason: String(err.message) });
             return fail("Couldn't reach the list. Try again in a moment.");
           }
-          window.__ph("waitlist_submitted", { where, has_utm: !!UTM });
-          if (window.posthog && window.posthog.__loaded)
-            window.posthog.identify(signupId, { email });
+          posthog.capture("waitlist_submitted", { where, has_utm: !!UTM });
+          posthog.identify(signupId, { email });
           form.classList.add("is-done");
           done.classList.add("is-done", "is-asking");
           note.textContent = noteDefault;
@@ -2485,13 +2466,13 @@
             send.disabled = false;
             return;
           }
-          window.__ph("waitlist_answered", { where, length: answer.length });
+          posthog.capture("waitlist_answered", { where, length: answer.length });
           done.classList.remove("is-asking");
           done.classList.add("is-thanked");
         });
 
         skip.addEventListener("click", () => {
-          window.__ph("waitlist_answer_skipped", { where });
+          posthog.capture("waitlist_answer_skipped", { where });
           done.classList.remove("is-asking");
         });
       });
