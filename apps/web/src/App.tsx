@@ -45,6 +45,13 @@ import { TABS, type Tab } from "./tabs.js";
 /** The accepted asset is hexUSDC (6 decimals) for every pool in this build. */
 const SYMBOL = "hexUSDC";
 const DECIMALS = 6;
+/**
+ * How long after a round ends before the manual SETTLE POSITION button shows.
+ * The operator settles one batch per 2 s tick, so a healthy crank clears a
+ * round well inside this; the button is the fallback for a stalled one.
+ * ponytail: fixed guess, derive from batch size × tick if rounds get crowded.
+ */
+const SETTLE_GRACE_SECONDS = 30n;
 
 export function App() {
   const { connection } = useConnection();
@@ -299,15 +306,18 @@ export function App() {
   );
 
   // A revealed round leaves the Position open until it is settled; that is the
-  // permissionless instruction which credits the round reward as Entries.
+  // permissionless instruction which credits the round reward as Entries. The
+  // operator sweeps positions every tick, so the manual button only shows once
+  // the round has been over long enough that the sweep is clearly behind.
   const settleState = useMemo(() => {
     if (!round || !position || !publicKey) return null;
     if (!isRevealed(round)) return null;
+    if ((now ?? 0n) < round.endsAt + SETTLE_GRACE_SECONDS) return null;
     const reward = covers(position.tiles, round.winningTile)
       ? expectedReward(round, position)
       : 0n;
     return { roundId: round.roundId, winningTile: round.winningTile, reward };
-  }, [round, position, publicKey]);
+  }, [round, position, publicKey, now]);
   const rewardHint = settleState
     ? settleState.reward > 0n
       ? `round #${settleState.roundId}: you covered tile ${displayTile(settleState.winningTile)} — settle for +${fmt(settleState.reward)} Tickets`
@@ -495,7 +505,6 @@ export function App() {
             />
             <ControlPanel
               engine={engine}
-              principal={principal}
               entries={entries}
               decimals={DECIMALS}
               stakeText={stakeText}
@@ -539,7 +548,6 @@ export function App() {
             >
               <ControlPanel
                 engine={engine}
-                principal={principal}
                 entries={entries}
                 decimals={DECIMALS}
                 stakeText={stakeText}

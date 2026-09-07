@@ -5,7 +5,7 @@
 import { useState } from "react";
 
 import { Textile } from "../arena/Textile.js";
-import { formatAtomic, formatAtomic2, parseAtomic, previewBuy } from "../lib/money.js";
+import { formatAtomic, formatAtomic2, parseAtomic } from "../lib/money.js";
 import type { EngineOutput } from "../useRoundEngine.js";
 import type { FeedRow } from "../engine.js";
 import { PanelCard } from "../ui.js";
@@ -14,8 +14,6 @@ const SYMBOL_ROW = [0, 1, 2, 3, 4, 5];
 
 export interface ControlPanelProps {
   engine: EngineOutput;
-  /** Player.principal, atomic units. */
-  principal: bigint;
   /** Player.entries, atomic units. */
   entries: bigint;
   decimals: number;
@@ -40,7 +38,6 @@ export interface ControlPanelProps {
 export function ControlPanel(props: ControlPanelProps) {
   const {
     engine,
-    principal,
     entries,
     decimals,
     stakeText,
@@ -64,7 +61,8 @@ export function ControlPanel(props: ControlPanelProps) {
   const tiles = engine.selected.length;
   const stake = parseAtomic(stakeText, decimals) ?? 0n;
   const perRound = stake * BigInt(Math.max(tiles, 0));
-  const buyPreview = previewBuy(principal, entries, tiles, stake);
+  // The manual deploy plays one round; auto-rounds adds that many more.
+  const rounds = autoRounds + 1;
   const fmt = (value: bigint) => formatAtomic2(value, decimals);
 
   const addAmount = (delta: number): void => {
@@ -267,10 +265,10 @@ export function ControlPanel(props: ControlPanelProps) {
           </div>
         </div>
         <div className="cost-row">
-          <span className="row-label">TICKETS IN</span>
+          <span className="row-label">TICKETS IN ({rounds} {rounds === 1 ? "ROUND" : "ROUNDS"})</span>
           <div>
             <span className="cost-value" data-testid="total-cost">
-              {fmt(perRound)}
+              {fmt(perRound * BigInt(rounds))}
             </span>
             <span className="cost-unit"> Tickets</span>
           </div>
@@ -281,17 +279,6 @@ export function ControlPanel(props: ControlPanelProps) {
             {fmt(deployedTotal)}
           </span>
         </div>
-        {tiles > 0 && stake > 0n ? (
-          <div className="dual-line" data-testid="deploy-preview">
-            <span>
-              Tickets in {fmt(buyPreview.spend)} · Tickets after{" "}
-              {fmt(buyPreview.entriesAfter)}
-            </span>
-            <span className="dual-accent">
-              withdrawable after {fmt(buyPreview.withdrawableAfter)}
-            </span>
-          </div>
-        ) : null}
         {rewardHint ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div className="reward-hint" data-testid="reward-hint">
