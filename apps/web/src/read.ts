@@ -2,7 +2,7 @@
  * Chain reads. This module owns the three accounts the UI cannot get wrong:
  * the Pool, the connected wallet's Player, and the open Round. Everything
  * else comes from `api.ts`. One `getMultipleAccountsInfo` every 10 s, and
- * again as soon as any program event lands on the logs websocket.
+ * one more per burst of program events on the logs websocket.
  */
 import { BN } from "@anchor-lang/core";
 import { AccountLayout } from "@solana/spl-token";
@@ -170,6 +170,11 @@ export interface ChainState {
 
 /** Fallback cadence; the logs subscription below reloads on every event. */
 const POLL_MS = 10_000;
+/**
+ * Window that folds a burst of events (or a `refresh()`) into one read. A
+ * settle sequence spans a few slots (~400 ms each), so 1 s covers it.
+ */
+const COALESCE_MS = 1_000;
 
 /** What the last pool read told us the other addresses are. */
 interface ReadPlan {
@@ -193,8 +198,11 @@ export function useChainState(
   owner: PublicKey | undefined,
 ): ChainState {
   const [state, setState] = useState(EMPTY);
-  const [tick, setTick] = useState(0);
-  const refresh = useCallback(() => setTick((value) => value + 1), []);
+  // `refresh` reaches the live scheduler through a ref so a caller's re-read
+  // coalesces with the event-triggered one instead of restarting the effect
+  // (which also tore down and re-opened the logs subscription).
+  const scheduleRef = useRef<() => void>(() => {});
+  const refresh = useCallback(() => scheduleRef.current(), []);
   /**
    * The round and token addresses come from the pool, so the first read only
    * knows the pool; every later read fetches all six accounts in one call.
@@ -277,30 +285,46 @@ export function useChainState(
       }
     };
 
+    // Program events land in bursts (a settle sequence is several
+    // transactions in one slot), and a burst per viewer is what tripped the
+    // RPC's 429. One read per burst: the first event arms a short timer and
+    // the rest ride on it.
+    let pending: number | null = null;
+    const schedule = () => {
+      if (pending !== null) return;
+      pending = window.setTimeout(() => {
+        pending = null;
+        void load();
+      }, COALESCE_MS);
+    };
+    scheduleRef.current = schedule;
+
     setState((current) => ({ ...current, loading: true }));
     void load();
     const timer = window.setInterval(() => {
-      if (!document.hidden) void load();
+      if (!document.hidden) schedule();
     }, POLL_MS);
 
     // Every program event moves something on screen (a deposit, a position,
-    // a settle, a new round); re-read right away instead of waiting 10 s.
+    // a settle, a new round); re-read soon instead of waiting 10 s.
     const subscription = connection.onLogs(
       PROGRAM_ID,
       ({ logs, err }) => {
         if (err) return;
-        if (decodeEventLogs(program, logs).length > 0) void load();
+        if (decodeEventLogs(program, logs).length > 0) schedule();
       },
       "confirmed",
     );
 
     return () => {
       cancelled = true;
+      scheduleRef.current = () => {};
+      if (pending !== null) window.clearTimeout(pending);
       window.clearInterval(timer);
       void connection.removeOnLogsListener(subscription);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ownerKey stands in for owner
-  }, [program, connection, ownerKey, tick]);
+  }, [program, connection, ownerKey]);
 
   return { ...state, refresh };
 }
