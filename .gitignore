@@ -25,3 +25,6 @@ playwright-report/
 
 # Local feature plans and tickets (docs/plan/rebuild predates this and stays tracked)
 docs/plan/
+
+# local operator keypair, never commit
+operator.json
