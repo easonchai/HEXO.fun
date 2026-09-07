@@ -93,7 +93,7 @@ function toRow(
         key,
         who: "pool",
         action: `tile ${displayTile(Number(field(data, "winningTile", "winning_tile")))}`,
-        tileLabel: field(data, "forfeited") === "true" ? "forfeited" : "settled",
+        tileLabel: field(data, "forfeited") === "true" ? "no winner" : "settled",
         roundId: field(data, "roundId", "round_id"),
       };
     case "registered":
