@@ -50,9 +50,16 @@ async function connectBurnerWallet(page: Page): Promise<void> {
   if (await burnerOption.isVisible({ timeout: 5_000 }).catch(() => false)) {
     await burnerOption.click();
   }
-  await expect(page.getByTestId("disconnect-button")).toBeVisible({
-    timeout: 15_000,
-  });
+  // Connected: the pill carries `Copy <address>` and opens the wallet menu.
+  await expect(page.getByTestId("connect-button")).toHaveAttribute(
+    "title",
+    /^Copy /,
+    { timeout: 15_000 },
+  );
+  await page.getByTestId("connect-button").click();
+  await expect(page.getByTestId("disconnect-button")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("wallet-menu")).toHaveCount(0);
 }
 
 function parseAfterLabel(text: string, label: string): number {

@@ -759,27 +759,106 @@ input::placeholder {
   filter: brightness(0.92);
 }
 
-.btn-disconnect {
-  background: transparent;
-  color: var(--text-muted);
-  border: 1px solid var(--border-subtle);
-  border-radius: 24px;
-  width: 32px;
-  height: 32px;
-  margin-left: 6px;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  vertical-align: middle;
-}
-
-.btn-disconnect:hover {
-  color: var(--text-primary);
-  border-color: var(--text-muted);
-}
-
 .btn-connect:active {
   filter: brightness(0.85);
+}
+
+/* ---------- wallet menu (dropdown under the address pill) ---------- */
+
+.wallet-menu-root {
+  position: relative;
+}
+
+.wallet-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 260px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(14, 27, 43, 0.35);
+  font-family: "Roboto Mono", monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.wallet-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wallet-menu-item:hover,
+.wallet-menu-item:focus-visible {
+  background: var(--pill-hover);
+  outline: none;
+}
+
+.wallet-menu-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wallet-menu-address {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.wallet-menu-item-danger {
+  color: var(--danger-text);
+}
+
+.wallet-menu-item-danger:hover,
+.wallet-menu-item-danger:focus-visible {
+  background: var(--danger-soft);
+}
+
+.wallet-menu-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.wallet-menu-row + .wallet-menu-row {
+  border-top: none;
+  padding-top: 0;
+}
+
+.wallet-menu-row + .wallet-menu-item {
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 10px 10px;
+}
+
+.wallet-menu-row-label {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.wallet-menu-row-value {
+  color: var(--accent-text);
 }
 
 /* ---------- layout ---------- */

@@ -35,6 +35,7 @@ import {
 } from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { SoundIcon } from "./SoundIcon.js";
+import { WalletMenu } from "./WalletMenu.js";
 import { useChainState } from "./read.js";
 import { useChainClock } from "./useChainClock.js";
 import { useProgramEvents } from "./useProgramEvents.js";
@@ -410,32 +411,18 @@ export function App() {
           >
             <SoundIcon on={soundOn} />
           </button>
-          <span data-testid="wallet-connector">
-            {signer.connected && signer.publicKey ? (
-              <>
-                <button
-                  type="button"
-                  className="btn-connect"
-                  data-testid="connect-button"
-                  title={`Copy ${signer.publicKey.toBase58()}`}
-                  onClick={() => void copyAddress(signer.publicKey!.toBase58())}
-                >
-                  {addressCopied
-                    ? "COPIED"
-                    : `${signer.publicKey.toBase58().slice(0, 4)}…${signer.publicKey.toBase58().slice(-4)}`}
-                </button>
-                <button
-                  type="button"
-                  className="btn-disconnect"
-                  data-testid="disconnect-button"
-                  title="Disconnect"
-                  aria-label="Disconnect wallet"
-                  onClick={() => signer.disconnect()}
-                >
-                  ×
-                </button>
-              </>
-            ) : (
+          {signer.connected && signer.publicKey ? (
+            <WalletMenu
+              address={signer.publicKey.toBase58()}
+              tickets={fmt(entries)}
+              balance={fmt(state.walletBalance)}
+              symbol={SYMBOL}
+              addressCopied={addressCopied}
+              onCopy={(address) => void copyAddress(address)}
+              onDisconnect={() => signer.disconnect()}
+            />
+          ) : (
+            <span data-testid="wallet-connector">
               <button
                 type="button"
                 className="btn-connect"
@@ -446,8 +433,8 @@ export function App() {
               >
                 {signer.connected ? "DISCONNECT" : "CONNECT"}
               </button>
-            )}
-          </span>
+            </span>
+          )}
         </div>
       </header>
 
