@@ -32,5 +32,19 @@ export default defineConfig({
         timeout: 30_000,
       }
     : undefined,
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      // Anything named *.phone.spec.ts is phone-only; keep it off desktop.
+      testIgnore: "**/*.phone.spec.ts",
+    },
+    {
+      // iPhone 13: 390px wide, WebKit. Run `pnpm exec playwright install
+      // webkit` once locally before this project can launch a browser.
+      name: "phone",
+      use: { ...devices["iPhone 13"] },
+      testMatch: "**/*.phone.spec.ts",
+    },
+  ],
 });

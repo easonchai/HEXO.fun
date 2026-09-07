@@ -5,7 +5,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { eventsToRows, liveEventToRow, mergeFeed } from "./activityRows.js";
 import { Arena, LogoCog } from "./arena/Arena.js";
+import { BetDrawer } from "./panel/BetDrawer.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
+import { StakeBarButton } from "./panel/StakeBarButton.js";
 import { About } from "./screens/About.js";
 import { Leaderboard } from "./screens/Leaderboard.js";
 import { Vault } from "./screens/Vault.js";
@@ -33,9 +35,7 @@ import { useApiPoll } from "./useApiPoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
-
-const TABS = ["MINE", "VAULT", "WEEKLY DRAW", "LEADERBOARD", "ABOUT"] as const;
-type Tab = (typeof TABS)[number];
+import { TABS, type Tab } from "./tabs.js";
 
 /** The accepted asset is hexUSDC (6 decimals) for every pool in this build. */
 const SYMBOL = "hexUSDC";
@@ -57,6 +57,9 @@ export function App() {
   const [depositBusy, setDepositBusy] = useState(false);
   const [vaultNote, setVaultNote] = useState<string | null>(null);
   const [feedHistory, setFeedHistory] = useState<FeedRow[]>([]);
+  // Phone bet drawer (spec.md "Drawer"): controlled here so the deploy
+  // success path and the win takeover path can both close it.
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Privy and wallet-adapter hand back a fresh signer object on every render,
   // so memoizing the provider on it rebuilt the Program every render — and the
@@ -127,6 +130,13 @@ export function App() {
     feed: liveFeed,
     hexpot: state.hexpot,
   });
+
+  // `takeover` only ever fires for the Player's own Position (useRoundEngine
+  // sets it inside `if (won)`), so this is exactly spec.md's "a win takeover
+  // for the Player's own Position closes the drawer".
+  useEffect(() => {
+    if (engine.takeover) setDrawerOpen(false);
+  }, [engine.takeover]);
 
   const refresh = state.refresh;
   const principal = player?.principal ?? 0n;
@@ -348,23 +358,34 @@ export function App() {
         </div>
         <nav className="nav" aria-label="Sections">
           {TABS.map((candidate) => (
-            <span
-              key={candidate}
-              role="button"
-              className={`nav-item${tab === candidate ? " active" : ""}`}
-              data-testid={`tab-${candidate.toLowerCase().replace(" ", "-")}`}
-              onClick={() => setTab(candidate)}
+            <button
+              key={candidate.id}
+              type="button"
+              className={`nav-item${tab === candidate.id ? " active" : ""}`}
+              data-testid={`tab-${candidate.id.toLowerCase().replace(" ", "-")}`}
+              onClick={() => setTab(candidate.id)}
             >
-              {candidate}
-            </span>
+              <span className="nav-item-long">{candidate.long}</span>
+              <span className="nav-item-short">{candidate.short}</span>
+            </button>
           ))}
         </nav>
         <div className="topbar-right">
-          <span className="chip" data-testid="status-pill" title={status.detail}>
-            <span className={`dot ${status.tone === "ok" ? "ok" : "warn"}`} />
-            {status.label.length > 24
-              ? `${status.label.slice(0, 24)}…`
-              : status.label}
+          <span
+            className="chip"
+            data-testid="status-pill"
+            title={status.detail}
+            aria-label={status.label}
+          >
+            <span
+              className={`dot ${status.tone === "ok" ? "ok" : "warn"}`}
+              aria-hidden="true"
+            />
+            <span className="chip-label">
+              {status.label.length > 24
+                ? `${status.label.slice(0, 24)}…`
+                : status.label}
+            </span>
           </span>
           <span className="chip" data-testid="slot-chip">
             {now !== null ? `T+${now.toString()}` : "SYNC…"}
@@ -512,6 +533,63 @@ export function App() {
               depositBusy={depositBusy}
               vaultNote={vaultNote}
             />
+            <StakeBarButton
+              stakeText={stakeText}
+              selected={engine.selected}
+              position={position}
+              phase={engine.phase}
+              decimals={DECIMALS}
+              onOpen={() => setDrawerOpen(true)}
+            />
+            <BetDrawer
+              open={drawerOpen}
+              onOpenChange={setDrawerOpen}
+              soundOn={soundOn}
+              onToggleSound={() => {
+                const next = !soundOn;
+                setSoundOn(next);
+                setSoundOnState(next);
+              }}
+              theme={theme}
+              onToggleTheme={() =>
+                setTheme((value) => (value === "light" ? "dark" : "light"))
+              }
+            >
+              <ControlPanel
+                engine={engine}
+                principal={principal}
+                entries={entries}
+                walletBalance={state.walletBalance}
+                decimals={DECIMALS}
+                symbol={SYMBOL}
+                stakeText={stakeText}
+                setStakeText={setStakeText}
+                autoRounds={autoRounds}
+                setAutoRounds={setAutoRounds}
+                canDeploy={canPick}
+                deployProblems={problems}
+                deployBusy={deployBusy}
+                deployNote={deployNote}
+                locked={locked}
+                deployedTotal={deployedTotal}
+                lastWin={engine.lastWin}
+                feed={feed}
+                rewardHint={rewardHint}
+                settleBusy={settleBusy}
+                onSettle={() => void settle()}
+                onDeploy={() => {
+                  // Confirmed deploy closes the drawer; a failed one leaves
+                  // it open with deployNote's error visible (spec.md
+                  // "Drawer": close states).
+                  void deploy(engine.selected, stake).then((placed) => {
+                    if (placed) setDrawerOpen(false);
+                  });
+                }}
+                onDeposit={(amount) => void doDeposit(amount)}
+                depositBusy={depositBusy}
+                vaultNote={vaultNote}
+              />
+            </BetDrawer>
           </>
         ) : null}
         {tab === "VAULT" && publicKey && pool ? (

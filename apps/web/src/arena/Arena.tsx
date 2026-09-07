@@ -3,7 +3,7 @@
  * countdown, hexagon outline, dot lattice, cog core, laser reveal, 36 tiles,
  * victory shockwaves, hexpot odometer ticker, and the win takeover modal.
  */
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { computeGeo } from "./geo.js";
 import { Textile } from "./Textile.js";
@@ -164,8 +164,40 @@ export function Arena({
           : "hexShakeSubtle .25s infinite"
         : "none";
 
+  const arenaWrapRef = useRef<HTMLDivElement>(null);
+  // Phone board scale (spec.md "Board scale"): the smaller of a width-based
+  // and height-based factor, capped at the desktop scale. CSS `min()` with
+  // length division (`calc(100vw / 620)` producing a bare number) is the
+  // spec's preferred approach, but neither Chromium nor WebKit in this
+  // repo's Playwright accept it as a `scale()` argument (verified with
+  // `CSS.supports`), so it's computed here instead and handed to the
+  // `@media (max-width: 960px)` rule in styles.css as one custom property,
+  // read there as `scale(var(--board-scale, 0.64))`. Above 960px that
+  // property is never read, so this is a no-op on desktop.
+  useEffect(() => {
+    const wrap = arenaWrapRef.current;
+    if (!wrap) return;
+    const DESKTOP_SCALE = 0.64;
+    const SIDE_MARGIN = 24;
+    // ponytail: rounded estimate of the timer (~48px above the box) plus
+    // the in-flow hexpot pill below it (~50px incl. its gap), not a
+    // measured constant; revisit if either one's size changes.
+    const RESERVED_HEIGHT = 100;
+    const updateScale = () => {
+      const { width, height } = wrap.getBoundingClientRect();
+      const widthFactor = (width - SIDE_MARGIN) / 620;
+      const heightFactor = (height - RESERVED_HEIGHT) / 600;
+      const scale = Math.min(widthFactor, heightFactor, DESKTOP_SCALE);
+      wrap.style.setProperty("--board-scale", String(Math.max(scale, 0.01)));
+    };
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, []);
+
   return (
-    <div className="stage-arena-wrap" data-testid="arena">
+    <div className="stage-arena-wrap" data-testid="arena" ref={arenaWrapRef}>
       <div className="hex-stage-container">
         {/* Timer / win banner above the hexagon */}
         {showTimer && !banner ? (

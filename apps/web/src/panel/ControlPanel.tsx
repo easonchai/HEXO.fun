@@ -135,6 +135,12 @@ export function ControlPanel(props: ControlPanelProps) {
   // "settling" here: the deploy button can't be pressed either way.
   const settling =
     (engine.phase === "settling" || engine.phase === "locked") && !deployBusy;
+  // Once a round settles, forfeits or voids, App nulls `openRound`, so
+  // `locked` and `canDeploy` both go false and this button would otherwise
+  // fall through to "SELECT TILES"/"DEPLOY" — inviting a bet while Positions
+  // are closed (see stakeBar.ts's doc comment, which needed the same fix on
+  // the phone stake bar, and used this same string).
+  const awaiting = engine.phase === "awaiting" && !deployBusy;
 
   /** Prototype deploy burst: six symbols radiating out for 0.65s. */
   const [burst, setBurst] = useState(false);
@@ -392,13 +398,15 @@ export function ControlPanel(props: ControlPanelProps) {
             </span>
           ) : (
             <span>
-              {settling
-                ? "SETTLING…"
-                : tiles === 0
-                  ? "SELECT TILES"
-                  : locked
-                    ? "DEPLOYED"
-                    : "DEPLOY"}
+              {awaiting
+                ? "AWAITING…"
+                : settling
+                  ? "SETTLING…"
+                  : tiles === 0
+                    ? "SELECT TILES"
+                    : locked
+                      ? "DEPLOYED"
+                      : "DEPLOY"}
             </span>
           )}
         </button>

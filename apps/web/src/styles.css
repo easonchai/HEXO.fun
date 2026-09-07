@@ -1966,6 +1966,21 @@ input::placeholder {
     min-height: 100vh !important;
   }
 
+  /* #root and .app both fix themselves to one viewport tall above (#root's
+     height: 100vh at the top of this file, .app's height: 100vh; overflow:
+     hidden). Either alone still caps the page at one screen, which is the
+     "does not scroll" bug (spec.md "Scroll and shell"). Lift both here. */
+  #root {
+    height: auto !important;
+    min-height: 100dvh !important;
+  }
+
+  .app {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow: visible !important;
+  }
+
   .main-content-split {
     flex-direction: column !important;
     height: auto !important;
@@ -1973,22 +1988,53 @@ input::placeholder {
   }
 
   .stage-arena-wrap {
-    height: 520px !important;
-    min-height: 520px !important;
+    /* flex-basis: auto so the flex algorithm falls back to `height` below
+       instead of the desktop rule's flex-basis: 0%, which collapses this
+       to 0 here: .main-content-split is height:auto under 960px, so
+       flex-grow has no free space to distribute the 0% basis into. */
+    flex: none !important;
+    /* Fluid game-screen height: one dynamic viewport tall minus the fixed
+       56px topbar and the fixed stake bar (plus its safe-area padding), so
+       the iOS URL bar collapsing doesn't leave a gap and the board still
+       fits above the bar (spec.md "Existing mobile overrides"). */
+    height: calc(
+      100dvh - 56px - var(--stake-bar-height) - env(safe-area-inset-bottom, 0px)
+    ) !important;
     width: 100% !important;
     overflow: visible !important;
   }
 
   .hex-stage-container {
-    transform: translate(-50%, -50%) scale(0.64) !important;
+    /* Fluid scale factor: the smaller of a width-based and a height-based
+       factor, capped at the scale this block already used (0.64). CSS
+       `min()` with length division is the spec's preferred way to compute
+       this, but neither Chromium nor WebKit in this repo's Playwright
+       accept `calc(<length> / <length>)` as a `scale()` argument (checked
+       with CSS.supports), so Arena.tsx's ResizeObserver computes it and
+       writes --board-scale here instead. The 0.64 fallback only matters
+       before that effect's first run. */
+    transform: translate(-50%, -50%) scale(var(--board-scale, 0.64)) !important;
   }
 
+  /* In normal flow directly under the board instead of absolutely
+     positioned outside its box, where it used to get clipped. */
+  .hexpot {
+    position: static !important;
+    left: auto !important;
+    bottom: auto !important;
+    transform: none !important;
+    width: fit-content !important;
+    margin: 16px auto 0 !important;
+  }
+
+  /* The bet drawer now owns the control panel on phones (spec.md "Existing
+     mobile overrides": "the control panel leaves the page flow and lives in
+     a bottom drawer"). The in-flow copy next to the arena is hidden rather
+     than stacked below it; .bet-drawer-body .control-panel below restores
+     it, sized for the drawer, at higher selector specificity so it does not
+     fight this rule. */
   .control-panel {
-    width: 100% !important;
-    height: auto !important;
-    border-left: none !important;
-    border-top: 1px solid var(--border-subtle) !important;
-    overflow-y: visible !important;
+    display: none !important;
   }
 }
 
@@ -2001,5 +2047,292 @@ input::placeholder {
 @media (min-width: 961px) and (max-height: 700px) {
   .hex-stage-container {
     transform: translate(-50%, -50%) scale(0.65) !important;
+  }
+}
+
+/* ---------- stake bar + bet drawer (phone only) ---------- */
+
+:root {
+  /* Fixed content height of the stake bar. .stage-arena-wrap above
+     subtracts this (plus the safe area inset) so the game screen still
+     fits one viewport above the bar. */
+  --stake-bar-height: 64px;
+}
+
+/* Mounted unconditionally on the MINE tab (spec.md "Breakpoint": no JS
+   breakpoint logic for the stake bar or the drawer); hidden by width here,
+   not by conditional rendering. */
+.stake-bar,
+.bet-drawer-overlay,
+.bet-drawer-content {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .stake-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    height: var(--stake-bar-height);
+    padding: 0 16px calc(env(safe-area-inset-bottom, 0px));
+    background: var(--bg-surface);
+    border: none;
+    border-top: 1px solid var(--border-subtle);
+    font-family: "Roboto Mono", monospace;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .stake-bar-stats {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .stake-bar-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .stake-bar-stat-label {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .stake-bar-stat-value {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .stake-bar-cta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--primary);
+    white-space: nowrap;
+  }
+
+  .stake-bar-cta-closed {
+    color: var(--text-muted);
+  }
+
+  .stake-bar-placed-mark {
+    color: var(--primary);
+  }
+
+  .bet-drawer-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 70;
+  }
+
+  .bet-drawer-content {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 71;
+    max-height: 90dvh;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-subtle);
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+    outline: none;
+  }
+
+  .bet-drawer-handle {
+    flex: none;
+    width: 40px;
+    height: 4px;
+    margin: 12px auto 2px;
+    border-radius: 999px;
+    background: var(--border-subtle);
+  }
+
+  /* Visually hidden — Drawer.Title/Description satisfy Radix Dialog's
+     accessible-name requirement without adding visible chrome the spec
+     doesn't ask for. */
+  .bet-drawer-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .bet-drawer-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 13px;
+    padding: 16px 4px calc(32px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Higher specificity than the plain .control-panel rule above (which
+     hides the in-flow desktop copy under 960px), so the drawer's copy
+     stays visible and sized for the sheet instead of the 450px aside. */
+  .bet-drawer-body .control-panel {
+    display: flex !important;
+    width: 100%;
+    height: auto;
+    border-left: none;
+    overflow-y: visible;
+    padding: 0 16px;
+  }
+
+  .bet-drawer-toggles {
+    display: flex;
+    gap: 10px;
+    padding: 0 16px;
+  }
+}
+
+/* ---------- phone topbar (mobile-game-page ticket 03) ---------- */
+
+/* .nav-item now renders as a real <button>; reset the UA button chrome so it
+   still looks like the old <span role="button">. The existing .nav-item
+   rule above still supplies color/cursor/padding-bottom/border-bottom —
+   :hover and .active there outrank this by specificity, so both states
+   still win. */
+.nav-item {
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin: 0;
+  padding: 0 0 3px;
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.nav-item:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Tab list carries a long and a short label per item (src/tabs.ts). Desktop
+   shows the long one; the phone override below flips it. */
+.nav-item-short {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .topbar {
+    padding: 0 14px;
+  }
+
+  .brand-logo {
+    display: none;
+  }
+
+  .nav {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 10px;
+    /* Five short labels plus the connect button do not fit at 390px at the
+       desktop tracking: the strip needed 269px of a 171px box, so RANKS and
+       ABOUT ended up behind .topbar-right. Tightening the type and the gaps
+       here (and the connect button below) brings the row to about 188px,
+       which fits 390px with room. Below roughly 360px it still overflows,
+       which is what the scroll and the edge fade are for. */
+    gap: 9px;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    /* Right-edge fade: painted over the strip's own box, so it stays fixed
+       at the right edge regardless of scroll offset. Harmless when the five
+       tabs already fit (nothing sits under it to fade). */
+    mask-image: linear-gradient(
+      to right,
+      black calc(100% - 20px),
+      transparent 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      black calc(100% - 20px),
+      transparent 100%
+    );
+  }
+
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-item {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .nav-item-long {
+    display: none;
+  }
+
+  .nav-item-short {
+    display: inline;
+  }
+
+  .topbar-right {
+    gap: 10px;
+  }
+
+  /* The desktop pill is 131px wide, over a third of a 390px screen. */
+  .btn-connect {
+    padding: 9px 14px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+  }
+
+  /* Slot chip and both toggles move into the drawer footer (ticket 02);
+     scoped to .topbar-right so their drawer copies, which share the same
+     data-testid, stay visible. */
+  .topbar-right [data-testid="slot-chip"],
+  .topbar-right [data-testid="sound-toggle"],
+  .topbar-right [data-testid="theme-toggle"] {
+    display: none;
+  }
+
+  /* Status pill collapses to its dot; the label stays as the accessible
+     name via aria-label on the chip. */
+  [data-testid="status-pill"] .chip-label {
+    display: none;
   }
 }
