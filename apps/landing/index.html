@@ -8,12 +8,76 @@
       name="description"
       content="Deposit USDC and earn a 5% base yield. Everything the pool earns above that goes into the weekly jackpot. Every dollar you deposit is a ticket."
     />
+    <link rel="canonical" href="https://hexo-landing.vercel.app/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="HEXO.fun" />
+    <meta property="og:url" content="https://hexo-landing.vercel.app/" />
+    <meta property="og:title" content="Earn 5%. Play for jackpot." />
+    <meta
+      property="og:description"
+      content="Prize-linked savings on Solana. Your deposit earns 5% and never goes into the game — every dollar is a ticket in the weekly jackpot."
+    />
+    <meta property="og:image" content="https://hexo-landing.vercel.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="HEXO.fun — Earn 5%. Play for jackpot."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Earn 5%. Play for jackpot." />
+    <meta
+      name="twitter:description"
+      content="Prize-linked savings on Solana. Your deposit earns 5% and never goes into the game."
+    />
+    <meta
+      name="twitter:image"
+      content="https://hexo-landing.vercel.app/og.png"
+    />
+    <meta name="theme-color" content="#0e1b2b" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://eu-assets.i.posthog.com" />
     <link
       href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&family=Syncopate:wght@400;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+
+    <!-- PostHog. Autocapture covers pageviews, clicks and rage clicks on its
+         own; the funnel events the form fires are named in the submit
+         handler at the bottom of this file. -->
+    <script>
+      window.__ph = function (name, props) {
+        (window.__phq = window.__phq || []).push([name, props]);
+        if (window.posthog && window.posthog.__loaded) flushPh();
+      };
+      function flushPh() {
+        var q = window.__phq || [];
+        window.__phq = [];
+        for (var i = 0; i < q.length; i++)
+          window.posthog.capture(q[i][0], q[i][1]);
+      }
+      (function () {
+        var s = document.createElement("script");
+        s.src = "https://eu-assets.i.posthog.com/static/array.js";
+        s.async = true;
+        s.onload = function () {
+          window.posthog.init(
+            "phc_kKKDDiifbNXJP46pA4iqnPJ32kijcbWPEePcaVN8vHUk",
+            {
+              api_host: "https://eu.i.posthog.com",
+              defaults: "2026-05-30",
+              person_profiles: "always",
+            },
+          );
+          flushPh();
+        };
+        document.head.appendChild(s);
+      })();
+    </script>
+
     <style>
       /* ---------------------------------------------------------------
          HEXO.fun landing — navy + lime.
@@ -522,6 +586,103 @@
       .form-done.is-done {
         display: block;
         animation: popIn 380ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+      }
+
+      /* --- the one follow-up question --- */
+      /* The email is already saved by the time this appears, so skipping or
+         closing the tab here costs the signup nothing. */
+
+      .done-line {
+        margin: 0;
+      }
+
+      .ask {
+        display: none;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid var(--lime-30);
+      }
+
+      .form-done.is-asking .ask {
+        display: block;
+        animation: popIn 320ms var(--ease) both;
+      }
+
+      .ask-q {
+        display: block;
+        color: var(--ink-2);
+        line-height: 1.5;
+      }
+
+      .ask-in {
+        display: block;
+        width: 100%;
+        margin-top: 12px;
+        background: var(--navy-850);
+        border: 1px solid var(--line-2);
+        border-radius: var(--r);
+        padding: 12px 14px;
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 14px;
+        line-height: 1.6;
+        resize: vertical;
+        outline: none;
+        transition:
+          border-color var(--std) var(--ease),
+          box-shadow var(--std) var(--ease);
+      }
+
+      .ask-in::placeholder {
+        color: var(--ink-3);
+      }
+
+      .ask-in:focus {
+        border-color: var(--lime);
+        box-shadow: 0 0 0 3px var(--lime-08);
+      }
+
+      .ask-row {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-top: 12px;
+      }
+
+      .btn-sm {
+        flex: none;
+        padding: 10px 22px;
+        font-size: 12px;
+      }
+
+      .ask-skip {
+        background: none;
+        border: 0;
+        padding: 0;
+        color: var(--ink-3);
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: color var(--quick) var(--ease);
+      }
+
+      .ask-skip:hover {
+        color: var(--ink-2);
+      }
+
+      .ask-thanks {
+        display: none;
+        margin: 16px 0 0;
+        padding-top: 16px;
+        border-top: 1px solid var(--lime-30);
+        color: var(--ink-2);
+      }
+
+      .form-done.is-thanked .ask-thanks {
+        display: block;
+        animation: popIn 320ms var(--ease) both;
       }
 
       @keyframes popIn {
@@ -1378,9 +1539,33 @@
               <span>Join the waitlist</span>
             </button>
           </form>
-          <p class="form-done" role="status">
-            You're on the list. We'll email you when the pool opens.
-          </p>
+          <div class="form-done" role="status">
+            <p class="done-line">
+              You're on the list. We'll email you when the pool opens.
+            </p>
+            <div class="ask">
+              <label class="ask-q"
+                >One quick thing. What would make you trust us with your
+                money?</label
+              >
+              <textarea
+                class="ask-in"
+                rows="3"
+                maxlength="2000"
+                placeholder="Anything at all. One line is plenty."
+                aria-label="What would make you trust us with your money?"
+              ></textarea>
+              <div class="ask-row">
+                <button type="button" class="btn btn-sm" data-send>
+                  <span>Send</span>
+                </button>
+                <button type="button" class="ask-skip" data-skip>
+                  No thanks
+                </button>
+              </div>
+            </div>
+            <p class="ask-thanks">Thank you. That genuinely helps.</p>
+          </div>
 
           <p class="micro form-note rv" style="--d: 280ms">
             No-loss · Weekly jackpot · Your deposit is never touched
@@ -1668,9 +1853,33 @@
               <span>Join the waitlist</span>
             </button>
           </form>
-          <p class="form-done" role="status">
-            You're on the list. We'll email you when the pool opens.
-          </p>
+          <div class="form-done" role="status">
+            <p class="done-line">
+              You're on the list. We'll email you when the pool opens.
+            </p>
+            <div class="ask">
+              <label class="ask-q"
+                >One quick thing. What would make you trust us with your
+                money?</label
+              >
+              <textarea
+                class="ask-in"
+                rows="3"
+                maxlength="2000"
+                placeholder="Anything at all. One line is plenty."
+                aria-label="What would make you trust us with your money?"
+              ></textarea>
+              <div class="ask-row">
+                <button type="button" class="btn btn-sm" data-send>
+                  <span>Send</span>
+                </button>
+                <button type="button" class="ask-skip" data-skip>
+                  No thanks
+                </button>
+              </div>
+            </div>
+            <p class="ask-thanks">Thank you. That genuinely helps.</p>
+          </div>
           <p class="micro form-note" style="margin-top: 16px">
             Save your money. Play your luck.
           </p>
@@ -2182,44 +2391,108 @@
       })();
 
       // ----------------------------- waitlist ------------------------------
-      // ponytail: POSTs to window.__WAITLIST_ENDPOINT when one is configured;
-      // otherwise the submit only advances the UI. Wire a real endpoint
-      // (Formspree / the API's /waitlist) before launch.
+      // Two steps against one route. Step one commits the email and hands back
+      // its id; step two attaches the answer to that id. Nothing about step two
+      // can lose the signup, which is why the question is asked after the save
+      // rather than beside it.
+
+      const UTM = (() => {
+        const q = new URLSearchParams(location.search);
+        const out = {};
+        for (const k of [
+          "utm_source",
+          "utm_medium",
+          "utm_campaign",
+          "utm_content",
+          "utm_term",
+          "ref",
+        ]) {
+          const v = q.get(k);
+          if (v) out[k] = v.slice(0, 200);
+        }
+        return Object.keys(out).length ? out : null;
+      })();
+
+      async function post(body) {
+        const r = await fetch("/api/waitlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || "Request failed");
+        return data;
+      }
+
       document.querySelectorAll("form[data-waitlist]").forEach((form) => {
         const scope = form.parentElement;
+        const where = form.closest("#top") ? "hero" : "closing";
         const note = scope.querySelector(".form-note");
         const noteDefault = note.textContent;
+        const done = scope.querySelector(".form-done");
+        const ask = done.querySelector(".ask-in");
+        const send = done.querySelector("[data-send]");
+        const skip = done.querySelector("[data-skip]");
+        const submit = form.querySelector("button[type=submit]");
+        let signupId = null;
+
+        const fail = (msg) => {
+          note.textContent = msg;
+          note.classList.add("form-err");
+          form.classList.remove("shake");
+          void form.offsetWidth;
+          form.classList.add("shake");
+        };
+
         form.addEventListener("submit", async (e) => {
           e.preventDefault();
           const input = form.querySelector("input");
           const email = input.value.trim();
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
             input.focus();
-            note.textContent = "That email doesn't look right.";
-            note.classList.add("form-err");
-            form.classList.remove("shake");
-            void form.offsetWidth;
-            form.classList.add("shake");
-            return;
+            return fail("That email doesn't look right.");
           }
           note.classList.remove("form-err");
-          const url = window.__WAITLIST_ENDPOINT;
-          if (url) {
-            try {
-              await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email }),
-              });
-            } catch {
-              note.textContent = "Couldn't reach the list. Try again in a moment.";
-              note.classList.add("form-err");
-              return;
-            }
+          submit.disabled = true;
+          try {
+            const r = await post({
+              email,
+              referrer: document.referrer || null,
+              utm: UTM,
+            });
+            signupId = r.id;
+          } catch (err) {
+            submit.disabled = false;
+            window.__ph("waitlist_failed", { where, reason: String(err.message) });
+            return fail("Couldn't reach the list. Try again in a moment.");
           }
+          window.__ph("waitlist_submitted", { where, has_utm: !!UTM });
+          if (window.posthog && window.posthog.__loaded)
+            window.posthog.identify(signupId, { email });
           form.classList.add("is-done");
-          scope.querySelector(".form-done").classList.add("is-done");
+          done.classList.add("is-done", "is-asking");
           note.textContent = noteDefault;
+          setTimeout(() => ask.focus(), 420);
+        });
+
+        send.addEventListener("click", async () => {
+          const answer = ask.value.trim();
+          if (!answer || !signupId) return;
+          send.disabled = true;
+          try {
+            await post({ id: signupId, answer });
+          } catch {
+            send.disabled = false;
+            return;
+          }
+          window.__ph("waitlist_answered", { where, length: answer.length });
+          done.classList.remove("is-asking");
+          done.classList.add("is-thanked");
+        });
+
+        skip.addEventListener("click", () => {
+          window.__ph("waitlist_answer_skipped", { where });
+          done.classList.remove("is-asking");
         });
       });
 

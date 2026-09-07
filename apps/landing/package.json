@@ -1,0 +1,10 @@
+{
+  "name": "@hexvault/landing",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "HEXO.fun marketing site. Static HTML plus one serverless route; no bundler.",
+  "dependencies": {
+    "@neondatabase/serverless": "1.0.2"
+  }
+}
