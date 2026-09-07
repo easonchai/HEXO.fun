@@ -629,6 +629,7 @@
       .ask-row {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 16px;
         margin-top: 12px;
       }
@@ -1403,6 +1404,10 @@
         .btn {
           width: 100%;
           flex: none;
+        }
+        /* Send sits beside "No thanks", so it keeps its intrinsic width. */
+        .btn-sm {
+          width: auto;
         }
         .sec,
         .close-in {
