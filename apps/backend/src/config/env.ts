@@ -22,7 +22,6 @@ export interface HexVaultEnv {
   AUTHORITY_KEYPAIR: string;
   HEXUSDC_MINT: string;
   APR_BPS: string;
-  JACKPOT_FLOOR: string;
   FAUCET_AMOUNT: string;
   FAUCET_INTERVAL_SECONDS: string;
   CORS_ORIGIN: string;
@@ -43,7 +42,6 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     AUTHORITY_KEYPAIR: String(env.AUTHORITY_KEYPAIR),
     HEXUSDC_MINT: String(env.HEXUSDC_MINT),
     APR_BPS: String(env.APR_BPS ?? "500"),
-    JACKPOT_FLOOR: String(env.JACKPOT_FLOOR ?? "10000000"),
     FAUCET_AMOUNT: String(env.FAUCET_AMOUNT ?? "1000000000"),
     FAUCET_INTERVAL_SECONDS: String(env.FAUCET_INTERVAL_SECONDS ?? "3600"),
     CORS_ORIGIN: String(env.CORS_ORIGIN),

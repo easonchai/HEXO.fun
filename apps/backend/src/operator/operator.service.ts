@@ -33,21 +33,21 @@ import {
 } from "./tick";
 import { isFulfilled, randomnessAddress } from "./vrf";
 
-const TICK_MS = 2_000;
+const TICK_MS = 1_000;
 
 @Injectable()
 export class OperatorService {
   private readonly logger = new Logger(OperatorService.name);
   private readonly instructions: OperatorInstructions;
   private readonly mint: PublicKey;
-  private readonly aprBps: bigint;
-  private readonly jackpotFloor: bigint;
   private readonly testVrf: boolean;
-  /** Single-flight: a tick that overruns 2 s skips the next one. */
+  /** Single-flight: a tick that overruns 1 s skips the next one. */
   private running = false;
   /** Ticket 04: whether `playersToRegister` came back empty last tick, and
    *  for which Epoch, so step 4 can require two consecutive empty ticks. */
   private lastRegisterCheck: RegisterCheck | null = null;
+  /** Step 6b's tries against one Epoch; resets when the Epoch changes. */
+  private topUp: { epochId: bigint; attempts: number } | null = null;
 
   constructor(
     private readonly chain: ChainService,
@@ -56,8 +56,6 @@ export class OperatorService {
     config: ConfigService<HexVaultEnv, true>,
   ) {
     this.mint = new PublicKey(config.get("HEXUSDC_MINT", { infer: true }));
-    this.aprBps = BigInt(config.get("APR_BPS", { infer: true }));
-    this.jackpotFloor = BigInt(config.get("JACKPOT_FLOOR", { infer: true }));
 
     // Which randomness account the program expects depends on how it was
     // compiled, and the IDL is the only thing that travels with the build.
@@ -138,12 +136,18 @@ export class OperatorService {
       previousEpoch,
       openRound,
       lastRound,
-      aprBps: this.aprBps,
-      jackpotFloor: this.jackpotFloor,
       ix: this.instructions,
       lastRegisterCheck: this.lastRegisterCheck,
+      topUpAttempts:
+        this.topUp?.epochId === pool.currentEpochId ? this.topUp.attempts : 0,
       fulfilled: (seed) => this.fulfilled(seed),
       authorityBalance: () => this.authorityBalance(),
+      jackpotBalance: () => this.jackpotBalance(),
+      recordTopUpAttempt: (epochId) => {
+        const attempts =
+          this.topUp?.epochId === epochId ? this.topUp.attempts + 1 : 1;
+        this.topUp = { epochId, attempts };
+      },
       playersToRegister: (epochId) => this.indexer.playersToRegister(epochId),
       unsettledPositions: () => this.indexer.unsettledPositions(),
       winner: (epochId, target) => this.winner(epochId, target),
@@ -223,6 +227,22 @@ export class OperatorService {
       if (cause instanceof TokenAccountNotFoundError) {
         throw new Error(
           `authority hexUSDC account ${address.toBase58()} does not exist; run bootstrap first`,
+          { cause },
+        );
+      }
+      throw cause;
+    }
+  }
+
+  private async jackpotBalance(): Promise<bigint> {
+    try {
+      return (
+        await getAccount(this.chain.connection, this.chain.jackpotVaultAddress())
+      ).amount;
+    } catch (cause) {
+      if (cause instanceof TokenAccountNotFoundError) {
+        throw new Error(
+          `jackpot vault ${this.chain.jackpotVaultAddress().toBase58()} does not exist; run bootstrap first`,
           { cause },
         );
       }

@@ -119,14 +119,12 @@ export class OperatorInstructions {
   }
 
   /**
-   * Step 2's tail: top the authority's own hexUSDC up when it is short (it is
-   * the mint authority), move the simulated yield into the jackpot vault, and
-   * close registration, all in one transaction so a partial funding can never
-   * be what the epoch draws on.
+   * Step 6b: top the authority's own hexUSDC up when it is short (it is the
+   * mint authority) and move `amount` into the jackpot vault, in one
+   * transaction so a mint can never land without its funding.
    */
-  async fundAndClose(
+  async fundJackpot(
     pool: PoolState,
-    epochId: bigint,
     amount: bigint,
     shortfall: bigint,
   ): Promise<TransactionInstruction[]> {
@@ -154,6 +152,14 @@ export class OperatorInstructions {
       })
       .instruction();
 
+    return [...mintTo, fund];
+  }
+
+  /** Step 4's tail: the epoch draws on whatever the jackpot vault holds. */
+  async closeRegistration(
+    pool: PoolState,
+    epochId: bigint,
+  ): Promise<TransactionInstruction[]> {
     const close = await this.method("closeRegistration")
       .accountsPartial({
         authority: this.authority,
@@ -170,7 +176,7 @@ export class OperatorInstructions {
       })
       .instruction();
 
-    return [...mintTo, fund, close];
+    return [close];
   }
 
   async draw(pool: PoolState, epoch: EpochState): Promise<TransactionInstruction[]> {
