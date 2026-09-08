@@ -267,7 +267,7 @@ export function ControlPanel(props: ControlPanelProps) {
         <div className="cost-row">
           <span className="row-label">TICKETS IN ({rounds} {rounds === 1 ? "ROUND" : "ROUNDS"})</span>
           <div>
-            <span className="cost-value" data-testid="total-cost">
+            <span className="volt-badge" data-testid="total-cost">
               {fmt(perRound * BigInt(rounds))}
             </span>
             <span className="cost-unit"> Tickets</span>
@@ -275,7 +275,7 @@ export function ControlPanel(props: ControlPanelProps) {
         </div>
         <div className="cost-row deployed">
           <span className="row-label strong">IN THIS ROUND</span>
-          <span className="volt-badge" data-testid="deployed-total">
+          <span className="cost-value" data-testid="deployed-total">
             {fmt(deployedTotal)}
           </span>
         </div>

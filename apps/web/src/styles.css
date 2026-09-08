@@ -119,9 +119,9 @@
   --stepper-border: var(--brand-navy);
   --stepper-color: var(--brand-mist);
   --modal-bg: rgba(14, 27, 43, 0.96);
-  --dim-btn-bg: var(--brand-lime-08);
-  --dim-btn-border: var(--brand-navy);
-  --dim-btn-text: var(--brand-mist-dim);
+  --dim-btn-bg: var(--brand-lime-16);
+  --dim-btn-border: transparent;
+  --dim-btn-text: var(--accent-text);
   --glow: rgba(182, 255, 59, 0.75);
   --input-placeholder: rgba(14, 27, 43, 0.5);
   --danger: var(--brand-red);
@@ -1330,7 +1330,11 @@ input::placeholder {
   animation: takeoverIn 0.6s cubic-bezier(0.2, 1.3, 0.4, 1);
 }
 
-/* ---------- control panel (450px aside, flat tiers) ---------- */
+/* ---------- control panel (450px aside, flat tiers) ----------
+   Figma node 119:5841 "Sidebar". Dark-only and art-directed, so the card
+   fill and the amount-input ink below are the frame's literal values rather
+   than the semantic theme vars: `--bg-surface` stays navy-lift for the other
+   screens' PanelCards, and #343d4a is a shade no kit swatch carries. */
 
 .control-panel {
   width: 450px;
@@ -1355,6 +1359,10 @@ input::placeholder {
   gap: 12px;
 }
 
+.control-panel .panel-card {
+  background: #363e4b;
+}
+
 .panel-head {
   display: flex;
   justify-content: space-between;
@@ -1363,7 +1371,7 @@ input::placeholder {
 
 .panel-title {
   font-family: "Roboto Mono", monospace;
-  font-size: 11px;
+  font-size: 10.5px;
   letter-spacing: 0.16em;
   color: var(--accent-text);
   font-weight: 700;
@@ -1372,7 +1380,7 @@ input::placeholder {
 
 .panel-reset {
   font-family: "Roboto Mono", monospace;
-  font-size: 10.5px;
+  font-size: 10px;
   letter-spacing: 0.12em;
   color: var(--text-primary);
   font-weight: 600;
@@ -1401,16 +1409,16 @@ input::placeholder {
   border: none;
   outline: none;
   text-align: center;
-  color: var(--on-primary);
+  color: #343d4a;
   font-family: "Syncopate", sans-serif;
   font-weight: 700;
-  font-size: 30px;
+  font-size: 32px;
   letter-spacing: 0.04em;
   transition: font-size 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
   cursor: text;
   padding: 0;
   margin: 0;
-  caret-color: var(--on-primary);
+  caret-color: #343d4a;
 }
 
 .dual-line {
@@ -1437,6 +1445,8 @@ input::placeholder {
 .quick-row {
   display: flex;
   gap: 7px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--brand-navy);
 }
 
 .pill {
@@ -1503,19 +1513,20 @@ input::placeholder {
   padding: 3px 7px;
   font-family: "Roboto Mono", monospace;
   font-size: 10px;
+  font-weight: 600;
   cursor: pointer;
-  border: 1px solid transparent;
-  color: var(--text-muted);
+  background: var(--brand-navy);
+  border: 1px solid var(--brand-navy);
+  color: var(--accent-text);
 }
 
 .preset:hover {
   border-color: var(--primary);
-  color: var(--accent-text);
 }
 
 .preset.active {
   border-color: var(--primary);
-  color: var(--accent-text);
+  font-weight: 700;
 }
 
 .stepper {
@@ -1536,7 +1547,8 @@ input::placeholder {
   align-items: center;
   justify-content: center;
   font-family: "Roboto Mono", monospace;
-  font-size: 14px;
+  font-size: 11.5px;
+  font-weight: 600;
   cursor: pointer;
   user-select: none;
 }
@@ -1585,12 +1597,17 @@ input::placeholder {
   padding-top: 4px;
 }
 
+.cost-row.deployed .cost-value {
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .volt-badge {
   background: var(--primary);
   color: var(--on-primary);
   font-family: "Roboto Mono", monospace;
-  font-weight: 800;
-  font-size: 13px;
+  font-weight: 700;
+  font-size: 12px;
   padding: 2px 7px;
   border-radius: 4px;
 }
