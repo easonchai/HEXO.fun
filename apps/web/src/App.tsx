@@ -419,6 +419,7 @@ export function App() {
               symbol={SYMBOL}
               addressCopied={addressCopied}
               onCopy={(address) => void copyAddress(address)}
+              onFunded={refresh}
               onDisconnect={() => signer.disconnect()}
             />
           ) : (

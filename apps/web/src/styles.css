@@ -849,7 +849,13 @@ input::placeholder {
 
 .wallet-menu-row + .wallet-menu-item {
   border-top: 1px solid var(--border-subtle);
-  border-radius: 0 0 10px 10px;
+  border-radius: 0;
+}
+
+.wallet-menu-item:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  background: none;
 }
 
 .wallet-menu-row-label {

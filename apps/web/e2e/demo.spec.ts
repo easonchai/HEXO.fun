@@ -37,8 +37,6 @@ const ROUND_SECONDS = Number(process.env.E2E_ROUND_SECONDS ?? 60);
 const VRF_TIMEOUT_SECONDS = Number(process.env.E2E_VRF_TIMEOUT_SECONDS ?? 120);
 /** Generous: a round can void and retry once before ORAO answers. */
 const SETTLE_TIMEOUT_MS = (ROUND_SECONDS + VRF_TIMEOUT_SECONDS + 60) * 1000;
-/** Same default as src/api.ts, so the spec's faucet call hits the app's backend. */
-const API_URL = process.env.VITE_API_URL ?? "http://127.0.0.1:8080";
 
 async function connectBurnerWallet(page: Page): Promise<void> {
   await page.goto("/#play");
@@ -90,13 +88,13 @@ test("faucet, deposit, play a round, settle, withdraw the matched amount", async
   // already holding hexUSDC from a previous run. This does not fix
   // repeatability properly; upgrade path is a fresh keypair per run, or a
   // backend reset endpoint, whichever ticket ends up owning CI for this spec.
-  // The faucet button left the VAULT tab with the Figma redesign (it moves to
-  // the navbar), so this hits POST /faucet directly with the connected address.
-  const title = await page.getByTestId("connect-button").getAttribute("title");
-  const owner = title?.replace(/^Copy /, "");
-  expect(owner, "connect button carries the wallet address").toBeTruthy();
-  const faucet = await page.request.post(`${API_URL}/faucet`, { data: { owner } });
-  expect([200, 201, 429]).toContain(faucet.status());
+  // The faucet lives in the wallet menu under the address pill.
+  await page.getByTestId("connect-button").click();
+  await page.getByTestId("faucet").click();
+  await expect(page.getByTestId("faucet")).toHaveText(/Sent|Faucet in \d+s/, {
+    timeout: 30_000,
+  });
+  await page.keyboard.press("Escape");
   await page.getByTestId("tab-vault").click();
 
   // 2. Deposit 100 hexUSDC.
