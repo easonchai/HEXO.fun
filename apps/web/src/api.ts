@@ -230,7 +230,7 @@ export const fetchHealth = (
 export interface FaucetGrant {
   owner: string;
   tokenAccount: string;
-  /** hexUSDC minted, atomic units, decimal string. */
+  /** USDC minted, atomic units, decimal string. */
   amount: string;
   signature: string;
   /** Unix seconds the same wallet may ask again. */

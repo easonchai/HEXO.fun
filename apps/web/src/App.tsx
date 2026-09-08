@@ -45,8 +45,8 @@ import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
 import { TABS, tabFromHash, type Tab } from "./tabs.js";
 
-/** The accepted asset is hexUSDC (6 decimals) for every pool in this build. */
-const SYMBOL = "hexUSDC";
+/** The accepted asset is USDC (6 decimals) for every pool in this build. */
+const SYMBOL = "USDC";
 const DECIMALS = 6;
 /**
  * How long after a round ends before the manual SETTLE POSITION button shows.

@@ -85,7 +85,7 @@ test("faucet, deposit, play a round, settle, withdraw the matched amount", async
   // 1. Faucet. Rate-limited is not a failure here (see api.ts's FaucetResult).
   // ponytail: the burner wallet is a fixed keypair, so a repeat run against
   // the same backend can legitimately hit the per-owner cooldown while
-  // already holding hexUSDC from a previous run. This does not fix
+  // already holding USDC from a previous run. This does not fix
   // repeatability properly; upgrade path is a fresh keypair per run, or a
   // backend reset endpoint, whichever ticket ends up owning CI for this spec.
   // The faucet lives in the wallet menu under the address pill.
@@ -97,7 +97,7 @@ test("faucet, deposit, play a round, settle, withdraw the matched amount", async
   await page.keyboard.press("Escape");
   await page.getByTestId("tab-vault").click();
 
-  // 2. Deposit 100 hexUSDC.
+  // 2. Deposit 100 USDC.
   await page.getByTestId("deposit-input").fill("100");
   const depositSubmit = page.getByTestId("deposit-submit");
   await expect(depositSubmit).toBeEnabled({ timeout: 15_000 });

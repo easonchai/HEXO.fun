@@ -158,6 +158,6 @@ export const jackpotVaultAddress = (pool: PublicKey): PublicKey =>
 
 export const TOKEN_PROGRAM = TOKEN_PROGRAM_ID;
 
-/** hexUSDC is a classic SPL Token mint, so the ATA is the classic one. */
+/** USDC is a classic SPL Token mint, so the ATA is the classic one. */
 export const acceptedAta = (mint: PublicKey, owner: PublicKey): PublicKey =>
   getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);

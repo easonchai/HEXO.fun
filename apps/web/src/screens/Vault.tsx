@@ -23,15 +23,15 @@ import type { PoolLike } from "../read.js";
 import { GlyphRow } from "./Home.js";
 
 const DECIMALS = 6;
-const SYMBOL = "hexUSDC";
+const SYMBOL = "USDC";
 const ONE = 10n ** BigInt(DECIMALS);
 /**
  * The input, the pills and MAX all stay at two decimals so what the rows show
- * is what gets signed. Up to 0.009999 hexUSDC of game dust in Tickets can
+ * is what gets signed. Up to 0.009999 USDC of game dust in Tickets can
  * stay behind on a MAX withdraw; worth less than a cent.
  */
 const INPUT_DECIMALS = 2;
-/** The Figma quick pills: each adds this many whole hexUSDC. */
+/** The Figma quick pills: each adds this many whole USDC. */
 const QUICK_ADDS = [50n, 100n, 500n] as const;
 
 type Mode = "deposit" | "withdraw";

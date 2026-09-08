@@ -27,7 +27,7 @@ import type { PoolLike } from "../read.js";
 import { PanelCard, Stat, StatGrid } from "../ui.js";
 import { useApiPoll } from "../useApiPoll.js";
 
-const SYMBOL = "hexUSDC";
+const SYMBOL = "USDC";
 /** Rollovers leave `winner: null`, so look back further than 5 to find five. */
 const EPOCH_LOOKBACK = 20;
 const WINNERS_SHOWN = 5;

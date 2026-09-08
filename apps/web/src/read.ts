@@ -161,7 +161,7 @@ export interface ChainState {
   round: RoundRow | null;
   /** The connected wallet's position in `round`, when it has one. */
   position: PositionRow | null;
-  /** The wallet's own hexUSDC balance, atomic units. */
+  /** The wallet's own USDC balance, atomic units. */
   walletBalance: bigint;
   loading: boolean;
   error: string | null;
