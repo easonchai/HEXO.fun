@@ -28,3 +28,5 @@ docs/plan/
 
 # local operator keypair, never commit
 operator.json
+.vercel
+.env*
