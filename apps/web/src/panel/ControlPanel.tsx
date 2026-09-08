@@ -356,7 +356,7 @@ export function ControlPanel(props: ControlPanelProps) {
               {awaiting
                 ? "AWAITING…"
                 : settling
-                  ? "SETTLING…"
+                  ? "DRAWING…"
                   : tiles === 0
                     ? "SELECT TILES"
                     : locked
