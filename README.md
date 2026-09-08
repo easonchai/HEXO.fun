@@ -13,7 +13,7 @@ cent you deposited.
 > as simulated. No audit, no legal review. Do not deposit real assets.
 
 - Landing page: https://hexo-landing.vercel.app/
-- App: _link_
+- App: https://hexofun-beta.vercel.app/
 - Program on devnet: `LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6`
 
 ## Screenshots
