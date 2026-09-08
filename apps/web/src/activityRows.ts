@@ -94,7 +94,7 @@ function toRow(
         roundId: field(data, "roundId", "round_id"),
       };
     case "registered":
-      return { key, who, action: "registered", tileLabel: "weekly draw" };
+      return { key, who, action: "registered", tileLabel: "daily draw" };
     case "jackpotPaid":
       return {
         key,

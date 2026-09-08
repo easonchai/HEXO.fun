@@ -1,5 +1,5 @@
 /**
- * WEEKLY DRAW tab: the epoch's simulated yield as this week's prize, on the
+ * DAILY DRAW tab: the epoch's simulated yield as today's prize, on the
  * tab ticket 10 emptied out when it deleted the old EXPLORE screen. Everything
  * here is aggregate state from the API (epoch, prize amount, your weight and
  * odds, past winners). `register` is the one on-chain write it sends, and
@@ -106,18 +106,18 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
   const apiError = epoch.error ?? player.error ?? history.error;
 
   return (
-    <div className="screen-vault" data-testid="weekly-draw-screen">
+    <div className="screen-vault" data-testid="daily-draw-screen">
       <PanelCard
         wide
-        title="WEEKLY DRAW"
+        title="DAILY DRAW"
         aside={
           <span className="dual-line-inline">draw in {countdown}</span>
         }
       >
         <p className="screen-copy">
-          This week's prize is the pool's yield, simulated at a published 5%
-          APR and labeled as such everywhere it appears. The weekly draw pays
-          it in full to one winner; your odds are your share of the week's
+          Today's prize is the pool's yield, simulated at a published 5%
+          APR and labeled as such everywhere it appears. The daily draw pays
+          it in full to one winner; your odds are your share of the day's
           Weight at the draw, assuming nobody deposits, withdraws or plays
           before then.
         </p>
@@ -175,7 +175,7 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
 
       <PanelCard wide title="LAST WINNERS">
         {winners.length === 0 ? (
-          <p className="screen-copy">no weekly draw has paid a winner yet.</p>
+          <p className="screen-copy">no daily draw has paid a winner yet.</p>
         ) : (
           <div className="board-list" data-testid="winner-rows">
             {winners.map((row) => (

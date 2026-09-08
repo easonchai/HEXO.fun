@@ -1,6 +1,6 @@
 /**
- * HOME tab: the Figma "Landing" frame. This week's prize (the epoch's
- * simulated yield, the same `/epochs/current` value WEEKLY DRAW labels
+ * HOME tab: the Figma "Landing" frame. Today's prize (the epoch's
+ * simulated yield, the same `/epochs/current` value DAILY DRAW labels
  * "Prize") as a whole-dollar hero, a DD:HH:MM:SS clock to `endsAt`, and one
  * button that jumps to the VAULT tab.
  */
@@ -136,7 +136,7 @@ export function Home({ now, onDeposit }: HomeProps) {
       </div>
 
       <div className="home-clock">
-        <div className="home-clock-label">WEEKLY PRIZE DRAW · NEXT DRAW IN</div>
+        <div className="home-clock-label">DAILY PRIZE DRAW · NEXT DRAW IN</div>
         {drawing || (remaining !== null && remaining <= 0n) ? (
           <div className="home-drawing" data-testid="home-drawing">
             DRAWING…
@@ -169,7 +169,7 @@ export function Home({ now, onDeposit }: HomeProps) {
       <div className="home-footer">
         <span>NO-LOSS</span>
         <Star />
-        <span>WEEKLY PRIZE DRAWS</span>
+        <span>DAILY PRIZE DRAWS</span>
         <Star />
         <span>YOUR DEPOSIT IS NEVER TOUCHED</span>
       </div>
