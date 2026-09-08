@@ -118,7 +118,8 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
           This week's prize is the pool's yield, simulated at a published 5%
           APR and labeled as such everywhere it appears. The weekly draw pays
           it in full to one winner; your odds are your share of the week's
-          Weight so far.
+          Weight at the draw, assuming nobody deposits, withdraws or plays
+          before then.
         </p>
         <StatGrid>
           <Stat

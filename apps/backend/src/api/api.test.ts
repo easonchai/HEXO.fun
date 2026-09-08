@@ -303,7 +303,7 @@ describe("API routes", () => {
     await http.get(`/players/${Keypair.generate().publicKey.toBase58()}`).expect(404);
   });
 
-  it("GET /leaderboard ranks players by liveWeight", async () => {
+  it("GET /leaderboard ranks players by their odds at the draw", async () => {
     const { body } = await http.get("/leaderboard").expect(200);
     expect(body.map((row: { owner: string }) => row.owner)).toEqual([
       ALICE,
@@ -313,6 +313,38 @@ describe("API routes", () => {
     expect(body[0].odds).toBe("100.00");
     expect(body[2].isHouse).toBe(true);
     assertNoLargeNumbers(body, "/leaderboard");
+  });
+
+  it("odds are the share at the draw, not the share right now", async () => {
+    // Alice has held 1e6 entries since the epoch opened; Bob deposits the
+    // same 1e6 at the chain clock, so he has no weight yet but a slice of
+    // the draw. Alice's seeded head start is dropped so Bob's share is not
+    // rounded to zero.
+    await prisma.player.update({
+      where: { owner: ALICE },
+      data: { weightAcc: new Prisma.Decimal(0) },
+    });
+    await prisma.player.update({
+      where: { owner: BOB },
+      data: { principal: 1_000_000n, entries: 1_000_000n, lastUpdate: CHAIN_NOW },
+    });
+    try {
+      const { body } = await http.get(`/players/${BOB}`).expect(200);
+      expect(body.liveWeight).toBe("0");
+      const end = CURRENT_START + EPOCH_LENGTH;
+      const bobAtDraw = 1_000_000n * (end - CHAIN_NOW);
+      const aliceAtDraw = 1_000_000n * (end - CURRENT_START);
+      expect(body.odds).toBe(oddsPercent(bobAtDraw, bobAtDraw + aliceAtDraw));
+    } finally {
+      await prisma.player.update({
+        where: { owner: ALICE },
+        data: { weightAcc: HUGE_U128 },
+      });
+      await prisma.player.update({
+        where: { owner: BOB },
+        data: { principal: 0n, entries: 0n, lastUpdate: CURRENT_START },
+      });
+    }
   });
 
   it("GET /feed keeps user-facing events only, newest first", async () => {

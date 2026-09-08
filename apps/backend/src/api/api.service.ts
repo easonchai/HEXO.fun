@@ -71,7 +71,16 @@ export function oddsPercent(weight: bigint, total: bigint): string {
 
 interface LiveWeight {
   player: Player;
+  /** Weight accrued so far this epoch. */
   liveWeight: bigint;
+  /**
+   * Weight the player will hold at the draw if nobody touches their account
+   * again. Odds come from this share, not the live one: the live share
+   * crawls every second as late depositors catch up (a 22.57% that reads
+   * 22.64% a minute later), while this one only moves when someone
+   * deposits, withdraws or plays.
+   */
+  drawWeight: bigint;
 }
 
 interface RpcHealth {
@@ -180,7 +189,7 @@ export class ApiService {
     return {
       ...mine.player,
       liveWeight: mine.liveWeight,
-      odds: oddsPercent(mine.liveWeight, total),
+      odds: oddsPercent(mine.drawWeight, total),
     };
   }
 
@@ -188,15 +197,15 @@ export class ApiService {
     const { weights, total } = await this.liveWeights();
     return weights
       .slice()
-      .sort((a, b) => (b.liveWeight === a.liveWeight ? 0 : b.liveWeight > a.liveWeight ? 1 : -1))
+      .sort((a, b) => (b.drawWeight === a.drawWeight ? 0 : b.drawWeight > a.drawWeight ? 1 : -1))
       .slice(0, limit)
-      .map(({ player, liveWeight }) => ({
+      .map(({ player, liveWeight, drawWeight }) => ({
         owner: player.owner,
         principal: player.principal,
         entries: player.entries,
         isHouse: player.isHouse,
         liveWeight,
-        odds: oddsPercent(liveWeight, total),
+        odds: oddsPercent(drawWeight, total),
       }));
   }
 
@@ -339,8 +348,9 @@ export class ApiService {
     const weights = players.map((player) => ({
       player,
       liveWeight: weightAt(player, epoch.id, epoch.startsAt, at),
+      drawWeight: weightAt(player, epoch.id, epoch.startsAt, epoch.endsAt),
     }));
-    const total = weights.reduce((sum, entry) => sum + entry.liveWeight, 0n);
+    const total = weights.reduce((sum, entry) => sum + entry.drawWeight, 0n);
     return { weights, total };
   }
 
