@@ -110,6 +110,17 @@ export function Home({ now, onDeposit }: HomeProps) {
 
   return (
     <div className="home" data-testid="home-screen">
+      {/* Pre-dithered coin ring (scripts/dither-video.mjs). Without autoplay the poster stays. */}
+      <video
+        className="home-bg"
+        src="/home-bg.mp4"
+        poster="/home-bg.png"
+        autoPlay={!window.matchMedia("(prefers-reduced-motion: reduce)").matches}
+        muted
+        loop
+        playsInline
+        aria-hidden="true"
+      />
       <div className="home-hero">
         <div className="home-pill-row">
           <Star />

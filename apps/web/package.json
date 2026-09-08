@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "sync-idl": "node scripts/sync-idl.mjs",
+    "dither-video": "node scripts/dither-video.mjs",
     "check": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:e2e": "playwright test"

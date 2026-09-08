@@ -2406,11 +2406,25 @@ input::placeholder {
   isolation: isolate;
 }
 
+/* HOME background: the pre-dithered coin ring at 15%. Screen blend drops the
+   video's black so the navy stays flush with the header and sidebar. */
+.home-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.15;
+  mix-blend-mode: screen;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
 /* Halftone coin: a lime dot grid faded by a radial mask, plus the 714px
    glow ellipse from the frame. ponytail: CSS stand-in for the Figma
    raster; drop the exported PNG in as a background-image if the exact art
    matters. */
-.home::before,
 .vault::before {
   content: "";
   position: absolute;
@@ -2436,7 +2450,6 @@ input::placeholder {
   );
 }
 
-.home::after,
 .vault::after {
   content: "";
   position: absolute;
