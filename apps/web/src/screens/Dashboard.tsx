@@ -312,7 +312,12 @@ export function Dashboard(props: DashboardScreenProps) {
           <div className="dash-boost-copy">
             <h3 className="dash-boost-title">
               <Star />
-              <span>Your Odds: {player.data ? `${player.data.odds}%` : "—"}</span>
+              <span>
+                Your Odds:{" "}
+                <span className="dash-lime">
+                  {player.data ? `${player.data.odds}%` : "—"}
+                </span>
+              </span>
             </h3>
             <p>
               Use your tickets to play in games that boost your odds. Your
@@ -325,7 +330,20 @@ export function Dashboard(props: DashboardScreenProps) {
             data-testid="dash-play"
             onClick={onPlay}
           >
-            Play to boost <span aria-hidden="true">↗</span>
+            Play to boost
+            <svg
+              viewBox="0 0 20 20"
+              width="20"
+              height="20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 16 16 4M7 4h9v9" />
+            </svg>
           </button>
         </section>
       ) : null}

@@ -3540,6 +3540,7 @@ input::placeholder {
   background: #4a5d48;
 }
 
+/* White label, lime figure; the star takes the lime through currentColor. */
 .dash-boost-title {
   display: flex;
   align-items: center;
@@ -3548,8 +3549,12 @@ input::placeholder {
   font-weight: 700;
   font-size: 20px;
   line-height: 24px;
-  color: var(--brand-lime);
+  color: var(--brand-white);
   margin: 0 0 6px;
+}
+
+.dash-boost-title > svg {
+  color: var(--brand-lime);
 }
 
 .dash-boost-copy p {
@@ -3578,9 +3583,8 @@ input::placeholder {
   transition: filter 120ms ease;
 }
 
-.dash-boost-cta span {
-  font-size: 20px;
-  line-height: 1;
+.dash-boost-cta svg {
+  flex: none;
 }
 
 .dash-boost-cta:hover {
@@ -3615,10 +3619,12 @@ input::placeholder {
 }
 
 /* Past winners and account history share this shape; see .board-list above.
-   Rows are 44px navy pills with a white 15% hairline; the header sits flush
-   with the pill edge while the cells inset 20px. */
+   Rows are 44px navy pills with a white 15% hairline. Column edges are the
+   frame's: address at +128 from the pill edge, amount at +545, date flush
+   right. The header sits on the pill edge while cells inset 20px, so the
+   header's first column is 20px wider to keep the later edges aligned. */
 .board-list-4col .board-row {
-  grid-template-columns: 0.6fr 2.2fr 1.4fr 1fr;
+  grid-template-columns: 108px 417px 1fr 1fr;
   min-height: 44px;
   padding: 0 20px;
   border-radius: 8px;
@@ -3629,7 +3635,12 @@ input::placeholder {
   color: var(--brand-white);
 }
 
+.board-list-4col .board-row > :last-child {
+  text-align: right;
+}
+
 .board-list-4col .board-row.board-head {
+  grid-template-columns: 128px 417px 1fr 1fr;
   min-height: 0;
   padding: 0;
   border: none;
@@ -3648,18 +3659,22 @@ input::placeholder {
   color: var(--brand-white-55);
 }
 
+/* The rounds chip sits at its own edge, +197 from the address, not beside
+   the text. */
 .dash-addr {
-  display: flex;
+  display: grid;
+  grid-template-columns: 197px auto;
   align-items: center;
-  gap: 10px;
+  justify-content: start;
   min-width: 0;
 }
 
-.dash-tx {
+.dash-tx,
+.dash-tx:visited {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: inherit;
+  color: var(--brand-white);
   text-decoration: none;
 }
 
@@ -3727,8 +3742,12 @@ input::placeholder {
     align-items: flex-start;
   }
 
-  .board-list-4col .board-row {
+  .board-list-4col .board-row,
+  .board-list-4col .board-row.board-head {
     grid-template-columns: 0.8fr 1.4fr 1fr;
+  }
+
+  .board-list-4col .board-row {
     padding: 0 12px;
   }
 
