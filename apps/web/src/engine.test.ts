@@ -72,20 +72,19 @@ describe("round engine", () => {
     expect(buyClosesAt(round(), buffer)).toBe(1055n);
   });
 
-  it("counts seconds left down to ends_at through mine and locked, zero elsewhere", () => {
+  it("counts seconds left down to the close through mine, zero elsewhere", () => {
     const buffer = 5n;
-    // mine: counts to ends_at (1060), not to the close.
-    expect(secondsLeft(round(), buffer, 1040n)).toBe(20n);
-    expect(secondsLeft(round(), buffer, 1054n)).toBe(6n);
-    // locked: the same countdown continues past the close.
-    expect(secondsLeft(round(), buffer, 1055n)).toBe(5n);
-    expect(secondsLeft(round(), buffer, 1059n)).toBe(1n);
-    // settling: holds at zero rather than going negative.
+    // mine: counts to the close (1055), not to ends_at.
+    expect(secondsLeft(round(), buffer, 1040n)).toBe(15n);
+    expect(secondsLeft(round(), buffer, 1054n)).toBe(1n);
+    // locked: the draw is in flight, nothing to count.
+    expect(secondsLeft(round(), buffer, 1055n)).toBe(0n);
+    expect(secondsLeft(round(), buffer, 1059n)).toBe(0n);
+    // settling: still nothing.
     expect(secondsLeft(round(), buffer, 1060n)).toBe(0n);
     expect(secondsLeft(round(), buffer, 9999n)).toBe(0n);
-    // A Round Settled early keeps its countdown: the timer runs to zero and
-    // the laser fires there, so the draw landing early is invisible.
-    expect(secondsLeft(round({ status: 2 }), buffer, 1057n)).toBe(3n);
+    // A Round Settled early is locked, so still zero.
+    expect(secondsLeft(round({ status: 2 }), buffer, 1057n)).toBe(0n);
     // awaiting (revealed or Voided, past ends_at): nothing left to count.
     expect(secondsLeft(round({ status: 2 }), buffer, 1060n)).toBe(0n);
     expect(secondsLeft(round({ status: 3 }), buffer, 9999n)).toBe(0n);
@@ -240,37 +239,22 @@ describe("decideReveal", () => {
   const remembered = round({ roundId: 3n, endsAt: 1060n, status: 2 });
   const noPlayed: ReadonlySet<string> = new Set();
 
-  it("waits with no remembered result yet, whatever the clock reads", () => {
-    expect(decideReveal(null, 1000n, 1060n, noPlayed)).toBe("wait");
-    expect(decideReveal(null, 1060n, 1060n, noPlayed)).toBe("wait");
-    expect(decideReveal(null, 9999n, 1060n, noPlayed)).toBe("wait");
+  it("waits with no remembered result yet", () => {
+    expect(decideReveal(null, noPlayed)).toBe("wait");
   });
 
-  it("waits while the result is known and the clock is before ends_at", () => {
-    expect(decideReveal(remembered, 1000n, 1060n, noPlayed)).toBe("wait");
-    expect(decideReveal(remembered, 1059n, 1060n, noPlayed)).toBe("wait");
+  it("fires as soon as a result is remembered, whatever the clock reads", () => {
+    expect(decideReveal(remembered, noPlayed)).toBe("fire");
   });
 
-  it("fires at ends_at when the result is known earlier", () => {
-    expect(decideReveal(remembered, 1060n, 1060n, noPlayed)).toBe("fire");
-  });
-
-  it("fires on arrival when the result is checked after ends_at has passed", () => {
-    // The result only just became known (this is the first non-null call for
-    // it), but the clock has already moved past ends_at — draw was slow.
-    expect(decideReveal(remembered, 1075n, 1060n, noPlayed)).toBe("fire");
-  });
-
-  it("does nothing for a round already played, before or after ends_at", () => {
+  it("does nothing for a round already played", () => {
     const played = new Set([roundKey(remembered.roundId)]);
-    expect(decideReveal(remembered, 1000n, 1060n, played)).toBe("nothing");
-    expect(decideReveal(remembered, 1060n, 1060n, played)).toBe("nothing");
-    expect(decideReveal(remembered, 9999n, 1060n, played)).toBe("nothing");
+    expect(decideReveal(remembered, played)).toBe("nothing");
   });
 
   it("keys the played set by round id, not by object identity", () => {
     // A different round id in the played set does not block this one.
     const played = new Set([roundKey(999n)]);
-    expect(decideReveal(remembered, 1060n, 1060n, played)).toBe("fire");
+    expect(decideReveal(remembered, played)).toBe("fire");
   });
 });

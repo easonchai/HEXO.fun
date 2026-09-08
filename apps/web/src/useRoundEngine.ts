@@ -33,6 +33,10 @@ import { sfx } from "./sfx.js";
 import type { PositionRow, RoundRow } from "./read.js";
 
 const GEO = computeGeo();
+/** The core shakes this long after the result lands before it detonates and
+ *  the laser fires. Every reveal timer after the fire instant is shifted by
+ *  this much. */
+export const BUILDUP_MS = 2000;
 
 export interface RevealState {
   /** Round id this reveal animates. */
@@ -40,6 +44,8 @@ export interface RevealState {
   /** Protocol tile index 0..35. */
   winningTile: number;
   laser: LaserPath;
+  /** Past the build-up: the core has detonated and the laser is travelling. */
+  fired: boolean;
   boom: boolean;
   flyTokens: ReturnType<typeof buildFlyTokens>;
   /** dot key → fly launch delay; lattice symbols lift off with their token. */
@@ -56,7 +62,7 @@ export interface Takeover {
 
 export interface EngineOutput {
   phase: Phase;
-  /** Seconds until the round's ends_at, during "mine" and "locked". */
+  /** Seconds until positions close, during "mine"; zero otherwise. */
   secondsLeft: bigint;
   /** Display numbers 1..36 the user has picked. */
   selected: number[];
@@ -143,7 +149,6 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
   const playedRef = useRef<Set<string>>(new Set());
   const seenAnyRoundRef = useRef(false);
   const revealBusyRef = useRef(false);
-  const nowRef = useRef<bigint>(0n);
 
   const runReveal = useCallback(
     (target: RoundLike, key: string, onDone: () => void) => {
@@ -156,12 +161,15 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
 
       const own = owner ? position : null;
       const won = Boolean(own && covers(own.tiles, tileIndex));
-      if (own && !won) later(() => sfx("miss"), 900);
+      // Everything from the fire instant on is timed after the build-up.
+      const afterFire = (fn: () => void, ms: number): void =>
+        later(fn, ms + BUILDUP_MS);
+      if (own && !won) afterFire(() => sfx("miss"), 900);
 
       const laser = genPath(GEO, tile.x, tile.y);
-      later(() => sfx("launch"), 0);
+      afterFire(() => sfx("launch"), 0);
       for (const info of Object.values(laser.activeDotTimes)) {
-        later(() => sfx("dotTick"), Math.round(info.delay * 1000));
+        afterFire(() => sfx("dotTick"), Math.round(info.delay * 1000));
       }
 
       const flyTokens = buildFlyTokens(laser.activeDotTimes, tile);
@@ -171,19 +179,27 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
           flyMap[dotKey] = flyTokens[index]!.delay;
       });
 
-      // The laser fires now, in step with the launch and dot-tick sounds; the
-      // tile is only announced (boom, banner, fly tokens) once it lands at
-      // 900 ms, so the beam visibly travels to the number first.
+      // The core shakes through the build-up first; at BUILDUP_MS the core
+      // detonates and the laser fires, in step with the launch and dot-tick
+      // sounds. The tile is only announced (boom, banner, fly tokens) once
+      // the beam lands 900 ms after that, so it visibly travels to the number.
       setReveal({
         key,
         winningTile: tileIndex,
         laser,
+        fired: false,
         boom: false,
         flyTokens: [],
         flyMap: {},
       });
 
-      later(() => {
+      afterFire(() => {
+        setRevealState((current) =>
+          current && current.key === key ? { ...current, fired: true } : current,
+        );
+      }, 0);
+
+      afterFire(() => {
         sfx("land");
         setRevealState((current) =>
           current && current.key === key
@@ -195,7 +211,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
       }, 900);
 
       for (const token of flyTokens) {
-        later(
+        afterFire(
           () => sfx("feed"),
           Math.round((token.delay + 0.68) * 1000) + 900,
         );
@@ -203,7 +219,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
 
       if (won) {
         const reward = expectedReward(target, own!);
-        later(() => {
+        afterFire(() => {
           sfx("win");
           setTakeover({
             title: "YOU WON",
@@ -213,7 +229,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
         }, 1550);
       }
 
-      later(() => {
+      afterFire(() => {
         setBanner(null);
         // The old lattice symbols fade over 0.65 s rather than vanishing
         // outright; unblock the queue now, at the clear, not after the fade.
@@ -243,13 +259,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     }
     if (!candidate) return;
     const key = roundKey(candidate.roundId);
-    const decision = decideReveal(
-      candidate,
-      nowRef.current,
-      candidate.endsAt,
-      playedRef.current,
-    );
-    if (decision !== "fire") return;
+    if (decideReveal(candidate, playedRef.current) !== "fire") return;
     playedRef.current.add(key);
     revealBusyRef.current = true;
     runReveal(candidate, key, () => {
@@ -276,12 +286,6 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     pump();
   }, [round, pump]);
 
-  // Re-check the fire decision on every chain-clock tick.
-  useEffect(() => {
-    nowRef.current = now;
-    pump();
-  }, [now, pump]);
-
   // --- Core fade-in + prime sound when a fresh Round opens --------------------
   const [coreEnter, setCoreEnter] = useState(false);
   const lastOpenRoundRef = useRef<string | null>(null);
@@ -301,7 +305,7 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
   const tickedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!round) return;
-    if (phase !== "mine" && phase !== "locked") return;
+    if (phase !== "mine") return;
     if (activeSecondsLeft < 1n || activeSecondsLeft > 3n) return;
     const key = `${roundKey(round.roundId)}:${activeSecondsLeft}`;
     if (tickedRef.current.has(key)) return;

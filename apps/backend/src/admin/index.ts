@@ -96,7 +96,7 @@ async function setParams(chain: ChainService, params: SetParamsInput): Promise<v
   log("params updated (epoch/round changes apply to the next epoch/round, not the open one)");
 }
 
-// ponytail: unlike the operator's automatic fundAndClose (operator/instructions.ts),
+// ponytail: unlike the operator's automatic fundJackpot (operator/instructions.ts),
 // this does not mint a shortfall first. An admin topping up the jackpot by
 // hand is expected to already hold hexUSDC (see the runbook's minting
 // recipe). Auto-minting here would silently paper over a genuinely

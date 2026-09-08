@@ -281,7 +281,7 @@ export function Dashboard(props: DashboardScreenProps) {
         <section className="dash-card dash-card-prize">
           <div className="dash-prize-heading">
             <Star />
-            <span className="dash-prize-label">WEEKLY PRIZE POOL</span>
+            <span className="dash-prize-label">DAILY PRIZE POOL</span>
             <Star />
           </div>
           <div className="dash-prize" data-testid="dash-prize">
@@ -351,7 +351,7 @@ export function Dashboard(props: DashboardScreenProps) {
       <section className="dash-panel">
         <h2 className="dash-panel-title">Past Winners</h2>
         {winners.length === 0 ? (
-          <p className="screen-copy">no weekly draw has paid a winner yet.</p>
+          <p className="screen-copy">no daily draw has paid a winner yet.</p>
         ) : (
           <div
             className="board-list board-list-4col dash-winners"

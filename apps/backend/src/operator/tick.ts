@@ -1,7 +1,8 @@
-// Spec §3.4: the seven steps, in order, at most one transaction per tick.
-// Round steps (1-2) run before the Epoch steps (3+) so a Round can never
-// straddle an Epoch boundary; `begin_epoch` (3) waits for both the sweep and
-// the previous Epoch to be settled.
+// Spec §3.4: the seven steps, in order, at most one transaction per tick,
+// plus 6b (jackpot top-up for the running epoch, after the previous one has
+// paid). Round steps (1-2) run before the Epoch steps (3+) so a Round can
+// never straddle an Epoch boundary; `begin_epoch` (3) waits for both the
+// sweep and the previous Epoch to be settled.
 //
 // Everything the steps touch arrives in the context, so a test drives them
 // with a fabricated chain state and a recording `send`, and the service is
@@ -17,30 +18,17 @@ import {
 } from "./chain-state";
 import type { OperatorInstructions } from "./instructions";
 
-const BPS = 10_000n;
-const SECONDS_PER_YEAR = 31_536_000n;
 /** Instructions per transaction for the two batched steps (spec §3.4). */
 export const BATCH_SIZE = 8;
-/** The reveal's 4.6 s choreography, rounded up to whole chain seconds. Step 7
- *  waits this long past a settled/forfeited `lastRound.endsAt` before opening
- *  the next Round, so no viewer sees a new countdown while the laser lands. */
-export const REVEAL_SECONDS = 5n;
-
-/**
- * The simulated yield an ended epoch pays out, in atomic units. Integer math
- * throughout: the truncated remainder is worth less than 10^-6 hexUSDC and
- * the floor dwarfs it during the demo anyway.
- */
-export function yieldAmount(
-  totalPrincipal: bigint,
-  aprBps: bigint,
-  epochSeconds: bigint,
-  floor: bigint,
-): bigint {
-  const accrued =
-    (totalPrincipal * aprBps * epochSeconds) / (BPS * SECONDS_PER_YEAR);
-  return accrued > floor ? accrued : floor;
-}
+/** Step 7 waits this long past a settled/forfeited `lastRound.endsAt` before
+ *  opening the next Round. The reveal now fires the moment the draw lands,
+ *  usually before `endsAt`, so one second of slack is all it needs. */
+export const REVEAL_SECONDS = 1n;
+/** Every epoch's jackpot, in atomic units: 42069 hexUSDC. Demo value, minted
+ *  by the operator; there is no real yield source. */
+export const JACKPOT_AMOUNT = 42_069_000_000n;
+/** Step 6b gives up on topping up an epoch's jackpot after this many tries. */
+export const TOP_UP_ATTEMPTS = 3;
 
 /**
  * What step 4 remembers about the last tick's `playersToRegister` check, so
@@ -63,15 +51,20 @@ export interface TickContext {
   /** The Round at `pool.nextRoundId - 1`, the most recently created one
    *  (open or already terminal). Null when none has ever been created. */
   readonly lastRound: RoundState | null;
-  readonly aprBps: bigint;
-  readonly jackpotFloor: bigint;
   readonly ix: OperatorInstructions;
   /** Null before the first tick has ever checked. */
   readonly lastRegisterCheck: RegisterCheck | null;
+  /** How many times step 6b has already tried to top up `currentEpoch`. */
+  readonly topUpAttempts: number;
   /** Has the oracle answered the request for this seed? */
   fulfilled(seed: Uint8Array): Promise<boolean>;
   /** The authority's own hexUSDC balance, in atomic units. */
   authorityBalance(): Promise<bigint>;
+  /** The jackpot vault's balance, in atomic units. */
+  jackpotBalance(): Promise<bigint>;
+  /** Called before every step 6b try, including one that finds the vault
+   *  already full, so the service can count attempts against `epochId`. */
+  recordTopUpAttempt(epochId: bigint): void;
   playersToRegister(epochId: bigint): Promise<string[]>;
   /**
    * Positions still on chain whose Round has reached a terminal status
@@ -189,17 +182,9 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
       };
     }
 
-    const amount = yieldAmount(
-      pool.totalPrincipal,
-      ctx.aprBps,
-      previousEpoch.endsAt - previousEpoch.startsAt,
-      ctx.jackpotFloor,
-    );
-    const balance = await ctx.authorityBalance();
-    const shortfall = amount > balance ? amount - balance : 0n;
-    await ctx.send(
-      await ctx.ix.fundAndClose(pool, previousEpoch.epochId, amount, shortfall),
-    );
+    // The jackpot was funded at the start of the epoch (step 6b), so closing
+    // snapshots whatever the vault holds now.
+    await ctx.send(await ctx.ix.closeRegistration(pool, previousEpoch.epochId));
     return { action: "close_registration" };
   }
 
@@ -229,6 +214,28 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
     }
     // No row covers the target yet: the indexer has not caught up with the
     // registrations. Retried next tick rather than treated as an error.
+  }
+
+  // 6b. Top the jackpot up to JACKPOT_AMOUNT for the epoch now running, once
+  // the previous one has been paid (or rolled over), so the prize is on
+  // display for the whole epoch and `close_registration` snapshots it.
+  // Runs after the payout because the vault is shared: funding earlier would
+  // hand the top-up to the previous epoch's winner. Every try counts, so a
+  // vault found already full stops the checks after TOP_UP_ATTEMPTS ticks.
+  if (
+    currentEpoch?.status === EPOCH_STATUS.OPEN &&
+    previousDone &&
+    ctx.topUpAttempts < TOP_UP_ATTEMPTS
+  ) {
+    ctx.recordTopUpAttempt(currentEpoch.epochId);
+    const vault = await ctx.jackpotBalance();
+    if (vault < JACKPOT_AMOUNT) {
+      const amount = JACKPOT_AMOUNT - vault;
+      const held = await ctx.authorityBalance();
+      const shortfall = amount > held ? amount - held : 0n;
+      await ctx.send(await ctx.ix.fundJackpot(pool, amount, shortfall));
+      return { action: "fund_jackpot" };
+    }
   }
 
   // 7. Open the next round, if a whole one still fits in this epoch, and the

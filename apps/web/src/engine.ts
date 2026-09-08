@@ -11,11 +11,11 @@ export const ROUND_VOIDED = 4;
 
 export type Phase =
   | /** no round exists yet */ "idle"
-  /** positions open: countdown to ends_at */
+  /** positions open: countdown to the close */
   | "mine"
-  /** positions closed, not yet revealed: countdown continues to ends_at */
+  /** positions closed, before ends_at: the draw is in flight, no countdown */
   | "locked"
-  /** past ends_at, not yet revealed: countdown holds at zero */
+  /** past ends_at, not yet revealed: still drawing */
   | "settling"
   /** settled, forfeited or voided; waiting for the next round to open */
   | "awaiting";
@@ -51,11 +51,9 @@ export function phaseFor(
   bufferSeconds: bigint,
 ): Phase {
   if (!round) return "idle";
-  // The clock decides first. The draw now lands during the countdown, so a
-  // round that is already Settled before ends_at stays "locked": the timer
-  // keeps running and the build-up keeps playing, and the reveal fires at
-  // zero. Reading the status first would blank the stage for those seconds,
-  // which is the dead stage this whole effort removes.
+  // The clock decides first. A round Settled before ends_at stays "locked"
+  // so the stage keeps its core while the reveal plays; "awaiting" only
+  // starts at ends_at, which is also when the operator opens the next round.
   if (now < buyClosesAt(round, bufferSeconds)) return "mine";
   if (now < round.endsAt) return "locked";
   if (isRevealed(round) || round.status === ROUND_VOIDED) return "awaiting";
@@ -76,19 +74,16 @@ export type RevealDecision = "fire" | "wait" | "nothing";
  *
  * - No remembered result yet → "wait" (nothing to fire).
  * - The Round is already in `played` → "nothing" (never re-animate it).
- * - Otherwise fire once the chain clock reaches `endsAt`: at `endsAt` when
- *   the result was known earlier, or immediately when it is checked after
- *   `endsAt` because the result only just arrived — "wait" until then.
+ * - Otherwise "fire" now: the result arriving is the cue. The countdown ends
+ *   at the close, so there is no zero to hold the laser for.
  */
 export function decideReveal(
   remembered: RoundLike | null,
-  now: bigint,
-  endsAt: bigint,
   played: ReadonlySet<string>,
 ): RevealDecision {
   if (!remembered) return "wait";
   if (played.has(roundKey(remembered.roundId))) return "nothing";
-  return now >= endsAt ? "fire" : "wait";
+  return "fire";
 }
 
 export const covers = (mask: bigint, tile: number): boolean =>
@@ -107,20 +102,17 @@ export function expectedReward(
 }
 
 /**
- * Seconds until the round's ends_at, counting down through both "mine" and
- * "locked". Zero in every other phase (idle, settling, awaiting) — settling
- * holds at zero rather than going negative, and a revealed or voided round
- * has nothing left to count down to.
+ * Seconds until positions close, counting down through "mine" only. Zero in
+ * every other phase: once locked, the draw is in flight and its length is
+ * the oracle's, not the clock's, so there is nothing honest to count.
  */
 export function secondsLeft(
   round: RoundLike,
   bufferSeconds: bigint,
   now: bigint,
 ): bigint {
-  const phase = phaseFor(round, now, bufferSeconds);
-  if (phase !== "mine" && phase !== "locked") return 0n;
-  const left = round.endsAt - now;
-  return left > 0n ? left : 0n;
+  if (phaseFor(round, now, bufferSeconds) !== "mine") return 0n;
+  return buyClosesAt(round, bufferSeconds) - now;
 }
 
 /** Display number 1..36 for a protocol tile index 0..35. */

@@ -98,7 +98,7 @@ const pool = (overrides: object = {}) => ({
 
 /** OperatorService's constructor only ever calls `get` on the config. */
 function stubConfig(
-  env: Pick<HexVaultEnv, "HEXUSDC_MINT" | "APR_BPS" | "JACKPOT_FLOOR">,
+  env: Pick<HexVaultEnv, "HEXUSDC_MINT">,
 ) {
   return {
     get: (key: keyof HexVaultEnv) => env[key as keyof typeof env],
@@ -148,8 +148,6 @@ describe("OperatorService end-of-tick timestamp", () => {
     };
     const config = stubConfig({
       HEXUSDC_MINT: Keypair.generate().publicKey.toBase58(),
-      APR_BPS: "500",
-      JACKPOT_FLOOR: "10000000",
     });
     const operator = new OperatorService(
       fakeChain as unknown as ChainService,

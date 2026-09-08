@@ -3,7 +3,7 @@ export type Tab =
   | "MINE"
   | "DASHBOARD"
   | "VAULT"
-  | "WEEKLY DRAW"
+  | "DAILY DRAW"
   | "LEADERBOARD"
   | "ABOUT";
 
@@ -27,7 +27,7 @@ const HASH_TABS: Record<string, Tab> = {
   play: "MINE",
   earn: "DASHBOARD",
   deposit: "VAULT",
-  draw: "WEEKLY DRAW",
+  draw: "DAILY DRAW",
   ranks: "LEADERBOARD",
   about: "ABOUT",
 };

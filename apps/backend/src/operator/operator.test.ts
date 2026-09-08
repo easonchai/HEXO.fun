@@ -32,7 +32,7 @@ import {
   type RoundState,
 } from "./chain-state";
 import { OperatorInstructions } from "./instructions";
-import { runTick, yieldAmount, type TickContext } from "./tick";
+import { JACKPOT_AMOUNT, runTick, type TickContext } from "./tick";
 import { isFulfilled, keccak256, randomnessAddress, vrfSeed } from "./vrf";
 
 const AUTHORITY = Keypair.generate().publicKey;
@@ -135,12 +135,14 @@ function context(over: Partial<TickContext> = {}): Recorder {
     // Null by default: only the step 7 tests below care, and null means "no
     // previous round", which never delays opening the next one.
     lastRound: null,
-    aprBps: 500n,
-    jackpotFloor: 10_000_000n,
     ix: instructions,
     lastRegisterCheck: null,
+    topUpAttempts: 0,
     fulfilled: async () => false,
     authorityBalance: async () => 0n,
+    // Full by default so step 6b stays quiet in every test that is not about it.
+    jackpotBalance: async () => JACKPOT_AMOUNT,
+    recordTopUpAttempt: () => {},
     playersToRegister: async () => [],
     unsettledPositions: async () => [],
     winner: async () => null,
@@ -361,27 +363,13 @@ describe("runTick", () => {
     expect(outcome.registerCheck).toEqual({ epochId: 1n, empty: true });
   });
 
-  it("4. funds the jackpot and closes registration on the second consecutive empty tick", async () => {
+  it("4. closes registration on the second consecutive empty tick, without funding", async () => {
     const result = await tickLabels({
       previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.REGISTERING }),
-      authorityBalance: async () => 999_999_999n,
       lastRegisterCheck: { epochId: 1n, empty: true },
     });
-    expect(result.labels).toEqual(["fund_jackpot", "close_registration"]);
+    expect(result.labels).toEqual(["close_registration"]);
     expect(result.action).toBe("close_registration");
-  });
-
-  it("4. mints to itself first when the authority is short", async () => {
-    const result = await tickLabels({
-      previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.REGISTERING }),
-      authorityBalance: async () => 0n,
-      lastRegisterCheck: { epochId: 1n, empty: true },
-    });
-    expect(result.labels).toEqual([
-      MINT_TO,
-      "fund_jackpot",
-      "close_registration",
-    ]);
   });
 
   it("4. list empty, then non-empty, then empty: only the second empty tick closes", async () => {
@@ -498,6 +486,58 @@ describe("runTick", () => {
 
   // --- 7. Create Round.
 
+  // --- 6b. Jackpot top-up for the running epoch.
+
+  it("6b. tops the jackpot up to JACKPOT_AMOUNT once the previous epoch is paid", async () => {
+    const attempts: bigint[] = [];
+    const result = await tickLabels({
+      jackpotBalance: async () => 1_000_000n,
+      authorityBalance: async () => JACKPOT_AMOUNT,
+      recordTopUpAttempt: (epochId) => attempts.push(epochId),
+    });
+    expect(result.labels).toEqual(["fund_jackpot"]);
+    expect(result.action).toBe("fund_jackpot");
+    expect(attempts).toEqual([2n]);
+  });
+
+  it("6b. mints the shortfall to itself in the same transaction when short", async () => {
+    const result = await tickLabels({
+      jackpotBalance: async () => 0n,
+      authorityBalance: async () => 0n,
+    });
+    expect(result.labels).toEqual([MINT_TO, "fund_jackpot"]);
+  });
+
+  it("6b. leaves a full vault alone", async () => {
+    const result = await tickLabels({ jackpotBalance: async () => JACKPOT_AMOUNT });
+    expect(result.transactions).toBe(0);
+  });
+
+  it("6b. waits while the previous epoch is still being drawn", async () => {
+    const result = await tickLabels({
+      jackpotBalance: async () => 0n,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWING,
+        requestedAt: NOW - 10n,
+      }),
+    });
+    expect(result.transactions).toBe(0);
+  });
+
+  it("6b. gives up after TOP_UP_ATTEMPTS tries", async () => {
+    let reads = 0;
+    const result = await tickLabels({
+      jackpotBalance: async () => {
+        reads += 1;
+        return 0n;
+      },
+      topUpAttempts: 3,
+    });
+    expect(result.transactions).toBe(0);
+    expect(reads).toBe(0);
+  });
+
   it("7. opens the next round when the last one is fully settled", async () => {
     const result = await tickLabels({
       pool: pool({ openRoundId: 0n }),
@@ -523,13 +563,14 @@ describe("runTick", () => {
     expect(result.transactions).toBe(0);
   });
 
-  // --- 7. The previous Round's reveal (5 s past its `endsAt`) must have had
-  // time to play before the next one opens (ticket 03).
+  // --- 7. The previous Round gets REVEAL_SECONDS (1 s) past its `endsAt`
+  // before the next one opens; the reveal itself fires when the draw lands,
+  // usually before `endsAt`.
 
-  it("7. holds the next round while a settled lastRound's reveal is still playing", async () => {
+  it("7. holds the next round at a settled lastRound's endsAt", async () => {
     const settledLastRound = round({
       status: ROUND_STATUS.SETTLED,
-      endsAt: NOW - 4n,
+      endsAt: NOW,
     });
     const result = await tickLabels({
       pool: pool({ openRoundId: 0n }),
@@ -539,10 +580,10 @@ describe("runTick", () => {
     expect(result.transactions).toBe(0);
   });
 
-  it("7. opens the next round one second later, once the reveal has played", async () => {
+  it("7. opens the next round one second past a settled lastRound's endsAt", async () => {
     const settledLastRound = round({
       status: ROUND_STATUS.SETTLED,
-      endsAt: NOW - 4n,
+      endsAt: NOW,
     });
     const result = await tickLabels({
       now: NOW + 1n,
@@ -560,24 +601,6 @@ describe("runTick", () => {
       lastRound: round({ status: ROUND_STATUS.VOIDED, endsAt: NOW }),
     });
     expect(result.labels).toEqual(["create_round"]);
-  });
-});
-
-describe("yieldAmount", () => {
-  it("accrues APR over the epoch length and floors the result", () => {
-    // 1,000 hexUSDC at 5% for one day.
-    const principal = 1_000_000_000n;
-    expect(yieldAmount(principal, 500n, 86_400n, 0n)).toBe(136_986n);
-    expect(yieldAmount(principal, 500n, 86_400n, 10_000_000n)).toBe(
-      10_000_000n,
-    );
-  });
-
-  it("pays the accrued amount once it clears the floor", () => {
-    // 1,000,000 hexUSDC at 5% for one day is 136.98 hexUSDC.
-    expect(yieldAmount(1_000_000_000_000n, 500n, 86_400n, 10_000_000n)).toBe(
-      136_986_301n,
-    );
   });
 });
 

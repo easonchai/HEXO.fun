@@ -1346,6 +1346,12 @@ input::placeholder {
   flex-direction: column;
   gap: 13px;
   overflow-y: auto;
+}
+
+/* PLAY page (tab MINE) runs the topbar and panel flush: no hairlines. */
+.app[data-tab="MINE"] .topbar,
+.app[data-tab="MINE"] .control-panel {
+  border-color: transparent;
   flex: none;
 }
 

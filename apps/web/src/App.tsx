@@ -355,7 +355,7 @@ export function App() {
   }, [settleState, pool, txSigner, program, fmt, refresh]);
 
   return (
-    <main className="app">
+    <main className="app" data-tab={tab}>
       <header className="topbar">
         <button
           type="button"
@@ -468,7 +468,7 @@ export function App() {
               setTab("VAULT");
             }}
             onPlay={() => setTab("MINE")}
-            onViewDraws={() => setTab("WEEKLY DRAW")}
+            onViewDraws={() => setTab("DAILY DRAW")}
           />
         ) : null}
         {tab === "MINE" ? (
@@ -574,7 +574,7 @@ export function App() {
             onPlay={() => setTab("MINE")}
           />
         ) : null}
-        {tab === "WEEKLY DRAW" ? (
+        {tab === "DAILY DRAW" ? (
           <WeeklyDraw
             program={program}
             owner={publicKey ?? undefined}

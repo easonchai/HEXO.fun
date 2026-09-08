@@ -12,10 +12,10 @@ export function About({ symbol }: { symbol: string }) {
           HexVault is a no-loss lottery prototype. You deposit {symbol} and the
           pool credits you equal Principal and Tickets. Principal is yours 1:1
           against the deposit and is never at risk. Tickets are lottery weight:
-          they decide your odds in the weekly draw, and you can risk them on
+          they decide your odds in the daily draw, and you can risk them on
           the board against other depositors. The prize is the yield the pool
-          earned during the week, simulated here at a published rate and
-          labelled as such. The WEEKLY DRAW tab shows it until the draw pays
+          earned during the day, simulated here at a published rate and
+          labelled as such. The DAILY DRAW tab shows it until the draw pays
           it out.
         </p>
         <HeadRow title="WHAT CAN GO WRONG" />
@@ -44,7 +44,7 @@ export function About({ symbol }: { symbol: string }) {
         <p className="screen-copy">
           The lifecycle steps belong to the operator, not to players: it opens
           weeks and rounds, requests randomness, settles rounds, cranks
-          registration, funds the simulated yield and pays the weekly draw's
+          registration, funds the simulated yield and pays the daily draw's
           winner. The prize is transferred straight to the winner's token
           account, with no step for the winner to take.
         </p>

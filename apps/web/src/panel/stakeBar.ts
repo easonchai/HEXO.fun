@@ -6,7 +6,7 @@
  *
  * Phase copy for the closed state mirrors the deploy button in
  * `ControlPanel.tsx`, but those strings are inline JSX literals, not
- * exports. "SETTLING…" is reused verbatim (the button shows it for both the
+ * exports. "DRAWING…" is reused verbatim (the button shows it for both the
  * locked and settling Round phases). Nothing in `ControlPanel` covers the
  * awaiting phase — its deploy button falls back to "DEPLOY"/"SELECT TILES"
  * because `openRound` is null once a round settles, forfeits or voids, so
@@ -32,8 +32,8 @@ export interface StakeBarModel {
 }
 
 const CLOSED_LABEL: Record<"locked" | "settling" | "awaiting", string> = {
-  locked: "SETTLING…",
-  settling: "SETTLING…",
+  locked: "DRAWING…",
+  settling: "DRAWING…",
   awaiting: "AWAITING…",
 };
 

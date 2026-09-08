@@ -51,9 +51,16 @@
   countdown instead of after it.
 
   Measured on devnet over 40 Rounds: request to settle takes 4s to 7s on 39 of them and 71s once (ORAO's tail). The request itself
-  lands about 2s after the window opens (blockhash fetch, send, confirm). close_buffer is set to 15s: 2s to land the request, 4s to
-  7s for the draw, and the rest is margin so the reveal fires at zero instead of after it. The timer holding at 00:00 covers the
-  rare 70s tail instead of the buffer trying to; vrf_timeout (120s) bounds it.
+  lands about 2s after the window opens (blockhash fetch, send, confirm). close_buffer is set to 12s on 30s rounds: 2s to land
+  the request, 4s to 7s for the draw, and the rest is margin. The web countdown ends at the close and the stage reads DRAWING
+  until the settle lands, at which point the reveal fires, so a slow draw shows as a longer DRAWING rather than a timer stuck at
+  zero. The operator ticks every 1s and opens the next Round 1s after ends_at. vrf_timeout (120s) bounds the ORAO tail.
+
+  Demo cadence (2026-09-08): epoch_seconds 3600, round_seconds 30, close_buffer 12. Rounds switch on the next Round, epochs on
+  the next epoch. The operator tops the jackpot vault up to 42069 hexUSDC (JACKPOT_AMOUNT in operator/tick.ts) once the previous
+  epoch has paid, three tries at most; there is no simulated yield any more.
+
+    set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --epoch-seconds 3600 --round-seconds 30 --close-buffer 12
 
   The buffer only works once the program that honours it is deployed. Until 2026-09-06 devnet ran the program from before ff22d53,
   whose request_round_randomness required `now >= ends_at`, so every draw request was rejected with RoundNotEnded until the round

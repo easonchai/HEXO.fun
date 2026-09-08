@@ -45,6 +45,7 @@ import {
 } from "./chain-state";
 import type { IndexerQueries } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
+import { JACKPOT_AMOUNT } from "./tick";
 import { randomnessAddress } from "./vrf";
 
 const RPC_URL = process.env.ANCHOR_PROVIDER_URL;
@@ -147,7 +148,6 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         AUTHORITY_KEYPAIR: bs58.encode(authority.secretKey),
         HEXUSDC_MINT: mint.toBase58(),
         APR_BPS: "500",
-        JACKPOT_FLOOR: "10000000",
         FAUCET_AMOUNT: "0",
         FAUCET_INTERVAL_SECONDS: "0",
         CORS_ORIGIN: "http://localhost",
@@ -328,7 +328,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
 
         const epoch = await readEpoch(1n);
         expect(epoch?.registeredCount).toBe(2);
-        expect(epoch?.jackpotAmount).toBe(10_000_000n); // the floor, spec §7
+        expect(epoch?.jackpotAmount).toBe(JACKPOT_AMOUNT); // step 6b's top-up
 
         const info = await connection.getAccountInfo(chain.epochAddress(1n));
         const winner = chain.program.coder.accounts

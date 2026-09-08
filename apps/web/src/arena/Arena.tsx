@@ -143,23 +143,24 @@ export function Arena({
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   // The winner lights up when the laser lands (boom), not when it launches.
   const winDisplay = reveal?.boom ? reveal.winningTile + 1 : 0;
-  const revealDots = reveal?.laser.activeDotTimes ?? {};
+  // Lattice symbols pop along the beam, so they wait for the fire instant too.
+  const revealDots = reveal?.fired ? reveal.laser.activeDotTimes : {};
   const flyMap = reveal?.flyMap ?? {};
   const seconds = Number(secondsLeft);
   const showTimer =
     phase === "mine" || phase === "locked" || phase === "settling";
-  // secondsLeft is already 0 outside "mine"/"locked", so this reads 00:00
-  // through "settling" for free.
-  const timerLabel = timerText(secondsLeft);
-  const timerRed = (phase === "mine" || phase === "locked") && seconds <= 2;
+  // The countdown ends at the close; from there the draw is in flight and
+  // its length is the oracle's, so the timer says what is happening instead.
+  const timerLabel = phase === "mine" ? timerText(secondsLeft) : "DRAWING";
+  const timerRed = phase === "mine" && seconds <= 2;
 
+  // Idle through the countdown and the draw; when the result lands the core
+  // shakes hard for the build-up, then detonates as the laser fires.
   const shake =
-    phase === "settling"
+    reveal && !reveal.fired
       ? "hexShake .08s infinite"
-      : phase === "mine" || phase === "locked"
-        ? seconds <= 5
-          ? "hexShake .08s infinite"
-          : "hexShakeSubtle .25s infinite"
+      : phase === "mine" || phase === "locked" || phase === "settling"
+        ? "hexShakeSubtle .25s infinite"
         : "none";
 
   const arenaWrapRef = useRef<HTMLDivElement>(null);
@@ -252,32 +253,12 @@ export function Arena({
             );
           })}
 
-          {/* Central honeycomb core while the round is live */}
-          {phase === "mine" || phase === "locked" || phase === "settling" ? (
-            <div
-              className="stage-core"
-              style={{
-                left: GEO.cx,
-                top: GEO.cy,
-                animation: coreEnter
-                  ? "coreFadeIn .85s ease-out forwards"
-                  : shake,
-              }}
-            >
-              <div
-                style={{
-                  transform: `scale(${(phase === "mine" || phase === "locked") && seconds <= 5 ? (1 + (5 - Math.min(5, seconds)) * 0.25).toFixed(3) : 1})`,
-                  transformOrigin: "center center",
-                  transition: "transform .18s linear",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <LogoCog size={72} />
-              </div>
-            </div>
-          ) : reveal ? (
+          {/* Central honeycomb core: the reveal wins over the phase, since
+              the result usually lands before ends_at while the phase still
+              says "locked", and the next round can open mid-reveal. Through
+              the build-up the live core stays and shakes; it explodes once
+              the reveal has fired. */}
+          {reveal?.fired ? (
             // The core detonates at the fire instant; coreHexExplode ends at
             // opacity 0 and holds there ("forwards") for the rest of the
             // reveal. Keyed on the reveal so a queued second reveal restarts it.
@@ -292,10 +273,34 @@ export function Arena({
             >
               <LogoCog size={72} />
             </div>
+          ) : reveal ||
+            phase === "mine" ||
+            phase === "locked" ||
+            phase === "settling" ? (
+            <div
+              className="stage-core"
+              style={{
+                left: GEO.cx,
+                top: GEO.cy,
+                animation: coreEnter
+                  ? "coreFadeIn .85s ease-out forwards"
+                  : shake,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <LogoCog size={72} />
+              </div>
+            </div>
           ) : null}
 
-          {/* Laser */}
-          {reveal ? (
+          {/* Laser, from the fire instant */}
+          {reveal?.fired ? (
             <svg
               width={620}
               height={600}

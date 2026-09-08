@@ -85,13 +85,13 @@ describe("stakeBarModel — closed state (locked, settling, awaiting)", () => {
   it("shows the locked phase copy and does not invite a bet", () => {
     const model = stakeBarModel("1", [1, 2], null, "locked", DECIMALS);
     expect(model.state).toBe("closed");
-    expect(model.label).toBe("SETTLING…");
+    expect(model.label).toBe("DRAWING…");
   });
 
   it("shows the settling phase copy", () => {
     const model = stakeBarModel("1", [1, 2], null, "settling", DECIMALS);
     expect(model.state).toBe("closed");
-    expect(model.label).toBe("SETTLING…");
+    expect(model.label).toBe("DRAWING…");
   });
 
   it("shows the awaiting phase copy", () => {
@@ -105,6 +105,6 @@ describe("stakeBarModel — closed state (locked, settling, awaiting)", () => {
     const model = stakeBarModel("1", [], active, "settling", DECIMALS);
     expect(model.state).toBe("closed");
     expect(model.tilesSelected).toBe("2");
-    expect(model.label).toBe("SETTLING…");
+    expect(model.label).toBe("DRAWING…");
   });
 });
