@@ -26,6 +26,7 @@ import {
   PublicKey,
   Transaction,
   VersionedTransaction,
+  clusterApiUrl,
   type PublicKey as PubkeyType,
 } from "@solana/web3.js";
 
@@ -84,7 +85,8 @@ export const walletModeFor = (env: WalletEnvironment): WalletMode =>
 // per render (or per StrictMode double-mount) can miss Phantom's injection.
 const SOLANA_CONNECTORS = toSolanaWalletConnectors({ shouldAutoConnect: true });
 
-const DEFAULT_RPC_URL = "http://127.0.0.1:8899";
+/** Public devnet unless overridden; .env.example pins the local validator. */
+const DEFAULT_RPC_URL = clusterApiUrl("devnet");
 
 /**
  * WebSocket endpoint for an HTTP RPC URL. The local validator serves
