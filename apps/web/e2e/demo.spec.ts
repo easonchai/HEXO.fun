@@ -95,7 +95,9 @@ test("faucet, deposit, play a round, settle, withdraw the matched amount", async
     timeout: 30_000,
   });
   await page.keyboard.press("Escape");
-  await page.getByTestId("tab-vault").click();
+  // EARN lands on the dashboard; the deposit widget is one hop further in.
+  await page.getByTestId("tab-dashboard").click();
+  await page.getByTestId("dash-deposit").click();
 
   // 2. Deposit 100 USDC.
   await page.getByTestId("deposit-input").fill("100");
@@ -142,8 +144,9 @@ test("faucet, deposit, play a round, settle, withdraw the matched amount", async
   );
   expect(entriesAfter).not.toBe(entriesBefore);
 
-  await page.getByTestId("tab-vault").click();
-  await page.getByTestId("vault-tab-withdraw").click();
+  // The dashboard's Withdraw button opens the widget already on that tab.
+  await page.getByTestId("tab-dashboard").click();
+  await page.getByTestId("dash-withdraw").click();
   // "Available N tickets" is min(Principal, Tickets); lib/money.test.ts
   // covers the arithmetic, this only checks the number is live and positive.
   const shownWithdrawable = parseAfterLabel(

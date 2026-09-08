@@ -209,12 +209,42 @@ export const fetchLeaderboard = (
 ): Promise<ApiResult<LeaderboardRowDto[]>> =>
   get<LeaderboardRowDto[]>(baseUrl, `/leaderboard?limit=${limit}`, signal);
 
+/**
+ * With `owner`, only that wallet's rows: the backend matches both `owner` and
+ * `winner` inside the event payload, so a JackpotPaid (which has no `owner`
+ * field) still reaches the winner's own history.
+ */
 export const fetchFeed = (
   baseUrl: string,
   limit: number,
   signal?: AbortSignal,
+  owner?: string,
 ): Promise<ApiResult<EventDto[]>> =>
-  get<EventDto[]>(baseUrl, `/feed?limit=${limit}`, signal);
+  get<EventDto[]>(
+    baseUrl,
+    `/feed?limit=${limit}${owner ? `&owner=${owner}` : ""}`,
+    signal,
+  );
+
+/** One key per requested owner, 0 rather than a missing key when they played none. */
+export interface PositionCountsDto {
+  counts: Record<string, number>;
+}
+
+/**
+ * How many rounds each of `owners` has played, batched: the dashboard asks for
+ * a whole table of winners at once. The backend caps the list at 25.
+ */
+export const fetchPositionCounts = (
+  baseUrl: string,
+  owners: readonly string[],
+  signal?: AbortSignal,
+): Promise<ApiResult<PositionCountsDto>> =>
+  get<PositionCountsDto>(
+    baseUrl,
+    `/positions/counts?owners=${owners.join(",")}`,
+    signal,
+  );
 
 export const fetchStatus = (
   baseUrl: string,

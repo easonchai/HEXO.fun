@@ -39,6 +39,11 @@
      grounds, so small error copy uses it shifted on lightness only. */
   --brand-red-lift: #ff5a50;
   --brand-red-deep: #bd251e;
+  /* Dashboard frame (249:8): the table lime and its white-alpha hairlines. */
+  --brand-lime-text: #bdff2c;
+  --brand-white-55: rgba(255, 255, 255, 0.55);
+  --brand-white-35: rgba(255, 255, 255, 0.35);
+  --brand-white-15: rgba(255, 255, 255, 0.15);
 
   /* ---- semantic: light theme (default) ---- */
   --bg: var(--brand-mist);
@@ -3207,3 +3212,532 @@ input::placeholder {
     animation: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   DASHBOARD (Figma node 249:8). Dark-only and art-directed, so the values
+   below are the frame's literal fills rather than the semantic theme vars.
+   The two hero cards carry the halftone the Figma frames bake in:
+   `public/card-halftone.webp` is the traced coin-ring field exported from
+   "Frame 84", drawn at the same 490x270 crop and 20% the frames use. The
+   principal card mirrors it so the pair does not read as one texture pasted
+   twice.
+   --------------------------------------------------------------------------- */
+.screen-dash {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 24px 28px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  background: var(--brand-navy);
+  color: var(--brand-white);
+  z-index: 5;
+}
+
+.screen-dash > * {
+  width: 100%;
+  max-width: 1054px;
+  margin: 0 auto;
+}
+
+.dash-cards {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+/* The frame's "Container" glow: a 916x389 lime radial behind both cards,
+   7% at a point 40% down, gone by 65%. */
+.dash-cards::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 916px;
+  max-width: 100%;
+  height: 389px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    ellipse 70% 60% at 50% 40%,
+    rgba(182, 255, 59, 0.07) 0%,
+    rgba(182, 255, 59, 0) 65%
+  );
+  pointer-events: none;
+}
+
+.dash-card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 16px;
+  min-height: 270px;
+  padding: 25px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Each card's own art, placed exactly where its frame clips it. Both go
+   through the same ordered Bayer pass, so the pair reads as one treatment
+   even though the artwork differs. */
+.dash-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+.dash-card > * {
+  position: relative;
+  z-index: 2;
+}
+
+.dash-card-principal {
+  background: var(--brand-slate);
+}
+
+/* The vault-and-coins render, dithered by scripts/dither-image.mjs to match
+   the coin ring next to it (the Figma raster is smooth, which is what made
+   this card read as flat beside the prize card). */
+.dash-card-principal::before {
+  /* Anchored to the right edge, which at the design's 517px card puts it at
+     the frame's x=276 and keeps the same bleed once the card narrows. */
+  background: url("/card-vault.png") no-repeat right -10px top -22px / 251px 334px;
+  opacity: 0.25;
+}
+
+/* Lime bloom off the top-left corner, under the halftone. */
+.dash-card-principal::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 7px;
+  width: 353px;
+  height: 354px;
+  z-index: 0;
+  transform: translate(-50%, -50%);
+  /* closest-side, or the gradient reaches zero past the box and the element's
+     own edge clips it into a visible arc. */
+  background: radial-gradient(
+    circle closest-side,
+    rgba(182, 255, 59, 0.45) 0%,
+    rgba(14, 27, 43, 0) 100%
+  );
+  pointer-events: none;
+}
+
+.dash-card-prize::before {
+  background: url("/card-halftone.webp") no-repeat 7px 0 / 490px 270px;
+  opacity: 0.2;
+}
+
+.dash-card-prize {
+  background: #101e2f;
+  border: 1px solid var(--brand-white-35);
+  align-items: center;
+  text-align: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.dash-card-title {
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+  color: var(--brand-lime);
+  margin: 0;
+}
+
+.dash-principal {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 48px;
+  line-height: 52px;
+  letter-spacing: -0.52px;
+  color: var(--brand-white);
+  font-variant-numeric: tabular-nums;
+  margin-top: 20px;
+}
+
+.dash-card-lines {
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dash-card-lines > div {
+  display: flex;
+  gap: 6px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 13px;
+  line-height: 19.5px;
+  color: var(--brand-white-55);
+}
+
+.dash-card-lines dt::after {
+  content: ":";
+}
+
+.dash-card-lines dd {
+  margin: 0;
+}
+
+.dash-card-actions {
+  margin-top: auto;
+  padding-top: 20px;
+  display: flex;
+  gap: 8px;
+}
+
+/* Withdraw: the frame's slate 75% ground with a white 30% hairline. */
+.dash-btn {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(54, 62, 75, 0.75);
+  color: rgba(255, 255, 255, 0.75);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    filter 120ms ease;
+}
+
+/* Deposit: solid lime, slate text, no hairline. */
+.dash-btn-wide {
+  flex: 1;
+  border-color: transparent;
+  background: var(--brand-lime);
+  color: var(--brand-slate);
+}
+
+.dash-btn:not(:disabled):hover {
+  color: var(--brand-white);
+  background: rgba(54, 62, 75, 0.95);
+}
+
+.dash-btn-wide:not(:disabled):hover {
+  color: var(--brand-slate);
+  background: var(--brand-lime);
+  filter: brightness(1.1);
+}
+
+.dash-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dash-btn:focus-visible {
+  outline: 2px solid var(--brand-lime);
+  outline-offset: 2px;
+}
+
+.dash-prize-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--brand-lime);
+}
+
+.dash-prize-label {
+  display: inline-flex;
+  align-items: center;
+  height: 37px;
+  padding: 0 22px;
+  border-radius: 999px;
+  border: 1px solid var(--brand-graphite);
+  background: var(--brand-lime);
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 14.5px;
+  letter-spacing: 0.5px;
+  color: var(--brand-graphite);
+}
+
+.dash-prize {
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 70px;
+  line-height: 1.15;
+  letter-spacing: 3.2px;
+  color: var(--brand-lime);
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-clock-label {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 2.2px;
+  color: var(--brand-lime);
+  opacity: 0.7;
+  margin-top: 8px;
+}
+
+.dash-clock {
+  display: flex;
+  gap: 8px;
+}
+
+.dash-clock-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 54px;
+}
+
+/* Each digit pair sits in its own slate 75% box with a white 15% hairline. */
+.dash-clock-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 39px;
+  border-radius: 6.7px;
+  border: 1px solid var(--brand-white-15);
+  background: rgba(54, 62, 75, 0.75);
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--brand-white);
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-clock-unit-label {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 1.08px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.dash-drawing {
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  color: var(--brand-lime);
+  padding: 8px 0;
+}
+
+.dash-boost {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+  border-radius: 14px;
+  background: #4a5d48;
+}
+
+.dash-boost-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 24px;
+  color: var(--brand-lime);
+  margin: 0 0 6px;
+}
+
+.dash-boost-copy p {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  color: rgba(255, 255, 255, 0.28);
+}
+
+.dash-boost-cta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 43px;
+  padding: 0 22px;
+  border-radius: 10px;
+  border: none;
+  background: var(--brand-lime);
+  color: var(--brand-navy);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+
+.dash-boost-cta span {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.dash-boost-cta:hover {
+  filter: brightness(1.1);
+}
+
+.dash-boost-cta:focus-visible {
+  outline: 2px solid var(--brand-lime);
+  outline-offset: 3px;
+}
+
+.dash-panel {
+  border: 1px solid #1a2738;
+  border-radius: 16px;
+  background: var(--brand-slate);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dash-panel-title {
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--brand-white);
+  margin: 0;
+}
+
+.dash-panel .screen-copy {
+  color: var(--brand-white-55);
+}
+
+/* Past winners and account history share this shape; see .board-list above.
+   Rows are 44px navy pills with a white 15% hairline; the header sits flush
+   with the pill edge while the cells inset 20px. */
+.board-list-4col .board-row {
+  grid-template-columns: 0.6fr 2.2fr 1.4fr 1fr;
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 8px;
+  border: 1px solid var(--brand-white-15);
+  background: var(--brand-navy);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--brand-white);
+}
+
+.board-list-4col .board-row.board-head {
+  min-height: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--brand-white-55);
+}
+
+.dash-lime {
+  color: var(--brand-lime-text);
+}
+
+.dash-dim {
+  color: var(--brand-white-55);
+}
+
+.dash-addr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dash-tx {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.dash-tx:hover {
+  text-decoration: underline;
+}
+
+.dash-chip {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: 16px;
+  background: #16291e;
+  color: var(--brand-lime-text);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.dash-date {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--brand-white-55);
+  text-align: right;
+}
+
+.dash-more {
+  align-self: flex-end;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: "Roboto Mono", monospace;
+  font-size: 13px;
+  color: var(--brand-lime);
+  cursor: pointer;
+}
+
+.dash-more:hover {
+  text-decoration: underline;
+}
+
+/* One breakpoint: the pair of cards stacks and the tx-hash column goes, which
+   is the only column that can neither wrap nor shorten. */
+@media (max-width: 860px) {
+  .screen-dash {
+    padding: 16px 14px 40px;
+  }
+
+  .dash-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dash-prize {
+    font-size: 48px;
+  }
+
+  /* Syncopate is wide: "+ Deposit More" wraps at 11px+ on a 390px screen. */
+  .dash-btn {
+    font-size: 10.5px;
+    padding: 0 12px;
+  }
+
+  .dash-boost {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .board-list-4col .board-row {
+    grid-template-columns: 0.8fr 1.4fr 1fr;
+    padding: 0 12px;
+  }
+
+  .board-list-4col .board-row > :nth-child(2) {
+    display: none;
+  }
+
+  .dash-chip {
+    display: none;
+  }
+}
+

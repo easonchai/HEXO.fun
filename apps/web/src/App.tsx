@@ -9,9 +9,10 @@ import { BetDrawer } from "./panel/BetDrawer.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
 import { StakeBarButton } from "./panel/StakeBarButton.js";
 import { About } from "./screens/About.js";
+import { Dashboard } from "./screens/Dashboard.js";
 import { Home } from "./screens/Home.js";
 import { Leaderboard } from "./screens/Leaderboard.js";
-import { Vault } from "./screens/Vault.js";
+import { Vault, type VaultMode } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
 import { buyPosition, settlePosition } from "./actions.js";
 import { apiBaseUrl, fetchFeed, fetchStatus } from "./api.js";
@@ -70,6 +71,8 @@ export function App() {
   const [tab, setTab] = useState<Tab>(() =>
     tabFromHash(window.location.hash),
   );
+  /** Which tab the deposit widget opens on; set by the dashboard's buttons. */
+  const [vaultMode, setVaultMode] = useState<VaultMode>("deposit");
   const [soundOn, setSoundOnState] = useState(isSoundOn());
   // Dark only: the toggle is gone, but the light tokens and the
   // `data-theme` attribute stay so re-enabling it is a one-line change.
@@ -447,7 +450,26 @@ export function App() {
 
       <main className="main-content-split">
         {tab === "HOME" ? (
-          <Home now={now} onDeposit={() => setTab("VAULT")} />
+          <Home now={now} onDeposit={() => setTab("DASHBOARD")} />
+        ) : null}
+        {tab === "DASHBOARD" ? (
+          <Dashboard
+            owner={publicKey ?? null}
+            principal={principal}
+            entries={entries}
+            now={now}
+            aprBps={statusPoll.data?.aprBps ?? null}
+            onDeposit={() => {
+              setVaultMode("deposit");
+              setTab("VAULT");
+            }}
+            onWithdraw={() => {
+              setVaultMode("withdraw");
+              setTab("VAULT");
+            }}
+            onPlay={() => setTab("MINE")}
+            onViewDraws={() => setTab("WEEKLY DRAW")}
+          />
         ) : null}
         {tab === "MINE" ? (
           <>
@@ -546,6 +568,7 @@ export function App() {
             paused={pool?.paused ?? false}
             now={now}
             aprBps={statusPoll.data?.aprBps ?? null}
+            initialMode={vaultMode}
             onConnect={() => signer.connect()}
             onDone={refresh}
             onPlay={() => setTab("MINE")}

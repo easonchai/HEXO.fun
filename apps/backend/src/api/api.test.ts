@@ -329,6 +329,71 @@ describe("API routes", () => {
     assertNoLargeNumbers(body, "/feed");
   });
 
+  it("GET /feed?owner filters to that wallet, keeping a JackpotPaid row by its winner field", async () => {
+    // Alice owns every feed-eligible row here, including the JackpotPaid one
+    // by its `winner` field: drop that disjunct and this list loses a row.
+    const alice = await http.get(`/feed?owner=${ALICE}`).expect(200);
+    expect(alice.body.map((event: { name: string }) => event.name)).toEqual([
+      "PositionSettled",
+      "JackpotPaid",
+      "PositionSettled",
+      "Deposited",
+    ]);
+    assertNoLargeNumbers(alice.body, "/feed?owner=alice");
+
+    // Bob's only owned row (slot 11) is a zero-reward PositionSettled, which
+    // the reward filter already drops, and he is nobody's JackpotPaid winner.
+    const bob = await http.get(`/feed?owner=${BOB}`).expect(200);
+    expect(bob.body).toEqual([]);
+  });
+
+  it("GET /positions/counts counts from the PositionBought event log, including rounds Position has already dropped", async () => {
+    // Runs after the /feed tests above on purpose: PositionBought is a
+    // FEED_NAMES event, so seeding it earlier would perturb their exact
+    // match on the shared Event table.
+    //
+    // Carl has no Position row at all (his round settled and the indexer
+    // deleted it, same as any settled position), yet his PositionBought
+    // event is still in the log. That is the whole point of reading Event
+    // instead of Position: this case reads 0 against the old
+    // Position.groupBy implementation and must not here.
+    const CARL = Keypair.generate().publicKey.toBase58();
+    await prisma.event.createMany({
+      data: [
+        {
+          slot: 20n,
+          signature: "sig20",
+          index: 0,
+          name: "PositionBought",
+          data: { roundId: "99", owner: ALICE, tiles: "1", stakePerTile: "100", total: "100" },
+          blockTime: NOW - 20n,
+        },
+        {
+          slot: 21n,
+          signature: "sig21",
+          index: 0,
+          name: "PositionBought",
+          data: { roundId: "100", owner: ALICE, tiles: "1", stakePerTile: "100", total: "100" },
+          blockTime: NOW - 10n,
+        },
+        {
+          slot: 22n,
+          signature: "sig22",
+          index: 0,
+          name: "PositionBought",
+          data: { roundId: "99", owner: CARL, tiles: "1", stakePerTile: "50", total: "50" },
+          blockTime: NOW - 5n,
+        },
+      ],
+    });
+
+    const { body } = await http
+      .get(`/positions/counts?owners=${ALICE},${BOB},${CARL}`)
+      .expect(200);
+    expect(body).toEqual({ counts: { [ALICE]: 2, [BOB]: 0, [CARL]: 1 } });
+    assertNoLargeNumbers(body, "/positions/counts");
+  });
+
   it("GET /status reports the operator, the cursor age and rpc health", async () => {
     const { body } = await http.get("/status").expect(200);
     expect(body.operator).toMatchObject({

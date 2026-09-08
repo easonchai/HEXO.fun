@@ -6,7 +6,7 @@
  */
 import { expect, test, type Page } from "playwright/test";
 
-const TAB_TESTIDS = ["tab-vault", "tab-mine"];
+const TAB_TESTIDS = ["tab-dashboard", "tab-mine"];
 
 async function assertNoHorizontalOverflow(page: Page): Promise<void> {
   const { scrollWidth, viewportWidth } = await page.evaluate(() => ({

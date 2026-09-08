@@ -34,7 +34,8 @@ const INPUT_DECIMALS = 2;
 /** The Figma quick pills: each adds this many whole USDC. */
 const QUICK_ADDS = [50n, 100n, 500n] as const;
 
-type Mode = "deposit" | "withdraw";
+export type VaultMode = "deposit" | "withdraw";
+type Mode = VaultMode;
 
 export interface VaultScreenProps {
   /** Null until a wallet is connected; the CTA then reads CONNECT WALLET. */
@@ -51,6 +52,12 @@ export interface VaultScreenProps {
   now: bigint | null;
   /** Basis points from GET /status; null while the backend is unreachable. */
   aprBps: number | null;
+  /**
+   * Which tab the widget opens on. The dashboard's two buttons are the only
+   * way in, and they arrive with an intent already; App unmounts the screen on
+   * every tab change, so this is read fresh on each arrival.
+   */
+  initialMode?: Mode | undefined;
   onConnect: () => void;
   onDone: () => void;
   /** "Play HEXO" on the deposit-confirmed modal: App switches to the MINE tab. */
@@ -69,6 +76,7 @@ export function Vault(props: VaultScreenProps) {
     paused,
     now,
     aprBps,
+    initialMode,
     onConnect,
     onDone,
     onPlay,
@@ -77,7 +85,7 @@ export function Vault(props: VaultScreenProps) {
   // (see INPUT_DECIMALS).
   const fmt2 = (value: bigint) => formatAtomic2(value, DECIMALS);
 
-  const [mode, setMode] = useState<Mode>("deposit");
+  const [mode, setMode] = useState<Mode>(initialMode ?? "deposit");
   const [amountText, setAmountText] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(

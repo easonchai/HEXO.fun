@@ -90,7 +90,7 @@ export function GlyphRow() {
   );
 }
 
-const Star = () => (
+export const Star = () => (
   <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
     {GLYPHS[0]}
   </svg>

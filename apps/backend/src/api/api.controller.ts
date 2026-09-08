@@ -6,6 +6,9 @@ import { ApiService } from "./api.service";
 /** Cap borrowed from the api-design rule; the frontend never asks for more. */
 const MAX_LIMIT = 100;
 
+/** Keeps the `owners` query string short and the groupBy below it cheap. */
+const MAX_OWNERS = 25;
+
 const parseLimit = (raw: string | undefined, fallback: number): number => {
   if (raw === undefined) return fallback;
   const value = Number(raw);
@@ -28,6 +31,20 @@ const parseOwner = (raw: string): string => {
   } catch {
     throw new BadRequestException("That is not a valid Solana wallet address.");
   }
+};
+
+const parseOwners = (raw: string | undefined): string[] => {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    throw new BadRequestException(
+      "`owners` must be a comma-separated list of wallet addresses.",
+    );
+  }
+  const owners = trimmed.split(",").map((entry) => parseOwner(entry.trim()));
+  if (owners.length > MAX_OWNERS) {
+    throw new BadRequestException(`\`owners\` accepts at most ${MAX_OWNERS} addresses.`);
+  }
+  return owners;
 };
 
 /** The read half of spec.md §3.5. Everything comes from Postgres. */
@@ -71,8 +88,13 @@ export class ApiController {
   }
 
   @Get("feed")
-  getFeed(@Query("limit") limit?: string) {
-    return this.api.getFeed(parseLimit(limit, 50));
+  getFeed(@Query("limit") limit?: string, @Query("owner") owner?: string) {
+    return this.api.getFeed(parseLimit(limit, 50), owner ? parseOwner(owner) : undefined);
+  }
+
+  @Get("positions/counts")
+  getPositionCounts(@Query("owners") owners?: string) {
+    return this.api.getPositionCounts(parseOwners(owners));
   }
 
   @Get("status")

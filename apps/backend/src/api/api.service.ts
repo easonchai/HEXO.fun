@@ -204,16 +204,52 @@ export class ApiService {
    * Newest first. A settled Position that won nothing is not news, so the
    * reward filter runs in Postgres: filtering it in JS would silently return
    * fewer than `limit` rows on a board where most positions lose.
+   *
+   * `owner`, when given, keeps only events about that wallet. `JackpotPaid`
+   * carries `winner` rather than `owner`, so both keys are checked; dropping
+   * the `winner` half would make a "Prize Win" row vanish from that wallet's
+   * filtered history. No GIN index on `data`: a seq scan is fine at demo scale.
    */
-  getFeed(limit: number): Promise<FeedRow[]> {
+  getFeed(limit: number, owner?: string): Promise<FeedRow[]> {
+    const ownerFilter =
+      owner === undefined
+        ? Prisma.empty
+        : Prisma.sql`AND (data->>'owner' = ${owner} OR data->>'winner' = ${owner})`;
     return this.prisma.$queryRaw<FeedRow[]>`
       SELECT slot, signature, "index", name, data, "blockTime"
       FROM "Event"
-      WHERE name IN (${Prisma.join(FEED_NAMES)})
-         OR (name = 'PositionSettled' AND data->>'reward' ~ '^[1-9][0-9]*$')
+      WHERE (name IN (${Prisma.join(FEED_NAMES)})
+         OR (name = 'PositionSettled' AND data->>'reward' ~ '^[1-9][0-9]*$'))
+      ${ownerFilter}
       ORDER BY slot DESC, "index" DESC
       LIMIT ${limit}
     `;
+  }
+
+  /**
+   * Distinct rounds played per owner, ever. `Position` cannot answer this:
+   * `settle_position`/`void_round` close the account and the indexer drops
+   * the row with it (indexer.service.ts `syncAccounts`), so a Position-backed
+   * count reads 0 for exactly the settled rounds a "Past Winners" row is
+   * about. `PositionBought` is append-only history instead, so this counts
+   * from the Event log: `{ roundId, owner, tiles, stakePerTile, total }`,
+   * both camelCase per `decode.ts`'s `jsonify` (checked against
+   * `decode.test.ts`'s fixture, not assumed).
+   *
+   * DISTINCT on `roundId`: a player can buy more than once in the same round
+   * (adding tiles to the same Position account), each a separate
+   * `PositionBought` event, so counting rows would overcount rounds.
+   */
+  async getPositionCounts(owners: string[]): Promise<{ counts: Record<string, number> }> {
+    const rows = await this.prisma.$queryRaw<{ owner: string; rounds: number }[]>`
+      SELECT data->>'owner' AS owner, COUNT(DISTINCT data->>'roundId')::int AS rounds
+      FROM "Event"
+      WHERE name = 'PositionBought' AND data->>'owner' IN (${Prisma.join(owners)})
+      GROUP BY data->>'owner'
+    `;
+    const byOwner = new Map(rows.map((row) => [row.owner, row.rounds]));
+    const counts = Object.fromEntries(owners.map((owner) => [owner, byOwner.get(owner) ?? 0]));
+    return { counts };
   }
 
   async getStatus() {

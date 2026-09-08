@@ -7,6 +7,7 @@ import {
   formatAddress,
   formatAtomic,
   formatAtomic2,
+  formatMoney2,
   parseAtomic,
   previewBuy,
   withdrawable,
@@ -48,6 +49,13 @@ describe("atomic formatting", () => {
     expect(formatAtomic2(15_000n, 6)).toBe("0.01");
     expect(formatAtomic2(0n, 6)).toBe("0.00");
     expect(formatAtomic2(-1_999_970_000n, 6)).toBe("-1999.97");
+  });
+
+  it("groups thousands for display", () => {
+    expect(formatMoney2(42_759_280_000n, 6)).toBe("42,759.28");
+    expect(formatMoney2(1_000_000_000n, 6)).toBe("1,000.00");
+    expect(formatMoney2(999_990_000n, 6)).toBe("999.99");
+    expect(formatMoney2(-1_234_567_000_000n, 6)).toBe("-1,234,567.00");
   });
 
   it("parses decimal text into atomic units exactly", () => {

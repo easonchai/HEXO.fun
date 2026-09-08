@@ -39,6 +39,17 @@ export function formatAtomic2(value: bigint, decimals: number): string {
 }
 
 /**
+ * `formatAtomic2` with thousands separators in the whole part, for display
+ * only: "1999.97" -> "1,999.97". Never feed the result back into a parser.
+ */
+export function formatMoney2(value: bigint, decimals: number): string {
+  const text = formatAtomic2(value, decimals);
+  const dot = text.indexOf(".");
+  const whole = text.slice(0, dot).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${whole}${text.slice(dot)}`;
+}
+
+/**
  * Keep typed amount text to digits, one dot and at most `places` decimals.
  * "12.3456" -> "12.34", "1.2.3" -> "1.23", "abc" -> "".
  */
