@@ -2347,46 +2347,20 @@ input::placeholder {
     display: none;
   }
 
+  /* Two tabs (src/tabs.ts) plus CONNECT fit 390px with room, so the type
+     stays readable. The tabs stretch to the bar's full 60px so the touch
+     target clears 44px and the active underline sits on the bar's edge. */
   .nav {
-    flex: 1 1 auto;
-    min-width: 0;
-    margin-left: 10px;
-    /* Five short labels plus the connect button do not fit at 390px at the
-       desktop tracking: the strip needed 269px of a 171px box, so RANKS and
-       ABOUT ended up behind .topbar-right. Tightening the type and the gaps
-       here (and the connect button below) brings the row to about 188px,
-       which fits 390px with room. Below roughly 360px it still overflows,
-       which is what the scroll and the edge fade are for. */
-    gap: 9px;
-    font-size: 10px;
-    letter-spacing: 0.05em;
-    overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-    /* Right-edge fade: painted over the strip's own box, so it stays fixed
-       at the right edge regardless of scroll offset. Harmless when the five
-       tabs already fit (nothing sits under it to fade). */
-    mask-image: linear-gradient(
-      to right,
-      black calc(100% - 20px),
-      transparent 100%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      black calc(100% - 20px),
-      transparent 100%
-    );
-  }
-
-  .nav::-webkit-scrollbar {
-    display: none;
+    align-self: stretch;
+    margin-left: 16px;
+    gap: 20px;
+    font-size: 13px;
+    letter-spacing: 0.1em;
   }
 
   .nav-item {
-    flex: none;
     white-space: nowrap;
+    padding: 0 4px;
   }
 
   .nav-item-long {
@@ -2403,9 +2377,9 @@ input::placeholder {
 
   /* The desktop pill is 131px wide, over a third of a 390px screen. */
   .btn-connect {
-    padding: 9px 14px;
-    font-size: 10px;
-    letter-spacing: 0.06em;
+    padding: 12px 18px;
+    font-size: 12px;
+    letter-spacing: 0.08em;
   }
 
   /* Balances already sit in the control panel and the vault screen, and the
