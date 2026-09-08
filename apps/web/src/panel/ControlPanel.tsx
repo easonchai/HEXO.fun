@@ -23,6 +23,8 @@ export interface ControlPanelProps {
   setAutoRounds: (value: number) => void;
   canDeploy: boolean;
   deployProblems: string[];
+  /** Why the deploy button is idle (round state); shown as its tooltip. */
+  deployHint: string | null;
   deployBusy: boolean;
   deployNote: string | null;
   locked: boolean;
@@ -46,6 +48,7 @@ export function ControlPanel(props: ControlPanelProps) {
     setAutoRounds,
     canDeploy,
     deployProblems,
+    deployHint,
     deployBusy,
     deployNote,
     locked,
@@ -311,6 +314,7 @@ export function ControlPanel(props: ControlPanelProps) {
           className={`btn-deploy${locked ? " locked" : ""}${settling ? " settling" : ""}${!canDeploy || tiles === 0 || stake === 0n ? " dim" : ""}`}
           data-testid="deploy"
           disabled={!ready}
+          title={deployHint ?? undefined}
           onClick={fireDeploy}
         >
           {burst ? (

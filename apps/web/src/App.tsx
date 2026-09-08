@@ -207,18 +207,20 @@ export function App() {
     : 0n;
   const spend = stake * BigInt(engine.selected.length);
 
+  // Red text is for things the user can act on. Round state (no open
+  // round, closed, already placed) is what the deploy button label already
+  // says, so it only goes on the button as a tooltip.
   const problems: string[] = [];
   if (!pool) problems.push("no pool found on chain yet");
-  if (!openRound) problems.push("no open round (the operator opens rounds)");
-  if (
-    openRound &&
-    phaseFor(openRound, now ?? 0n, pool?.closeBuffer ?? 0n) !== "mine"
-  )
-    problems.push("positions are closed for this round");
-  if (locked && openRound)
-    problems.push(`position already placed in round #${openRound.roundId}`);
   if (spend > entries)
     problems.push("not enough Tickets — deposit to earn more");
+  const deployHint = !openRound
+    ? "no open round (the operator opens rounds)"
+    : locked
+      ? `position already placed in round #${openRound.roundId}`
+      : phaseFor(openRound, now ?? 0n, pool?.closeBuffer ?? 0n) !== "mine"
+        ? "positions are closed for this round"
+        : null;
 
   /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction was sent. */
   const deploy = useCallback(
@@ -496,6 +498,7 @@ export function App() {
               setAutoRounds={setAutoRounds}
               canDeploy={canPick}
               deployProblems={problems}
+              deployHint={deployHint}
               deployBusy={deployBusy}
               deployNote={deployNote}
               locked={locked}
@@ -535,6 +538,7 @@ export function App() {
                 setAutoRounds={setAutoRounds}
                 canDeploy={canPick}
                 deployProblems={problems}
+                deployHint={deployHint}
                 deployBusy={deployBusy}
                 deployNote={deployNote}
                 locked={locked}

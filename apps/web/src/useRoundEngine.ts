@@ -296,6 +296,9 @@ export function useRoundEngine(input: EngineInput): EngineOutput {
     const isFirstRoundEver = lastOpenRoundRef.current === null;
     lastOpenRoundRef.current = key;
     if (isFirstRoundEver) return; // no fade-in/chime for the very first Round on load
+    // Last round's picks are stale on a fresh board. Auto-rounds re-select
+    // after it re-deploys, and App's effect runs after this one.
+    setSelected([]);
     sfx("prime");
     setCoreEnter(true);
     later(() => setCoreEnter(false), 850);
