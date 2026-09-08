@@ -355,7 +355,7 @@ export function App() {
   }, [settleState, pool, txSigner, program, fmt, refresh]);
 
   return (
-    <main className="app">
+    <main className="app" data-tab={tab}>
       <header className="topbar">
         <button
           type="button"
