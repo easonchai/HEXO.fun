@@ -58,7 +58,7 @@ export function Leaderboard({ owner }: LeaderboardScreenProps) {
                   {row.isHouse
                     ? "House"
                     : row.owner === ownerBase58
-                      ? "you"
+                      ? "You"
                       : formatAddress(row.owner)}
                 </span>
                 <span>{atomicShort(row.entries)}</span>

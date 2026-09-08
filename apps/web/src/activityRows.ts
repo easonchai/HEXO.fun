@@ -39,7 +39,7 @@ const addressOf = (value: unknown): string | null => {
 const whoOf = (value: unknown, owner: string | undefined): string => {
   const key = addressOf(value);
   if (!key) return "pool";
-  return key === owner ? "you" : formatAddress(key);
+  return key === owner ? "You" : formatAddress(key);
 };
 
 /** One mapper for both sources: they differ only in how a row is keyed. */

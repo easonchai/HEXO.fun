@@ -36,7 +36,7 @@ describe("activity feed row mappers", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]?.tileLabel).toBe("deposit");
-    expect(rows[0]?.who).toBe("you");
+    expect(rows[0]?.who).toBe("You");
     expect(rows[0]?.action).toBe("+1.50 USDC");
   });
 
@@ -136,14 +136,14 @@ describe("isRowVisible (activity feed hold)", () => {
   };
   const rewardRow: FeedRow = {
     key: "p1",
-    who: "you",
+    who: "You",
     action: "+1 Tickets",
     tileLabel: "round reward",
     roundId: "7",
   };
   const boughtRow: FeedRow = {
     key: "b1",
-    who: "you",
+    who: "You",
     action: "−1 Tickets",
     tileLabel: "3 tiles",
   };

@@ -198,7 +198,7 @@ export function decideAutoRound(
 
 export interface FeedRow {
   key: string;
-  /** Short address label; "you" when it is the connected wallet. */
+  /** Short address label; "You" when it is the connected wallet. */
   who: string;
   /** Orange gain column, e.g. Entries staked or "+reward". */
   action: string;

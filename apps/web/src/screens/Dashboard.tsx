@@ -369,7 +369,7 @@ export function Dashboard(props: DashboardScreenProps) {
                   #{row.id}
                 </span>
                 <span className="dash-addr">
-                  {row.winner === ownerBase58 ? "you" : formatAddress(row.winner)}
+                  {row.winner === ownerBase58 ? "You" : formatAddress(row.winner)}
                   {/* The backend answers 0 for a winner who never played a
                       round; a "Played 0 rounds" chip is noise, so it goes. */}
                   {(roundsPlayed[row.winner] ?? 0) > 0 ? (

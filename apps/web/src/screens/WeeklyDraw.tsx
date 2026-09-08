@@ -181,7 +181,7 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
               <div className="board-row" key={row.id}>
                 <span>week #{row.id}</span>
                 <span>
-                  {row.winner === ownerBase58 ? "you" : formatAddress(row.winner)}
+                  {row.winner === ownerBase58 ? "You" : formatAddress(row.winner)}
                 </span>
                 <span>
                   {atomicShort(row.jackpotAmount)} {SYMBOL}
