@@ -183,6 +183,17 @@ export function Vault(props: VaultScreenProps) {
 
   return (
     <div className="vault" data-testid="vault-screen">
+      {/* Pre-dithered checkmark coin (scripts/dither-video.mjs). Without autoplay the poster stays. */}
+      <video
+        className="home-bg"
+        src="/vault-bg.mp4"
+        poster="/vault-bg.png"
+        autoPlay={!window.matchMedia("(prefers-reduced-motion: reduce)").matches}
+        muted
+        loop
+        playsInline
+        aria-hidden="true"
+      />
       <div className="vault-row">
         <GlyphRow />
         <section className="vault-widget" aria-label="Deposit or withdraw">

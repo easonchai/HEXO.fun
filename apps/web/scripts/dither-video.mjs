@@ -1,35 +1,48 @@
-// Renders the HOME background: the coin-ring mp4 run through the Figma
-// "Dither" shader's ordered pass (Bayer 16x16, size 2, 3 levels, colour),
-// so the web build ships a plain looping video instead of a WebGPU port.
+// Renders a screen background: an mp4 run through the Figma "Dither"
+// shader's ordered pass (Bayer 16x16, size 2, 3 levels, colour), so the
+// web build ships a plain looping video instead of a WebGPU port.
 //
-//   node scripts/dither-video.mjs <source.mp4>
+//   node scripts/dither-video.mjs <source.mp4> <name> [speed] [cell]
 //
-// Writes public/home-bg.mp4 (H.264, no audio) and public/home-bg.png
-// (dithered first frame, the poster). Needs ffmpeg on PATH.
-import { spawn } from "node:child_process";
+//   HOME:  node scripts/dither-video.mjs coin-ring.mp4 home-bg 0.8 8
+//   VAULT: node scripts/dither-video.mjs Checkmark_LoopVideo.mp4 vault-bg 0.6 4
+//
+// Writes public/<name>.mp4 (H.264, no audio) and public/<name>.png
+// (dithered first frame, the poster). Needs ffmpeg and ffprobe on PATH.
+import { execFileSync, spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SRC = process.argv[2];
-if (!SRC) throw new Error("usage: node scripts/dither-video.mjs <source.mp4>");
+const [SRC, NAME, SPEED_ARG = "0.8", CELL_ARG = "8"] = process.argv.slice(2);
+if (!SRC || !NAME) throw new Error("usage: node scripts/dither-video.mjs <source.mp4> <name> [speed] [cell]");
+const SPEED = Number(SPEED_ARG);
+if (!(SPEED > 0)) throw new Error(`speed must be a positive number, got ${SPEED_ARG}`);
+// Source pixels per dither cell, tuned by eye against each Figma frame:
+// 8 on the 1080p coin ring (240x135 cells), 4 on the 720p checkmark.
+const PIXEL_SIZE = Number(CELL_ARG);
+if (!Number.isInteger(PIXEL_SIZE) || PIXEL_SIZE < 1) throw new Error(`cell must be a positive integer, got ${CELL_ARG}`);
 
-// dither.js parameters, size 8, tuned by eye against the Figma frame
-// on a 1080p source = 240x135 cells, 3 levels per channel.
+// dither.js parameters: 3 levels per channel, Bayer 16x16.
 // The page scales the cells back up with image-rendering: pixelated.
-const PIXEL_SIZE = 8;
 const LEVELS = 3;
 const BRIGHT = (100 - 100) / 200;
 const CONTRAST = 1;
 const BAYER_N = 16;
-const W = 1920 / PIXEL_SIZE;
-const H = 1080 / PIXEL_SIZE;
-// Source is 24 fps; encoding the same frames at 0.8x that plays them slower.
-const SPEED = 0.8;
-const FPS = 24 * SPEED;
+
+const probe = execFileSync(
+  "ffprobe",
+  ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "csv=p=0", SRC],
+  { encoding: "utf8" },
+).trim();
+const [srcW, srcH, rate] = probe.split(",");
+const [num, den] = rate.split("/").map(Number);
+const W = Math.round(Number(srcW) / PIXEL_SIZE);
+const H = Math.round(Number(srcH) / PIXEL_SIZE);
+const SRC_FPS = num / den;
 
 const here = dirname(fileURLToPath(import.meta.url));
-const OUT_MP4 = resolve(here, "../public/home-bg.mp4");
-const OUT_PNG = resolve(here, "../public/home-bg.png");
+const OUT_MP4 = resolve(here, `../public/${NAME}.mp4`);
+const OUT_PNG = resolve(here, `../public/${NAME}.png`);
 
 // Same recursive construction as bayerMatrix()/flattenBayer() in dither.js.
 function bayer(n) {
@@ -80,15 +93,24 @@ function ffmpeg(args, stdio) {
 }
 
 // Bilinear downscale stands in for the load pass sampling block centres.
+// Slow the clip first, then motion-interpolate back to the source rate so a
+// 0.6x render still plays at 24fps instead of 14.
 const decode = ffmpeg(
-  ["-i", SRC, "-an", "-vf", `scale=${W}:${H}:flags=bilinear`, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+  [
+    "-i", SRC, "-an",
+    "-vf", `setpts=PTS/${SPEED},minterpolate=fps=${SRC_FPS}:mi_mode=mci,scale=${W}:${H}:flags=bilinear`,
+    "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+  ],
   ["ignore", "pipe", "inherit"],
 );
 const encode = ffmpeg(
   [
-    "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", `${W}x${H}`, "-r", String(FPS), "-i", "-",
+    "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", `${W}x${H}`, "-r", String(SRC_FPS), "-i", "-",
     // 2x nearest upscale so 4:2:0 chroma subsampling still covers every cell.
-    "-vf", "scale=iw*2:ih*2:flags=neighbor",
+    // Explicit bt709 limited range: untagged files leave browsers guessing,
+    // and a wrong guess lifts black to grey, which screen blend then shows.
+    "-vf", "scale=iw*2:ih*2:flags=neighbor:out_color_matrix=bt709:out_range=tv",
+    "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
     "-c:v", "libx264", "-preset", "slow", "-crf", "28", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
     OUT_MP4,
   ],

@@ -2408,11 +2408,15 @@ input::placeholder {
   gap: 41px;
   padding: 40px 24px;
   color: var(--brand-lime);
+  /* The blend needs a backdrop inside the isolated group; without this the
+     video composites over transparent and its black frame paints through. */
+  background: var(--bg);
   isolation: isolate;
 }
 
-/* HOME background: the pre-dithered coin ring at 15%. Screen blend drops the
-   video's black so the navy stays flush with the header and sidebar. */
+/* HOME and VAULT backgrounds: the pre-dithered coin videos at 15%. Additive
+   (plus-lighter) blend drops the video's black so the navy stays flush with
+   the header and sidebar. */
 .home-bg {
   position: absolute;
   inset: 0;
@@ -2421,56 +2425,8 @@ input::placeholder {
   height: 100%;
   object-fit: cover;
   opacity: 0.15;
-  mix-blend-mode: screen;
+  mix-blend-mode: plus-lighter;
   image-rendering: pixelated;
-  pointer-events: none;
-}
-
-/* Halftone coin: a lime dot grid faded by a radial mask, plus the 714px
-   glow ellipse from the frame. ponytail: CSS stand-in for the Figma
-   raster; drop the exported PNG in as a background-image if the exact art
-   matters. */
-.vault::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background-image: radial-gradient(
-    circle,
-    rgba(182, 255, 59, 0.22) 1.2px,
-    transparent 1.7px
-  );
-  background-size: 8px 8px;
-  -webkit-mask-image: radial-gradient(
-    ellipse 40% 55% at 50% 60%,
-    #000 0%,
-    rgba(0, 0, 0, 0.45) 45%,
-    transparent 75%
-  );
-  mask-image: radial-gradient(
-    ellipse 40% 55% at 50% 60%,
-    #000 0%,
-    rgba(0, 0, 0, 0.45) 45%,
-    transparent 75%
-  );
-}
-
-.vault::after {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  left: 50%;
-  top: 50%;
-  width: 714px;
-  height: 714px;
-  transform: translate(-50%, -40%);
-  border-radius: 50%;
-  background: radial-gradient(
-    circle,
-    rgba(182, 255, 59, 0.6) 0%,
-    rgba(14, 27, 43, 0) 70%
-  );
-  opacity: 0.35;
   pointer-events: none;
 }
 
@@ -2742,8 +2698,13 @@ input::placeholder {
 
 /* ---------- VAULT tab (Figma "Deposit" frame) ---------- */
 
-/* Same halftone coin and glow as HOME; the ::before/::after rules above
-   list both selectors. */
+/* Background is the dithered checkmark video, same .home-bg rule as HOME,
+   shrunk 15% so the coin sits inside the widget's edges. The video's black
+   border screens out, so the scaled edge never shows. */
+.vault .home-bg {
+  transform: scale(0.85);
+}
+
 .vault {
   position: relative;
   flex: 1;
@@ -2754,6 +2715,7 @@ input::placeholder {
   justify-content: center;
   padding: 40px 24px;
   color: var(--brand-lime);
+  background: var(--bg);
   isolation: isolate;
 }
 
@@ -3061,7 +3023,8 @@ input::placeholder {
 }
 
 @media (max-width: 720px) {
-  .vault-row .home-glyphs {
+  .vault-row .home-glyphs,
+  .vault .home-bg {
     display: none;
   }
 
