@@ -3642,8 +3642,10 @@ input::placeholder {
 .board-list-4col .board-row.board-head {
   grid-template-columns: 128px 417px 1fr 1fr;
   min-height: 0;
-  padding: 0;
+  padding: 0 0 10px;
   border: none;
+  border-bottom: 1px solid var(--brand-white-15);
+  border-radius: 0;
   background: transparent;
   font-size: 10px;
   font-weight: 700;
@@ -3751,8 +3753,20 @@ input::placeholder {
     padding: 0 12px;
   }
 
-  .board-list-4col .board-row > :nth-child(2) {
+  /* Winners keep draw, address and prize and drop the date. History keeps
+     type, amount and date and drops the hash, the one cell that can neither
+     wrap nor shorten. */
+  .dash-winners .board-row > :last-child,
+  .dash-history .board-row > :nth-child(2) {
     display: none;
+  }
+
+  .dash-winners .board-row > :nth-child(3) {
+    text-align: right;
+  }
+
+  .dash-addr {
+    grid-template-columns: auto;
   }
 
   .dash-chip {

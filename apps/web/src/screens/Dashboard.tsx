@@ -353,7 +353,10 @@ export function Dashboard(props: DashboardScreenProps) {
         {winners.length === 0 ? (
           <p className="screen-copy">no weekly draw has paid a winner yet.</p>
         ) : (
-          <div className="board-list board-list-4col" data-testid="dash-winner-rows">
+          <div
+            className="board-list board-list-4col dash-winners"
+            data-testid="dash-winner-rows"
+          >
             <div className="board-row board-head">
               <span>DRAW</span>
               <span>WINNER ADDRESS</span>
@@ -394,7 +397,10 @@ export function Dashboard(props: DashboardScreenProps) {
         ) : historyRows.length === 0 ? (
           <p className="screen-copy">no deposits, withdrawals or prizes yet.</p>
         ) : (
-          <div className="board-list board-list-4col" data-testid="dash-history-rows">
+          <div
+            className="board-list board-list-4col dash-history"
+            data-testid="dash-history-rows"
+          >
             <div className="board-row board-head">
               <span>TYPE</span>
               <span>TX HASH</span>
