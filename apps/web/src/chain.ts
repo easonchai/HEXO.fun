@@ -6,7 +6,7 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { PublicKey, type Transaction } from "@solana/web3.js";
+import { PublicKey, type Transaction, clusterApiUrl } from "@solana/web3.js";
 
 export type HexVaultProgram = Program<Idl>;
 
@@ -116,7 +116,8 @@ export const PROGRAM_ID = new PublicKey(env("VITE_PROGRAM_ID") ?? idl.address);
 /** The single pool this build talks to; the demo runs pool 1. */
 export const POOL_ID = BigInt(env("VITE_POOL_ID") ?? "1");
 
-export const RPC_URL = env("VITE_RPC_URL") ?? "http://127.0.0.1:8899";
+/** Public devnet unless overridden; .env.example pins the local validator. */
+export const RPC_URL = env("VITE_RPC_URL") ?? clusterApiUrl("devnet");
 
 export const API_URL = env("VITE_API_URL") ?? "http://127.0.0.1:8080";
 
