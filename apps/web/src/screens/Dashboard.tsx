@@ -1,6 +1,6 @@
 /**
  * DASHBOARD tab (the Figma "Dashboard" frame, node 249:8): where EARN lands.
- * Two halftone cards — your principal on the left, this week's prize and the
+ * Two halftone cards — your principal on the left, today's prize and the
  * draw clock on the right — then the odds strip, past winners and your own
  * account history.
  *

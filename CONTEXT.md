@@ -1,8 +1,8 @@
 # HexVault
 
-A no-loss lottery on Solana: users deposit USDC into a pool, the pool's yield becomes the weekly draw's prize, and each depositor's time-weighted Entries decide their odds. Entries can be risked in a MinePEA-style hex-tile game against other depositors to win more Entries, but principal is never at stake.
+A no-loss lottery on Solana: users deposit USDC into a pool, the pool's yield becomes the daily draw's prize, and each depositor's time-weighted Entries decide their odds. Entries can be risked in a MinePEA-style hex-tile game against other depositors to win more Entries, but principal is never at stake.
 
-Player-facing words differ from mechanism names in two places, on purpose: the screen says "week" where the code says epoch, and "prize" or "hexpot" where the code says jackpot. Code, API and program identifiers keep the mechanism names.
+Player-facing words differ from mechanism names in two places, on purpose: the screen says "day" where the code says epoch, and "prize" or "hexpot" where the code says jackpot. Code, API and program identifiers keep the mechanism names.
 
 ## Language
 
@@ -51,15 +51,19 @@ A player's time-weighted Entries over one epoch: the integral of Entries held ov
 _Avoid_: TWAB, average balance, odds
 
 **Epoch**:
-One lottery cycle of fixed length. Epochs are contiguous: the next opens the moment the previous ends. The one exception is an operator that comes back a whole epoch or more late: `begin_epoch` then starts at the current time, skipping the dead gap instead of replaying it one epoch at a time. Configurable per pool; production intent is seven days, which is why the screen calls it a week.
+One lottery cycle. Its boundaries are points on a fixed grid: the pool's Anchor sets where the grid sits, and the cycle length, a pool parameter, sets the spacing. Epochs are contiguous, and a late crank lands on the same grid a punctual one would, so an operator outage skips whole epochs instead of moving the boundary. A pool's first epoch is the short stub from launch to the next grid point.
 _Avoid_: Season, draw period
 
-**Weekly draw**:
-The player-facing name for one epoch's draw and payout. The screen says "weekly draw", "week #4", "draw in 3d 4h"; code and the API say epoch.
+**Anchor**:
+The timestamp that fixes the phase of a pool's epoch grid, so the draw ends at the same clock time every cycle instead of at whatever second the pool launched. The pool's anchor is a Sunday 16:00 UTC, one instant that sits on the hourly, daily and weekly grids at once, so changing the cycle length never moves the draw off midnight Malaysian time.
+_Avoid_: Epoch start, genesis, offset
+
+**Daily draw**:
+The player-facing name for one epoch's draw and payout. The screen says "daily draw", "day #4", "draw in 3h 20m"; code and the API say epoch. The cycle length is a pool parameter, so the name follows the pool's cadence rather than fixing it.
 _Avoid_: Jackpot, lottery, raffle
 
 **Prize**:
-The yield the pool earned during an epoch, paid in full to the weekly draw's single winner. The demo's yield is simulated at a published rate and labeled as such. Code and the API call this amount the jackpot (`jackpotAmount`, `fund_jackpot`).
+The yield the pool earned during an epoch, paid in full to the daily draw's single winner. The demo's yield is simulated at a published rate and labeled as such. Code and the API call this amount the jackpot (`jackpotAmount`, `fund_jackpot`).
 _Avoid_: Jackpot (on screen), pot, reward (a game concept)
 
 **Hexpot**:

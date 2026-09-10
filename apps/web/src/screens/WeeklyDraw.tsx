@@ -6,7 +6,7 @@
  * only as the permissionless fallback PRD §3.3 describes.
  *
  * "Epoch" stays the mechanism name in code and the API; on screen it is a
- * week (ticket 14).
+ * day (ticket 14, renamed from a week by the epoch-anchor effort).
  */
 import { useCallback, useMemo, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
@@ -145,12 +145,12 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
             value={player.data ? `${player.data.odds}%` : "—"}
             testid="your-odds"
           />
-          <Stat label="Week" value={epoch.data ? `#${epoch.data.id}` : "—"} small />
+          <Stat label="Day" value={epoch.data ? `#${epoch.data.id}` : "—"} small />
         </StatGrid>
       </PanelCard>
 
       {drawing ? (
-        <PanelCard wide title={`DRAWING WEEK ${drawing.epochId}`}>
+        <PanelCard wide title={`DRAWING DAY ${drawing.epochId}`}>
           <p className="screen-copy">
             registered {drawing.registeredCount} of {drawing.eligible} eligible
             players
@@ -180,7 +180,7 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
           <div className="board-list" data-testid="winner-rows">
             {winners.map((row) => (
               <div className="board-row" key={row.id}>
-                <span>week #{row.id}</span>
+                <span>day #{row.id}</span>
                 <span>
                   {row.winner === ownerBase58 ? "You" : formatAddress(row.winner)}
                 </span>
