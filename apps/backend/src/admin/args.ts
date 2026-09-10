@@ -3,8 +3,12 @@
 // reason bootstrap.ts's params live in bootstrap/params.ts.
 import { parseArgs } from "node:util";
 
+import { isoSeconds } from "../bootstrap/params";
+
 export interface SetParamsInput {
   readonly epochSeconds?: number;
+  /** Unix seconds, from an ISO 8601 flag value. */
+  readonly epochAnchor?: number;
   readonly roundSeconds?: number;
   readonly closeBuffer?: number;
   readonly vrfTimeout?: number;
@@ -19,7 +23,7 @@ export type AdminCommand =
 
 export const USAGE = [
   "usage: admin <command> [flags]",
-  "  set-params [--epoch-seconds N] [--round-seconds N] [--close-buffer N] [--vrf-timeout N] [--min-deposit N]",
+  "  set-params [--epoch-seconds N] [--epoch-anchor ISO8601] [--round-seconds N] [--close-buffer N] [--vrf-timeout N] [--min-deposit N]",
   "  pause",
   "  unpause",
   "  fund-jackpot --amount N   (N is raw atomic hexUSDC, 6 decimals)",
@@ -95,6 +99,7 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
     case "set-params": {
       let values: {
         "epoch-seconds"?: string;
+        "epoch-anchor"?: string;
         "round-seconds"?: string;
         "close-buffer"?: string;
         "vrf-timeout"?: string;
@@ -105,6 +110,7 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
           args: [...rest],
           options: {
             "epoch-seconds": { type: "string" },
+            "epoch-anchor": { type: "string" },
             "round-seconds": { type: "string" },
             "close-buffer": { type: "string" },
             "vrf-timeout": { type: "string" },
@@ -119,6 +125,9 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
       const params: SetParamsInput = {
         ...(values["epoch-seconds"] !== undefined && {
           epochSeconds: positiveInt("epoch-seconds", values["epoch-seconds"]),
+        }),
+        ...(values["epoch-anchor"] !== undefined && {
+          epochAnchor: isoSeconds("epoch-anchor", values["epoch-anchor"]),
         }),
         ...(values["round-seconds"] !== undefined && {
           roundSeconds: positiveInt("round-seconds", values["round-seconds"]),
