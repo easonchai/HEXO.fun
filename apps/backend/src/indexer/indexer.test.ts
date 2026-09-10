@@ -274,6 +274,16 @@ describe("account sync", () => {
     expect(await prisma.epoch.count()).toBe(0);
   });
 
+  it("skips a pool left behind by an older program layout and still syncs this one", async () => {
+    // A pool bootstrapped before the epoch-anchor upgrade is 22 bytes short
+    // of the current layout; decoding it must not fail the whole sweep.
+    const stale = await chain.program.coder.accounts.encode("pool", poolAccount());
+    connection.accounts.push({ pubkey: Keypair.generate().publicKey, data: stale.subarray(0, -22) });
+    await put("pool", chain.poolAddress(), poolAccount());
+    await indexer.syncAccounts();
+    expect(await prisma.pool.count()).toBe(1);
+  });
+
   it("stamps the cursor with the sync time so /status can age it", async () => {
     await indexer.tick();
     const cursor = await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } });

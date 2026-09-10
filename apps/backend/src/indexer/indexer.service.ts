@@ -341,11 +341,20 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     return {
       slot: BigInt(context.slot),
       accounts: {
+        // Accounts of an earlier program build (an abandoned pool from before
+        // a layout change) still carry the discriminator but not the bytes;
+        // they belong to no configured pool, so they are skipped, not fatal.
         get: <T>(name: string) =>
-          (byType.get(name) ?? []).map(({ pubkey, data }) => ({
-            pubkey,
-            account: coder.decode<T>(name, data),
-          })),
+          (byType.get(name) ?? []).flatMap(({ pubkey, data }) => {
+            try {
+              return [{ pubkey, account: coder.decode<T>(name, data) }];
+            } catch (cause) {
+              this.logger.debug(
+                `skipping ${name} ${pubkey.toBase58()}: does not decode with the current IDL (${cause instanceof Error ? cause.message : String(cause)})`,
+              );
+              return [];
+            }
+          }),
       },
     };
   }
