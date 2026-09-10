@@ -10,6 +10,7 @@
     "test": "vitest run",
     "bootstrap": "tsx src/bootstrap.ts",
     "admin": "tsx src/admin/index.ts",
+    "sparring-setup": "tsx src/sparring-setup.ts",
     "sync-idl": "node scripts/sync-idl.mjs"
   },
   "dependencies": {

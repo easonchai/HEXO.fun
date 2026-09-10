@@ -76,6 +76,7 @@ const pool = (overrides: object = {}) => ({
   house: Keypair.generate().publicKey,
   vrfNetworkState: Keypair.generate().publicKey,
   epochSeconds: bn(86_400),
+  epochAnchor: bn(1_789_315_200),
   roundSeconds: bn(60),
   closeBuffer: bn(5),
   vrfTimeout: bn(120),
@@ -85,7 +86,9 @@ const pool = (overrides: object = {}) => ({
   // `begin_epoch`, so `send` fires without any Epoch or Round fixture.
   currentEpochId: bn(0),
   currentEpochStart: bn(0),
+  currentEpochEndsAt: bn(0),
   previousEpochStart: bn(0),
+  previousEpochEndsAt: bn(0),
   nextRoundId: bn(1),
   openRoundId: bn(0),
   carryPot: bn(0),

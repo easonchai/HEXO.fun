@@ -2267,6 +2267,10 @@
             "type": "i64"
           },
           {
+            "name": "epoch_anchor",
+            "type": "i64"
+          },
+          {
             "name": "round_seconds",
             "type": "i64"
           },
@@ -2492,6 +2496,10 @@
             "type": "i64"
           },
           {
+            "name": "epoch_anchor",
+            "type": "i64"
+          },
+          {
             "name": "round_seconds",
             "type": "i64"
           },
@@ -2676,6 +2684,15 @@
             "type": "i64"
           },
           {
+            "name": "epoch_anchor",
+            "docs": [
+              "Fixes the phase of the epoch grid `epoch_anchor + k * epoch_seconds`.",
+              "Every epoch boundary is a point on it, so the draw lands at the same",
+              "clock time whatever second the pool was bootstrapped on."
+            ],
+            "type": "i64"
+          },
+          {
             "name": "round_seconds",
             "docs": [
               "Applies to the next round created, not the open one."
@@ -2716,11 +2733,27 @@
             "type": "i64"
           },
           {
+            "name": "current_epoch_ends_at",
+            "docs": [
+              "End of the current epoch, copied from its `Epoch.ends_at`. `touch`",
+              "reads it instead of adding `epoch_seconds`, so changing that",
+              "parameter never moves an epoch that has already begun."
+            ],
+            "type": "i64"
+          },
+          {
             "name": "previous_epoch_start",
             "docs": [
-              "Start of the epoch before the current one; it ended `epoch_seconds`",
-              "later. Usually that is `current_epoch_start` too, except after a",
-              "`begin_epoch` that ran a whole epoch late and started at `now`."
+              "Start of the epoch before the current one. Usually that is",
+              "`current_epoch_start` too, except when `begin_epoch` skipped a gap."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "previous_epoch_ends_at",
+            "docs": [
+              "End of the epoch before the current one, where `touch` freezes the",
+              "weight a player earned in it."
             ],
             "type": "i64"
           },
@@ -3047,6 +3080,12 @@
         "fields": [
           {
             "name": "epoch_seconds",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "epoch_anchor",
             "type": {
               "option": "i64"
             }

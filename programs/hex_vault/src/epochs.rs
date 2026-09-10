@@ -29,6 +29,21 @@ fn weight_of(entries: u64, seconds: u128) -> Result<u128> {
         .ok_or_else(|| HexVaultError::ArithmeticOverflow.into())
 }
 
+/// Most recent point of the `anchor + k * period` grid at or before `t`.
+///
+/// `div_euclid` floors towards negative infinity. Plain `/` truncates
+/// towards zero, which lands a whole period late for any `t` before the
+/// anchor, and an anchor set to a future Sunday makes that the normal case.
+fn grid_floor(anchor: i64, period: i64, t: i64) -> Result<i64> {
+    let k = t
+        .checked_sub(anchor)
+        .ok_or(HexVaultError::ArithmeticOverflow)?
+        .div_euclid(period);
+    k.checked_mul(period)
+        .and_then(|offset| anchor.checked_add(offset))
+        .ok_or_else(|| HexVaultError::ArithmeticOverflow.into())
+}
+
 pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
     let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
@@ -54,28 +69,26 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
         previous.try_serialize(&mut buf)?;
         data[..buf.len()].copy_from_slice(&buf);
 
-        // Contiguous when the operator is merely late, so the schedule holds.
-        // A whole epoch or more late (the operator was down), chaining would
-        // open an epoch that has already ended, and every Round would wait
-        // while the crank replays the backlog one epoch at a time. Skip the
-        // gap instead: nobody accrued Weight in it (`touch` clamps at the
-        // previous `ends_at`), so nothing is lost.
-        let whole_epoch_late = previous_ends_at
-            .checked_add(pool.epoch_seconds)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
-        if now >= whole_epoch_late {
-            now
-        } else {
-            previous_ends_at
-        }
+        // Contiguous when the operator is merely late, so the schedule
+        // holds. Once the operator has been down past a whole grid point,
+        // `grid_floor(now)` overtakes the previous end and the dead gap is
+        // skipped: nobody accrued Weight in it (`touch` clamps at the
+        // previous `ends_at`), so nothing is lost, and the boundary stays on
+        // the grid instead of rerolling to `now`.
+        previous_ends_at.max(grid_floor(pool.epoch_anchor, pool.epoch_seconds, now)?)
     };
 
-    let ends_at = starts_at
+    // The first epoch starts off grid at `now` and ends at the next grid
+    // point, so it is a short stub and the pool is live from bootstrap.
+    // Every epoch after it starts on the grid and runs a full period.
+    let ends_at = grid_floor(pool.epoch_anchor, pool.epoch_seconds, starts_at)?
         .checked_add(pool.epoch_seconds)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
 
     pool.previous_epoch_start = pool.current_epoch_start;
     pool.current_epoch_start = starts_at;
+    pool.previous_epoch_ends_at = pool.current_epoch_ends_at;
+    pool.current_epoch_ends_at = ends_at;
     pool.current_epoch_id = pool
         .current_epoch_id
         .checked_add(1)
@@ -583,4 +596,62 @@ pub struct RolloverEpoch<'info> {
         bump = epoch.bump,
     )]
     pub epoch: Account<'info, Epoch>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grid_floor;
+
+    const HOUR: i64 = 3_600;
+    const DAY: i64 = 86_400;
+    const WEEK: i64 = 604_800;
+    /// Sunday 2026-09-13T16:00:00Z, which is 00:00 Monday in UTC+8.
+    const SUNDAY_1600: i64 = 1_789_315_200;
+
+    #[test]
+    fn a_t_already_on_the_grid_returns_itself() {
+        assert_eq!(grid_floor(1_000, 60, 1_000).expect("grid"), 1_000);
+        assert_eq!(grid_floor(1_000, 60, 1_240).expect("grid"), 1_240);
+        assert_eq!(
+            grid_floor(SUNDAY_1600, DAY, SUNDAY_1600 + 5 * DAY).expect("grid"),
+            SUNDAY_1600 + 5 * DAY
+        );
+    }
+
+    #[test]
+    fn a_t_before_the_anchor_floors_down_not_towards_zero() {
+        // Truncating division gives 1_000 for all three, a whole period late
+        // and after `t`, which is what `div_euclid` is here to avoid.
+        assert_eq!(grid_floor(1_000, 60, 999).expect("grid"), 940);
+        assert_eq!(grid_floor(1_000, 60, 941).expect("grid"), 940);
+        assert_eq!(grid_floor(1_000, 60, 940).expect("grid"), 940);
+        assert_eq!(
+            grid_floor(SUNDAY_1600, DAY, SUNDAY_1600 - 1).expect("grid"),
+            SUNDAY_1600 - DAY
+        );
+    }
+
+    #[test]
+    fn the_daily_grid_from_a_sunday_anchor_lands_on_1600_utc_all_week() {
+        // 57_600 seconds into the UTC day is 16:00, which is midnight in
+        // UTC+8. Probes run a week either side of the anchor.
+        for hour in -168..168 {
+            let t = SUNDAY_1600 + hour * HOUR;
+            let point = grid_floor(SUNDAY_1600, DAY, t).expect("grid");
+            assert_eq!(point.rem_euclid(DAY), 57_600, "hour {hour} left 16:00 UTC");
+            assert!(point <= t && t - point < DAY, "hour {hour} is not the floor");
+        }
+    }
+
+    #[test]
+    fn the_weekly_grid_from_the_same_anchor_lands_on_sundays() {
+        // 316_800 seconds into the unix week (which starts on a Thursday) is
+        // Sunday 16:00 UTC, so one anchor serves the daily and weekly grids.
+        for hour in -168..168 {
+            let t = SUNDAY_1600 + hour * HOUR;
+            let point = grid_floor(SUNDAY_1600, WEEK, t).expect("grid");
+            assert_eq!(point.rem_euclid(WEEK), 316_800, "hour {hour} left Sunday");
+            assert!(point <= t && t - point < WEEK, "hour {hour} is not the floor");
+        }
+    }
 }

@@ -41,7 +41,7 @@ const GLYPHS = [
 ];
 
 /** How many glyphs in a row turn on each tick, and how often a tick fires. */
-const GLYPHS_PER_TICK = 2;
+const GLYPHS_PER_TICK = 3;
 const GLYPH_TICK_MS = 1000;
 const GLYPH_TURN_DEG = 45;
 
@@ -54,7 +54,7 @@ function pickGlyphs(count: number): Set<number> {
   return picks;
 }
 
-/** Six brand glyphs, two of which turn 45° every second. Shared with the Vault. */
+/** Six brand glyphs, three of which turn 45° every second. Shared with the Vault. */
 export function GlyphRow() {
   const [turns, setTurns] = useState(() => GLYPHS.map(() => 0));
 
@@ -101,7 +101,7 @@ export function Home({ now, onDeposit }: HomeProps) {
     (signal: AbortSignal) => fetchCurrentEpoch(apiBaseUrl(), signal),
     [],
   );
-  const epoch = useApiPoll(loadCurrentEpoch, 2000);
+  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
 
   const remaining =
     epoch.data && now !== null ? BigInt(epoch.data.endsAt) - now : null;

@@ -183,6 +183,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         poolId: new BN(poolId.toString()),
         vrfNetworkState: VRF_NETWORK_STATE,
         epochSeconds: new BN(3_600),
+        epochAnchor: new BN(Math.floor(Date.now() / 1000)),
         roundSeconds: new BN(ROUND_SECONDS),
         closeBuffer: new BN(2),
         vrfTimeout: new BN(5),
@@ -308,7 +309,6 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         roundId: 1n,
         tiles: TILE_ZERO,
         stakePerTile: STAKE,
-        settled: false,
       },
     ]);
     expect(await prisma.pool.findMany()).toMatchObject([

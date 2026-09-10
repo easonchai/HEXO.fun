@@ -105,9 +105,12 @@ export interface DecodedPool {
   authority: PublicKey;
   acceptedMint: PublicKey;
   epochSeconds: BN;
+  epochAnchor: BN;
   roundSeconds: BN;
   paused: boolean;
   currentEpochId: BN;
+  currentEpochEndsAt: BN;
+  previousEpochEndsAt: BN;
   totalPrincipal: BN;
   carryPot: BN;
 }
@@ -168,9 +171,12 @@ export function poolRow(
     authority: pool.authority.toBase58(),
     mint: pool.acceptedMint.toBase58(),
     epochSeconds: big(pool.epochSeconds),
+    epochAnchor: big(pool.epochAnchor),
     roundSeconds: big(pool.roundSeconds),
     paused: pool.paused,
     currentEpochId: big(pool.currentEpochId),
+    currentEpochEndsAt: big(pool.currentEpochEndsAt),
+    previousEpochEndsAt: big(pool.previousEpochEndsAt),
     totalPrincipal: big(pool.totalPrincipal),
     carryPot: big(pool.carryPot),
     updatedSlot: slot,

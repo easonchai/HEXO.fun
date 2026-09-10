@@ -109,7 +109,8 @@ export class ChainService {
   }
 
   /**
-   * Signs with the authority keypair, sends, confirms at "confirmed".
+   * Signs with `signer` (the authority unless told otherwise, as for the
+   * Sparring player), sends, confirms at "confirmed". The signer pays the fee.
    *
    * The blockhash is fetched at "finalized" on purpose. The RPC is a
    * load-balanced pool, and a "confirmed" blockhash from one node is not yet
@@ -117,16 +118,19 @@ export class ChainService {
    * "Blockhash not found". A finalized hash is ~32 slots old, which every node
    * has, and still leaves ~118 of its 150 valid slots to land.
    */
-  async send(instructions: TransactionInstruction[]): Promise<string> {
+  async send(
+    instructions: TransactionInstruction[],
+    signer: Keypair = this.keypair,
+  ): Promise<string> {
     try {
       const { blockhash, lastValidBlockHeight } =
         await this.connection.getLatestBlockhash("finalized");
       const tx = new Transaction({
         blockhash,
         lastValidBlockHeight,
-        feePayer: this.keypair.publicKey,
+        feePayer: signer.publicKey,
       }).add(...instructions);
-      tx.sign(this.keypair);
+      tx.sign(signer);
       const signature = await this.connection.sendRawTransaction(
         tx.serialize(),
         {

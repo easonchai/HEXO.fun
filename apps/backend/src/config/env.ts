@@ -26,6 +26,8 @@ export interface HexVaultEnv {
   FAUCET_INTERVAL_SECONDS: string;
   CORS_ORIGIN: string;
   PORT: string;
+  /** Sparring player secret, base58. Absent switches the Sparring player off. */
+  SPARRING_KEYPAIR?: string;
 }
 
 /** @nestjs/config `validate` hook: runs once at boot, on the raw process.env. */
@@ -46,5 +48,10 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     FAUCET_INTERVAL_SECONDS: String(env.FAUCET_INTERVAL_SECONDS ?? "3600"),
     CORS_ORIGIN: String(env.CORS_ORIGIN),
     PORT: String(env.PORT ?? "8080"),
+    // Spread rather than assigned: under `exactOptionalPropertyTypes` an
+    // optional key cannot be set to `undefined`, and "absent" is the switch.
+    ...(env.SPARRING_KEYPAIR
+      ? { SPARRING_KEYPAIR: String(env.SPARRING_KEYPAIR) }
+      : {}),
   };
 }
