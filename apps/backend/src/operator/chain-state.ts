@@ -60,6 +60,11 @@ export interface RoundState {
   readonly requestedAt: bigint;
 }
 
+/** Only the field the Sparring player spends; add more when something needs them. */
+export interface PlayerState {
+  readonly entries: bigint;
+}
+
 /** Anchor hands back BN for u64/u128 and number[] for byte arrays. */
 type Decoded = Record<
   string,
@@ -118,6 +123,11 @@ export function decodeRound(program: Program<Idl>, data: Buffer): RoundState {
     vrfSeed: Uint8Array.from(raw.vrfSeed as number[]),
     requestedAt: big(raw.requestedAt),
   };
+}
+
+export function decodePlayer(program: Program<Idl>, data: Buffer): PlayerState {
+  const raw = program.coder.accounts.decode<Decoded>("player", data);
+  return { entries: big(raw.entries) };
 }
 
 /**

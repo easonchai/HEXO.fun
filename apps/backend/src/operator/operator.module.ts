@@ -6,6 +6,7 @@ import { IndexerModule } from "../indexer/indexer.module";
 import { IndexerService } from "../indexer/indexer.service";
 import { INDEXER_QUERIES } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
+import { SparringService } from "./sparring";
 
 /**
  * `ScheduleModule.forRoot()` is imported here rather than in AppModule so the
@@ -21,6 +22,7 @@ import { OperatorService } from "./operator.service";
   imports: [ScheduleModule.forRoot(), ChainModule, IndexerModule],
   providers: [
     OperatorService,
+    SparringService,
     { provide: INDEXER_QUERIES, useExisting: IndexerService },
   ],
   exports: [OperatorService],
