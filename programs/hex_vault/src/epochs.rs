@@ -76,6 +76,8 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
 
     pool.previous_epoch_start = pool.current_epoch_start;
     pool.current_epoch_start = starts_at;
+    pool.previous_epoch_ends_at = pool.current_epoch_ends_at;
+    pool.current_epoch_ends_at = ends_at;
     pool.current_epoch_id = pool
         .current_epoch_id
         .checked_add(1)

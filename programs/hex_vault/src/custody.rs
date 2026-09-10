@@ -62,7 +62,9 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
+    pool.current_epoch_ends_at = 0;
     pool.previous_epoch_start = 0;
+    pool.previous_epoch_ends_at = 0;
     pool.next_round_id = 1;
     pool.open_round_id = 0;
     pool.carry_pot = 0;

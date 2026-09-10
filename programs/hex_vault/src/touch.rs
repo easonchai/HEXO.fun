@@ -41,12 +41,12 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
         // negative span at zero) instead of re-adding the same tail.
         //
         // Before the first epoch (`current_epoch_id == 0`) there is no
-        // `ends_at` to speak of yet -- `current_epoch_start` is still its
+        // `ends_at` to speak of yet -- `current_epoch_ends_at` is still its
         // zero placeholder -- so nothing is clamped.
         let accrue_until = if pool.current_epoch_id == 0 {
             now
         } else {
-            now.min(pool.current_epoch_start.saturating_add(pool.epoch_seconds))
+            now.min(pool.current_epoch_ends_at)
         };
         player.weight_acc = player
             .weight_acc
@@ -60,10 +60,10 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
     }
 
     let previous_epoch_id = pool.current_epoch_id - 1;
-    // The previous epoch ended a fixed length after it started. That is
-    // usually `current_epoch_start` too, but a `begin_epoch` that ran a whole
-    // epoch late starts the new one at `now`, leaving a gap nobody accrues in.
-    let previous_ends_at = pool.previous_epoch_start.saturating_add(pool.epoch_seconds);
+    // The end `begin_epoch` actually gave that epoch. Usually
+    // `current_epoch_start` too, but a `begin_epoch` that skipped a gap
+    // leaves one nobody accrues in.
+    let previous_ends_at = pool.previous_epoch_ends_at;
 
     player.frozen_weight = if player.epoch_id == previous_epoch_id {
         // Acted during the previous epoch: finish its accumulator at the
@@ -89,7 +89,7 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
     // Same clamp as the same-epoch branch above, against the *new* current
     // epoch's `ends_at`: a late `begin_epoch` must not let this
     // initialisation credit more than the new epoch's own length either.
-    let new_ends_at = pool.current_epoch_start.saturating_add(pool.epoch_seconds);
+    let new_ends_at = pool.current_epoch_ends_at;
     player.weight_acc = weight_of(
         player.principal,
         elapsed(pool.current_epoch_start, now.min(new_ends_at)),
@@ -126,7 +126,9 @@ mod tests {
             paused: false,
             current_epoch_id: id,
             current_epoch_start: start,
+            current_epoch_ends_at: start + DAY,
             previous_epoch_start: start - DAY,
+            previous_epoch_ends_at: start,
             next_round_id: 1,
             open_round_id: 0,
             carry_pot: 0,
@@ -239,6 +241,7 @@ mod tests {
         // epoch's worth of weight, and neither gets the two-day gap.
         let mut pool = pool_at(4, 1_000 + 3 * DAY);
         pool.previous_epoch_start = 1_000;
+        pool.previous_epoch_ends_at = 1_000 + DAY;
 
         // Touched once in the gap (same-epoch branch, clamped), then rolled.
         let mut active = player(100, 100, 3, 1_000);
@@ -312,6 +315,22 @@ mod tests {
 
         assert_eq!(p.entries, 0);
         assert_eq!(p.frozen_weight, 5_000 * DAY as u128);
+    }
+
+    #[test]
+    fn changing_epoch_seconds_after_the_boundary_leaves_the_frozen_weight_alone() {
+        // Epoch 3 ran [1_000, 1_000 + DAY) and epoch 4 opened where it ended.
+        // The authority then switched the pool to hourly, before this player
+        // was touched. The freeze must use the day epoch 3 actually ran, not
+        // the new parameter.
+        let mut pool = pool_at(4, 1_000 + DAY);
+        pool.epoch_seconds = 3_600;
+        let mut p = player(100, 100, 3, 1_000);
+
+        touch(&mut p, &pool, 1_000 + DAY + 10).expect("touch");
+
+        assert_eq!(p.frozen_weight, 100 * DAY as u128);
+        assert_eq!(p.frozen_epoch, 3);
     }
 
     #[test]

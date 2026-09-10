@@ -85,7 +85,9 @@ const pool = (overrides: object = {}) => ({
   // `begin_epoch`, so `send` fires without any Epoch or Round fixture.
   currentEpochId: bn(0),
   currentEpochStart: bn(0),
+  currentEpochEndsAt: bn(0),
   previousEpochStart: bn(0),
+  previousEpochEndsAt: bn(0),
   nextRoundId: bn(1),
   openRoundId: bn(0),
   carryPot: bn(0),
