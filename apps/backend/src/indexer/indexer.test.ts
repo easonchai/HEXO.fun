@@ -46,12 +46,21 @@ class FakeConnection {
     });
   }
 
-  getSignaturesForAddress(): Promise<never[]> {
+  /** Every address the indexer asked to list or subscribe on. */
+  watched: PublicKey[] = [];
+
+  getSignaturesForAddress(address: PublicKey): Promise<never[]> {
+    this.watched = [...this.watched, address];
     return Promise.resolve([]);
   }
 
-  onLogs(): number {
+  onLogs(address: PublicKey): number {
+    this.watched = [...this.watched, address];
     return 1;
+  }
+
+  removeOnLogsListener(): Promise<void> {
+    return Promise.resolve();
   }
 }
 
@@ -383,6 +392,19 @@ describe("event ingest", () => {
       lastSignature: "sig0",
       lastSlot: 5n,
     });
+  });
+
+  // Several pools share one program on devnet and events carry no pool field,
+  // so listening on the program id fed every sibling pool's feed into this one.
+  it("lists and subscribes on the pool PDA, never the program id", async () => {
+    await put("pool", chain.poolAddress(), poolAccount());
+    connection.watched = [];
+    indexer["subscribeToLogs"]();
+    indexer["subscribeToSync"]();
+    await indexer.tick();
+
+    const pool = chain.poolAddress().toBase58();
+    expect(connection.watched.map((address) => address.toBase58())).toEqual([pool, pool, pool]);
   });
 });
 
