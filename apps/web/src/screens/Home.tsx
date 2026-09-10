@@ -101,7 +101,7 @@ export function Home({ now, onDeposit }: HomeProps) {
     (signal: AbortSignal) => fetchCurrentEpoch(apiBaseUrl(), signal),
     [],
   );
-  const epoch = useApiPoll(loadCurrentEpoch, 2000);
+  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
 
   const remaining =
     epoch.data && now !== null ? BigInt(epoch.data.endsAt) - now : null;

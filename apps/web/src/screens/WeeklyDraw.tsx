@@ -63,9 +63,9 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
     [ownerBase58],
   );
 
-  const epoch = useApiPoll(loadCurrentEpoch, 2000);
-  const history = useApiPoll(loadEpochs, 2000);
-  const player = useApiPoll(loadPlayer, 2000);
+  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
+  const history = useApiPoll(loadEpochs, 10_000);
+  const player = useApiPoll(loadPlayer, 10_000);
 
   const winners = useMemo(
     () =>
@@ -96,12 +96,13 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
       );
       setRegisterNote("registered your weight for this draw");
       onDone();
+      player.refresh();
     } catch (error) {
       setRegisterNote(error instanceof Error ? error.message : String(error));
     } finally {
       setRegisterBusy(false);
     }
-  }, [drawing, program, pool, owner, sendTransaction, onDone]);
+  }, [drawing, program, pool, owner, sendTransaction, onDone, player.refresh]);
 
   const apiError = epoch.error ?? player.error ?? history.error;
 

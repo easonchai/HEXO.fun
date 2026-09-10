@@ -181,10 +181,10 @@ export function Dashboard(props: DashboardScreenProps) {
     [ownerBase58, historyLimit],
   );
 
-  const epoch = useApiPoll(loadCurrentEpoch, 2000);
-  const epochs = useApiPoll(loadEpochs, 2000);
-  const player = useApiPoll(loadPlayer, 2000);
-  const history = useApiPoll(loadHistory, 2000);
+  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
+  const epochs = useApiPoll(loadEpochs, 10_000);
+  const player = useApiPoll(loadPlayer, 10_000);
+  const history = useApiPoll(loadHistory, 10_000);
 
   const winners = useMemo(
     () =>

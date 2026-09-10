@@ -24,7 +24,7 @@ export function Leaderboard({ owner }: LeaderboardScreenProps) {
     (signal: AbortSignal) => fetchLeaderboard(apiBaseUrl(), LIMIT, signal),
     [],
   );
-  const board = useApiPoll(loadLeaderboard, 2000);
+  const board = useApiPoll(loadLeaderboard, 10_000);
   const rows = board.data ?? [];
 
   return (

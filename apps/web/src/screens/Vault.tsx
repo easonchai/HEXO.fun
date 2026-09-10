@@ -101,7 +101,7 @@ export function Vault(props: VaultScreenProps) {
     (signal: AbortSignal) => fetchCurrentEpoch(apiBaseUrl(), signal),
     [],
   );
-  const epoch = useApiPoll(loadCurrentEpoch, 2000);
+  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
 
   const connected = owner !== null && program !== null && pool !== null;
   const matched = withdrawable(principal, entries);
