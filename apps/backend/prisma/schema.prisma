@@ -13,17 +13,20 @@ datasource db {
 }
 
 model Pool {
-  address         String  @id
-  poolId          BigInt
-  authority       String
-  mint            String
-  epochSeconds    BigInt
-  roundSeconds    BigInt
-  paused          Boolean
-  currentEpochId  BigInt
-  totalPrincipal  BigInt
-  carryPot        BigInt
-  updatedSlot     BigInt
+  address             String  @id
+  poolId              BigInt
+  authority           String
+  mint                String
+  epochSeconds        BigInt
+  epochAnchor         BigInt
+  roundSeconds        BigInt
+  paused              Boolean
+  currentEpochId      BigInt
+  currentEpochEndsAt  BigInt
+  previousEpochEndsAt BigInt
+  totalPrincipal      BigInt
+  carryPot            BigInt
+  updatedSlot         BigInt
 }
 
 model Epoch {

@@ -5,12 +5,18 @@
 // decodes them: encoding with the coder under test would pass whatever the
 // coder happens to do. A field reordered in events.rs, a type widened, or a
 // stale IDL snapshot all fail here.
-import { BorshCoder, convertIdlToCamelCase, EventParser } from "@anchor-lang/core";
+import { BN, BorshCoder, convertIdlToCamelCase, EventParser } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
 import { loadIdl } from "../chain/idl";
-import { decodeEventLogs, jsonify, registrationWeight } from "./decode";
+import {
+  decodeEventLogs,
+  jsonify,
+  poolRow,
+  registrationWeight,
+  type DecodedPool,
+} from "./decode";
 
 const idl = loadIdl();
 const PROGRAM_ID = new PublicKey(idl.address);
@@ -240,6 +246,34 @@ describe("jsonify", () => {
 
   it("passes plain values through", () => {
     expect(jsonify({ a: [1, "b", true], c: null })).toEqual({ a: [1, "b", true], c: null });
+  });
+});
+
+describe("poolRow", () => {
+  // The epoch grid timestamps take the same BN -> BigInt path as
+  // `epochSeconds`, so a name that drifts from the IDL drops them silently.
+  // The API's interceptor is what turns these columns into decimal strings.
+  it("carries the epoch grid timestamps", () => {
+    const pool: DecodedPool = {
+      poolId: new BN(7),
+      authority: new PublicKey(OWNER),
+      acceptedMint: new PublicKey(MINT),
+      epochSeconds: new BN(86_400),
+      epochAnchor: new BN(1_789_315_200),
+      roundSeconds: new BN(60),
+      paused: false,
+      currentEpochId: new BN(3),
+      currentEpochEndsAt: new BN(1_789_488_000),
+      previousEpochEndsAt: new BN(1_789_401_600),
+      totalPrincipal: new BN(3_000_000),
+      carryPot: new BN(0),
+    };
+    expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
+      epochSeconds: 86_400n,
+      epochAnchor: 1_789_315_200n,
+      currentEpochEndsAt: 1_789_488_000n,
+      previousEpochEndsAt: 1_789_401_600n,
+    });
   });
 });
 

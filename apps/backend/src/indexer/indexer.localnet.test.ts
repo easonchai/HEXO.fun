@@ -309,7 +309,6 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         roundId: 1n,
         tiles: TILE_ZERO,
         stakePerTile: STAKE,
-        settled: false,
       },
     ]);
     expect(await prisma.pool.findMany()).toMatchObject([

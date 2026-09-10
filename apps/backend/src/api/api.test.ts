@@ -219,6 +219,9 @@ describe("API routes", () => {
       currentEpochId: "7",
       totalPrincipal: HUGE_U64,
       paused: false,
+      epochAnchor: String(CURRENT_START),
+      currentEpochEndsAt: String(CURRENT_START + EPOCH_LENGTH),
+      previousEpochEndsAt: String(CURRENT_START),
     });
     expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
     expect(body.openRound).toEqual({
@@ -496,9 +499,12 @@ async function seed(prisma: PrismaService): Promise<void> {
       authority: HOUSE,
       mint: Keypair.generate().publicKey.toBase58(),
       epochSeconds: EPOCH_LENGTH,
+      epochAnchor: CURRENT_START,
       roundSeconds: 60n,
       paused: false,
       currentEpochId: CURRENT_EPOCH,
+      currentEpochEndsAt: CURRENT_START + EPOCH_LENGTH,
+      previousEpochEndsAt: CURRENT_START,
       totalPrincipal: BigInt(HUGE_U64),
       carryPot: 0n,
       updatedSlot: 15n,

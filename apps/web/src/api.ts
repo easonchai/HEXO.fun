@@ -47,9 +47,12 @@ export interface PoolDto {
   authority: string;
   mint: string;
   epochSeconds: string;
+  epochAnchor: string;
   roundSeconds: string;
   paused: boolean;
   currentEpochId: string;
+  currentEpochEndsAt: string;
+  previousEpochEndsAt: string;
   totalPrincipal: string;
   carryPot: string;
   updatedSlot: string;
