@@ -29,6 +29,9 @@ docs/plan/
 # One-off scratch scripts (screenshot runners, Figma export shims)
 *.tmp.mjs
 
+# Local MCP server config, stays on each machine
+.mcp.json
+
 # local operator keypair, never commit
 operator.json
 
