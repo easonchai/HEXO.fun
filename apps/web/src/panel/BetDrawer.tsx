@@ -1,22 +1,29 @@
 /**
- * Phone bet drawer: the vaul bottom sheet wrapping the existing control
- * panel (`children`, props unchanged — spec.md "Drawer") plus a footer row
- * with the sound toggle the topbar hides at phone width. Controlled from
- * App's `drawerOpen` state; closing (swipe, backdrop, Escape, confirmed
- * deploy, own-Position win takeover) is all `onOpenChange(false)` or a
- * parent effect setting the same state.
+ * Phone bet drawer: the vaul bottom sheet wrapping the control panel plus a
+ * footer row with the sound toggle the topbar hides at phone width. Owns the
+ * DEPOSIT / LAST WIN tab (Figma 358:3271 / 359:4924) and hands it to
+ * `children` as a render prop; the tab resets to DEPOSIT on every open.
+ * Controlled from App's `drawerOpen` state; closing (swipe, backdrop,
+ * Escape, confirmed deploy, own-Position win takeover) is all
+ * `onOpenChange(false)` or a parent effect setting the same state.
  */
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Drawer } from "vaul";
 
 import { SoundIcon } from "../SoundIcon.js";
+import type { PanelTab } from "./ControlPanel.js";
+
+const TABS: { id: PanelTab; label: string }[] = [
+  { id: "deposit", label: "Deposit" },
+  { id: "lastwin", label: "Last win" },
+];
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   soundOn: boolean;
   onToggleSound: () => void;
-  children: ReactNode;
+  children: (tab: PanelTab) => ReactNode;
 };
 
 export function BetDrawer({
@@ -27,11 +34,19 @@ export function BetDrawer({
   children,
 }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const [tab, setTab] = useState<PanelTab>("deposit");
 
-  // Reopens scrolled to the top (spec.md "Drawer").
+  // Reopens on DEPOSIT, scrolled to the top.
   useEffect(() => {
-    if (open && bodyRef.current) bodyRef.current.scrollTop = 0;
+    if (!open) return;
+    setTab("deposit");
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
   }, [open]);
+
+  const pickTab = (next: PanelTab): void => {
+    setTab(next);
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  };
 
   return (
     <Drawer.Root open={open} onOpenChange={onOpenChange}>
@@ -48,8 +63,23 @@ export function BetDrawer({
           <Drawer.Description className="bet-drawer-title">
             Amount, tiles, deploy and vault controls
           </Drawer.Description>
+          <div className="bet-drawer-tabs" role="tablist">
+            {TABS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                className="bet-drawer-tab"
+                data-testid={`drawer-tab-${item.id}`}
+                aria-selected={tab === item.id}
+                onClick={() => pickTab(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
           <div className="bet-drawer-body" ref={bodyRef}>
-            {children}
+            {children(tab)}
             <div className="bet-drawer-toggles">
               <button
                 type="button"

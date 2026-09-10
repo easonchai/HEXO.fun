@@ -75,6 +75,28 @@ test.describe("phone stake bar and bet drawer, no wallet, no backend", () => {
     await expect(tileCount).toHaveText(before);
   });
 
+  test("LAST WIN tab swaps the deploy form for the miner feed, and reopening resets to DEPOSIT", async ({
+    page,
+  }) => {
+    await page.goto("/#play");
+    await openDrawer(page);
+    const drawer = page.getByTestId("bet-drawer");
+
+    await expect(drawer.getByTestId("deploy")).toBeVisible();
+    await expect(drawer.getByTestId("miner-feed")).toHaveCount(0);
+
+    await drawer.getByTestId("drawer-tab-lastwin").click();
+    await expect(drawer.getByTestId("miner-feed")).toBeVisible();
+    await expect(drawer.getByTestId("deploy")).toHaveCount(0);
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("bet-drawer")).toHaveCount(0);
+    await openDrawer(page);
+    await expect(
+      page.getByTestId("bet-drawer").getByTestId("drawer-tab-deposit"),
+    ).toHaveAttribute("aria-selected", "true");
+  });
+
   test("the page behind does not scroll while the drawer is open", async ({
     page,
   }) => {

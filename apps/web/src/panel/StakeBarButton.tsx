@@ -38,21 +38,21 @@ export function StakeBarButton({
     >
       <span className="stake-bar-stats">
         <span className="stake-bar-stat">
-          <span className="stake-bar-stat-label">PER TILE</span>
+          <span className="stake-bar-stat-label">AMOUNT</span>
           <span className="stake-bar-stat-value" data-testid="stake-bar-per-tile">
             {model.entriesPerTile}
-          </span>
-        </span>
-        <span className="stake-bar-stat">
-          <span className="stake-bar-stat-label">TILES</span>
-          <span className="stake-bar-stat-value" data-testid="stake-bar-tiles">
-            {model.tilesSelected}
           </span>
         </span>
         <span className="stake-bar-stat">
           <span className="stake-bar-stat-label">TICKETS IN</span>
           <span className="stake-bar-stat-value" data-testid="stake-bar-entries-in">
             {model.entriesIn}
+          </span>
+        </span>
+        <span className="stake-bar-stat">
+          <span className="stake-bar-stat-label">TILES</span>
+          <span className="stake-bar-stat-value" data-testid="stake-bar-tiles">
+            {model.tilesSelected}
           </span>
         </span>
       </span>

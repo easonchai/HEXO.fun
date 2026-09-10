@@ -528,35 +528,38 @@ export function App() {
                 setSoundOnState(next);
               }}
             >
-              <ControlPanel
-                engine={engine}
-                entries={entries}
-                decimals={DECIMALS}
-                stakeText={stakeText}
-                setStakeText={setStakeText}
-                autoRounds={autoRounds}
-                setAutoRounds={setAutoRounds}
-                canDeploy={canPick}
-                deployProblems={problems}
-                deployHint={deployHint}
-                deployBusy={deployBusy}
-                deployNote={deployNote}
-                locked={locked}
-                deployedTotal={deployedTotal}
-                lastWin={engine.lastWin}
-                feed={feed}
-                rewardHint={rewardHint}
-                settleBusy={settleBusy}
-                onSettle={() => void settle()}
-                onDeploy={() => {
-                  // Confirmed deploy closes the drawer; a failed one leaves
-                  // it open with deployNote's error visible (spec.md
-                  // "Drawer": close states).
-                  void deploy(engine.selected, stake).then((placed) => {
-                    if (placed) setDrawerOpen(false);
-                  });
-                }}
-              />
+              {(tab) => (
+                <ControlPanel
+                  tab={tab}
+                  engine={engine}
+                  entries={entries}
+                  decimals={DECIMALS}
+                  stakeText={stakeText}
+                  setStakeText={setStakeText}
+                  autoRounds={autoRounds}
+                  setAutoRounds={setAutoRounds}
+                  canDeploy={canPick}
+                  deployProblems={problems}
+                  deployHint={deployHint}
+                  deployBusy={deployBusy}
+                  deployNote={deployNote}
+                  locked={locked}
+                  deployedTotal={deployedTotal}
+                  lastWin={engine.lastWin}
+                  feed={feed}
+                  rewardHint={rewardHint}
+                  settleBusy={settleBusy}
+                  onSettle={() => void settle()}
+                  onDeploy={() => {
+                    // Confirmed deploy closes the drawer; a failed one leaves
+                    // it open with deployNote's error visible (spec.md
+                    // "Drawer": close states).
+                    void deploy(engine.selected, stake).then((placed) => {
+                      if (placed) setDrawerOpen(false);
+                    });
+                  }}
+                />
+              )}
             </BetDrawer>
           </>
         ) : null}

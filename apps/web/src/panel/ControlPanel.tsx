@@ -12,7 +12,12 @@ import { PanelCard } from "../ui.js";
 
 const SYMBOL_ROW = [0, 1, 2, 3, 4, 5];
 
+/** Phone drawer tabs. `deposit` = tiers 1+2, `lastwin` = tier 3. */
+export type PanelTab = "deposit" | "lastwin";
+
 export interface ControlPanelProps {
+  /** Omitted (desktop) renders every tier stacked. */
+  tab?: PanelTab;
   engine: EngineOutput;
   /** Player.entries, atomic units. */
   entries: bigint;
@@ -39,6 +44,7 @@ export interface ControlPanelProps {
 
 export function ControlPanel(props: ControlPanelProps) {
   const {
+    tab,
     engine,
     entries,
     decimals,
@@ -134,8 +140,13 @@ export function ControlPanel(props: ControlPanelProps) {
     onDeploy();
   };
 
+  const showDeposit = tab !== "lastwin";
+  const showLastWin = tab !== "deposit";
+
   return (
     <aside className="control-panel" data-testid="control-panel">
+      {showDeposit ? (
+      <>
       {/* TIER 1 — amount / tiles / auto-rounds */}
       <PanelCard
         title="AMOUNT / TILE"
@@ -375,21 +386,22 @@ export function ControlPanel(props: ControlPanelProps) {
           </div>
         ) : null}
       </PanelCard>
+      </>
+      ) : null}
 
       {/* TIER 3 — telemetry + feed */}
+      {showLastWin ? (
       <PanelCard>
-        <div className="lastwin-banner">
-          <div className="lastwin-left">
-            <span className="row-label">LAST WIN</span>
-            <span className="lastwin-tile">
-              ⬡ {lastWin ? lastWin.tile : "—"}
-            </span>
-            {lastWin ? (
+        {lastWin ? (
+          <div className="lastwin-banner" data-testid="lastwin-banner">
+            <div className="lastwin-left">
+              <span className="row-label">LAST WIN</span>
+              <span className="lastwin-tile">⬡ {lastWin.tile}</span>
               <span className="lastwin-kind">{lastWin.kind}</span>
-            ) : null}
+            </div>
+            <span className="lastwin-dot" aria-hidden="true" />
           </div>
-          <span className="lastwin-more">LIVE ›</span>
-        </div>
+        ) : null}
         <div className="feed-head">
           <span className="feed-title">LIVE MINERS</span>
           <span className="feed-sub">POOL STREAM</span>
@@ -398,7 +410,7 @@ export function ControlPanel(props: ControlPanelProps) {
           {feed.length === 0 ? (
             <div className="feed-empty">waiting for pool activity…</div>
           ) : (
-            feed.slice(0, 6).map((row) => (
+            feed.slice(0, 10).map((row) => (
               <div key={row.key} className="feed-row">
                 <span className="feed-who">{row.who}</span>
                 <span className="feed-action">{row.action}</span>
@@ -408,6 +420,7 @@ export function ControlPanel(props: ControlPanelProps) {
           )}
         </div>
       </PanelCard>
+      ) : null}
     </aside>
   );
 }
