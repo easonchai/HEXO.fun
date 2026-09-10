@@ -1,29 +1,34 @@
 /**
  * Polls one `api.ts` fetcher on an interval and keeps the last good value on
  * screen if a poll fails, matching `read.ts`'s "never blank the screen"
- * convention. Used by the header status pill and the WeeklyDraw/Leaderboard
- * screens, which all poll aggregate API state on the same 2 s cadence ticket
- * 10 established for chain reads.
+ * convention. The header status pill polls every 2 s because it drives the
+ * OPERATOR PAUSED state; the screens poll every 10 s and call `refresh()`
+ * after an action instead, since epoch and leaderboard rows only move on a
+ * transaction or a draw.
  *
  * ponytail: no backoff beyond the plain interval tick. Add one if the API
  * proves flaky enough under load to need it.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiResult } from "./api.js";
 
 export interface ApiPollState<T> {
   data: T | null;
   error: string | null;
+  /** Re-run the fetcher now, outside the interval. */
+  refresh: () => void;
 }
 
 export function useApiPoll<T>(
   load: (signal: AbortSignal) => Promise<ApiResult<T>>,
   intervalMs: number,
 ): ApiPollState<T> {
-  const [state, setState] = useState<ApiPollState<T>>({
+  const [state, setState] = useState<Omit<ApiPollState<T>, "refresh">>({
     data: null,
     error: null,
   });
+  const runRef = useRef<() => void>(() => {});
+  const refresh = useCallback(() => runRef.current(), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +43,7 @@ export function useApiPoll<T>(
           : { data: current.data, error: result.reason },
       );
     };
+    runRef.current = () => void run();
 
     void run();
     const timer = window.setInterval(() => {
@@ -46,10 +52,11 @@ export function useApiPoll<T>(
 
     return () => {
       cancelled = true;
+      runRef.current = () => {};
       controller.abort();
       window.clearInterval(timer);
     };
   }, [load, intervalMs]);
 
-  return state;
+  return { ...state, refresh };
 }

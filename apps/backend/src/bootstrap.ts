@@ -59,6 +59,16 @@ const log = (message: string): void => {
   process.stderr.write(`${message}\n`);
 };
 
+/** Malaysia is UTC+8 and skips daylight saving, so a fixed shift is exact. */
+const stamp = (unixSeconds: number): string => {
+  const utc = new Date(unixSeconds * 1000).toISOString();
+  const myt = new Date((unixSeconds + 8 * 3600) * 1000)
+    .toISOString()
+    .slice(0, 19)
+    .replace("T", " ");
+  return `${utc} (${myt} MYT)`;
+};
+
 function requireEnv(key: string): string {
   const value = process.env[key];
   if (!value) throw new Error(`missing required env var ${key}`);
@@ -196,6 +206,7 @@ async function createPool(
     poolId: new BN(poolId.toString()),
     vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
     epochSeconds: new BN(params.epochSeconds),
+    epochAnchor: new BN(params.epochAnchor),
     roundSeconds: new BN(params.roundSeconds),
     closeBuffer: new BN(params.closeBuffer),
     vrfTimeout: new BN(params.vrfTimeout),
@@ -218,6 +229,19 @@ async function createPool(
   log(
     `created pool ${pool.toBase58()} (epoch ${params.epochSeconds}s, round ${params.roundSeconds}s)`,
   );
+  // Print the grid the anchor produces, so a mistyped anchor is obvious now
+  // rather than a week later when the draws land at the wrong hour.
+  const now = Math.floor(Date.now() / 1000);
+  const period = params.epochSeconds;
+  // Math.floor matches Rust's div_euclid for a positive period, so an anchor
+  // still in the future floors downward instead of toward zero.
+  const next =
+    params.epochAnchor +
+    (Math.floor((now - params.epochAnchor) / period) + 1) * period;
+  log(`  epoch anchor ${stamp(params.epochAnchor)}`);
+  for (const k of [0, 1, 2]) {
+    log(`  boundary ${k + 1} ${stamp(next + k * period)}`);
+  }
 }
 
 async function main(): Promise<void> {

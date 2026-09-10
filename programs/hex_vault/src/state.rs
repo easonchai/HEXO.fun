@@ -27,6 +27,10 @@ pub struct Pool {
     pub vrf_network_state: Pubkey,
     /// Applies to the next epoch created, not the open one.
     pub epoch_seconds: i64,
+    /// Fixes the phase of the epoch grid `epoch_anchor + k * epoch_seconds`.
+    /// Every epoch boundary is a point on it, so the draw lands at the same
+    /// clock time whatever second the pool was bootstrapped on.
+    pub epoch_anchor: i64,
     /// Applies to the next round created, not the open one.
     pub round_seconds: i64,
     /// Positions stop this many seconds before a round ends.
@@ -38,10 +42,16 @@ pub struct Pool {
     /// 0 before the first epoch.
     pub current_epoch_id: u64,
     pub current_epoch_start: i64,
-    /// Start of the epoch before the current one; it ended `epoch_seconds`
-    /// later. Usually that is `current_epoch_start` too, except after a
-    /// `begin_epoch` that ran a whole epoch late and started at `now`.
+    /// End of the current epoch, copied from its `Epoch.ends_at`. `touch`
+    /// reads it instead of adding `epoch_seconds`, so changing that
+    /// parameter never moves an epoch that has already begun.
+    pub current_epoch_ends_at: i64,
+    /// Start of the epoch before the current one. Usually that is
+    /// `current_epoch_start` too, except when `begin_epoch` skipped a gap.
     pub previous_epoch_start: i64,
+    /// End of the epoch before the current one, where `touch` freezes the
+    /// weight a player earned in it.
+    pub previous_epoch_ends_at: i64,
     pub next_round_id: u64,
     /// 0 when no round is Open or Requested.
     pub open_round_id: u64,

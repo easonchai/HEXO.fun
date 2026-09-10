@@ -74,6 +74,9 @@ export interface TickContext {
   unsettledPositions(): Promise<
     { address: string; owner: string; roundId: bigint }[]
   >;
+  /** Positions a confirmed `settle_position` just closed; keep them out of
+   *  later `unsettledPositions` results. */
+  forgetPositions(addresses: string[]): Promise<void>;
   /** Owner of the Player whose registered interval contains `target`. */
   winner(epochId: bigint, target: bigint): Promise<string | null>;
   send(instructions: TransactionInstruction[]): Promise<string>;
@@ -129,6 +132,10 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
       .filter((position) => position.roundId === roundId)
       .slice(0, BATCH_SIZE);
     await ctx.send(await ctx.ix.settlePositions(pool, roundId, batch));
+    // The accounts are closed now, but the indexer can keep (or briefly
+    // resurrect) their rows for a few sweeps; tell the context so no later
+    // tick resends settle_position and gets AccountNotInitialized.
+    await ctx.forgetPositions(batch.map((position) => position.address));
     return { action: "settle_position" };
   }
 

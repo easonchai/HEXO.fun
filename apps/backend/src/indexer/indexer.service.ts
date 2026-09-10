@@ -188,13 +188,18 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   // --------------------------------------------------------- account sync
 
   /**
-   * Every confirmed program transaction changes some account, so each one
+   * Every confirmed pool transaction changes some account, so each one
    * triggers a sync. Coalesced: a burst of logs during a sync runs one more
    * sync after it, not one per log.
+   *
+   * Subscribed on the pool PDA, not the program: every instruction takes the
+   * pool account, so "mentions the pool" is exactly "belongs to this pool".
+   * Several pools share one program on devnet, and the events carry no pool
+   * field to filter on afterwards.
    */
   private subscribeToSync(): void {
     this.syncSubscriptionId = this.chain.connection.onLogs(
-      this.chain.programId,
+      this.chain.poolAddress(),
       (logs) => {
         if (logs.err) return;
         void this.requestSync().catch((error: unknown) =>
@@ -237,10 +242,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const pool = this.chain.poolAddress();
     const { slot, accounts } = await this.fetchAll();
 
-    const pools = accounts.get<DecodedPool>(ACCOUNT.pool);
+    const pools = accounts.get<DecodedPool>(ACCOUNT.pool).filter(({ pubkey }) => pubkey.equals(pool));
+    if (pools.length === 0) {
+      throw new Error(`configured pool ${pool.toBase58()} is not on chain or does not decode with the current IDL`);
+    }
     await this.prisma.$transaction(
       pools
-        .filter(({ pubkey }) => pubkey.equals(pool))
         .map(({ pubkey, account }) => {
           const row = poolRow(pubkey, account, slot);
           return this.prisma.pool.upsert({
@@ -341,11 +348,18 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     return {
       slot: BigInt(context.slot),
       accounts: {
+        // Accounts of an earlier program build (an abandoned pool from before
+        // a layout change) still carry the discriminator but not the bytes;
+        // they belong to no configured pool, so they are dropped silently.
+        // `syncAccounts` raises when the configured pool itself is missing.
         get: <T>(name: string) =>
-          (byType.get(name) ?? []).map(({ pubkey, data }) => ({
-            pubkey,
-            account: coder.decode<T>(name, data),
-          })),
+          (byType.get(name) ?? []).flatMap(({ pubkey, data }) => {
+            try {
+              return [{ pubkey, account: coder.decode<T>(name, data) }];
+            } catch {
+              return [];
+            }
+          }),
       },
     };
   }
@@ -402,7 +416,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   private async catchUpEvents(): Promise<void> {
     const cursor = await this.prisma.cursor.findUnique({ where: { id: CURSOR_ID } });
     const signatures = await this.chain.connection.getSignaturesForAddress(
-      this.chain.programId,
+      this.chain.poolAddress(),
       cursor?.lastSignature
         ? { until: cursor.lastSignature, limit: SIGNATURE_PAGE }
         : { limit: SIGNATURE_PAGE },
@@ -451,7 +465,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
 
   private subscribeToLogs(): void {
     this.subscriptionId = this.chain.connection.onLogs(
-      this.chain.programId,
+      this.chain.poolAddress(),
       (logs, context) => {
         if (logs.err) return;
         void this.enqueue(async () => {

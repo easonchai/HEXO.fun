@@ -18,6 +18,7 @@ pub struct CreatePoolParams {
     pub pool_id: u64,
     pub vrf_network_state: Pubkey,
     pub epoch_seconds: i64,
+    pub epoch_anchor: i64,
     pub round_seconds: i64,
     pub close_buffer: i64,
     pub vrf_timeout: i64,
@@ -27,6 +28,7 @@ pub struct CreatePoolParams {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
 pub struct SetParamsArgs {
     pub epoch_seconds: Option<i64>,
+    pub epoch_anchor: Option<i64>,
     pub round_seconds: Option<i64>,
     pub close_buffer: Option<i64>,
     pub vrf_timeout: Option<i64>,
@@ -35,7 +37,10 @@ pub struct SetParamsArgs {
 
 pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result<()> {
     require!(
-        params.epoch_seconds > 0 && params.round_seconds > 0 && params.vrf_timeout > 0,
+        params.epoch_seconds > 0
+            && params.epoch_anchor > 0
+            && params.round_seconds > 0
+            && params.vrf_timeout > 0,
         HexVaultError::InvalidParameter
     );
     require!(
@@ -55,6 +60,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.house = ctx.accounts.house.key();
     pool.vrf_network_state = params.vrf_network_state;
     pool.epoch_seconds = params.epoch_seconds;
+    pool.epoch_anchor = params.epoch_anchor;
     pool.round_seconds = params.round_seconds;
     pool.close_buffer = params.close_buffer;
     pool.vrf_timeout = params.vrf_timeout;
@@ -62,7 +68,9 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
+    pool.current_epoch_ends_at = 0;
     pool.previous_epoch_start = 0;
+    pool.previous_epoch_ends_at = 0;
     pool.next_round_id = 1;
     pool.open_round_id = 0;
     pool.carry_pot = 0;
@@ -105,6 +113,10 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         require!(v > 0, HexVaultError::InvalidParameter);
         pool.epoch_seconds = v;
     }
+    if let Some(v) = params.epoch_anchor {
+        require!(v > 0, HexVaultError::InvalidParameter);
+        pool.epoch_anchor = v;
+    }
     if let Some(v) = params.round_seconds {
         require!(v > 0, HexVaultError::InvalidParameter);
         pool.round_seconds = v;
@@ -127,6 +139,7 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
     emit!(ParamsSet {
         pool: pool.key(),
         epoch_seconds: pool.epoch_seconds,
+        epoch_anchor: pool.epoch_anchor,
         round_seconds: pool.round_seconds,
         close_buffer: pool.close_buffer,
         vrf_timeout: pool.vrf_timeout,

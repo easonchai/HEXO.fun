@@ -145,6 +145,7 @@ function context(over: Partial<TickContext> = {}): Recorder {
     recordTopUpAttempt: () => {},
     playersToRegister: async () => [],
     unsettledPositions: async () => [],
+    forgetPositions: async () => {},
     winner: async () => null,
     send: async (ixs) => {
       sent.push(ixs);
@@ -259,6 +260,47 @@ describe("runTick", () => {
     });
     expect(result.labels).toEqual(Array(8).fill("settle_position"));
     expect(result.action).toBe("settle_position");
+  });
+
+  it("2. forgets the positions it settled, and only those, once the send confirms", async () => {
+    const positions = Array.from({ length: 9 }, () => ({
+      address: Keypair.generate().publicKey.toBase58(),
+      owner: Keypair.generate().publicKey.toBase58(),
+      roundId: 3n,
+    }));
+    const forgotten: string[][] = [];
+    await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      unsettledPositions: async () => positions,
+      forgetPositions: async (addresses) => {
+        forgotten.push(addresses);
+      },
+    });
+    expect(forgotten).toEqual([positions.slice(0, 8).map((position) => position.address)]);
+  });
+
+  it("2. keeps the rows when the send fails, so the next tick retries", async () => {
+    const forgotten: string[][] = [];
+    const { ctx } = context({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      unsettledPositions: async () => [
+        {
+          address: Keypair.generate().publicKey.toBase58(),
+          owner: Keypair.generate().publicKey.toBase58(),
+          roundId: 3n,
+        },
+      ],
+      forgetPositions: async (addresses) => {
+        forgotten.push(addresses);
+      },
+      send: async () => {
+        throw new Error("blockhash expired");
+      },
+    });
+    await expect(runTick(ctx)).rejects.toThrow("blockhash expired");
+    expect(forgotten).toEqual([]);
   });
 
   it("2. sweeps a leftover position before begin_epoch when the epoch has also ended", async () => {

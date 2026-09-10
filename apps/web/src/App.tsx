@@ -594,7 +594,7 @@ export function App() {
         {tab === "LEADERBOARD" ? (
           <Leaderboard owner={publicKey ?? undefined} />
         ) : null}
-        {tab === "ABOUT" ? <About symbol={SYMBOL} /> : null}
+        {tab === "ABOUT" ? <About /> : null}
       </main>
     </main>
   );

@@ -1,8 +1,9 @@
 /**
  * Chain reads. This module owns the three accounts the UI cannot get wrong:
  * the Pool, the connected wallet's Player, and the open Round. Everything
- * else comes from `api.ts`. One `getMultipleAccountsInfo` every 10 s, and
- * one more per burst of program events on the logs websocket.
+ * else comes from `api.ts`. One `getMultipleAccountsInfo` per burst of
+ * program events on the logs websocket, one per `refresh()` after a user
+ * action, and a 60 s fallback poll for the case where the websocket dropped.
  */
 import { BN } from "@anchor-lang/core";
 import { AccountLayout } from "@solana/spl-token";
@@ -39,6 +40,7 @@ export interface PoolRow {
   buybackReserve: PublicKey;
   house: PublicKey;
   epochSeconds: bigint;
+  epochAnchor: bigint;
   roundSeconds: bigint;
   closeBuffer: bigint;
   vrfTimeout: bigint;
@@ -46,7 +48,9 @@ export interface PoolRow {
   paused: boolean;
   currentEpochId: bigint;
   currentEpochStart: bigint;
+  currentEpochEndsAt: bigint;
   previousEpochStart: bigint;
+  previousEpochEndsAt: bigint;
   nextRoundId: bigint;
   /** 0 when no round is open. */
   openRoundId: bigint;
@@ -168,8 +172,12 @@ export interface ChainState {
   refresh: () => void;
 }
 
-/** Fallback cadence; the logs subscription below reloads on every event. */
-const POLL_MS = 10_000;
+/**
+ * Fallback cadence only; the logs subscription below reloads on every event
+ * and `refresh()` reloads after every action, so this just bounds how stale
+ * the screen can get if the websocket silently dies.
+ */
+const POLL_MS = 60_000;
 /**
  * Window that folds a burst of events (or a `refresh()`) into one read. A
  * settle sequence spans a few slots (~400 ms each), so 1 s covers it.
@@ -306,7 +314,7 @@ export function useChainState(
     }, POLL_MS);
 
     // Every program event moves something on screen (a deposit, a position,
-    // a settle, a new round); re-read soon instead of waiting 10 s.
+    // a settle, a new round); re-read soon instead of waiting for the poll.
     const subscription = connection.onLogs(
       PROGRAM_ID,
       ({ logs, err }) => {

@@ -18,6 +18,7 @@ import {
   epochAddress,
   jackpotVaultAddress,
   playerAddress,
+  positionAddress,
   roundAddress,
 } from "../chain/pda";
 import type { EpochState, PoolState, RoundState } from "./chain-state";
@@ -301,6 +302,33 @@ export class OperatorInstructions {
           .instruction();
       }),
     );
+  }
+
+  /**
+   * Permissionless, and the only builder here whose signer is not the
+   * authority: the Sparring player buys for itself, so the owner is passed in
+   * and `ChainService.send` gets its keypair.
+   */
+  async buyPosition(
+    pool: PoolState,
+    roundId: bigint,
+    owner: PublicKey,
+    tiles: bigint,
+    stakePerTile: bigint,
+  ): Promise<TransactionInstruction[]> {
+    const round = this.round(pool, roundId);
+    return [
+      await this.method("buyPosition", bn(tiles), bn(stakePerTile))
+        .accountsPartial({
+          owner,
+          pool: pool.address,
+          player: this.player(pool, owner),
+          round,
+          position: positionAddress(this.programId, round, owner),
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction(),
+    ];
   }
 
   async createRound(

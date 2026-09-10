@@ -15,6 +15,7 @@ pub struct PoolCreated {
 pub struct ParamsSet {
     pub pool: Pubkey,
     pub epoch_seconds: i64,
+    pub epoch_anchor: i64,
     pub round_seconds: i64,
     pub close_buffer: i64,
     pub vrf_timeout: i64,

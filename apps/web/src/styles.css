@@ -3763,3 +3763,637 @@ input::placeholder {
   }
 }
 
+/* ---------- ABOUT tab: the Figma "About Page" frame (340:17234) ---------- */
+
+/* Measurements are the frame's: a 1054px column at x=240 in a 1534px
+   canvas, so the column is centred with 24px of side padding below that. */
+.about {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--brand-navy);
+  color: var(--brand-white);
+  z-index: 5;
+}
+
+.about em,
+.about .home-glyphs {
+  font-style: normal;
+  color: var(--brand-lime);
+}
+
+.about-hero,
+.about-section {
+  position: relative;
+  max-width: 1102px;
+  margin: 0 auto;
+  /* Figma stacks sections 180px apart: 90 below one, 90 above the next. */
+  padding: 90px 24px;
+}
+
+.about-hero {
+  display: grid;
+  grid-template-columns: 1fr 523px;
+  align-items: center;
+  gap: 20px;
+  padding-top: 94px;
+  padding-bottom: 60px;
+}
+
+.about-hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.about-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--brand-lime);
+  margin-bottom: 8px;
+}
+
+.about-h1 {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 56px;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+.about-sub {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+}
+
+.about-lead {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-size: 16px;
+  line-height: 2;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.about-board {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* Same board classes as the marketing hero; keyframes live at the top of
+   this file next to the arena's own. */
+.about-board .laser path {
+  stroke-dasharray: 26 100;
+  stroke-dashoffset: 26;
+  animation: fixedLineTravel 0.9s cubic-bezier(0.2, 0.85, 0.2, 1) forwards;
+}
+
+.about-board .dot-sym,
+.about-board .tile-inner,
+.about-board .shock {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes tilePick {
+  0% {
+    transform: scale(0.86);
+  }
+  60% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.about-board .tile-inner.sel {
+  animation: tilePick 0.34s cubic-bezier(0.17, 0.89, 0.32, 1.28) both;
+}
+
+.about-board .tile-inner.win {
+  animation: tileWin 0.6s ease-out forwards;
+}
+
+.about-board .shock {
+  animation: shock 0.9s ease-out forwards;
+}
+
+.about-board .shock.alt {
+  animation: shock 1.3s 0.12s ease-out forwards;
+}
+
+.about-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 32px;
+}
+
+.about-section > :not(.about-art, .about-textile) {
+  position: relative;
+  z-index: 1;
+}
+
+.about-center,
+.about-why,
+.about-jackpot,
+.about-close {
+  align-items: center;
+  text-align: center;
+}
+
+/* The glossy Figma renders (exported at 2x, no dither) float behind the copy
+   where the frame puts them. Offsets are the Figma image rects measured from
+   each section's padding box (content column minus 24px left, minus 90px
+   top). The frame darkens them with a -24%/-33% tint, so they sit well
+   behind the copy. */
+.about-art {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.32;
+  filter: brightness(0.72);
+}
+
+.about-art-tokens {
+  width: 1152px;
+  left: -55px;
+  top: -173px;
+}
+
+.about-art-bank {
+  width: 584px;
+  right: -256px;
+  top: 52px;
+}
+
+.about-art-ticket {
+  width: 704px;
+  left: 158px;
+  top: -58px;
+}
+
+.about-art-shield {
+  width: 472px;
+  left: -301px;
+  top: 344px;
+}
+
+.about-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--brand-lime);
+  font-family: "Roboto Mono", monospace;
+  font-size: 16px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  /* Label sits 24px above its heading's text box in the frame. */
+  margin-bottom: -8px;
+}
+
+.about-h2 {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 48px;
+  line-height: 0.95;
+  letter-spacing: 0.024em;
+}
+
+.about-why .about-h2,
+.about-close-title {
+  font-size: 64px;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+.about-why .about-h2 {
+  margin-bottom: -18px;
+}
+
+.about-jackpot .about-h2 {
+  line-height: 1.33;
+  letter-spacing: 0;
+}
+
+.about-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 249px);
+  gap: 23px 19px;
+}
+
+.about-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 160px;
+  padding: 16px;
+  border-radius: 16px;
+  background: #2c3543;
+  text-align: left;
+}
+
+.about-stat:first-child {
+  background: #4a5d48;
+}
+
+.about-stat strong {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 56px;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+  color: var(--brand-lime);
+}
+
+.about-stat span {
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #caccd0;
+}
+
+.about-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+  width: 100%;
+}
+
+.about-h2 + .about-steps {
+  margin-top: 16px;
+}
+
+.about-step {
+  display: grid;
+  grid-template-columns: 114px 1fr;
+  align-items: center;
+  gap: 20px;
+}
+
+.about-badge {
+  width: 79px;
+  height: 79px;
+  margin-left: 18px;
+  display: grid;
+  place-items: center;
+  background: var(--brand-lime);
+  color: var(--brand-navy);
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 28px;
+}
+
+.about-badge-circle {
+  border-radius: 50%;
+}
+
+.about-badge-square {
+  border-radius: 16px;
+}
+
+/* Star and plus are SVG masks rather than clip-path polygons so their corners
+   can round: a stroke with round joins on the same polygon does it. */
+.about-badge-star {
+  width: 98px;
+  height: 98px;
+  margin-left: 8px;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-7 -7 114 114'%3E%3Cpolygon points='50,0 63,34 100,38 72,62 81,100 50,80 19,100 28,62 0,38 37,34' fill='%23000' stroke='%23000' stroke-width='14' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-7 -7 114 114'%3E%3Cpolygon points='50,0 63,34 100,38 72,62 81,100 50,80 19,100 28,62 0,38 37,34' fill='%23000' stroke='%23000' stroke-width='14' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.about-badge-plus {
+  width: 84px;
+  margin-left: 15px;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 -6 112 112'%3E%3Cpolygon points='32,0 68,0 68,32 100,32 100,68 68,68 68,100 32,100 32,68 0,68 0,32 32,32' fill='%23000' stroke='%23000' stroke-width='12' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 -6 112 112'%3E%3Cpolygon points='32,0 68,0 68,32 100,32 100,68 68,68 68,100 32,100 32,68 0,68 0,32 32,32' fill='%23000' stroke='%23000' stroke-width='12' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.about-step-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  line-height: 1.06;
+}
+
+.about-step-body {
+  margin: 8px 0 0;
+  max-width: 920px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 1.875;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.about-jackpot-body {
+  margin: 0;
+  max-width: 574px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 1.875;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.about-lose {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  width: 100%;
+}
+
+.about-lose-card {
+  min-height: 200px;
+  padding: 26px;
+  border-radius: 16px;
+  border: 1px solid;
+}
+
+.about-lose-safe {
+  background: #4a5d48;
+  border-color: rgba(182, 255, 59, 0.12);
+  color: var(--brand-lime);
+}
+
+.about-lose-risk {
+  background: rgba(255, 65, 54, 0.2);
+  border-color: rgba(255, 65, 54, 0.12);
+  color: var(--brand-red);
+}
+
+.about-lose-card h3 {
+  margin: 0 0 12px;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 1.8;
+}
+
+.about-lose-card ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.about-lose-card li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.about-lose-card li::before {
+  content: "✓";
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--brand-lime);
+}
+
+.about-lose-risk li::before {
+  content: "×";
+  color: var(--brand-red);
+}
+
+.about-faq {
+  width: 100%;
+  margin-top: -8px;
+  border-top: 1px solid var(--brand-white-15);
+}
+
+.about-faq-item {
+  border-bottom: 1px solid var(--brand-white-15);
+}
+
+.about-faq-item summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+  list-style: none;
+  cursor: pointer;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.about-faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.about-faq-item summary::after {
+  content: "+";
+  font-weight: 400;
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.about-faq-item[open] summary::after {
+  content: "−";
+}
+
+.about-faq-item p {
+  margin: 0;
+  padding: 0 24px 22px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.about-close {
+  /* The frame runs 331px past the CTA row, all of it textile. */
+  padding-bottom: 330px;
+  gap: 32px;
+}
+
+.about-close-title {
+  max-width: 900px;
+}
+
+/* Figma's TextilePixelBg: starts 128px above the glyph row and runs to the
+   bottom of the page, full bleed. */
+.about-textile {
+  position: absolute;
+  left: 50%;
+  top: 52px;
+  /* Replaced element: top/bottom alone leave it at the SVG's 150px default. */
+  height: calc(100% - 52px);
+  width: 100vw;
+  transform: translateX(-50%);
+  color: var(--brand-lime);
+  opacity: 0.22;
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, transparent, black 55%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 55%);
+}
+
+@media (max-width: 960px) {
+  .about-hero {
+    grid-template-columns: 1fr;
+    padding-top: 24px;
+    gap: 16px;
+  }
+
+  .about-hero-copy {
+    order: 1;
+  }
+
+  /* Stacked: the board is cropped at its centre line and faded out at the
+     cut, the same as the marketing hero on phones. */
+  .about-board {
+    order: 0;
+    max-width: 420px;
+    margin: 0 auto;
+    aspect-ratio: 620 / 300;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, black 55%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent);
+  }
+
+  .about-h1 {
+    font-size: 34px;
+  }
+
+  .about-sub {
+    font-size: 18px;
+  }
+
+  .about-lead {
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  /* Clipped per section so the off-edge art never widens the scroll box. */
+  .about-section {
+    padding: 56px 16px;
+    gap: 24px;
+    overflow: hidden;
+  }
+
+  .about-h2,
+  .about-why .about-h2,
+  .about-close-title {
+    font-size: 30px;
+    line-height: 1.15;
+  }
+
+  .about-art {
+    width: 50%;
+    opacity: 0.5;
+  }
+
+  .about-art-tokens {
+    left: auto;
+    right: -20%;
+    top: -80px;
+  }
+
+  .about-art-bank {
+    right: -25%;
+    top: 0;
+  }
+
+  .about-art-ticket {
+    left: 25%;
+    top: -40px;
+  }
+
+  .about-art-shield {
+    left: -25%;
+    top: 40%;
+  }
+
+  .about-stats {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    width: 100%;
+  }
+
+  .about-stat {
+    padding: 16px;
+  }
+
+  .about-stat strong {
+    font-size: 36px;
+  }
+
+  .about-stat span {
+    font-size: 11px;
+  }
+
+  .about-steps {
+    gap: 32px;
+  }
+
+  .about-step {
+    grid-template-columns: 44px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+
+  .about-badge,
+  .about-badge-star,
+  .about-badge-plus {
+    width: 44px;
+    height: 44px;
+    margin-left: 0;
+    font-size: 20px;
+  }
+
+  .about-stat {
+    min-height: 0;
+  }
+
+  .about-step-title {
+    font-size: 18px;
+  }
+
+  .about-lose {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .about-lose-card {
+    min-height: 0;
+    padding: 20px;
+  }
+
+  .about-faq-item summary {
+    padding: 16px 12px;
+    font-size: 14px;
+  }
+
+  .about-faq-item p {
+    padding: 0 12px 16px;
+  }
+
+  .about-close {
+    padding-bottom: 96px;
+  }
+}
+

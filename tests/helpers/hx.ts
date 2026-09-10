@@ -141,6 +141,17 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** The validator's actual on-chain clock (not `Date.now()`, which drifts a
+ * few seconds from it and so is an unreliable proxy over a short window). */
+export async function onChainNowSeconds(): Promise<number> {
+  for (;;) {
+    const slot = await connection.getSlot();
+    const time = await connection.getBlockTime(slot);
+    if (time !== null) return time;
+    await sleep(200);
+  }
+}
+
 /** Decodes the named event out of one confirmed transaction's logs. */
 export async function findEvent<T = unknown>(
   signature: string,
@@ -173,6 +184,11 @@ function nextPoolId(): bigint {
 
 export interface PoolParamsOverrides {
   epochSeconds?: number;
+  /** Phase of the epoch grid. Defaults to the on-chain clock at pool
+   * creation, which puts the first grid point one whole `epochSeconds`
+   * after bootstrap, so epoch 1 is as long as it was before the grid
+   * existed bar the seconds the test spends setting wallets up. */
+  epochAnchor?: number;
   roundSeconds?: number;
   closeBuffer?: number;
   vrfTimeout?: number;
@@ -196,6 +212,8 @@ export interface PoolCtx {
   poolId: bigint;
   pool: PublicKey;
   mint: PublicKey;
+  epochSeconds: number;
+  epochAnchor: number;
   authority: Keypair;
   treasury: PublicKey;
   buybackReserve: PublicKey;
@@ -244,12 +262,14 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
   const principalVault = principalVaultPda(pool);
   const jackpotVault = jackpotVaultPda(pool);
   const house = playerPda(pool, authority.publicKey);
+  const epochAnchor = overrides.epochAnchor ?? (await onChainNowSeconds());
 
   await program.methods
     .createPool({
       poolId: new BN(poolId.toString()),
       vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
       epochSeconds: new BN(params.epochSeconds),
+      epochAnchor: new BN(epochAnchor),
       roundSeconds: new BN(params.roundSeconds),
       closeBuffer: new BN(params.closeBuffer),
       vrfTimeout: new BN(params.vrfTimeout),
@@ -284,6 +304,8 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
     poolId,
     pool,
     mint,
+    epochSeconds: params.epochSeconds,
+    epochAnchor,
     authority,
     treasury,
     buybackReserve,

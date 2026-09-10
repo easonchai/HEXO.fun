@@ -34,6 +34,8 @@ import {
 import { isFulfilled, randomnessAddress } from "./vrf";
 
 const TICK_MS = 1_000;
+/** How long a settled Position's address is remembered; well past any sweep lag. */
+const SETTLED_MEMORY_MS = 5 * 60_000;
 
 @Injectable()
 export class OperatorService {
@@ -48,6 +50,14 @@ export class OperatorService {
   private lastRegisterCheck: RegisterCheck | null = null;
   /** Step 6b's tries against one Epoch; resets when the Epoch changes. */
   private topUp: { epochId: bigint; attempts: number } | null = null;
+  /**
+   * Positions this operator has already settled, by address, with when. The
+   * indexer's sweep can re-insert one for a few seconds after the close: the
+   * sync fired by the settle's own log can snapshot the chain before the
+   * close is visible. A closed Position never comes back, so remembering the
+   * address is always safe; the timestamp only bounds the map.
+   */
+  private settled = new Map<string, number>();
 
   constructor(
     private readonly chain: ChainService,
@@ -105,7 +115,13 @@ export class OperatorService {
         await this.writeState({ action: null }, null);
         return { action: null };
       }
-      this.logger.error(`tick failed: ${error.message}`, error.stack);
+      // Anchor and web3 hang the program logs off the cause; they name the
+      // instruction and the account that failed, which the message does not.
+      const logs = (error.cause as { logs?: string[] } | undefined)?.logs;
+      this.logger.error(
+        `tick failed: ${error.message}${logs ? `\n${logs.join("\n")}` : ""}`,
+        error.stack,
+      );
       await this.writeState({ action: null }, error.message);
       return { action: null };
     }
@@ -149,7 +165,17 @@ export class OperatorService {
         this.topUp = { epochId, attempts };
       },
       playersToRegister: (epochId) => this.indexer.playersToRegister(epochId),
-      unsettledPositions: () => this.indexer.unsettledPositions(),
+      unsettledPositions: async () =>
+        (await this.indexer.unsettledPositions()).filter(
+          (position) => !this.settled.has(position.address),
+        ),
+      forgetPositions: async (addresses) => {
+        const now = Date.now();
+        for (const [address, at] of this.settled) {
+          if (now - at > SETTLED_MEMORY_MS) this.settled.delete(address);
+        }
+        for (const address of addresses) this.settled.set(address, now);
+      },
       winner: (epochId, target) => this.winner(epochId, target),
       send: (instructions) => this.chain.send(instructions),
     };
