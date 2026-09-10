@@ -1,5 +1,5 @@
  # terminal 1 — postgres + backend
-  docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+  docker compose -f docker-compose.dev.yml up -d
 
   # terminal 2 — frontend
   pnpm --filter @hexvault/web dev
@@ -7,7 +7,7 @@
   Then http://localhost:5173, Phantom set to devnet. Faucet gives you 1000 hexUSDC.
 
   Check it came up: curl localhost:8080/status should show rpcOk: true and a lastAction a few seconds old. Watch it work with docker
-  compose -f docker-compose.yml -f docker-compose.local.yml logs -f backend — a round every ~65s.
+  compose -f docker-compose.dev.yml logs -f backend — a round every ~65s.
 
   Shut down with down in place of up -d.
 

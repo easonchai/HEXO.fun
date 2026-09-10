@@ -3814,54 +3814,6 @@ input::placeholder {
   color: rgba(255, 255, 255, 0.58);
 }
 
-.about-hero-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.about-btn,
-.about-btn-outline {
-  font-family: "Syncopate", sans-serif;
-  font-weight: 700;
-  cursor: pointer;
-  transition:
-    filter 0.2s ease,
-    transform 0.2s ease;
-}
-
-.about-btn {
-  height: 49px;
-  padding: 0 32px;
-  border: none;
-  border-radius: 10px;
-  background: var(--brand-lime);
-  color: #07101c;
-  font-size: 16px;
-  letter-spacing: 0.096em;
-}
-
-.about-btn-outline {
-  height: 49px;
-  padding: 0 19px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 8px;
-  background: rgba(54, 62, 75, 0.75);
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 13px;
-}
-
-.about-btn:hover,
-.about-btn-outline:hover {
-  filter: brightness(1.08);
-}
-
-.about-btn:active,
-.about-btn-outline:active {
-  transform: scale(0.98);
-}
-
 .about-board {
   display: block;
   width: 100%;
@@ -4307,10 +4259,6 @@ input::placeholder {
     line-height: 1.7;
   }
 
-  .about-hero-actions {
-    flex-wrap: wrap;
-  }
-
   /* Clipped per section so the off-edge art never widens the scroll box. */
   .about-section {
     padding: 56px 16px;
@@ -4417,10 +4365,6 @@ input::placeholder {
 
   .about-close {
     padding-bottom: 96px;
-  }
-
-  .about-close .home-cta-row .home-glyphs {
-    display: none;
   }
 }
 

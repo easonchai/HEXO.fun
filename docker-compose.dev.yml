@@ -1,0 +1,47 @@
+# Local dev: postgres + backend published on the host, no Traefik.
+# Frontend runs on the host with `pnpm --filter @hexvault/web dev`.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# Same project name as docker-compose.yml so the existing postgres-data volume
+# is reused. Reads the same .env; the Traefik keys in it are ignored here.
+name: hexvault
+
+volumes:
+  postgres-data:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # Published so psql / Prisma Studio on the host can reach it.
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PORT: 8080
+    # `pnpm dev` on the host talks to http://127.0.0.1:8080 (apps/web VITE_API_URL default).
+    ports:
+      - "8080:8080"

@@ -95,7 +95,7 @@ answers, so a slow draw shows as a longer DRAWING rather than a timer stuck at z
 ## Run it locally
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d   # postgres + backend
+docker compose -f docker-compose.dev.yml up -d   # postgres + backend
 pnpm --filter @hexvault/web dev                                          # frontend
 ```
 
