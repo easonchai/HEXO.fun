@@ -119,6 +119,7 @@ mod tests {
             house: Pubkey::default(),
             vrf_network_state: Pubkey::default(),
             epoch_seconds: DAY,
+            epoch_anchor: 1,
             round_seconds: 60,
             close_buffer: 5,
             vrf_timeout: 120,

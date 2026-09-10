@@ -76,6 +76,7 @@ const pool = (overrides: object = {}) => ({
   house: Keypair.generate().publicKey,
   vrfNetworkState: Keypair.generate().publicKey,
   epochSeconds: bn(86_400),
+  epochAnchor: bn(1_789_315_200),
   roundSeconds: bn(60),
   closeBuffer: bn(5),
   vrfTimeout: bn(120),

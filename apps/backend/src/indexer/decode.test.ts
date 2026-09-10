@@ -75,10 +75,19 @@ const CASES: Case[] = [
   },
   {
     name: "ParamsSet",
-    fields: [key(POOL), i64(86_400n), i64(60n), i64(5n), i64(120n), u64(1_000_000n)],
+    fields: [
+      key(POOL),
+      i64(86_400n),
+      i64(1_789_315_200n),
+      i64(60n),
+      i64(5n),
+      i64(120n),
+      u64(1_000_000n),
+    ],
     data: {
       pool: POOL,
       epochSeconds: "86400",
+      epochAnchor: "1789315200",
       roundSeconds: "60",
       closeBuffer: "5",
       vrfTimeout: "120",

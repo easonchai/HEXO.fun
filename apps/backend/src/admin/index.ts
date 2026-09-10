@@ -85,6 +85,8 @@ function bnOrNull(value: number | undefined): BN | null {
 async function setParams(chain: ChainService, params: SetParamsInput): Promise<void> {
   const ix = await method(chain, "setParams", {
     epochSeconds: bnOrNull(params.epochSeconds),
+    // TODO(ticket 03): resolve from --epoch-anchor
+    epochAnchor: null,
     roundSeconds: bnOrNull(params.roundSeconds),
     closeBuffer: bnOrNull(params.closeBuffer),
     vrfTimeout: bnOrNull(params.vrfTimeout),

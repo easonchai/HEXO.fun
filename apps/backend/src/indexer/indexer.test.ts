@@ -128,6 +128,7 @@ const poolAccount = (overrides: object = {}) => ({
   house: chain.playerAddress(OWNER),
   vrfNetworkState: STRANGER,
   epochSeconds: bn(86_400),
+  epochAnchor: bn(1_789_315_200),
   roundSeconds: bn(60),
   closeBuffer: bn(5),
   vrfTimeout: bn(120),

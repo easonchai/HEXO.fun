@@ -168,6 +168,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         poolId: new BN(poolId.toString()),
         vrfNetworkState: VRF_NETWORK_STATE,
         epochSeconds: new BN(86_400),
+        epochAnchor: new BN(Math.floor(Date.now() / 1000)),
         roundSeconds: new BN(ROUND_SECONDS),
         closeBuffer: new BN(CLOSE_BUFFER),
         vrfTimeout: new BN(120),
@@ -191,6 +192,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       // operator opens the first one.
       await method("setParams", {
         epochSeconds: new BN(EPOCH_SECONDS),
+        epochAnchor: null,
         roundSeconds: null,
         closeBuffer: null,
         vrfTimeout: null,

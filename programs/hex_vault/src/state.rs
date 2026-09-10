@@ -27,6 +27,10 @@ pub struct Pool {
     pub vrf_network_state: Pubkey,
     /// Applies to the next epoch created, not the open one.
     pub epoch_seconds: i64,
+    /// Fixes the phase of the epoch grid `epoch_anchor + k * epoch_seconds`.
+    /// Every epoch boundary is a point on it, so the draw lands at the same
+    /// clock time whatever second the pool was bootstrapped on.
+    pub epoch_anchor: i64,
     /// Applies to the next round created, not the open one.
     pub round_seconds: i64,
     /// Positions stop this many seconds before a round ends.

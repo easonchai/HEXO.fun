@@ -2267,6 +2267,10 @@
             "type": "i64"
           },
           {
+            "name": "epoch_anchor",
+            "type": "i64"
+          },
+          {
             "name": "round_seconds",
             "type": "i64"
           },
@@ -2492,6 +2496,10 @@
             "type": "i64"
           },
           {
+            "name": "epoch_anchor",
+            "type": "i64"
+          },
+          {
             "name": "round_seconds",
             "type": "i64"
           },
@@ -2672,6 +2680,15 @@
             "name": "epoch_seconds",
             "docs": [
               "Applies to the next epoch created, not the open one."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "epoch_anchor",
+            "docs": [
+              "Fixes the phase of the epoch grid `epoch_anchor + k * epoch_seconds`.",
+              "Every epoch boundary is a point on it, so the draw lands at the same",
+              "clock time whatever second the pool was bootstrapped on."
             ],
             "type": "i64"
           },
@@ -3063,6 +3080,12 @@
         "fields": [
           {
             "name": "epoch_seconds",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "epoch_anchor",
             "type": {
               "option": "i64"
             }

@@ -196,6 +196,9 @@ async function createPool(
     poolId: new BN(poolId.toString()),
     vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
     epochSeconds: new BN(params.epochSeconds),
+    // TODO(ticket 03): resolve from --epoch-anchor
+    // Sunday 2026-09-13T16:00:00Z, which is 00:00 Monday in UTC+8.
+    epochAnchor: new BN(1_789_315_200),
     roundSeconds: new BN(params.roundSeconds),
     closeBuffer: new BN(params.closeBuffer),
     vrfTimeout: new BN(params.vrfTimeout),

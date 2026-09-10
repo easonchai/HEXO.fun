@@ -16,6 +16,7 @@ import {
   epochPda,
   findEvent,
   fulfillRandomness,
+  onChainNowSeconds,
   playerPda,
   positionPda,
   program,
@@ -70,18 +71,6 @@ async function retryUntilOk<T>(fn: () => Promise<T>, intervalMs = 750, maxAttemp
     }
   }
   throw lastError;
-}
-
-/** The validator's actual on-chain clock (not `Date.now()`, which the same
- * drift makes an unreliable proxy for it over a short window). */
-async function onChainNowSeconds(): Promise<number> {
-  const connection = program.provider.connection;
-  for (;;) {
-    const slot = await connection.getSlot();
-    const time = await connection.getBlockTime(slot);
-    if (time !== null) return time;
-    await sleep(200);
-  }
 }
 
 async function sleepUntilOnChain(targetUnixSeconds: number): Promise<void> {
@@ -140,6 +129,21 @@ async function beginEpoch(pool: PoolCtx, currentEpochId: bigint) {
       newEpoch: epochPda(pool.pool, currentEpochId + 1n),
       systemProgram: SystemProgram.programId,
     })
+    .signers([pool.authority])
+    .rpc();
+}
+
+async function setParams(pool: PoolCtx, epochSeconds: number) {
+  return program.methods
+    .setParams({
+      epochSeconds: new BN(epochSeconds),
+      epochAnchor: null,
+      roundSeconds: null,
+      closeBuffer: null,
+      vrfTimeout: null,
+      minDeposit: null,
+    })
+    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
     .signers([pool.authority])
     .rpc();
 }
@@ -699,6 +703,164 @@ describe("epochs", () => {
       const pool = await setupPool();
       await beginEpoch(pool, 0n);
       await expect(beginEpoch(pool, 1n)).rejects.toThrow();
+    },
+    TIMEOUT,
+  );
+
+  // --- The anchored grid (epoch-anchor/02). Every boundary is a point of
+  // `epochAnchor + k * epochSeconds`. These pools set the anchor a few
+  // seconds ahead of `setupPool`, so epoch 1 is a short stub ending on the
+  // first grid point and epoch 2 onwards run a full period. The clock cannot
+  // be warped on localnet, so "minutes late" and "a whole period late" are
+  // scaled down to seconds against a period of seconds; the arithmetic is
+  // the same one an hourly pool goes through.
+
+  const GRID_LEAD = 12;
+
+  it(
+    "an operator seconds late keeps the epochs contiguous",
+    async () => {
+      const anchor = (await onChainNowSeconds()) + GRID_LEAD;
+      const pool = await setupPool({ epochSeconds: 10, epochAnchor: anchor });
+
+      await beginEpoch(pool, 0n);
+      const epoch1 = await fetchEpoch(pool, 1n);
+      // retryUntilOk polls every 750ms, so this lands within a second of the
+      // boundary.
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+
+      const epoch2 = await fetchEpoch(pool, 2n);
+      expect(epoch2.startsAt.toString()).toBe(epoch1.endsAt.toString());
+      expect(Number(epoch2.endsAt) - Number(epoch2.startsAt)).toBe(10);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "an operator well past the boundary but inside the period keeps the epochs contiguous",
+    async () => {
+      const anchor = (await onChainNowSeconds()) + GRID_LEAD;
+      const pool = await setupPool({ epochSeconds: 20, epochAnchor: anchor });
+
+      await beginEpoch(pool, 0n);
+      const epoch1 = await fetchEpoch(pool, 1n);
+      await sleepUntilOnChain(Number(epoch1.endsAt) + 9);
+      await beginEpoch(pool, 1n);
+
+      const epoch2 = await fetchEpoch(pool, 2n);
+      expect(epoch2.startsAt.toString()).toBe(epoch1.endsAt.toString());
+      expect(Number(epoch2.endsAt) - Number(epoch2.startsAt)).toBe(20);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "an operator a whole period late jumps to the current grid point, and the epoch it left behind still pays out",
+    async () => {
+      const anchor = (await onChainNowSeconds()) + GRID_LEAD;
+      const pool = await setupPool({ epochSeconds: 8, epochAnchor: anchor });
+      const a = await pool.fundedWallet(10_000_000n);
+
+      // Deposited before the first epoch opens, so this player holds Entries
+      // for every second of the stub whatever length it turns out to be.
+      await deposit(pool, a, 4_000_000n);
+      await beginEpoch(pool, 0n);
+      const epoch1 = await fetchEpoch(pool, 1n);
+
+      // Past the boundary *and* past the grid point after it.
+      await sleepUntilOnChain(Number(epoch1.endsAt) + 8 + 1);
+      await beginEpoch(pool, 1n);
+
+      const epoch2 = await fetchEpoch(pool, 2n);
+      expect(Number(epoch2.startsAt)).toBe(Number(epoch1.endsAt) + 8);
+      expect((Number(epoch2.startsAt) - anchor) % 8).toBe(0);
+      expect(Number(epoch2.endsAt) - Number(epoch2.startsAt)).toBe(8);
+
+      // Epoch 1 was skipped past, not orphaned: it still runs its own draw.
+      await register(pool, 1n, a.keypair.publicKey);
+      await closeRegistration(pool, 1n);
+      const closed = await fetchEpoch(pool, 1n);
+      expect(closed.status).toBe(epoch_status.DRAWING);
+
+      const randomness = await fulfillRandomness(Uint8Array.from(closed.vrfSeed));
+      await draw(pool, 1n, randomness);
+      await payout(pool, 1n, a.keypair.publicKey, a.tokenAccount);
+
+      expect((await fetchEpoch(pool, 1n)).status).toBe(epoch_status.PAID);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the first epoch is a stub ending on the grid, and a deposit inside it freezes weight over the stub's own length",
+    async () => {
+      const anchor = (await onChainNowSeconds()) + GRID_LEAD;
+      const pool = await setupPool({ epochSeconds: 30, epochAnchor: anchor });
+      const a = await pool.fundedWallet(10_000_000n);
+
+      await beginEpoch(pool, 0n);
+      await deposit(pool, a, 5_000_000n);
+
+      const epoch1 = await fetchEpoch(pool, 1n);
+      const startsAt = BigInt(epoch1.startsAt.toString());
+      const endsAt = BigInt(epoch1.endsAt.toString());
+      expect(endsAt).toBe(BigInt(anchor)); // the first grid point after bootstrap
+      expect(Number(endsAt - startsAt)).toBeGreaterThan(0);
+      expect(Number(endsAt - startsAt)).toBeLessThan(30);
+
+      const afterDeposit = await fetchPlayer(pool, a.keypair.publicKey);
+      const lastUpdate = BigInt(afterDeposit.lastUpdate.toString());
+      expect(Number(lastUpdate)).toBeLessThan(Number(endsAt));
+
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+      // Any instruction that touches the player crosses the boundary and
+      // freezes epoch 1's weight.
+      await deposit(pool, a, 1_000_000n);
+
+      const touched = await fetchPlayer(pool, a.keypair.publicKey);
+      expect(touched.frozenEpoch.toString()).toBe("1");
+      expect(BigInt(touched.frozenWeight.toString())).toBe(5_000_000n * (endsAt - lastUpdate));
+      expect(Number(touched.frozenWeight)).toBeLessThan(5_000_000 * 30);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "raising epoch_seconds mid-epoch gives one short transition epoch, then the new cadence, and leaves the old epoch's weight alone",
+    async () => {
+      const anchor = (await onChainNowSeconds()) + GRID_LEAD;
+      const pool = await setupPool({ epochSeconds: 8, epochAnchor: anchor });
+      const a = await pool.fundedWallet(10_000_000n);
+
+      await beginEpoch(pool, 0n); // epoch 1: the stub
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch 2: a full 8s period
+      const epoch2 = await fetchEpoch(pool, 2n);
+      expect(Number(epoch2.endsAt) - Number(epoch2.startsAt)).toBe(8);
+
+      await deposit(pool, a, 5_000_000n);
+      const inEpoch2 = await fetchPlayer(pool, a.keypair.publicKey);
+      const lastUpdate = BigInt(inEpoch2.lastUpdate.toString());
+
+      await setParams(pool, 24); // the daily-to-weekly switch, scaled down
+
+      await retryUntilOk(() => beginEpoch(pool, 2n)); // epoch 3: the transition
+      const epoch3 = await fetchEpoch(pool, 3n);
+      expect(epoch3.startsAt.toString()).toBe(epoch2.endsAt.toString());
+      expect((Number(epoch3.endsAt) - anchor) % 24).toBe(0);
+      expect(Number(epoch3.endsAt) - Number(epoch3.startsAt)).toBeLessThan(24);
+
+      // Epoch 2 ended where its own Epoch account says it did, not 24s after
+      // it started.
+      await deposit(pool, a, 1_000_000n);
+      const touched = await fetchPlayer(pool, a.keypair.publicKey);
+      expect(touched.frozenEpoch.toString()).toBe("2");
+      expect(BigInt(touched.frozenWeight.toString())).toBe(
+        5_000_000n * (BigInt(epoch2.endsAt.toString()) - lastUpdate),
+      );
+
+      await retryUntilOk(() => beginEpoch(pool, 3n)); // epoch 4: the new cadence
+      const epoch4 = await fetchEpoch(pool, 4n);
+      expect(Number(epoch4.endsAt) - Number(epoch4.startsAt)).toBe(24);
     },
     TIMEOUT,
   );
