@@ -237,10 +237,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const pool = this.chain.poolAddress();
     const { slot, accounts } = await this.fetchAll();
 
-    const pools = accounts.get<DecodedPool>(ACCOUNT.pool);
+    const pools = accounts.get<DecodedPool>(ACCOUNT.pool).filter(({ pubkey }) => pubkey.equals(pool));
+    if (pools.length === 0) {
+      throw new Error(`configured pool ${pool.toBase58()} is not on chain or does not decode with the current IDL`);
+    }
     await this.prisma.$transaction(
       pools
-        .filter(({ pubkey }) => pubkey.equals(pool))
         .map(({ pubkey, account }) => {
           const row = poolRow(pubkey, account, slot);
           return this.prisma.pool.upsert({
@@ -343,15 +345,13 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       accounts: {
         // Accounts of an earlier program build (an abandoned pool from before
         // a layout change) still carry the discriminator but not the bytes;
-        // they belong to no configured pool, so they are skipped, not fatal.
+        // they belong to no configured pool, so they are dropped silently.
+        // `syncAccounts` raises when the configured pool itself is missing.
         get: <T>(name: string) =>
           (byType.get(name) ?? []).flatMap(({ pubkey, data }) => {
             try {
               return [{ pubkey, account: coder.decode<T>(name, data) }];
-            } catch (cause) {
-              this.logger.debug(
-                `skipping ${name} ${pubkey.toBase58()}: does not decode with the current IDL (${cause instanceof Error ? cause.message : String(cause)})`,
-              );
+            } catch {
               return [];
             }
           }),
