@@ -122,3 +122,33 @@
        stale one reads an account that no longer exists.
     4. Restart the indexer so it reloads the env and mirrors the new accounts from scratch: up -d --force-recreate --build backend.
        Check curl localhost:8080/status shows rpcOk: true and a fresh lastAction.
+
+  The Sparring player
+
+  The Sparring player is a backend-owned wallet that buys one Position in every Round, on six to eight random tiles at one Ticket per
+  tile, so a lone human is never playing against an empty board. It looks like any other wallet on screen and competes in the daily
+  draw like any Player. It is not the House and never touches the House account.
+
+  SPARRING_KEYPAIR is the base58 secret of that wallet, and it is optional. When it is set the backend plays every Round; when it is
+  empty the backend boots exactly as before and nobody else is on the board.
+
+  Set one up once per environment with the root .env exported first, the same way admin is run:
+
+    set -a; . ./.env; set +a; pnpm --filter @hexvault/backend sparring-setup
+
+  The script generates a keypair when SPARRING_KEYPAIR is empty and prints the SPARRING_KEYPAIR= line on stdout, so you can append it
+  straight to .env. Everything else it prints goes to stderr. It then transfers 0.1 SOL from the authority wallet when the Sparring
+  wallet holds under 0.05, mints 1000 hexUSDC to the Sparring wallet with the authority key, and deposits that 1000 as Principal
+  signed by the Sparring keypair. The 0.1 SOL covers transaction fees and Position rent for weeks of hourly epochs, and Position rent
+  comes back when the operator settles the Position.
+
+  Every step checks the chain before it acts and says what it did or why it skipped, so re-running after a half-finished setup is
+  safe. It never deposits a second time: Tickets reset to Principal at every new epoch, so the 1000 keeps funding play forever. Once
+  the Principal is in place the script mints nothing either, because the deposit leaves the token account at zero and a balance check
+  on its own would mint another 1000 on every run.
+
+  Paste the printed line into .env and restart the backend to pick it up (up -d --force-recreate backend). The wallet is worth
+  recording here, since the secret only lives in .env:
+
+    local: <sparring wallet public key>
+    VPS:   <sparring wallet public key>
