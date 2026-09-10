@@ -26,6 +26,9 @@ playwright-report/
 # Local feature plans and tickets (docs/plan/rebuild predates this and stays tracked)
 docs/plan/
 
+# One-off scratch scripts (screenshot runners, Figma export shims)
+*.tmp.mjs
+
 # local operator keypair, never commit
 operator.json
 

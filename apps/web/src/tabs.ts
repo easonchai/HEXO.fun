@@ -8,8 +8,8 @@ export type Tab =
   | "ABOUT";
 
 /**
- * Navbar items: the desktop long label and the phone short label. Only EARN
- * and PLAY show for now; the other tabs stay routable (HOME via the logomark,
+ * Navbar items: the desktop long label and the phone short label. Only EARN,
+ * PLAY and ABOUT show; the other tabs stay routable (HOME via the logomark,
  * the rest via the URL hash below) but unlisted.
  *
  * EARN lands on the DASHBOARD, not the deposit widget: the widget is one hop
@@ -19,6 +19,7 @@ export type Tab =
 export const TABS = [
   { id: "DASHBOARD", long: "EARN", short: "EARN" },
   { id: "MINE", long: "PLAY", short: "PLAY" },
+  { id: "ABOUT", long: "ABOUT", short: "ABOUT" },
 ] as const satisfies readonly { id: Tab; long: string; short: string }[];
 
 /** URL hash → tab, so `/#play` opens the hex page directly (e2e specs rely on it). */
