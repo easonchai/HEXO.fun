@@ -591,12 +591,7 @@ export function App() {
         {tab === "LEADERBOARD" ? (
           <Leaderboard owner={publicKey ?? undefined} />
         ) : null}
-        {tab === "ABOUT" ? (
-          <About
-            onPlay={() => setTab("MINE")}
-            onDeposit={() => setTab("DASHBOARD")}
-          />
-        ) : null}
+        {tab === "ABOUT" ? <About /> : null}
       </main>
     </main>
   );

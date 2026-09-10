@@ -1,7 +1,9 @@
 /**
  * ABOUT tab: the Figma "About Page" frame (340:17234). The marketing site's
  * pitch, inside the app: hero with the self-playing board, four stats, how
- * it works, the jackpot, what you can and can't lose, FAQ, closing CTA.
+ * it works, the jackpot, what you can and can't lose, FAQ, closing line.
+ * The Figma's hero and closing buttons were dropped: the tab bar already
+ * routes to PLAY and EARN.
  *
  * Copy is the Figma's, except the draw cadence: the app draws daily, so
  * "weekly jackpot" became "daily jackpot" wherever it describes the draw.
@@ -11,11 +13,6 @@ import { DemoBoard } from "../arena/DemoBoard.js";
 import { LogoCog, LogoWordmark } from "../arena/Arena.js";
 import { Textile } from "../arena/Textile.js";
 import { GlyphRow } from "./Home.js";
-
-export interface AboutProps {
-  onPlay: () => void;
-  onDeposit: () => void;
-}
 
 const STATS = [
   ["5%", "APR base yield, paid out weekly"],
@@ -160,7 +157,7 @@ function TextileBg() {
   );
 }
 
-export function About({ onPlay, onDeposit }: AboutProps) {
+export function About() {
   return (
     <div className="about" data-testid="about-screen">
       <section className="about-hero">
@@ -176,27 +173,6 @@ export function About({ onPlay, onDeposit }: AboutProps) {
           <p className="about-lead">
             Deposit USDC, never lose it, win a daily prize.
           </p>
-          <div className="about-hero-actions">
-            <button
-              type="button"
-              className="about-btn"
-              data-testid="about-play"
-              onClick={onPlay}
-            >
-              PLAY HEXO
-            </button>
-            <button
-              type="button"
-              className="about-btn-outline"
-              onClick={() =>
-                document
-                  .getElementById("about-how")
-                  ?.scrollIntoView({ behavior: "smooth" })
-              }
-            >
-              How it Works ↓
-            </button>
-          </div>
         </div>
         <DemoBoard className="about-board" />
       </section>
@@ -290,18 +266,7 @@ export function About({ onPlay, onDeposit }: AboutProps) {
         <h2 className="about-h2 about-center about-close-title">
           Start Saving, <em>Maybe Win</em>
         </h2>
-        <div className="home-cta-row">
-          <GlyphRow />
-          <button
-            type="button"
-            className="home-cta"
-            data-testid="about-deposit"
-            onClick={onDeposit}
-          >
-            DEPOSIT NOW
-          </button>
-          <GlyphRow />
-        </div>
+        <GlyphRow />
       </section>
     </div>
   );
