@@ -30,7 +30,6 @@ import bs58 from "bs58";
 import { loadIdl } from "./chain/idl";
 import { playerAddress, poolAddress, principalVaultAddress } from "./chain/pda";
 import { DEFAULT_PROGRAM_ID } from "./config/env";
-import { decodePool } from "./operator/chain-state";
 
 /** 1000 hexUSDC. The mint has 6 decimals (spec.md §3.6, bootstrap.ts). */
 const DEPOSIT = 1_000_000_000n;
@@ -66,7 +65,7 @@ async function main(): Promise<void> {
   const authority = Keypair.fromSecretKey(
     bs58.decode(requireEnv("AUTHORITY_KEYPAIR")),
   );
-  const envMint = new PublicKey(requireEnv("HEXUSDC_MINT"));
+  const mint = new PublicKey(requireEnv("HEXUSDC_MINT"));
   const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
   const poolId = BigInt(process.env.POOL_ID ?? "1");
 
@@ -102,22 +101,16 @@ async function main(): Promise<void> {
     }),
   );
 
+  // Existence only. The Pool is not decoded, so the script keeps working when
+  // the deployed layout lags the IDL snapshot; a wrong HEXUSDC_MINT fails in
+  // the deposit instead.
   const pool = poolAddress(programId, poolId);
-  const poolState = await step("reading the pool account", async () => {
-    const info = await connection.getAccountInfo(pool);
-    if (!info) {
-      throw new Error(
-        `pool ${pool.toBase58()} not found on this cluster; has bootstrap run?`,
-      );
-    }
-    return decodePool(program, pool, info.data);
-  });
-  if (!poolState.acceptedMint.equals(envMint)) {
+  await step("reading the pool account", async () => {
+    if (await connection.getAccountInfo(pool)) return;
     throw new Error(
-      `pool ${pool.toBase58()} accepts ${poolState.acceptedMint.toBase58()}, but HEXUSDC_MINT is ${envMint.toBase58()}`,
+      `pool ${pool.toBase58()} not found on this cluster; has bootstrap run?`,
     );
-  }
-  const mint = poolState.acceptedMint;
+  });
 
   // Step 2. Fees and Position rent for weeks of hourly epochs.
   await step("topping up the Sparring wallet's SOL", async () => {

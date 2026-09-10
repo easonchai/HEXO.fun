@@ -150,5 +150,5 @@
   Paste the printed line into .env and restart the backend to pick it up (up -d --force-recreate backend). The wallet is worth
   recording here, since the secret only lives in .env:
 
-    local: <sparring wallet public key>
-    VPS:   <sparring wallet public key>
+    local (pool 1): 8fiH2kWupGjj7MbScxXkbD6aaWpbLkAnvBqt26jc3A8B
+    VPS (pools 2 and 3): 2phBznrAD5cHHQ1zq6z3Qf7dmHzrcuYsNtNPL9M8oT4B
