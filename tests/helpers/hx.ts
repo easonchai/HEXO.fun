@@ -193,6 +193,9 @@ export interface PoolParamsOverrides {
   closeBuffer?: number;
   vrfTimeout?: number;
   minDeposit?: number;
+  /** House cut in basis points, 0..=10_000. Defaults to the bootstrap rate,
+   * so every round test settles against the cut the product ships with. */
+  houseCutBps?: number;
   /** Reuse an existing mint instead of creating a fresh one (e.g. to test
    * two pools sharing an accepted asset). The caller must not rely on this
    * pool's authority being the mint authority when a shared mint is passed. */
@@ -206,6 +209,7 @@ const DEFAULT_PARAMS = {
   closeBuffer: 5,
   vrfTimeout: 120,
   minDeposit: 1_000_000, // 1 hexUSDC at 6 decimals
+  houseCutBps: 600, // 6%, the bootstrap default
 };
 
 export interface PoolCtx {
@@ -221,6 +225,7 @@ export interface PoolCtx {
   jackpotVault: PublicKey;
   house: PublicKey;
   minDeposit: bigint;
+  houseCutBps: number;
   /** A fresh funded keypair with `amount` hexUSDC already in its ATA. */
   fundedWallet(amount: bigint): Promise<{ keypair: Keypair; tokenAccount: PublicKey }>;
 }
@@ -274,6 +279,7 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       closeBuffer: new BN(params.closeBuffer),
       vrfTimeout: new BN(params.vrfTimeout),
       minDeposit: new BN(params.minDeposit),
+      houseCutBps: params.houseCutBps,
     })
     .accountsPartial({
       authority: authority.publicKey,
@@ -313,6 +319,7 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
     jackpotVault,
     house,
     minDeposit: BigInt(params.minDeposit),
+    houseCutBps: params.houseCutBps,
     fundedWallet,
   };
 }

@@ -109,11 +109,15 @@ The Tickets a player types for one Position, split evenly across the selected ti
 _Avoid_: Bet amount, wager, stake per tile (that is the derived figure)
 
 **Round pot**:
-All Tickets staked in a round plus any carry from a voided round. Distributed pro rata to the positions covering the winning tile, so the total Tickets in the pool is unchanged by a round.
+All Tickets staked in a round plus any carry from a voided round. After the House cut, the rest is distributed pro rata to the positions covering the winning tile, so the total Tickets in the pool is unchanged by a round.
 _Avoid_: Bonus, reward pool, prize pool
 
+**House cut**:
+A pool-configurable percentage of a settled round's pot, credited to the House as Tickets before the winners split the remainder. It is taken from the pot as a whole, so every winner pays it on their gross round reward, own stake included. Forfeited and voided rounds have no House cut. PRD-V2 calls this the round fee.
+_Avoid_: Round fee, tax, rake, commission
+
 **Round reward**:
-A winning position's share of the round pot, credited as Tickets.
+A winning position's share of the round pot after the House cut, credited as Tickets.
 _Avoid_: Winnings, payout (a lottery concept), bonus
 
 **Forfeit**:

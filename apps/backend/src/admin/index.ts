@@ -90,6 +90,7 @@ async function setParams(chain: ChainService, params: SetParamsInput): Promise<v
     closeBuffer: bnOrNull(params.closeBuffer),
     vrfTimeout: bnOrNull(params.vrfTimeout),
     minDeposit: params.minDeposit === undefined ? null : new BN(params.minDeposit.toString()),
+    houseCutBps: params.houseCutBps === undefined ? null : params.houseCutBps,
   })
     .accountsPartial({ authority: chain.keypair.publicKey, pool: chain.poolAddress() })
     .instruction();

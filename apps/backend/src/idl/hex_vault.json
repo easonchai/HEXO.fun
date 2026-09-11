@@ -2285,6 +2285,10 @@
           {
             "name": "min_deposit",
             "type": "u64"
+          },
+          {
+            "name": "house_cut_bps",
+            "type": "u16"
           }
         ]
       }
@@ -2514,6 +2518,10 @@
           {
             "name": "min_deposit",
             "type": "u64"
+          },
+          {
+            "name": "house_cut_bps",
+            "type": "u16"
           }
         ]
       }
@@ -2716,6 +2724,14 @@
           {
             "name": "min_deposit",
             "type": "u64"
+          },
+          {
+            "name": "house_cut_bps",
+            "docs": [
+              "Share of every settled round pot credited to the House, in basis",
+              "points, 0..=10_000. Applies to the next round settled."
+            ],
+            "type": "u16"
           },
           {
             "name": "paused",
@@ -2971,7 +2987,16 @@
           {
             "name": "pot",
             "docs": [
-              "Entries staked in this round plus any carry from a voided round."
+              "Entries staked in this round plus any carry from a voided round.",
+              "Stays gross: the House cut is never subtracted from it."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "house_cut",
+            "docs": [
+              "Entries taken out of `pot` for the House at settlement. 0 until then,",
+              "and on forfeited or voided rounds."
             ],
             "type": "u64"
           },
@@ -3045,6 +3070,9 @@
           },
           {
             "name": "pot",
+            "docs": [
+              "Gross: the House cut has not been subtracted from it."
+            ],
             "type": "u64"
           },
           {
@@ -3053,6 +3081,13 @@
               "True when nobody covered the winning tile and the pot went to the House."
             ],
             "type": "bool"
+          },
+          {
+            "name": "house_cut",
+            "docs": [
+              "Entries taken out of `pot` for the House. 0 on a forfeited round."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3112,6 +3147,12 @@
             "name": "min_deposit",
             "type": {
               "option": "u64"
+            }
+          },
+          {
+            "name": "house_cut_bps",
+            "type": {
+              "option": "u16"
             }
           }
         ]

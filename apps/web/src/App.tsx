@@ -479,6 +479,7 @@ export function App() {
               engine={engine}
               canPick={canPick}
               operatorStale={status.stale}
+              houseCutBps={pool?.houseCutBps ?? 0}
               onToggleTile={(n) => {
                 sfx("click");
                 engine.setSelected(

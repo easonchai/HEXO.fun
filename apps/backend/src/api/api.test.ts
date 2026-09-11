@@ -501,6 +501,7 @@ async function seed(prisma: PrismaService): Promise<void> {
       epochSeconds: EPOCH_LENGTH,
       epochAnchor: CURRENT_START,
       roundSeconds: 60n,
+      houseCutBps: 600,
       paused: false,
       currentEpochId: CURRENT_EPOCH,
       currentEpochEndsAt: CURRENT_START + EPOCH_LENGTH,
@@ -547,6 +548,7 @@ async function seed(prisma: PrismaService): Promise<void> {
         endsAt: CURRENT_START,
         status: 2, // Settled
         pot: 4_000n,
+        houseCut: 240n,
         winningTile: 17,
         tileTotals: { "17": "4000" },
       },
@@ -557,6 +559,7 @@ async function seed(prisma: PrismaService): Promise<void> {
         endsAt: CURRENT_START + 60n,
         status: 0, // Open
         pot: 5_000n,
+        houseCut: 0n,
         winningTile: null,
         tileTotals: {},
       },

@@ -107,6 +107,7 @@ export interface DecodedPool {
   epochSeconds: BN;
   epochAnchor: BN;
   roundSeconds: BN;
+  houseCutBps: number;
   paused: boolean;
   currentEpochId: BN;
   currentEpochEndsAt: BN;
@@ -135,6 +136,7 @@ export interface DecodedRound {
   status: number;
   tileTotals: BN[];
   pot: BN;
+  houseCut: BN;
   winningTile: number;
 }
 
@@ -173,6 +175,7 @@ export function poolRow(
     epochSeconds: big(pool.epochSeconds),
     epochAnchor: big(pool.epochAnchor),
     roundSeconds: big(pool.roundSeconds),
+    houseCutBps: pool.houseCutBps,
     paused: pool.paused,
     currentEpochId: big(pool.currentEpochId),
     currentEpochEndsAt: big(pool.currentEpochEndsAt),
@@ -206,6 +209,7 @@ export function roundRow(round: DecodedRound): Prisma.RoundCreateInput {
     endsAt: big(round.endsAt),
     status: round.status,
     pot: big(round.pot),
+    houseCut: big(round.houseCut),
     // `winning_tile` is 0 on an unsettled round, which is also a real tile.
     winningTile: TILE_DECIDED.includes(round.status) ? round.winningTile : null,
     tileTotals: round.tileTotals.map((total) => total.toString()),

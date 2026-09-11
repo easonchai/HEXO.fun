@@ -6,7 +6,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
-use crate::constants::{SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
+use crate::constants::{BPS_DENOMINATOR, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
 use crate::errors::HexVaultError;
 use crate::events::{Deposited, ParamsSet, Paused, PoolCreated, Withdrawn};
 use crate::state::{Player, Pool};
@@ -23,6 +23,7 @@ pub struct CreatePoolParams {
     pub close_buffer: i64,
     pub vrf_timeout: i64,
     pub min_deposit: u64,
+    pub house_cut_bps: u16,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
@@ -33,6 +34,7 @@ pub struct SetParamsArgs {
     pub close_buffer: Option<i64>,
     pub vrf_timeout: Option<i64>,
     pub min_deposit: Option<u64>,
+    pub house_cut_bps: Option<u16>,
 }
 
 pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result<()> {
@@ -45,6 +47,10 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     );
     require!(
         params.close_buffer >= 0 && params.close_buffer < params.round_seconds,
+        HexVaultError::InvalidParameter
+    );
+    require!(
+        params.house_cut_bps <= BPS_DENOMINATOR,
         HexVaultError::InvalidParameter
     );
 
@@ -65,6 +71,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.close_buffer = params.close_buffer;
     pool.vrf_timeout = params.vrf_timeout;
     pool.min_deposit = params.min_deposit;
+    pool.house_cut_bps = params.house_cut_bps;
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
@@ -135,6 +142,10 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
     if let Some(v) = params.min_deposit {
         pool.min_deposit = v;
     }
+    if let Some(v) = params.house_cut_bps {
+        require!(v <= BPS_DENOMINATOR, HexVaultError::InvalidParameter);
+        pool.house_cut_bps = v;
+    }
 
     emit!(ParamsSet {
         pool: pool.key(),
@@ -144,6 +155,7 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         close_buffer: pool.close_buffer,
         vrf_timeout: pool.vrf_timeout,
         min_deposit: pool.min_deposit,
+        house_cut_bps: pool.house_cut_bps,
     });
     Ok(())
 }

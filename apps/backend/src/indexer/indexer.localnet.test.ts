@@ -188,6 +188,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         closeBuffer: new BN(2),
         vrfTimeout: new BN(5),
         minDeposit: new BN(1_000_000),
+        houseCutBps: 600,
       })
       .accountsPartial({
         authority: authority.publicKey,

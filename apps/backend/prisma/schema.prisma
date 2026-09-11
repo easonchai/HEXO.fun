@@ -26,6 +26,7 @@ model Pool {
   previousEpochEndsAt BigInt
   totalPrincipal      BigInt
   carryPot            BigInt
+  houseCutBps         Int
   updatedSlot         BigInt
 }
 
@@ -48,6 +49,7 @@ model Round {
   endsAt      BigInt
   status      Int
   pot         BigInt
+  houseCut    BigInt
   winningTile Int?
   tileTotals  Json
 }

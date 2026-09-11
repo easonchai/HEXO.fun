@@ -36,6 +36,30 @@ describe("parsePoolParams", () => {
     expect(() => parsePoolParams(["--pool-id", "2"])).toThrow(/usage/);
   });
 
+  it("overrides the House cut rate", () => {
+    expect(parsePoolParams(["--house-cut-bps", "0"])).toEqual({
+      ...DEFAULT_POOL_PARAMS,
+      houseCutBps: 0,
+    });
+    expect(parsePoolParams(["--house-cut-bps", "10000"])).toEqual({
+      ...DEFAULT_POOL_PARAMS,
+      houseCutBps: 10_000,
+    });
+  });
+
+  it("rejects a House cut rate outside 0..=10000", () => {
+    // node:util parseArgs only accepts a "-"-leading value via "=" syntax.
+    expect(() => parsePoolParams(["--house-cut-bps=-1"])).toThrow(
+      /0 to 10000/,
+    );
+    expect(() => parsePoolParams(["--house-cut-bps", "10001"])).toThrow(
+      /0 to 10000/,
+    );
+    expect(() => parsePoolParams(["--house-cut-bps", "1.5"])).toThrow(
+      /0 to 10000/,
+    );
+  });
+
   it("takes the anchor as an ISO 8601 time", () => {
     expect(
       parsePoolParams(["--epoch-anchor", "2026-09-13T16:00:00Z"]).epochAnchor,

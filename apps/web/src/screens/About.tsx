@@ -54,8 +54,8 @@ const RULES = [
     "We hold tickets in the daily draw like everyone else. If our ticket wins, the jackpot goes to the treasury and to buying back our token. It always goes back to the community.",
   ],
   [
-    "Game fees",
-    "A 6% fee, paid in tickets, is taken from game winnings. Your deposit is never charged.",
+    "House cut",
+    "The House takes 6% of every round pot in tickets before the winners split the rest. Your deposit is never charged.",
   ],
 ] as const;
 

@@ -466,8 +466,8 @@ describe("operator queries", () => {
   it("finds the round the operator may still act on", async () => {
     await prisma.round.createMany({
       data: [
-        { id: 1n, epochId: 5n, startsAt: 0n, endsAt: 60n, status: 2, pot: 0n, tileTotals: [] },
-        { id: 2n, epochId: 5n, startsAt: 60n, endsAt: 120n, status: 1, pot: 5n, tileTotals: [] },
+        { id: 1n, epochId: 5n, startsAt: 0n, endsAt: 60n, status: 2, pot: 0n, houseCut: 0n, tileTotals: [] },
+        { id: 2n, epochId: 5n, startsAt: 60n, endsAt: 120n, status: 1, pot: 5n, houseCut: 0n, tileTotals: [] },
       ],
     });
     expect(await indexer.getOpenRound()).toMatchObject({ id: 2n, status: 1 });
@@ -476,9 +476,9 @@ describe("operator queries", () => {
   it("lists positions across every round that has reached a terminal status", async () => {
     await prisma.round.createMany({
       data: [
-        { id: 1n, epochId: 5n, startsAt: 0n, endsAt: 60n, status: 2, pot: 0n, tileTotals: [] }, // Settled
-        { id: 2n, epochId: 5n, startsAt: 60n, endsAt: 120n, status: 1, pot: 5n, tileTotals: [] }, // Requested: still live
-        { id: 3n, epochId: 5n, startsAt: 120n, endsAt: 180n, status: 4, pot: 0n, tileTotals: [] }, // Voided
+        { id: 1n, epochId: 5n, startsAt: 0n, endsAt: 60n, status: 2, pot: 0n, houseCut: 0n, tileTotals: [] }, // Settled
+        { id: 2n, epochId: 5n, startsAt: 60n, endsAt: 120n, status: 1, pot: 5n, houseCut: 0n, tileTotals: [] }, // Requested: still live
+        { id: 3n, epochId: 5n, startsAt: 120n, endsAt: 180n, status: 4, pot: 0n, houseCut: 0n, tileTotals: [] }, // Voided
       ],
     });
     await prisma.position.createMany({

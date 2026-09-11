@@ -11,6 +11,8 @@ export interface PoolParams {
   readonly closeBuffer: number;
   readonly vrfTimeout: number;
   readonly minDeposit: bigint;
+  /** Basis points of every settled round pot credited to the House, 0..=10_000. */
+  readonly houseCutBps: number;
 }
 
 /**
@@ -38,16 +40,28 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
   closeBuffer: 5,
   vrfTimeout: 120,
   minDeposit: 1_000_000n, // 1 hexUSDC at 6 decimals
+  houseCutBps: 600, // 6%, the rate PRD-V2 §5.4 asks for
 };
 
 export const USAGE =
-  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601]";
+  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N]";
 
 function seconds(flag: string, raw: string): number {
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(
       `--${flag} must be a positive whole number of seconds, got "${raw}"`,
+    );
+  }
+  return value;
+}
+
+/** create_pool and set_params both cap the House cut at 10_000 bps (100%). */
+export function houseCutBps(flag: string, raw: string): number {
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0 || value > 10_000) {
+    throw new Error(
+      `--${flag} must be a whole number from 0 to 10000, got "${raw}"`,
     );
   }
   return value;
@@ -73,6 +87,7 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     "epoch-seconds"?: string;
     "round-seconds"?: string;
     "epoch-anchor"?: string;
+    "house-cut-bps"?: string;
   };
   try {
     ({ values } = parseArgs({
@@ -81,6 +96,7 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
         "epoch-seconds": { type: "string" },
         "round-seconds": { type: "string" },
         "epoch-anchor": { type: "string" },
+        "house-cut-bps": { type: "string" },
       },
       allowPositionals: false,
     }));
@@ -91,6 +107,7 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
   const epochSeconds = values["epoch-seconds"];
   const roundSeconds = values["round-seconds"];
   const epochAnchor = values["epoch-anchor"];
+  const houseCut = values["house-cut-bps"];
   const params: PoolParams = {
     ...DEFAULT_POOL_PARAMS,
     ...(epochSeconds === undefined
@@ -102,6 +119,9 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     ...(epochAnchor === undefined
       ? {}
       : { epochAnchor: isoSeconds("epoch-anchor", epochAnchor) }),
+    ...(houseCut === undefined
+      ? {}
+      : { houseCutBps: houseCutBps("house-cut-bps", houseCut) }),
   };
 
   // create_pool requires close_buffer < round_seconds, so a too-fast demo

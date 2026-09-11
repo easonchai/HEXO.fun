@@ -173,6 +173,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         closeBuffer: new BN(CLOSE_BUFFER),
         vrfTimeout: new BN(120),
         minDeposit: new BN(1_000_000),
+        houseCutBps: 600,
       })
         .accountsPartial({
           authority: authority.publicKey,
@@ -197,6 +198,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         closeBuffer: null,
         vrfTimeout: null,
         minDeposit: null,
+        houseCutBps: null,
       })
         .accountsPartial({ authority: authority.publicKey, pool })
         .rpc();

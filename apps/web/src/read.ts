@@ -45,6 +45,8 @@ export interface PoolRow {
   closeBuffer: bigint;
   vrfTimeout: bigint;
   minDeposit: bigint;
+  /** Share of a settled round's pot credited to the House, in basis points. */
+  houseCutBps: number;
   paused: boolean;
   currentEpochId: bigint;
   currentEpochStart: bigint;
@@ -85,6 +87,8 @@ export interface RoundRow {
   status: number;
   tileTotals: bigint[];
   pot: bigint;
+  /** Entries the House took from the pot at settlement; 0 until then. */
+  houseCut: bigint;
   requestedAt: bigint;
   winningTile: number;
 }
