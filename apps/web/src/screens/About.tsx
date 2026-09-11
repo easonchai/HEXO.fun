@@ -5,9 +5,10 @@
  * The Figma's hero and closing buttons were dropped: the tab bar already
  * routes to PLAY and EARN.
  *
- * Copy is the Figma's, except the draw cadence: the app draws daily, so
- * "weekly jackpot" became "daily jackpot" wherever it describes the draw.
- * Tickets still reset weekly, so those lines keep "week".
+ * Copy is the Figma's, except the draw cadence. Epochs are a day long
+ * (`epochSeconds` 86_400), and `touch` sets `entries = principal` on every
+ * rollover, so both the draw and the ticket reset are daily. The base yield
+ * has no payout schedule in the program, so those two lines still say weekly.
  */
 import { DemoBoard } from "../arena/DemoBoard.js";
 import { LogoCog, LogoWordmark } from "../arena/Arena.js";
@@ -47,7 +48,7 @@ const RULES = [
   ],
   [
     "Withdrawals",
-    "You can withdraw at any time by burning that week's tickets. Spent half your tickets? Half your deposit is still free to go. Spent them all? The rest is yours again at next week's reset, when tickets refresh.",
+    "You can withdraw at any time by burning that day's tickets. Spent half your tickets? Half your deposit is still free to go. Spent them all? The rest is yours again at the next daily reset, when tickets refresh.",
   ],
   [
     "We play too",
@@ -70,7 +71,7 @@ const FAQ = [
   ],
   [
     "What if I lose a game round?",
-    "You lose the tickets you put in. Your deposit and your 5% aren't touched, and your tickets refresh next week.",
+    "You lose the tickets you put in. Your deposit and your 5% aren't touched, and your tickets refresh tomorrow.",
   ],
   [
     "Where does the jackpot come from?",
@@ -82,7 +83,7 @@ const FAQ = [
   ],
   [
     "Can I withdraw anytime?",
-    "Yes. Withdrawing burns that week's tickets, so you can take out whatever share of your tickets you still hold. Spend them all and the rest comes back to you at the weekly reset.",
+    "Yes. Withdrawing burns that day's tickets, so you can take out whatever share of your tickets you still hold. Spend them all and the rest comes back to you at the daily reset.",
   ],
   [
     "Do you take any of the prize?",
