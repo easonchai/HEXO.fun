@@ -144,7 +144,7 @@ export function hmText(seconds: bigint): string {
 }
 
 /**
- * [DD, HH, MM, SS] for the landing's weekly-draw clock. Negative (already
+ * [DD, HH, MM, SS] for the landing's draw clock. Negative (already
  * past) clamps to all zeros. Days are not capped at two digits.
  */
 export function dhmsParts(seconds: bigint): [string, string, string, string] {
