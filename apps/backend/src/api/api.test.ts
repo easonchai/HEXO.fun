@@ -231,6 +231,7 @@ describe("API routes", () => {
       endsAt: String(CURRENT_START + 60n),
       status: 0,
       pot: "5000",
+      houseCut: "0",
     });
     assertNoLargeNumbers(body, "/pool");
   });

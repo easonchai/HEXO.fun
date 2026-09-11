@@ -254,6 +254,7 @@ describe("account sync", () => {
   });
 
   it("records the winning tile once the round is settled", async () => {
+    await put("pool", chain.poolAddress(), poolAccount());
     await put("round", chain.roundAddress(1n), roundAccount({ status: 2, winningTile: 17 }));
     await indexer.syncAccounts();
     expect((await prisma.round.findUniqueOrThrow({ where: { id: 1n } })).winningTile).toBe(17);
@@ -261,13 +262,15 @@ describe("account sync", () => {
 
   it("deletes a Position row once settle_position has closed the account", async () => {
     const round = chain.roundAddress(1n);
+    const pool = chain.poolAddress();
+    await put("pool", pool, poolAccount());
     await put("round", round, roundAccount());
     await put("position", chain.positionAddress(round, OWNER), positionAccount(OWNER, round));
     await indexer.syncAccounts();
     expect(await prisma.position.count()).toBe(1);
 
-    connection.accounts = connection.accounts.filter((account) =>
-      account.pubkey.equals(round),
+    connection.accounts = connection.accounts.filter(
+      (account) => account.pubkey.equals(round) || account.pubkey.equals(pool),
     );
     await indexer.syncAccounts();
     expect(await prisma.position.count()).toBe(0);
@@ -276,6 +279,7 @@ describe("account sync", () => {
   it("ignores an account that does not sit at this pool's PDA", async () => {
     // Same layout, different pool: the tables are keyed by owner and epoch id,
     // so a second pool's accounts would overwrite this one's.
+    await put("pool", chain.poolAddress(), poolAccount());
     await put("player", Keypair.generate().publicKey, playerAccount(STRANGER));
     await put("epoch", Keypair.generate().publicKey, epochAccount({ epochId: bn(9) }));
     await indexer.syncAccounts();
@@ -294,6 +298,7 @@ describe("account sync", () => {
   });
 
   it("stamps the cursor with the sync time so /status can age it", async () => {
+    await put("pool", chain.poolAddress(), poolAccount());
     await indexer.tick();
     const cursor = await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } });
     expect(cursor.updatedAt).not.toBeNull();
