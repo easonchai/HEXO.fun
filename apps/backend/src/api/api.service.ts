@@ -30,6 +30,12 @@ const FEED_NAMES = [
 /** How long a `getSlot` probe answers for. `rpcOk` only needs to be roughly right. */
 const RPC_PROBE_TTL_MS = 300_000;
 
+/** How long the chain clock read behind live weights answers for, short enough that they still read as live. */
+export const CHAIN_CLOCK_TTL_MS = 2_000;
+
+/** How long the jackpot vault balance read behind the open epoch's amount answers for. */
+export const JACKPOT_BALANCE_TTL_MS = 2_000;
+
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
 
 const toBigInt = (value: Prisma.Decimal): bigint => BigInt(value.toFixed());
@@ -88,11 +94,24 @@ interface RpcHealth {
   slot: number | null;
 }
 
+/**
+ * A TTL-cached read. `result` is the in-flight or last-settled promise
+ * itself, not just its resolved value: every caller inside the `at` window
+ * awaits that same promise, so a concurrent burst collapses to one chain
+ * call instead of one per caller.
+ */
+interface CachedRead<T> {
+  at: number;
+  result: Promise<T>;
+}
+
 /** Reads for every route in spec.md §3.5 except the faucet, all from Postgres. */
 @Injectable()
 export class ApiService {
   private readonly logger = new Logger(ApiService.name);
-  private probe: { at: number; result: Promise<RpcHealth> } | undefined;
+  private probe: CachedRead<RpcHealth> | undefined;
+  private clock: CachedRead<bigint> | undefined;
+  private jackpotBalance: CachedRead<bigint> | undefined;
 
   /** Simulated yield rate, so the Vault's "estimated yield" row is not hardcoded. */
   private readonly aprBps: number;
@@ -152,11 +171,10 @@ export class ApiService {
   private async liveJackpot(epoch: Epoch): Promise<bigint> {
     if (epoch.status !== EPOCH_OPEN) return epoch.jackpotAmount;
     try {
-      const { value } = await this.chain.connection.getTokenAccountBalance(
-        this.chain.jackpotVaultAddress(),
-      );
-      return BigInt(value.amount);
+      return await this.cachedJackpotBalance();
     } catch (error: unknown) {
+      // This fallback never enters the cache. cachedJackpotBalance clears a
+      // failed read, so the next request retries the chain.
       this.logger.warn(
         `jackpot vault balance read failed, serving the indexed snapshot: ${
           error instanceof Error ? error.message : String(error)
@@ -164,6 +182,32 @@ export class ApiService {
       );
       return epoch.jackpotAmount;
     }
+  }
+
+  /**
+   * The chain call `liveJackpot` caches. Unlike `chainNow`/`rpcHealth`
+   * below, a failed read clears the slot instead of sitting in it for the
+   * rest of the window: the next call retries the chain rather than
+   * repeating the same failure, and `liveJackpot`'s fallback is computed
+   * above from the failed promise, so it never becomes the cached value
+   * itself. A concurrent burst inside the window still shares one chain
+   * call: every caller reads the same pending promise before it settles.
+   */
+  private cachedJackpotBalance(): Promise<bigint> {
+    if (
+      this.jackpotBalance === undefined ||
+      Date.now() - this.jackpotBalance.at > JACKPOT_BALANCE_TTL_MS
+    ) {
+      const result = this.chain.connection
+        .getTokenAccountBalance(this.chain.jackpotVaultAddress())
+        .then(({ value }) => BigInt(value.amount));
+      const entry: CachedRead<bigint> = { at: Date.now(), result };
+      this.jackpotBalance = entry;
+      result.catch(() => {
+        if (this.jackpotBalance === entry) this.jackpotBalance = undefined;
+      });
+    }
+    return this.jackpotBalance.result;
   }
 
   getRounds(limit: number): Promise<Round[]> {
@@ -357,21 +401,42 @@ export class ApiService {
   /**
    * The Clock sysvar's `unix_timestamp`, read the same way the operator reads
    * it (see `operator/chain-state.ts`), so Weight and odds here agree with
-   * what the draw uses instead of drifting from wall time.
-   * ponytail: no caching, unlike rpcHealth below; add the same TTL cache here
-   * if /players and /leaderboard polling starts hammering the RPC.
+   * what the draw uses instead of drifting from wall time. Cached for
+   * `CHAIN_CLOCK_TTL_MS` so /players and /leaderboard polling does not turn
+   * into a chain read per viewer.
    */
-  private async chainNow(): Promise<bigint> {
-    const info = await this.chain.connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY);
-    return clockUnixTimestamp(info?.data);
+  private chainNow(): Promise<bigint> {
+    this.clock = this.cached(this.clock, CHAIN_CLOCK_TTL_MS, async () => {
+      const info = await this.chain.connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY);
+      return clockUnixTimestamp(info?.data);
+    });
+    return this.clock.result;
   }
 
   /** Cached so /status polling at 2 s does not turn into a getSlot per client. */
   private rpcHealth(): Promise<RpcHealth> {
-    if (this.probe === undefined || Date.now() - this.probe.at > RPC_PROBE_TTL_MS) {
-      this.probe = { at: Date.now(), result: this.probeRpc() };
-    }
+    this.probe = this.cached(this.probe, RPC_PROBE_TTL_MS, () => this.probeRpc());
     return this.probe.result;
+  }
+
+  /**
+   * Serves `fetch()` from `cache` for `ttlMs`, replacing it with a fresh call
+   * once the window lapses. Returns the new cache entry; the caller stores
+   * it back on its own field since a shared private field would mix values
+   * of different types across `chainNow` and `rpcHealth` above.
+   * `cachedJackpotBalance` below needs a failed read to clear its slot
+   * instead of sitting cached for the window, so it keeps its own copy of
+   * this check rather than reusing this helper.
+   */
+  private cached<T>(
+    cache: CachedRead<T> | undefined,
+    ttlMs: number,
+    fetch: () => Promise<T>,
+  ): CachedRead<T> {
+    if (cache === undefined || Date.now() - cache.at > ttlMs) {
+      return { at: Date.now(), result: fetch() };
+    }
+    return cache;
   }
 
   private async probeRpc(): Promise<RpcHealth> {

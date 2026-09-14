@@ -12,7 +12,7 @@ import { Test } from "@nestjs/testing";
 import { Prisma, type Player } from "@prisma/client";
 import { Keypair, type PublicKey, type TransactionInstruction } from "@solana/web3.js";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ChainService } from "../chain/chain.service";
 import { ConfigModule } from "../config/config.module";
@@ -20,7 +20,7 @@ import { HealthController } from "../health/health.controller";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApiModule } from "./api.module";
-import { oddsPercent, weightAt } from "./api.service";
+import { CHAIN_CLOCK_TTL_MS, JACKPOT_BALANCE_TTL_MS, oddsPercent, weightAt } from "./api.service";
 
 const NOW = BigInt(Math.floor(Date.now() / 1000));
 const EPOCH_LENGTH = 86_400n;
@@ -56,16 +56,30 @@ function clockSysvarData(unixTimestamp: bigint): Buffer {
 }
 
 const sentInstructions: TransactionInstruction[][] = [];
+
+/** Counts calls the caching tests assert against, so they check the chain
+ *  seam rather than the response body. */
+let clockReads = 0;
+let jackpotReads = 0;
+/** When set, the next `getTokenAccountBalance` call throws once and resets it. */
+let failNextJackpotRead = false;
+
 const fakeChain = {
   connection: {
     rpcEndpoint: "http://127.0.0.1:8899",
     getSlot: async (): Promise<number> => 1234,
-    getAccountInfo: async (): Promise<{ data: Buffer }> => ({
-      data: clockSysvarData(CHAIN_NOW),
-    }),
-    getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => ({
-      value: { amount: VAULT_BALANCE.toString() },
-    }),
+    getAccountInfo: async (): Promise<{ data: Buffer }> => {
+      clockReads += 1;
+      return { data: clockSysvarData(CHAIN_NOW) };
+    },
+    getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => {
+      jackpotReads += 1;
+      if (failNextJackpotRead) {
+        failNextJackpotRead = false;
+        throw new Error("simulated jackpot vault balance read failure");
+      }
+      return { value: { amount: VAULT_BALANCE.toString() } };
+    },
   },
   jackpotVaultAddress: (): PublicKey => Keypair.generate().publicKey,
   keypair: Keypair.generate(),
@@ -446,6 +460,84 @@ describe("API routes", () => {
     expect(body.slot).toBe(1234);
     expect(body.aprBps).toBe(500);
     assertNoLargeNumbers(body, "/status");
+  });
+
+  describe("chain read caching", () => {
+    // Fakes only `Date`, leaving real timers and I/O alone, so `Date.now()`
+    // inside the service's TTL caches is controlled without slowing the
+    // suite down with real waits. Installed once for the whole block rather
+    // than per test: each test only ever advances this clock forward from
+    // wherever the previous one left it, so it can never land behind a
+    // cache timestamp an earlier test already stamped (which resetting to
+    // the real "now" between tests could do, reading a still-fresh cache as
+    // stale-checked-clean by accident).
+    beforeAll(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+    });
+
+    afterAll(() => {
+      vi.useRealTimers();
+    });
+
+    it("collapses a concurrent burst of chain-clock reads to one call, then reads again after the window", async () => {
+      // Past the window from whatever an earlier test left cached, so the
+      // burst below starts from a cold cache.
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      const before = clockReads;
+
+      const burst = await Promise.all([
+        http.get(`/players/${ALICE}`),
+        http.get("/leaderboard"),
+        http.get(`/players/${ALICE}`),
+      ]);
+      burst.forEach((response) => expect(response.status).toBe(200));
+      expect(clockReads).toBe(before + 1);
+
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      await http.get(`/players/${ALICE}`).expect(200);
+      expect(clockReads).toBe(before + 2);
+    });
+
+    it("collapses a concurrent burst of jackpot balance reads to one call, then reads again after the window", async () => {
+      vi.setSystemTime(Date.now() + JACKPOT_BALANCE_TTL_MS + 1);
+      const before = jackpotReads;
+
+      const burst = await Promise.all([
+        http.get("/epochs/current"),
+        http.get("/epochs/current"),
+        http.get("/epochs/current"),
+      ]);
+      burst.forEach((response) => {
+        expect(response.status).toBe(200);
+        expect(response.body.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      });
+      expect(jackpotReads).toBe(before + 1);
+
+      vi.setSystemTime(Date.now() + JACKPOT_BALANCE_TTL_MS + 1);
+      await http.get("/epochs/current").expect(200);
+      expect(jackpotReads).toBe(before + 2);
+    });
+
+    it("falls back to the indexed snapshot on a failed jackpot read, without caching the fallback", async () => {
+      vi.setSystemTime(Date.now() + JACKPOT_BALANCE_TTL_MS + 1);
+      const before = jackpotReads;
+      failNextJackpotRead = true;
+
+      const failed = await http.get("/epochs/current").expect(200);
+      // Epoch 7's indexed jackpotAmount is seeded at 0, distinct from
+      // VAULT_BALANCE, so this proves the fallback path ran rather than a
+      // stale success.
+      expect(failed.body.jackpotAmount).toBe("0");
+      expect(jackpotReads).toBe(before + 1);
+
+      // Still inside the window the failed read opened. A cache poisoned
+      // with the "0" fallback would keep serving it here; the failed
+      // attempt must instead have cleared the cache slot, so this retries
+      // the chain and sees the vault balance again.
+      const recovered = await http.get("/epochs/current").expect(200);
+      expect(recovered.body.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      expect(jackpotReads).toBe(before + 2);
+    });
   });
 
   describe("POST /faucet", () => {
