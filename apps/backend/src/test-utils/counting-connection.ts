@@ -277,12 +277,21 @@ export class CountingConnection {
       return Promise.resolve({ error: { code: -32601, message: "Method not found" } });
     }
     // SAFETY: the indexer always calls this with [programId, config].
-    const [, config] = params as [string, { paginationKey?: string }];
+    const [, config] = params as [string, { paginationKey?: string | null }];
+    // What the real RPC does with the null it just handed back: refuses it.
+    // The last page ends the walk with `paginationKey: null` rather than
+    // leaving the field out, so a walk that reads null as "one more page"
+    // fails here instead of quietly looping (probed against devnet).
+    if (config.paginationKey === null) {
+      return Promise.resolve({
+        error: { code: -32602, message: "Invalid param at index 1: invalid type: null, expected a string" },
+      });
+    }
     const entries = [...this.accounts.entries()];
     const offset = config.paginationKey ? Number(config.paginationKey) : 0;
     const page = entries.slice(offset, offset + this.pageSize);
     const nextOffset = offset + this.pageSize;
-    const paginationKey = nextOffset < entries.length ? String(nextOffset) : undefined;
+    const paginationKey = nextOffset < entries.length ? String(nextOffset) : null;
     return Promise.resolve({
       result: {
         context: { slot: this.slot },

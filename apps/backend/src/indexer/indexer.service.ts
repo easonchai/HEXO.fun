@@ -94,7 +94,11 @@ interface ProgramAccountsV2Response {
   value: {
     accounts: RawProgramAccount[];
     count: number;
-    paginationKey?: string;
+    /** Explicitly `null` on the last page, not absent (probed 2026-09-14
+     *  against the devnet key: a 6,534-account walk ends `"paginationKey":
+     *  null` on page 7). Sending that null back is a hard RPC error, so the
+     *  walk has to treat it as the end, not as another page. */
+    paginationKey?: string | null;
   };
 }
 
@@ -467,7 +471,9 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           const page = await this.programAccountsPage(paginationKey, changedSinceSlot);
           if (slot === undefined) slot = BigInt(page.context.slot);
           raw.push(...page.value.accounts);
-          paginationKey = page.value.paginationKey;
+          // Null and absent both mean "that was the last page"; see the
+          // `paginationKey` note on ProgramAccountsV2Response.
+          paginationKey = page.value.paginationKey ?? undefined;
         } while (paginationKey !== undefined);
       } catch (error: unknown) {
         if (!(error instanceof MethodNotFound)) throw error;
