@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chainTimeNow, syncChainClock } from "./clock.js";
+import { chainTimeNow, needsResync, syncChainClock } from "./clock.js";
 
 describe("chainTimeNow", () => {
   it("reads the synced value exactly at the sync instant", () => {
@@ -40,5 +40,36 @@ describe("chainTimeNow", () => {
     // takes that at face value rather than carrying the old offset forward.
     const resynced = syncChainClock(1_001n, 2_000);
     expect(chainTimeNow(resynced, 2_500)).toBe(1_001n);
+  });
+});
+
+describe("needsResync", () => {
+  const TOLERANCE = 3n;
+
+  it("ignores the jitter the chain's own clock serves within a round", () => {
+    const sync = syncChainClock(1_000n, 0);
+    // 30 s on, the anchor reads 1_030 and the served value wanders either
+    // side of it by the measured 2.23 s spread. None of that is worth
+    // dragging the local second boundary around for.
+    for (const served of [1_028n, 1_029n, 1_030n, 1_031n, 1_032n]) {
+      expect(needsResync(sync, served, 30_000, TOLERANCE)).toBe(false);
+    }
+  });
+
+  it("re-anchors when the monotonic clock stopped while the device slept", () => {
+    // `performance.now()` froze at 10 s while the served time kept moving.
+    const sync = syncChainClock(1_000n, 0);
+    expect(needsResync(sync, 1_600n, 10_000, TOLERANCE)).toBe(true);
+  });
+
+  it("re-anchors when the anchor has fallen behind by the whole tolerance", () => {
+    const sync = syncChainClock(1_000n, 0);
+    expect(needsResync(sync, 1_012n, 9_000, TOLERANCE)).toBe(true);
+    expect(needsResync(sync, 1_011n, 9_000, TOLERANCE)).toBe(false);
+  });
+
+  it("re-anchors on a served time far enough behind, not only ahead", () => {
+    const sync = syncChainClock(1_000n, 0);
+    expect(needsResync(sync, 997n, 0, TOLERANCE)).toBe(true);
   });
 });

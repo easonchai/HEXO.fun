@@ -35,3 +35,24 @@ export function chainTimeNow(sync: ChainClockSync, monotonicNowMs: number): bigi
   const elapsedMs = monotonicNowMs - sync.syncedAtMs;
   return sync.chainTimeSeconds + BigInt(Math.floor(elapsedMs / 1000));
 }
+
+/**
+ * Whether a freshly served chain time is far enough from the extrapolation to
+ * be worth re-anchoring on mid-round. The served value jitters by a second or
+ * two either way against a clock that ticks at the same rate, so anchoring on
+ * every one only moves the local second boundary around (see
+ * `useChainClock.ts`); `toleranceSeconds` is the band that jitter has to leave
+ * before the anchor is actually wrong — a monotonic clock that stopped while
+ * the device slept, or an anchor left standing long enough for the rate
+ * difference to add up.
+ */
+export function needsResync(
+  sync: ChainClockSync,
+  servedSeconds: bigint,
+  monotonicNowMs: number,
+  toleranceSeconds: bigint,
+): boolean {
+  const local = chainTimeNow(sync, monotonicNowMs);
+  const apart = local > servedSeconds ? local - servedSeconds : servedSeconds - local;
+  return apart >= toleranceSeconds;
+}

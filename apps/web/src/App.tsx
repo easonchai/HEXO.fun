@@ -139,7 +139,7 @@ export function App() {
   // The tracked Round: open, or the last one this session saw once it has
   // settled (see api.service.ts `getState`'s comment on `round`).
   const round = state?.round ? roundLikeFrom(state.round) : null;
-  const now = useChainClock(state ? BigInt(state.chainTime) : null);
+  const now = useChainClock(state ? BigInt(state.chainTime) : null, round?.roundId ?? null);
   // The wallet balance is the one chain read left in the browser, so it
   // reloads when something actually moved, not on every poll: `snapshot` is
   // unchanged while only chain time and the heartbeat tick. The nonce covers
