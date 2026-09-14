@@ -55,7 +55,8 @@
   lands about 2s after the window opens (blockhash fetch, send, confirm). close_buffer is set to 12s on 30s rounds: 2s to land
   the request, 4s to 7s for the draw, and the rest is margin. The web countdown ends at the close and the stage reads DRAWING
   until the settle lands, at which point the reveal fires, so a slow draw shows as a longer DRAWING rather than a timer stuck at
-  zero. The operator ticks every 1s and opens the next Round 1s after ends_at. vrf_timeout (120s) bounds the ORAO tail.
+  zero. The operator sleeps until its next deadline, so the next Round opens a second after ends_at; a 60s safety tick and the
+  randomness subscription are what else wakes it. vrf_timeout (120s) bounds the ORAO tail.
 
   Demo cadence (2026-09-10): epoch_seconds 86400, round_seconds 30, close_buffer 12, on the anchored pool bootstrapped with
   --epoch-anchor 2026-09-13T16:00:00Z. One draw a day, landing at 00:00 MYT. Rounds switch on the next Round, epochs on the next
@@ -175,3 +176,24 @@
 
     local (pool 1): 8fiH2kWupGjj7MbScxXkbD6aaWpbLkAnvBqt26jc3A8B
     VPS (pools 2 and 3): 2phBznrAD5cHHQ1zq6z3Qf7dmHzrcuYsNtNPL9M8oT4B
+
+  Frontend RPC endpoint and checking for a leaked key
+
+  The browser reads chain data through VITE_PUBLIC_RPC_URL, a public endpoint that Vite inlines into the shipped bundle at build
+  time, defaulting to devnet's public cluster URL when unset. Never set this to a keyed URL: whatever the variable holds ships in
+  plaintext to every visitor, in the JS bundle and again in the wss:// URL the wallet layer derives from that same string. The
+  backend's own RPC endpoint is a separate, server-only variable and never reaches the frontend build. Everything else the browser
+  shows comes from the backend API, mostly one poll of GET /state; the wallet's own token balance is the only thing it still reads
+  from the chain directly.
+
+  Check a local build for a leaked key:
+
+    pnpm --filter @hexvault/web build
+    grep -r "api-key=" apps/web/dist
+    grep -r "helius-rpc.com" apps/web/dist
+
+  Both greps should print nothing. Check a deployed site the same way, without a local build, by pulling down what the browser actually
+  downloads:
+
+    curl -s https://<deployed-host>/ | grep -oE '/assets/[^"]+\.js'
+    curl -s https://<deployed-host><asset-path-from-above> | grep -E "api-key=|helius-rpc.com"
