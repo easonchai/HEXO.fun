@@ -29,6 +29,24 @@ import {
   type DecodedRound,
 } from "./decode";
 
+/** What a log-triggered read expects at an address, plus anything the row
+ *  builder needs that the account bytes do not carry. */
+type WantedAccount =
+  | { kind: "pool" }
+  | { kind: "epoch" }
+  | { kind: "round" }
+  | { kind: "player" }
+  | { kind: "position"; roundId: bigint };
+
+/** One string field of a decoded event, or undefined when the event has no
+ *  such field. `jsonify` renders every pubkey and u64 as a string. */
+function eventField(event: DecodedEvent, key: string): string | undefined {
+  const { data } = event;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return undefined;
+  const value = data[key];
+  return typeof value === "string" ? value : undefined;
+}
+
 /**
  * The account sync is event driven: a confirmed program log triggers one
  * `getProgramAccountsV2` walk. This sweep is the safety net for a dropped
@@ -146,6 +164,14 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   /** Set once an RPC answers "method not found" for `getProgramAccountsV2`,
    *  which a local validator and most non-Helius providers do. */
   private v2Unsupported = false;
+  /**
+   * Addresses the log path has written, and the slot it wrote them from.
+   * `getProgramAccountsV2`'s index runs behind the chain (measured
+   * 2026-09-14 against devnet: 33 to 59 slots, 13 to 24 seconds), so a sweep
+   * can hand back a row older than one of these; those rows are skipped and
+   * the entry is dropped once a sweep has caught up past it.
+   */
+  private freshWrites = new Map<string, bigint>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -243,8 +269,13 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Every confirmed pool transaction changes some account, so each one
-   * triggers a sync. Coalesced: a burst of logs during a sync runs one more
-   * sync after it, not one per log.
+   * re-reads the accounts it touched. Not a sweep: `getProgramAccountsV2`'s
+   * index runs 13 to 24 seconds behind the chain (measured 2026-09-14), so a
+   * sweep fired by a log returns a snapshot from before the transaction that
+   * fired it, and the mirror the browser reads would sit that far behind the
+   * countdown. `getMultipleAccountsInfo` reads at the connection's own
+   * commitment for one credit, against ten for the unpaginated walk this
+   * replaced, and the periodic sweep stays as the safety net.
    *
    * Subscribed on the pool PDA, not the program: every instruction takes the
    * pool account, so "mentions the pool" is exactly "belongs to this pool".
@@ -254,14 +285,143 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   private subscribeToSync(): void {
     this.syncSubscriptionId = this.chain.connection.onLogs(
       this.chain.poolAddress(),
-      (logs) => {
+      (logs, context) => {
         if (logs.err) return;
-        void this.requestSync().catch((error: unknown) =>
-          this.noteFailure("log-triggered sync failed", error),
+        void this.enqueue(() =>
+          this.refreshFromLogs(logs.logs, BigInt(context.slot)),
+        ).catch((error: unknown) =>
+          this.noteFailure("log-triggered refresh failed", error),
         );
       },
       "confirmed",
     );
+  }
+
+  /**
+   * Re-reads exactly the accounts one confirmed transaction touched.
+   *
+   * Most of them are named by the transaction's own events. Two instructions
+   * emit none — `request_round_randomness` moves the open Round, and
+   * `close_registration` moves the epoch that just ended — so the open Round
+   * and the two epochs either side of the pool's cursor are asked for every
+   * time rather than derived from an event that is not there. That is four
+   * addresses on a quiet transaction and a handful on a busy one, all in one
+   * call.
+   */
+  private async refreshFromLogs(logs: string[], slot: bigint): Promise<void> {
+    const wanted = new Map<string, WantedAccount>();
+    wanted.set(this.chain.poolAddress().toBase58(), { kind: "pool" });
+
+    const [pool, openRound] = await Promise.all([
+      this.prisma.pool.findFirst(),
+      this.getOpenRound(),
+    ]);
+    const currentEpochId = pool?.currentEpochId ?? 0n;
+    for (const epochId of [currentEpochId, currentEpochId - 1n]) {
+      if (epochId > 0n) {
+        wanted.set(this.chain.epochAddress(epochId).toBase58(), { kind: "epoch" });
+      }
+    }
+    if (openRound) {
+      wanted.set(this.chain.roundAddress(openRound.id).toBase58(), { kind: "round" });
+    }
+
+    for (const event of decodeEventLogs(this.parser, logs)) {
+      const epochId = eventField(event, "epochId");
+      const roundId = eventField(event, "roundId");
+      // JackpotPaid names its player `winner`; every other event says `owner`.
+      const owner = eventField(event, "owner") ?? eventField(event, "winner");
+      if (epochId !== undefined) {
+        wanted.set(this.chain.epochAddress(BigInt(epochId)).toBase58(), { kind: "epoch" });
+      }
+      if (roundId !== undefined) {
+        wanted.set(this.chain.roundAddress(BigInt(roundId)).toBase58(), { kind: "round" });
+      }
+      if (owner !== undefined) {
+        wanted.set(this.chain.playerAddress(new PublicKey(owner)).toBase58(), { kind: "player" });
+      }
+      if (roundId !== undefined && owner !== undefined) {
+        const round = this.chain.roundAddress(BigInt(roundId));
+        wanted.set(this.chain.positionAddress(round, new PublicKey(owner)).toBase58(), {
+          kind: "position",
+          roundId: BigInt(roundId),
+        });
+      }
+    }
+
+    const addresses = [...wanted.keys()];
+    const infos = await this.chain.connection.getMultipleAccountsInfo(
+      addresses.map((address) => new PublicKey(address)),
+    );
+    for (const [index, address] of addresses.entries()) {
+      // SAFETY: `wanted` is what `addresses` was built from, key for key.
+      await this.applyAccount(address, wanted.get(address)!, infos[index]?.data, slot);
+    }
+  }
+
+  /**
+   * Writes one account read by `refreshFromLogs`. A Position is the only
+   * account this program closes, so it is the only one whose absence means
+   * "gone"; anything else missing is a read that raced its own transaction,
+   * and the next log or sweep brings it in.
+   */
+  private async applyAccount(
+    address: string,
+    wanted: WantedAccount,
+    data: Buffer | undefined,
+    slot: bigint,
+  ): Promise<void> {
+    const coder = this.chain.program.coder.accounts;
+    const pubkey = new PublicKey(address);
+    if (data === undefined) {
+      if (wanted.kind !== "position") return;
+      await this.prisma.position.deleteMany({ where: { address } });
+      this.freshWrites.set(address, slot);
+      return;
+    }
+    switch (wanted.kind) {
+      case "pool": {
+        const row = poolRow(pubkey, coder.decode<DecodedPool>(ACCOUNT.pool, data), slot);
+        await this.prisma.pool.upsert({ where: { address: row.address }, create: row, update: row });
+        break;
+      }
+      case "epoch": {
+        const row = epochRow(coder.decode<DecodedEpoch>(ACCOUNT.epoch, data));
+        await this.prisma.epoch.upsert({ where: { id: row.id }, create: row, update: row });
+        break;
+      }
+      case "round": {
+        const row = roundRow(coder.decode<DecodedRound>(ACCOUNT.round, data));
+        await this.prisma.round.upsert({ where: { id: row.id }, create: row, update: row });
+        break;
+      }
+      case "player": {
+        const row = playerRow(coder.decode<DecodedPlayer>(ACCOUNT.player, data));
+        await this.prisma.player.upsert({ where: { owner: row.owner }, create: row, update: row });
+        break;
+      }
+      case "position": {
+        const row = positionRow(
+          pubkey,
+          coder.decode<DecodedPosition>(ACCOUNT.position, data),
+          wanted.roundId,
+        );
+        await this.prisma.position.upsert({
+          where: { address: row.address },
+          create: row,
+          update: row,
+        });
+        break;
+      }
+    }
+    this.freshWrites.set(address, slot);
+  }
+
+  /** True when the log path already wrote this address from a slot the
+   *  sweep's snapshot predates, so the sweep's row is a step backwards. */
+  private behindLogPath(pubkey: PublicKey, sweepSlot: bigint): boolean {
+    const written = this.freshWrites.get(pubkey.toBase58());
+    return written !== undefined && written > sweepSlot;
   }
 
   private requestSync(): Promise<void> {
@@ -307,12 +467,16 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       Date.now() - this.lastFullWalkAt >= FULL_WALK_INTERVAL_MS;
     const { slot, accounts } = await this.fetchAll(fullWalk ? undefined : this.lastSyncedSlot);
 
-    const pools = accounts.get<DecodedPool>(ACCOUNT.pool).filter(({ pubkey }) => pubkey.equals(pool));
+    const poolsSeen = accounts.get<DecodedPool>(ACCOUNT.pool).filter(({ pubkey }) => pubkey.equals(pool));
     // An incremental walk legitimately reports nothing when the Pool has not
     // changed; only a full walk finding it missing means misconfiguration.
-    if (fullWalk && pools.length === 0) {
+    if (fullWalk && poolsSeen.length === 0) {
       throw new Error(`configured pool ${pool.toBase58()} is not on chain or does not decode with the current IDL`);
     }
+    // Every write below skips an account the log path has already written
+    // from a newer slot than this walk's snapshot: the V2 index runs behind
+    // the chain, so without this a sweep would undo the live path's work.
+    const pools = poolsSeen.filter(({ pubkey }) => !this.behindLogPath(pubkey, slot));
     await this.prisma.$transaction(
       pools
         .map(({ pubkey, account }) => {
@@ -328,8 +492,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const epochs = accounts.get<DecodedEpoch>(ACCOUNT.epoch);
     await this.prisma.$transaction(
       epochs
-        .filter(({ pubkey, account }) =>
-          pubkey.equals(this.chain.epochAddress(BigInt(account.epochId.toString()), pool)),
+        .filter(
+          ({ pubkey, account }) =>
+            pubkey.equals(this.chain.epochAddress(BigInt(account.epochId.toString()), pool)) &&
+            !this.behindLogPath(pubkey, slot),
         )
         .map(({ account }) => {
           const row = epochRow(account);
@@ -340,17 +506,25 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const rounds = accounts.get<DecodedRound>(ACCOUNT.round).filter(({ pubkey, account }) =>
       pubkey.equals(this.chain.roundAddress(BigInt(account.roundId.toString()), pool)),
     );
+    // Filtered at the write, not above: `roundIds` below needs every round
+    // this walk saw, whether or not its row is the one being written.
     await this.prisma.$transaction(
-      rounds.map(({ account }) => {
-        const row = roundRow(account);
-        return this.prisma.round.upsert({ where: { id: row.id }, create: row, update: row });
-      }),
+      rounds
+        .filter(({ pubkey }) => !this.behindLogPath(pubkey, slot))
+        .map(({ account }) => {
+          const row = roundRow(account);
+          return this.prisma.round.upsert({ where: { id: row.id }, create: row, update: row });
+        }),
     );
 
     const players = accounts.get<DecodedPlayer>(ACCOUNT.player);
     await this.prisma.$transaction(
       players
-        .filter(({ pubkey, account }) => pubkey.equals(this.chain.playerAddress(account.owner, pool)))
+        .filter(
+          ({ pubkey, account }) =>
+            pubkey.equals(this.chain.playerAddress(account.owner, pool)) &&
+            !this.behindLogPath(pubkey, slot),
+        )
         .map(({ account }) => {
           const row = playerRow(account);
           return this.prisma.player.upsert({
@@ -377,20 +551,24 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     );
     const live = positions.map((row) => row.address);
     await this.prisma.$transaction([
-      ...positions.map((row) =>
-        this.prisma.position.upsert({
-          where: { address: row.address },
-          create: row,
-          update: row,
-        }),
-      ),
+      ...positions
+        .filter((row) => !this.behindLogPath(new PublicKey(row.address), slot))
+        .map((row) =>
+          this.prisma.position.upsert({
+            where: { address: row.address },
+            create: row,
+            update: row,
+          }),
+        ),
       // A full walk does see that a closed account is gone, so it stays a
       // second guard behind the `PositionSettled` event. An incremental walk
-      // cannot: there, absence only means unchanged.
+      // cannot: there, absence only means unchanged. A Position bought since
+      // this walk's snapshot is not in `live` either, so the log path's
+      // addresses are spared the same way its rows are.
       ...(fullWalk
         ? [
             this.prisma.position.deleteMany({
-              where: live.length > 0 ? { address: { notIn: live } } : {},
+              where: { address: { notIn: [...live, ...this.freshWrites.keys()] } },
             }),
           ]
         : []),
@@ -401,6 +579,11 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     // slot past pages it never read.
     if (fullWalk) this.lastFullWalkAt = Date.now();
     this.lastSyncedSlot = slot;
+    // The sweep has caught up to everything written at or before its
+    // snapshot, so those entries have nothing left to protect.
+    for (const [address, written] of this.freshWrites) {
+      if (written <= slot) this.freshWrites.delete(address);
+    }
   }
 
   /**

@@ -67,8 +67,10 @@ beforeEach(async () => {
   connection.failOnCallNumber = undefined;
   connection.noProgramAccountsV2 = false;
   // The indexer is built once for the suite, so the flag it latches when an
-  // RPC lacks V2 has to be cleared between tests.
+  // RPC lacks V2 has to be cleared between tests, and so does what the live
+  // path has written (a fresh process starts with neither).
   indexer["v2Unsupported"] = false;
+  indexer["freshWrites"].clear();
   await wipe();
 });
 
@@ -560,6 +562,99 @@ describe("event ingest", () => {
     const event = await prisma.event.findFirstOrThrow({ where: { signature: "sig-backfill" } });
     // batch()'s own fixed block time, not the 999_999n last observed live.
     expect(event.blockTime).toBe(1_700_000_000n);
+  });
+});
+
+// `getProgramAccountsV2`'s index runs 13 to 24 seconds behind the chain
+// (measured against devnet), so a sweep fired by a log hands back a snapshot
+// from before the transaction that fired it. A confirmed log re-reads the
+// accounts it names instead, and the sweep must not undo that.
+describe("live account refresh", () => {
+  const fire = async (logs: string[], slot: number): Promise<void> => {
+    indexer["subscribeToSync"]();
+    connection.fireLogs(
+      chain.poolAddress(),
+      "confirmed",
+      { err: null, signature: `sig-${slot}`, logs: batch(`sig-${slot}`, BigInt(slot), logs).logs },
+      slot,
+    );
+    await indexer["queue"];
+  };
+
+  it("re-reads the accounts one log names, in a single call, and writes them", async () => {
+    const round = chain.roundAddress(4n);
+    await put("pool", chain.poolAddress(), poolAccount({ openRoundId: bn(4), nextRoundId: bn(5) }));
+    await put("epoch", chain.epochAddress(2n), epochAccount({ epochId: bn(2) }));
+    await put("round", round, roundAccount({ roundId: bn(4), epochId: bn(2) }));
+    await put("player", chain.playerAddress(OWNER), playerAccount(OWNER));
+    connection.resetCalls();
+
+    await fire([roundOpened, deposited], 300);
+
+    expect(connection.callsTo("getMultipleAccountsInfo")).toBe(1);
+    // The walk is the safety net now, not the live path: no page of it here.
+    expect(connection.callsTo("_rpcRequest")).toBe(0);
+    expect(await prisma.round.findUniqueOrThrow({ where: { id: 4n } })).toMatchObject({
+      epochId: 2n,
+      status: 0,
+    });
+    expect(await prisma.player.findUniqueOrThrow({ where: { owner: OWNER.toBase58() } }))
+      .toMatchObject({ principal: 3_000_000n });
+  });
+
+  it("drops a Position the settle closed, without waiting for a full walk", async () => {
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await put("position", chain.positionAddress(round, OWNER), positionAccount(OWNER, round));
+    await indexer.syncAccounts();
+    expect(await prisma.position.count()).toBe(1);
+
+    // settle_position closed it: the account reads back as gone.
+    connection.clearAccounts();
+    await put("pool", chain.poolAddress(), poolAccount());
+    await fire([positionSettled], 301);
+
+    expect(await prisma.position.count()).toBe(0);
+  });
+
+  it("keeps a sweep's older snapshot from overwriting what the log path wrote", async () => {
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    // The open Round is asked for by position rather than by event, so it
+    // has to be one the mirror already knows about.
+    await indexer.syncAccounts();
+
+    // The live read sees the settled Round…
+    await put("round", round, roundAccount({ status: 2, winningTile: 17 }));
+    await fire([], 500);
+    expect((await prisma.round.findUniqueOrThrow({ where: { id: 1n } })).winningTile).toBe(17);
+
+    // …and a sweep whose snapshot predates it still reports it Open. The
+    // fake answers every walk from slot 100, well behind the log's 500.
+    await put("round", round, roundAccount({ status: 0, winningTile: 0 }));
+    await indexer.syncAccounts();
+
+    const stored = await prisma.round.findUniqueOrThrow({ where: { id: 1n } });
+    expect(stored.status).toBe(2);
+    expect(stored.winningTile).toBe(17);
+  });
+
+  it("lets a sweep that has caught up write again", async () => {
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await indexer.syncAccounts();
+
+    await put("round", round, roundAccount({ status: 2, winningTile: 17 }));
+    await fire([], 50); // behind the fake's own sweep slot of 100
+
+    await put("round", round, roundAccount({ status: 0, winningTile: 0 }));
+    await indexer.syncAccounts();
+
+    expect((await prisma.round.findUniqueOrThrow({ where: { id: 1n } })).status).toBe(0);
+    expect(indexer["freshWrites"].size).toBe(0);
   });
 });
 
