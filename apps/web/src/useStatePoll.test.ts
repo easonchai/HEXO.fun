@@ -52,6 +52,11 @@ describe("snapshot", () => {
     expect(snapshot(deposited)).not.toBe(snapshot(state()));
   });
 
+  it("notices a register, which moves nothing else on the Player", () => {
+    const registered = state({ player: player({ regEpoch: "7", regStart: "0", regEnd: "1000" }) });
+    expect(snapshot(registered)).not.toBe(snapshot(state()));
+  });
+
   it("notices a Position bought in the tracked Round", () => {
     const bought = state({ position: { tiles: "7", stakePerTile: "1000000" } });
     expect(snapshot(bought)).not.toBe(snapshot(state()));

@@ -37,12 +37,20 @@ export interface StatePollResult {
  * change on every poll by themselves, and so do the Player's Weight and odds,
  * which accrue with chain time: comparing those would call a deposit landed
  * one poll after it was sent, whatever the chain did.
+ *
+ * Every write the UI can send has to land in here or `pending` never clears:
+ * deposit and withdraw move `principal`, buy_position moves `entries` and
+ * `position`, and `register` (the Daily Draw screen's one write) moves
+ * `regEpoch` and nothing else. The faucet moves none of them — it mints to
+ * the wallet, which `/state` does not carry — so it refreshes the balance
+ * directly instead of arming this watch (see App.tsx `onFunded`).
  */
 export function snapshot(data: StateDto): string {
   const player = data.player;
   return JSON.stringify({
     principal: player?.principal ?? null,
     entries: player?.entries ?? null,
+    regEpoch: player?.regEpoch ?? null,
     position: data.position,
     round: data.round,
     openRound: data.openRound,

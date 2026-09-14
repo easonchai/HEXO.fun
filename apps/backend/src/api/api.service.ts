@@ -41,8 +41,14 @@ const RPC_PROBE_TTL_MS = 300_000;
 /** How long the chain clock read behind live weights answers for, short enough that they still read as live. */
 export const CHAIN_CLOCK_TTL_MS = 2_000;
 
-/** How long the jackpot vault balance read behind the open epoch's amount answers for. */
-export const JACKPOT_BALANCE_TTL_MS = 2_000;
+/**
+ * How long the jackpot vault balance read behind the open epoch's amount
+ * answers for. Longer than the clock's: the vault only moves when the
+ * operator tops it up (once per epoch) or the payout drains it, so a 2 s
+ * window bought nothing and cost 30 chain calls a minute for as long as one
+ * browser tab stayed open.
+ */
+export const JACKPOT_BALANCE_TTL_MS = 15_000;
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
 

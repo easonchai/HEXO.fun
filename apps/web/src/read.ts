@@ -14,9 +14,10 @@ import type { PoolDto } from "./api.js";
 
 /**
  * What `actions.ts` needs to build instructions, and what the screens need to
- * gate the UI. Derived from `/state`'s `pool` (plus `closeBuffer`/
- * `minDeposit`, which the API mixes in from a chain-only read of its own —
- * see api.service.ts `poolConfig`).
+ * gate the UI. All of it derives from `/state`'s `pool`: `closeBuffer` and
+ * `minDeposit` are columns on the mirror (migration
+ * 20260914061500_pool_close_buffer_and_min_deposit), so serving this costs
+ * no chain read.
  */
 export interface PoolLike {
   address: PublicKey;
@@ -43,10 +44,11 @@ export function poolFromDto(
 
 /**
  * The one surviving direct chain read (spec.md "Wallet balances stay on the
- * chain"): the connected wallet's own USDC balance. `reloadKey` ties this to
- * the same poll cadence `useStatePoll` drives everything else with (pass its
- * `data`, which is a fresh object every poll), so a deposit or withdrawal
- * shows up here in step with the rest of the screen.
+ * chain"): the connected wallet's own USDC balance. `reloadKey` says when to
+ * take it again, and it has to be a value that only changes when something
+ * moved — pass the state poll's `data` object itself and this re-reads the
+ * chain every 2 s per viewer, which is the polling the whole effort removed.
+ * App.tsx passes `snapshot(state)` plus a faucet nonce.
  */
 export function useWalletBalance(
   connection: Connection,

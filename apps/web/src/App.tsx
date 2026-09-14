@@ -36,7 +36,7 @@ import { WalletMenu } from "./WalletMenu.js";
 import { poolFromDto, useWalletBalance } from "./read.js";
 import { useChainClock } from "./useChainClock.js";
 import { useApiPoll } from "./useApiPoll.js";
-import { useStatePoll } from "./useStatePoll.js";
+import { snapshot, useStatePoll } from "./useStatePoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
@@ -140,11 +140,16 @@ export function App() {
   // settled (see api.service.ts `getState`'s comment on `round`).
   const round = state?.round ? roundLikeFrom(state.round) : null;
   const now = useChainClock(state ? BigInt(state.chainTime) : null);
+  // The wallet balance is the one chain read left in the browser, so it
+  // reloads when something actually moved, not on every poll: `snapshot` is
+  // unchanged while only chain time and the heartbeat tick. The nonce covers
+  // the faucet, which mints to the wallet without touching `/state` at all.
+  const [balanceNonce, setBalanceNonce] = useState(0);
   const walletBalance = useWalletBalance(
     connection,
     state?.pool.mint ?? null,
     publicKey ?? undefined,
-    state,
+    `${state ? snapshot(state) : ""}:${balanceNonce}`,
   );
   const status = useMemo(
     () => summarizeStatus(state?.status ?? null, Date.now()),
@@ -436,7 +441,10 @@ export function App() {
               symbol={SYMBOL}
               addressCopied={addressCopied}
               onCopy={(address) => void copyAddress(address)}
-              onFunded={statePoll.kick}
+              // Not `kick()`: a faucet grant changes nothing `/state` carries,
+              // so arming the change watch would leave "confirming…" up for
+              // good. The balance is what moved, so reload just that.
+              onFunded={() => setBalanceNonce((value) => value + 1)}
               onDisconnect={() => signer.disconnect()}
             />
           ) : (
