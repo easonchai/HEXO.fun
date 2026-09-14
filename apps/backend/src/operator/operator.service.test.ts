@@ -31,11 +31,12 @@ import { epochAddress, poolAddress, roundAddress } from "../chain/pda";
 import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { CountingConnection } from "../test-utils/counting-connection";
-import { EPOCH_STATUS } from "./chain-state";
+import { EPOCH_STATUS, ROUND_STATUS } from "./chain-state";
 import type { IndexerQueries } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
 import type { SparringService } from "./sparring";
 import { msUntilWake, SAFETY_INTERVAL_SECONDS } from "./tick";
+import { RANDOMNESS_DISCRIMINATOR, randomnessAddress } from "./vrf";
 
 const PROGRAM_ID = new PublicKey("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
 const POOL = poolAddress(PROGRAM_ID, 1n);
@@ -128,6 +129,7 @@ describe("OperatorService end-of-tick timestamp", () => {
       keypair: Keypair.generate(),
       connection: new CountingConnection(accounts),
       poolAddress: () => POOL,
+      recordChainTime: () => {},
       send: async (
         _instructions: TransactionInstruction[],
       ): Promise<string> => {
@@ -233,6 +235,7 @@ describe("OperatorService read budget", () => {
       poolAddress: () => POOL,
       epochAddress: (id: bigint) => epochAddress(PROGRAM_ID, POOL, id),
       roundAddress: (id: bigint) => roundAddress(PROGRAM_ID, POOL, id),
+      recordChainTime: () => {},
       send: async () => {
         throw new Error("an idle tick must not send anything");
       },
@@ -272,6 +275,141 @@ describe("OperatorService read budget", () => {
     } finally {
       await prisma.operatorState.deleteMany({ where: { id: 1 } });
       await prisma.$disconnect();
+    }
+  });
+});
+
+// Ticket 04: a Round awaiting VRF is watched via subscription rather than
+// polled. `roundAccount`/`requestedPool` below fix `currentEpochId` at 0 (no
+// Epoch fixture needed) so `decide()`'s only live branch is step 1's Round
+// check; every other step falls through to nothing, and the fake `send`
+// throws if that assumption ever breaks.
+describe("OperatorService randomness subscription", () => {
+  const CHAIN_NOW = 1_800_000_000n;
+  const SEED = new Uint8Array(32).fill(7);
+  // The checked-in IDL has no `testFulfill`, same derivation OperatorService
+  // itself uses, kept in step with it rather than hard-coded.
+  const TEST_VRF = program.idl.instructions.some((ix) => ix.name === "testFulfill");
+  const RANDOMNESS = randomnessAddress(PROGRAM_ID, SEED, TEST_VRF);
+  const ROUND = roundAddress(PROGRAM_ID, POOL, 1n);
+
+  const requestedRound = (overrides: object = {}) => ({
+    roundId: bn(1),
+    epochId: bn(0),
+    startsAt: bn(CHAIN_NOW - 60n),
+    endsAt: bn(CHAIN_NOW - 5n),
+    status: ROUND_STATUS.REQUESTED,
+    tileTotals: Array.from({ length: 36 }, () => bn(0)),
+    pot: bn(0),
+    houseCut: bn(0),
+    vrfSeed: Array.from(SEED),
+    requestedAt: bn(CHAIN_NOW - 5n),
+    winningTile: 0,
+    bump: 255,
+    ...overrides,
+  });
+
+  async function setUp() {
+    const prisma = new PrismaService();
+    await prisma.$connect();
+    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+
+    const accounts = new Map<string, Buffer>();
+    accounts.set(
+      POOL.toBase58(),
+      await program.coder.accounts.encode(
+        "pool",
+        pool({ currentEpochId: bn(0), openRoundId: bn(1), nextRoundId: bn(2) }),
+      ),
+    );
+    accounts.set(ROUND.toBase58(), await program.coder.accounts.encode("round", requestedRound()));
+    const clock = Buffer.alloc(40);
+    clock.writeBigInt64LE(CHAIN_NOW, 32);
+    accounts.set(SYSVAR_CLOCK_PUBKEY.toBase58(), clock);
+
+    const connection = new CountingConnection(accounts);
+    const fakeChain = {
+      program,
+      programId: PROGRAM_ID,
+      keypair: Keypair.generate(),
+      connection,
+      poolAddress: () => POOL,
+      epochAddress: (id: bigint) => epochAddress(PROGRAM_ID, POOL, id),
+      roundAddress: (id: bigint) => roundAddress(PROGRAM_ID, POOL, id),
+      recordChainTime: () => {},
+      send: async () => {
+        throw new Error("this fixture's tick should never need to send anything");
+      },
+    };
+    const indexer: IndexerQueries = { playersToRegister: async () => [], unsettledPositions: async () => [] };
+    const operator = new OperatorService(
+      fakeChain as unknown as ChainService,
+      prisma,
+      indexer,
+      noopSparring,
+      stubConfig({ HEXUSDC_MINT: Keypair.generate().publicKey.toBase58() }),
+    );
+    return { prisma, connection, accounts, operator };
+  }
+
+  async function tearDown(prisma: PrismaService): Promise<void> {
+    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+    await prisma.$disconnect();
+  }
+
+  it("opens one subscription while Requested and wakes once fulfilled, without polling", async () => {
+    const { prisma, connection, operator } = await setUp();
+    try {
+      // Mocked rather than spied-through: the real `wake()` schedules another
+      // tick fire-and-forget, which is a separate concern (ticket 03) this
+      // test does not want racing its own assertions and teardown.
+      const wakeSpy = vi.spyOn(operator, "wake").mockImplementation(() => {});
+
+      const first = await operator.tick();
+      expect(first?.action).toBeNull();
+      expect(connection.callsTo("onAccountChange")).toBe(1);
+      // decide()'s own check, once per tick; unrelated to the subscription.
+      expect(connection.callsTo("getAccountInfo")).toBe(1);
+
+      // A second tick while still unfulfilled must not add a second
+      // subscription: one persistent watch replaces the poll, it is not
+      // re-armed every tick.
+      await operator.tick();
+      expect(connection.callsTo("onAccountChange")).toBe(1);
+      expect(connection.callsTo("getAccountInfo")).toBe(2);
+
+      // ORAO fulfils: the push notification wakes the operator directly,
+      // rather than waiting for the vrf-timeout deadline or the safety tick.
+      const fulfilled = Buffer.concat([
+        RANDOMNESS_DISCRIMINATOR,
+        Buffer.from([1]),
+        Buffer.alloc(32 + 32 + 64),
+      ]);
+      connection.setAccount(RANDOMNESS, fulfilled);
+      connection.fireAccountChange(RANDOMNESS);
+      expect(wakeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      await tearDown(prisma);
+    }
+  });
+
+  it("stops watching once the Round is no longer Requested", async () => {
+    const { prisma, connection, accounts, operator } = await setUp();
+    try {
+      await operator.tick();
+      expect(connection.callsTo("onAccountChange")).toBe(1);
+
+      // The next fresh read no longer finds the Round Requested (settled by
+      // whatever means); the watch must be torn down rather than left dangling.
+      accounts.set(
+        ROUND.toBase58(),
+        await program.coder.accounts.encode("round", requestedRound({ status: ROUND_STATUS.SETTLED })),
+      );
+      await operator.tick();
+      expect(connection.callsTo("removeAccountChangeListener")).toBe(1);
+      expect(connection.callsTo("onAccountChange")).toBe(1); // no new watch opened
+    } finally {
+      await tearDown(prisma);
     }
   });
 });

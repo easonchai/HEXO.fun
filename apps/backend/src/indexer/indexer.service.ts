@@ -636,6 +636,14 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     return true;
   }
 
+  /**
+   * `onLogs` carries no block time, and a finalized log arrives within a
+   * second or two of finalization, so this timestamps the event from chain
+   * time as the backend last observed it (ticket 04) instead of paying a
+   * `getBlockTime` call per event. Never wall time: a local validator's chain
+   * clock runs faster than it. `undefined` (nothing has read the clock yet)
+   * stores as null, same as a backfilled transaction with no block time.
+   */
   private subscribeToLogs(): void {
     this.subscriptionId = this.chain.connection.onLogs(
       this.chain.poolAddress(),
@@ -648,7 +656,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
             {
               signature: logs.signature,
               slot: BigInt(context.slot),
-              blockTime: await this.blockTime(context.slot),
+              blockTime: this.chain.lastObservedChainTime() ?? null,
               logs: logs.logs,
             },
             events,
@@ -657,17 +665,6 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       },
       "finalized",
     );
-  }
-
-  /** onLogs carries no block time; the catch-up poll gets it for free. */
-  private async blockTime(slot: number): Promise<bigint | null> {
-    try {
-      const seconds = await this.chain.connection.getBlockTime(slot);
-      return seconds === null ? null : BigInt(seconds);
-    } catch (error) {
-      this.noteFailure(`no block time for slot ${slot}`, error);
-      return null;
-    }
   }
 
   /**

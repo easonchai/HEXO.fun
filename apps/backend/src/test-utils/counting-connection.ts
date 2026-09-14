@@ -11,7 +11,20 @@
 // costs one call quiet and seven for a full walk. Extend it with the methods
 // those need (`getProgramAccounts`, `onLogs`, ...) rather than adding a
 // second counting fake.
+//
+// Ticket 04 added the subscription and send-confirmation methods below
+// (`onSignature`, `onAccountChange`, `getSignatureStatuses`, `getBlockHeight`,
+// `getLatestBlockhash`, `sendRawTransaction`), plus `fireLogs`/
+// `fireAccountChange` test hooks so a suite can simulate the RPC pushing a
+// notification instead of waiting on a real subscription.
 import { PublicKey } from "@solana/web3.js";
+
+/** Shape `onLogs`'s callback receives; mirrors web3.js's `Logs`. */
+interface FakeLogs {
+  err: unknown;
+  logs: string[];
+  signature: string;
+}
 
 export class CountingConnection {
   private readonly calls = new Map<string, number>();
@@ -28,6 +41,29 @@ export class CountingConnection {
   /** Answers `getProgramAccountsV2` with JSON-RPC -32601, the way a local
    *  validator and every non-Helius provider does. */
   noProgramAccountsV2 = false;
+  /** Height `getBlockHeight` answers with `send`'s expiry fallback checks. */
+  blockHeight = 0;
+  /** Whether `sendRawTransaction` lands the transaction, notifying the
+   *  `onSignature` listeners already open, as the RPC does (default: yes, with
+   *  no error). A listener opened after the send hears nothing, which is the
+   *  race `ChainService.send` has to avoid. False lets a test drive the
+   *  bounded timeout fallback instead. */
+  autoConfirmSignature = true;
+  /** Error the landing notification reports, when `autoConfirmSignature`. */
+  signatureError: unknown = null;
+  private signatureListeners: ((result: { err: unknown }) => void)[] = [];
+  /** Status `getSignatureStatuses` answers with once the wait times out;
+   *  undefined ("not found") sends `send`'s fallback on to `getBlockHeight`. */
+  signatureStatus: { err: unknown } | undefined;
+  private readonly logsListeners: {
+    address: PublicKey;
+    commitment: string | undefined;
+    callback: (logs: FakeLogs, context: { slot: number }) => void;
+  }[] = [];
+  private readonly accountChangeListeners = new Map<
+    string,
+    (info: { data: Buffer }) => void
+  >();
 
   constructor(private readonly accounts: Map<string, Buffer> = new Map()) {}
 
@@ -118,15 +154,102 @@ export class CountingConnection {
     });
   }
 
-  onLogs(address: PublicKey): number {
-    this.record("onLogs");
+  onLogs(
+    address: PublicKey,
+    callback: (logs: FakeLogs, context: { slot: number }) => void,
+    commitment?: string,
+  ): number {
+    const id = this.record("onLogs");
     this.watched = [...this.watched, address];
-    return 1;
+    this.logsListeners.push({ address, commitment, callback });
+    return id;
   }
 
   removeOnLogsListener(): Promise<void> {
     this.record("removeOnLogsListener");
     return Promise.resolve();
+  }
+
+  /** Test hook: simulates the RPC pushing a log notification to whichever
+   *  `onLogs` registration matches `address` and `commitment` (the indexer
+   *  subscribes on the same pool address twice, at different commitments). */
+  fireLogs(address: PublicKey, commitment: string, logs: FakeLogs, slot: number): void {
+    this.logsListeners
+      .find((entry) => entry.address.equals(address) && entry.commitment === commitment)
+      ?.callback(logs, { slot });
+  }
+
+  onAccountChange(
+    address: PublicKey,
+    callback: (info: { data: Buffer }) => void,
+    _commitment?: string,
+  ): number {
+    const id = this.record("onAccountChange");
+    this.accountChangeListeners.set(address.toBase58(), callback);
+    return id;
+  }
+
+  removeAccountChangeListener(_id: number): Promise<void> {
+    this.record("removeAccountChangeListener");
+    return Promise.resolve();
+  }
+
+  /** Test hook: simulates the RPC pushing a notification that `address`'s
+   *  data is now whatever `setAccount` last stored for it. */
+  fireAccountChange(address: PublicKey): void {
+    const data = this.accounts.get(address.toBase58());
+    this.accountChangeListeners.get(address.toBase58())?.({ data: data ?? Buffer.alloc(0) });
+  }
+
+  getLatestBlockhash(
+    _commitment?: string,
+  ): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
+    this.record("getLatestBlockhash");
+    return Promise.resolve({
+      blockhash: PublicKey.default.toBase58(),
+      lastValidBlockHeight: this.slot + 150,
+    });
+  }
+
+  sendRawTransaction(_rawTransaction: Buffer | Uint8Array | number[]): Promise<string> {
+    this.record("sendRawTransaction");
+    if (this.autoConfirmSignature) {
+      const listeners = this.signatureListeners;
+      this.signatureListeners = [];
+      queueMicrotask(() => {
+        for (const listener of listeners) listener({ err: this.signatureError });
+      });
+    }
+    return Promise.resolve("fake-signature");
+  }
+
+  /** See `autoConfirmSignature`. Records the signature, so a test can check
+   *  the listener watched the one `send` returned. */
+  onSignature(
+    signature: string,
+    callback: (result: { err: unknown }) => void,
+    _commitment?: string,
+  ): number {
+    const id = this.record("onSignature", [signature]);
+    this.signatureListeners = [...this.signatureListeners, callback];
+    return id;
+  }
+
+  removeSignatureListener(_id: number): Promise<void> {
+    this.record("removeSignatureListener");
+    return Promise.resolve();
+  }
+
+  getSignatureStatuses(
+    signatures: string[],
+  ): Promise<{ value: ({ err: unknown } | null)[] }> {
+    this.record("getSignatureStatuses");
+    return Promise.resolve({ value: signatures.map(() => this.signatureStatus ?? null) });
+  }
+
+  getBlockHeight(_commitment?: string): Promise<number> {
+    this.record("getBlockHeight");
+    return Promise.resolve(this.blockHeight);
   }
 
   /**

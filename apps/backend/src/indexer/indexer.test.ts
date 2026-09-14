@@ -532,6 +532,35 @@ describe("event ingest", () => {
     const pool = chain.poolAddress().toBase58();
     expect(connection.watched.map((address) => address.toBase58())).toEqual([pool, pool, pool]);
   });
+
+  // Ticket 04: the live path costs no `getBlockTime` call, and must not
+  // borrow the backfill path's real block time or fall back to wall time.
+  it("timestamps a live event from the last observed chain time, not a block-time lookup", async () => {
+    await put("pool", chain.poolAddress(), poolAccount());
+    chain.recordChainTime(1_234_567n);
+    indexer["subscribeToLogs"]();
+
+    const pool = chain.poolAddress();
+    connection.fireLogs(
+      pool,
+      "finalized",
+      { err: null, signature: "sig-live", logs: batch("sig-live", 0n, [deposited]).logs },
+      77,
+    );
+    await indexer["queue"];
+
+    const event = await prisma.event.findFirstOrThrow({ where: { signature: "sig-live" } });
+    expect(event.blockTime).toBe(1_234_567n);
+    expect(event.slot).toBe(77n);
+  });
+
+  it("keeps the transaction's own block time on a backfilled event, even with a different chain time observed live", async () => {
+    chain.recordChainTime(999_999n);
+    expect(await indexer.ingestLogs(batch("sig-backfill", 40n, [deposited]))).toBe(1);
+    const event = await prisma.event.findFirstOrThrow({ where: { signature: "sig-backfill" } });
+    // batch()'s own fixed block time, not the 999_999n last observed live.
+    expect(event.blockTime).toBe(1_700_000_000n);
+  });
 });
 
 // -------------------------------------------------------- operator reads

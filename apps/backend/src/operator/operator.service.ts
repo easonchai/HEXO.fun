@@ -25,6 +25,7 @@ import {
   decodeEpoch,
   decodePool,
   decodeRound,
+  ROUND_STATUS,
   type EpochState,
   type PoolState,
   type RoundState,
@@ -81,6 +82,15 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    * address is always safe; the timestamp only bounds the map.
    */
   private settled = new Map<string, number>();
+  /**
+   * The Round randomness address currently watched via subscription, and its
+   * websocket subscription id (ticket 04): kept in sync with `openRound` on
+   * every tick, not only the one that sent `request_round_randomness`, so a
+   * restart mid-wait re-subscribes instead of falling back to polling. The
+   * subscription only shortens the wait by calling `wake()`; `decide()`'s own
+   * `fulfilled` check inside a tick stays the one authoritative read.
+   */
+  private randomnessWatch: { address: string; subscriptionId: number } | undefined;
 
   constructor(
     private readonly chain: ChainService,
@@ -114,8 +124,14 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     void this.runAndScheduleNext();
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.clearDeadlineTimer();
+    if (this.randomnessWatch) {
+      await this.chain.connection.removeAccountChangeListener(
+        this.randomnessWatch.subscriptionId,
+      );
+      this.randomnessWatch = undefined;
+    }
   }
 
   /** The slow net (spec.md "Operator becomes deadline-driven"): runs on its
@@ -174,6 +190,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     try {
       ctx = await this.context();
       const outcome = await runTick(ctx);
+      this.syncRandomnessWatch(ctx.openRound);
       if (outcome.registerCheck) this.lastRegisterCheck = outcome.registerCheck;
       if (outcome.action) this.logger.log(`sent ${outcome.action}`);
       // A new Round exists on chain now; the Sparring player buys in without
@@ -222,6 +239,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     }
     const pool = decodePool(this.chain.program, poolAddress, poolInfo.data);
     const now = clockUnixTimestamp(clockInfo?.data);
+    this.chain.recordChainTime(now);
 
     const { currentEpoch, previousEpoch, openRound, lastRound } =
       await this.readCycle(pool);
@@ -321,6 +339,40 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     const address = randomnessAddress(this.chain.programId, seed, this.testVrf);
     const info = await this.chain.connection.getAccountInfo(address);
     return isFulfilled(info?.data);
+  }
+
+  /**
+   * Ticket 04: watches the Requested Round's randomness address so a
+   * fulfilment wakes the operator immediately, instead of waiting for
+   * `nextWakeAt`'s `vrfTimeout` fallback. Idempotent (a repeat call for the
+   * same Round is a no-op) and self-correcting: called after every tick with
+   * the freshly-read `openRound`, so it starts watching a Round found already
+   * Requested at boot, and stops watching one that just settled or voided.
+   * A subscription that drops is re-established by web3.js itself (it owns
+   * the websocket and resubscribes on reconnect); a fulfilment that arrives
+   * in that gap is still caught by the safety tick's own `fulfilled` check.
+   */
+  private syncRandomnessWatch(openRound: RoundState | null): void {
+    const wanted =
+      openRound?.status === ROUND_STATUS.REQUESTED
+        ? randomnessAddress(this.chain.programId, openRound.vrfSeed, this.testVrf).toBase58()
+        : undefined;
+    if (wanted === this.randomnessWatch?.address) return;
+    if (this.randomnessWatch) {
+      void this.chain.connection.removeAccountChangeListener(
+        this.randomnessWatch.subscriptionId,
+      );
+      this.randomnessWatch = undefined;
+    }
+    if (wanted === undefined) return;
+    const subscriptionId = this.chain.connection.onAccountChange(
+      new PublicKey(wanted),
+      (info) => {
+        if (isFulfilled(info.data)) this.wake();
+      },
+      "confirmed",
+    );
+    this.randomnessWatch = { address: wanted, subscriptionId };
   }
 
   private async authorityBalance(): Promise<bigint> {

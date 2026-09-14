@@ -14,6 +14,7 @@ import {
   Keypair,
   PublicKey,
   Transaction,
+  type SignatureResult,
   type TransactionInstruction,
 } from "@solana/web3.js";
 import bs58 from "bs58";
@@ -33,6 +34,15 @@ import {
 export const SOLANA_CONNECTION = Symbol("SOLANA_CONNECTION");
 
 /**
+ * How long `send` waits for a signature subscription to report before
+ * falling back to one status query and one block-height read (ticket 04,
+ * spec.md "A subscription still has to notice a dropped transaction"): a
+ * bare subscription would wait forever for a transaction that never landed,
+ * so the wait is bounded and the fallback decides pending from expired.
+ */
+export const CONFIRM_TIMEOUT_MS = 30_000;
+
+/**
  * Connection, Program, authority keypair, PDA helpers and a signed-send
  * helper. No business logic (deposit/withdraw/etc calls) — that lands with
  * the operator and API tickets.
@@ -47,6 +57,12 @@ export class ChainService {
 
   private readonly errorNames: Map<number, string>;
   private readonly idlErrorMessages: Map<number, string>;
+  /**
+   * The last Clock sysvar reading (the operator's tick takes one) and the wall
+   * time it was taken at. The indexer's live log path timestamps events from
+   * this instead of paying a `getBlockTime` call per event (ticket 04).
+   */
+  private lastChainTime: { value: bigint; observedAtMs: number } | undefined;
 
   constructor(
     @Inject(SOLANA_CONNECTION) connection: Connection,
@@ -108,6 +124,24 @@ export class ChainService {
     return jackpotVaultAddress(this.programId, pool);
   }
 
+  /** Records a Clock sysvar reading, for `lastObservedChainTime`. */
+  recordChainTime(now: bigint): void {
+    this.lastChainTime = { value: now, observedAtMs: Date.now() };
+  }
+
+  /**
+   * The last chain time read, advanced by the wall seconds since. The operator
+   * can sleep a minute between reads, and an event stamped with a minute-old
+   * clock would land in the wrong Round. The advance is the only wall time in
+   * it; a fast local validator's chain clock pulls ahead again on the next
+   * read. Undefined until something has read the clock once.
+   */
+  lastObservedChainTime(): bigint | undefined {
+    if (this.lastChainTime === undefined) return undefined;
+    const elapsedMs = Math.max(0, Date.now() - this.lastChainTime.observedAtMs);
+    return this.lastChainTime.value + BigInt(Math.floor(elapsedMs / 1000));
+  }
+
   /**
    * Signs with `signer` (the authority unless told otherwise, as for the
    * Sparring player), sends, confirms at "confirmed". The signer pays the fee.
@@ -131,25 +165,100 @@ export class ChainService {
         feePayer: signer.publicKey,
       }).add(...instructions);
       tx.sign(signer);
-      const signature = await this.connection.sendRawTransaction(
-        tx.serialize(),
-        {
+      // SAFETY: sign() has just filled the fee payer's signature slot.
+      const signature = bs58.encode(tx.signature as Buffer);
+      // Subscribe before sending. The RPC only notifies a signature that lands
+      // after the subscription opens, so one that confirms first never would.
+      const watch = this.watchSignature(signature);
+      try {
+        await this.connection.sendRawTransaction(tx.serialize(), {
           preflightCommitment: "confirmed",
-        },
-      );
-      const { value } = await this.connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        "confirmed",
-      );
-      if (value.err) {
-        throw new Error(
-          `transaction ${signature} failed: ${JSON.stringify(value.err)}`,
-        );
+        });
+      } catch (cause) {
+        watch.cancel();
+        throw cause;
       }
+      await this.confirm(signature, await watch.result, lastValidBlockHeight);
       return signature;
     } catch (cause) {
       throw this.mapSendError(cause);
     }
+  }
+
+  /**
+   * Confirms `signature` off a subscription instead of polling block height
+   * once a second (ticket 04, spec.md "transaction confirmation to come from
+   * a subscription rather than a block-height poll"): web3.js's own
+   * `confirmTransaction`, given a blockhash strategy, races that very poll
+   * against the subscription, so it pays for it even on the happy path.
+   *
+   * Bounded by `CONFIRM_TIMEOUT_MS`. Past it, one `getSignatureStatuses` plus
+   * one `getBlockHeight` decide pending (the blockhash has not expired yet)
+   * from expired, so a dropped send still surfaces as an error rather than a
+   * hang, which is the property the block-height strategy used to provide.
+   */
+  private async confirm(
+    signature: string,
+    result: SignatureResult | "timeout",
+    lastValidBlockHeight: number,
+  ): Promise<void> {
+    if (result !== "timeout") {
+      if (result.err) {
+        throw new Error(
+          `transaction ${signature} failed: ${JSON.stringify(result.err)}`,
+        );
+      }
+      return;
+    }
+    // The subscription itself may have dropped without web3.js noticing yet
+    // (it resubscribes on reconnect, but that misses a notification already
+    // in flight when the socket closed), so ask directly before giving up.
+    const [status] = (await this.connection.getSignatureStatuses([signature])).value;
+    if (status) {
+      if (status.err) {
+        throw new Error(
+          `transaction ${signature} failed: ${JSON.stringify(status.err)}`,
+        );
+      }
+      return;
+    }
+    const blockHeight = await this.connection.getBlockHeight("confirmed");
+    if (blockHeight > lastValidBlockHeight) {
+      throw new Error(
+        `transaction ${signature} expired: block height ${blockHeight} passed the blockhash's last valid height ${lastValidBlockHeight}`,
+      );
+    }
+    throw new Error(
+      `transaction ${signature} still pending after ${CONFIRM_TIMEOUT_MS}ms; the blockhash has not expired yet`,
+    );
+  }
+
+  /** One-shot wait for `signature` to reach "confirmed", or `"timeout"` past
+   *  `CONFIRM_TIMEOUT_MS` or on `cancel`. web3.js drops a signature listener
+   *  itself once it fires, so only the timeout and cancel paths remove it. */
+  private watchSignature(signature: string): {
+    result: Promise<SignatureResult | "timeout">;
+    cancel: () => void;
+  } {
+    let resolve!: (value: SignatureResult | "timeout") => void;
+    const result = new Promise<SignatureResult | "timeout">((r) => {
+      resolve = r;
+    });
+    const timer = setTimeout(() => stop(), CONFIRM_TIMEOUT_MS);
+    const subscriptionId = this.connection.onSignature(
+      signature,
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      "confirmed",
+    );
+    const stop = () => {
+      clearTimeout(timer);
+      void this.connection.removeSignatureListener(subscriptionId);
+      resolve("timeout");
+    };
+    return { result, cancel: stop };
   }
 
   /** Anchor's own logs already name the error; fall back to the IDL's error table. */
