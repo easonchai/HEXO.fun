@@ -101,4 +101,14 @@ export class ApiController {
   getStatus() {
     return this.api.getStatus();
   }
+
+  /**
+   * Ticket 06: the Pool, current Epoch, open Round, operator status and
+   * chain time in one response, plus `owner`'s Player when given. Screens
+   * poll this instead of their own separate requests.
+   */
+  @Get("state")
+  getState(@Query("owner") owner?: string) {
+    return this.api.getState(owner ? parseOwner(owner) : undefined);
+  }
 }

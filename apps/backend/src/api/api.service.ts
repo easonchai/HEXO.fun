@@ -1,6 +1,14 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { Prisma, type Epoch, type Player, type Pool, type Round } from "@prisma/client";
+import {
+  Prisma,
+  type Cursor,
+  type Epoch,
+  type OperatorState,
+  type Player,
+  type Pool,
+  type Round,
+} from "@prisma/client";
 import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
@@ -94,6 +102,13 @@ interface RpcHealth {
   slot: number | null;
 }
 
+/** The cached Clock sysvar value plus the wall-clock moment it was observed
+ *  (when the read resolved, not when `CachedRead.at` below was stamped). */
+interface ClockReading {
+  value: bigint;
+  observedAt: number;
+}
+
 /**
  * A TTL-cached read. `result` is the in-flight or last-settled promise
  * itself, not just its resolved value: every caller inside the `at` window
@@ -110,7 +125,7 @@ interface CachedRead<T> {
 export class ApiService {
   private readonly logger = new Logger(ApiService.name);
   private probe: CachedRead<RpcHealth> | undefined;
-  private clock: CachedRead<bigint> | undefined;
+  private clock: CachedRead<ClockReading> | undefined;
   private jackpotBalance: CachedRead<bigint> | undefined;
 
   /** Simulated yield rate, so the Vault's "estimated yield" row is not hardcoded. */
@@ -230,10 +245,79 @@ export class ApiService {
         "No Player account for that wallet yet. Deposit to open one.",
       );
     }
+    return playerDto(mine, total);
+  }
+
+  /**
+   * Ticket 06: Pool, current Epoch, open Round, Player and operator status
+   * from one point-in-time snapshot. Every DB read this needs — including
+   * the previous epoch and player scan that `drawingProgress`/`liveWeights`
+   * would otherwise re-read on their own connections — goes through one
+   * `RepeatableRead` transaction; the player scan only runs when an owner is
+   * given or the previous epoch is mid-draw. The chain-cached reads (jackpot
+   * balance, rpc health, clock) run after the transaction closes.
+   */
+  async getState(owner?: string) {
+    const { pool, epoch, previousEpoch, openRound, operator, cursor, players } =
+      await this.prisma.$transaction(
+        async (tx) => {
+          const pool = await tx.pool.findFirst();
+          if (pool === null) {
+            throw new NotFoundException(
+              "The pool is not indexed yet. Try again in a few seconds.",
+            );
+          }
+          const [epoch, previousEpoch, openRound, operator, cursor] = await Promise.all([
+            tx.epoch.findUnique({ where: { id: pool.currentEpochId } }),
+            pool.currentEpochId <= 0n
+              ? Promise.resolve(null)
+              : tx.epoch.findUnique({ where: { id: pool.currentEpochId - 1n } }),
+            tx.round.findFirst({
+              where: { status: { in: [ROUND_OPEN, ROUND_REQUESTED] } },
+              orderBy: { id: "desc" },
+            }),
+            tx.operatorState.findUnique({ where: { id: 1 } }),
+            tx.cursor.findUnique({ where: { id: 1 } }),
+          ]);
+          const needsPlayers =
+            owner !== undefined ||
+            (previousEpoch !== null &&
+              (previousEpoch.status === EPOCH_REGISTERING ||
+                previousEpoch.status === EPOCH_DRAWING));
+          const players = needsPlayers ? await tx.player.findMany() : [];
+          return { pool, epoch, previousEpoch, openRound, operator, cursor, players };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+      );
+    if (epoch === null) {
+      throw new NotFoundException(
+        "The current epoch is not indexed yet. Try again in a few seconds.",
+      );
+    }
+
+    const [jackpotAmount, rpc, chainTime] = await Promise.all([
+      this.liveJackpot(epoch),
+      this.rpcHealth(),
+      this.extrapolatedChainNow(),
+    ]);
+
+    // Same extrapolated instant for the response's chainTime and for the
+    // Player's liveWeight, so the two never disagree by the clock's TTL.
+    const { weights, total } = weightsFrom(players, epoch, chainTime);
+    const mine =
+      owner === undefined ? undefined : weights.find((entry) => entry.player.owner === owner);
+
     return {
-      ...mine.player,
-      liveWeight: mine.liveWeight,
-      odds: oddsPercent(mine.drawWeight, total),
+      pool,
+      currentEpoch: {
+        ...epoch,
+        jackpotAmount,
+        drawing: drawingProgressFrom(previousEpoch, players),
+      },
+      openRound: openRound === null ? null : summarizeRound(openRound),
+      player: mine === undefined ? null : playerDto(mine, total),
+      status: statusFrom(operator, cursor, rpc, this.aprBps),
+      chainTime,
     };
   }
 
@@ -311,34 +395,7 @@ export class ApiService {
       this.prisma.cursor.findUnique({ where: { id: 1 } }),
       this.rpcHealth(),
     ]);
-    const now = nowSeconds();
-    return {
-      // The row keeps unix seconds; the frontend `Date.parse`s this field,
-      // which reads a bare digit string as NaN and shows "STALLED" forever.
-      operator: operator && {
-        ...operator,
-        lastTickAt:
-          operator.lastTickAt == null
-            ? null
-            : new Date(Number(operator.lastTickAt) * 1000),
-        // Same treatment: the crank sleeps to a deadline, so the frontend
-        // needs to know when it plans to wake before calling it stalled.
-        nextWakeAt:
-          operator.nextWakeAt == null
-            ? null
-            : new Date(Number(operator.nextWakeAt) * 1000),
-      },
-      cursor: {
-        lastSlot: cursor?.lastSlot ?? null,
-        lastSignature: cursor?.lastSignature ?? null,
-        // Null rather than 0 when the indexer has never synced, so the
-        // frontend can tell "fresh" from "never ran".
-        ageSeconds:
-          cursor?.updatedAt == null ? null : Number(now - cursor.updatedAt),
-      },
-      ...rpc,
-      aprBps: this.aprBps,
-    };
+    return statusFrom(operator, cursor, rpc, this.aprBps);
   }
 
   private async requirePool(): Promise<Pool> {
@@ -360,23 +417,11 @@ export class ApiService {
     const previous = await this.prisma.epoch.findUnique({
       where: { id: pool.currentEpochId - 1n },
     });
-    if (
-      previous === null ||
-      (previous.status !== EPOCH_REGISTERING && previous.status !== EPOCH_DRAWING)
-    ) {
-      return null;
-    }
-    const players = await this.prisma.player.findMany();
-    const eligible = players.filter(
-      (player) =>
-        weightAt(player, previous.id, previous.startsAt, previous.endsAt) > 0n,
-    ).length;
-    return {
-      epochId: previous.id,
-      registeredCount: previous.registeredCount,
-      eligible,
-      status: previous.status,
-    };
+    const needsPlayers =
+      previous !== null &&
+      (previous.status === EPOCH_REGISTERING || previous.status === EPOCH_DRAWING);
+    const players = needsPlayers ? await this.prisma.player.findMany() : [];
+    return drawingProgressFrom(previous, players);
   }
 
   /**
@@ -395,13 +440,7 @@ export class ApiService {
     }
     const at = await this.chainNow();
     const players = await this.prisma.player.findMany();
-    const weights = players.map((player) => ({
-      player,
-      liveWeight: weightAt(player, epoch.id, epoch.startsAt, at),
-      drawWeight: weightAt(player, epoch.id, epoch.startsAt, epoch.endsAt),
-    }));
-    const total = weights.reduce((sum, entry) => sum + entry.drawWeight, 0n);
-    return { weights, total };
+    return weightsFrom(players, epoch, at);
   }
 
   /**
@@ -411,10 +450,27 @@ export class ApiService {
    * `CHAIN_CLOCK_TTL_MS` so /players and /leaderboard polling does not turn
    * into a chain read per viewer.
    */
-  private chainNow(): Promise<bigint> {
+  private async chainNow(): Promise<bigint> {
+    return (await this.chainClock()).value;
+  }
+
+  /**
+   * Chain time as of right now: the cached Clock sysvar value (shared with
+   * `chainNow` above, so this spends no extra call) advanced by the wall
+   * time elapsed since it was observed, so a cache hit never serves a
+   * second that is already stale. Used only by `getState` (ticket 06).
+   */
+  private async extrapolatedChainNow(): Promise<bigint> {
+    const { value, observedAt } = await this.chainClock();
+    const elapsedSeconds = BigInt(Math.max(0, Math.floor((Date.now() - observedAt) / 1000)));
+    return value + elapsedSeconds;
+  }
+
+  /** `chainNow`/`extrapolatedChainNow`'s shared cache. */
+  private chainClock(): Promise<ClockReading> {
     this.clock = this.cached(this.clock, CHAIN_CLOCK_TTL_MS, async () => {
       const info = await this.chain.connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY);
-      return clockUnixTimestamp(info?.data);
+      return { value: clockUnixTimestamp(info?.data), observedAt: Date.now() };
     });
     return this.clock.result;
   }
@@ -477,3 +533,79 @@ const summarizeRound = (round: Round) => ({
   pot: round.pot,
   houseCut: round.houseCut,
 });
+
+/** Draw progress for the epoch that just ended, from rows already read.
+ *  Null unless `previous` is Registering or Drawing. */
+function drawingProgressFrom(previous: Epoch | null, players: Player[]) {
+  if (
+    previous === null ||
+    (previous.status !== EPOCH_REGISTERING && previous.status !== EPOCH_DRAWING)
+  ) {
+    return null;
+  }
+  const eligible = players.filter(
+    (player) => weightAt(player, previous.id, previous.startsAt, previous.endsAt) > 0n,
+  ).length;
+  return {
+    epochId: previous.id,
+    registeredCount: previous.registeredCount,
+    eligible,
+    status: previous.status,
+  };
+}
+
+/** GET /status's shape, from rows already read. */
+function statusFrom(
+  operator: OperatorState | null,
+  cursor: Cursor | null,
+  rpc: RpcHealth,
+  aprBps: number,
+) {
+  const now = nowSeconds();
+  return {
+    // The row keeps unix seconds; the frontend `Date.parse`s this field,
+    // which reads a bare digit string as NaN and shows "STALLED" forever.
+    operator: operator && {
+      ...operator,
+      lastTickAt:
+        operator.lastTickAt == null ? null : new Date(Number(operator.lastTickAt) * 1000),
+      // Same treatment: the crank sleeps to a deadline, so the frontend
+      // needs to know when it plans to wake before calling it stalled.
+      nextWakeAt:
+        operator.nextWakeAt == null ? null : new Date(Number(operator.nextWakeAt) * 1000),
+    },
+    cursor: {
+      lastSlot: cursor?.lastSlot ?? null,
+      lastSignature: cursor?.lastSignature ?? null,
+      // Null rather than 0 when the indexer has never synced, so the
+      // frontend can tell "fresh" from "never ran".
+      ageSeconds: cursor?.updatedAt == null ? null : Number(now - cursor.updatedAt),
+    },
+    ...rpc,
+    aprBps,
+  };
+}
+
+/** Each player's Weight at instant `at`, plus the epoch total, from rows already read. */
+function weightsFrom(
+  players: Player[],
+  epoch: Epoch,
+  at: bigint,
+): { weights: LiveWeight[]; total: bigint } {
+  const weights = players.map((player) => ({
+    player,
+    liveWeight: weightAt(player, epoch.id, epoch.startsAt, at),
+    drawWeight: weightAt(player, epoch.id, epoch.startsAt, epoch.endsAt),
+  }));
+  const total = weights.reduce((sum, entry) => sum + entry.drawWeight, 0n);
+  return { weights, total };
+}
+
+/** A weighted entry as `/players/:owner` and `/state` return it. */
+function playerDto(entry: LiveWeight, total: bigint) {
+  return {
+    ...entry.player,
+    liveWeight: entry.liveWeight,
+    odds: oddsPercent(entry.drawWeight, total),
+  };
+}

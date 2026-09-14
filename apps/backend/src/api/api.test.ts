@@ -462,6 +462,68 @@ describe("API routes", () => {
     assertNoLargeNumbers(body, "/status");
   });
 
+  describe("GET /state", () => {
+    it("returns the pool, current epoch, open round, status and chain time for a given owner", async () => {
+      const { body } = await http.get(`/state?owner=${ALICE}`).expect(200);
+      expect(body.pool).toMatchObject({ address: POOL_ADDRESS, currentEpochId: "7" });
+      expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
+      // Open epoch: same live-vault-balance rule as GET /epochs/current.
+      expect(body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      // Epoch 6 (the one that just ended) is seeded Registering, so the
+      // mid-draw case is exercised by the default seed, not extra setup.
+      expect(body.currentEpoch.drawing).toEqual({
+        epochId: "6",
+        registeredCount: 1,
+        eligible: 1,
+        status: 1,
+      });
+      expect(body.openRound).toEqual({
+        id: "100",
+        epochId: "7",
+        startsAt: String(CURRENT_START),
+        endsAt: String(CURRENT_START + 60n),
+        status: 0,
+        pot: "5000",
+        houseCut: "0",
+      });
+      expect(body.player).toMatchObject({ owner: ALICE, odds: "100.00" });
+      expect(body.status.operator).toMatchObject({ lastAction: "settle_round" });
+      expect(body.status.cursor.lastSlot).toBe("15");
+      expect(BigInt(body.chainTime)).toBeGreaterThanOrEqual(CHAIN_NOW);
+      assertNoLargeNumbers(body, "/state?owner");
+    });
+
+    it("omits the Player with no owner given, so a disconnected visitor gets a complete page", async () => {
+      const { body } = await http.get("/state").expect(200);
+      expect(body.player).toBeNull();
+      expect(body.pool).toBeDefined();
+      expect(body.currentEpoch).toBeDefined();
+      expect(body.openRound).toBeDefined();
+      expect(body.status).toBeDefined();
+      assertNoLargeNumbers(body, "/state");
+    });
+
+    it("returns a null Player, not a 404, for a wallet with no Player account yet", async () => {
+      const stranger = Keypair.generate().publicKey.toBase58();
+      const { body } = await http.get(`/state?owner=${stranger}`).expect(200);
+      expect(body.player).toBeNull();
+    });
+
+    it("returns a null open Round once the epoch has none open", async () => {
+      await prisma.round.update({ where: { id: 100n }, data: { status: 2 } });
+      try {
+        const { body } = await http.get("/state").expect(200);
+        expect(body.openRound).toBeNull();
+      } finally {
+        await prisma.round.update({ where: { id: 100n }, data: { status: 0 } });
+      }
+    });
+
+    it("rejects a malformed owner", async () => {
+      await http.get("/state?owner=not-a-wallet").expect(400);
+    });
+  });
+
   describe("chain read caching", () => {
     // Fakes only `Date`, leaving real timers and I/O alone, so `Date.now()`
     // inside the service's TTL caches is controlled without slowing the
@@ -537,6 +599,36 @@ describe("API routes", () => {
       const recovered = await http.get("/epochs/current").expect(200);
       expect(recovered.body.jackpotAmount).toBe(VAULT_BALANCE.toString());
       expect(jackpotReads).toBe(before + 2);
+    });
+
+    it("GET /state advances the cached chain time by the wall time elapsed since it was observed, with no extra clock read", async () => {
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      const before = clockReads;
+
+      const fresh = await http.get("/state").expect(200);
+      expect(clockReads).toBe(before + 1);
+      expect(fresh.body.chainTime).toBe(CHAIN_NOW.toString());
+
+      // Still inside the TTL window: the same cached clock value, now
+      // extrapolated forward by the whole second that elapsed, with no new
+      // read of the chain.
+      vi.setSystemTime(Date.now() + 1_500);
+      const later = await http.get("/state").expect(200);
+      expect(clockReads).toBe(before + 1);
+      expect(later.body.chainTime).toBe((CHAIN_NOW + 1n).toString());
+    });
+
+    it("GET /state reuses the cached jackpot balance for the open epoch's live amount", async () => {
+      vi.setSystemTime(Date.now() + JACKPOT_BALANCE_TTL_MS + 1);
+      const before = jackpotReads;
+
+      const first = await http.get("/state").expect(200);
+      expect(first.body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      expect(jackpotReads).toBe(before + 1);
+
+      const second = await http.get("/state").expect(200);
+      expect(second.body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      expect(jackpotReads).toBe(before + 1);
     });
   });
 
