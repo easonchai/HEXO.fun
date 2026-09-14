@@ -124,6 +124,7 @@ mod tests {
             close_buffer: 5,
             vrf_timeout: 120,
             min_deposit: 1,
+            house_cut_bps: 0,
             paused: false,
             current_epoch_id: id,
             current_epoch_start: start,

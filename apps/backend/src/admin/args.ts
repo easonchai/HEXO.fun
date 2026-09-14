@@ -3,7 +3,7 @@
 // reason bootstrap.ts's params live in bootstrap/params.ts.
 import { parseArgs } from "node:util";
 
-import { isoSeconds } from "../bootstrap/params";
+import { houseCutBps, isoSeconds } from "../bootstrap/params";
 
 export interface SetParamsInput {
   readonly epochSeconds?: number;
@@ -13,6 +13,7 @@ export interface SetParamsInput {
   readonly closeBuffer?: number;
   readonly vrfTimeout?: number;
   readonly minDeposit?: bigint;
+  readonly houseCutBps?: number;
 }
 
 export type AdminCommand =
@@ -23,7 +24,7 @@ export type AdminCommand =
 
 export const USAGE = [
   "usage: admin <command> [flags]",
-  "  set-params [--epoch-seconds N] [--epoch-anchor ISO8601] [--round-seconds N] [--close-buffer N] [--vrf-timeout N] [--min-deposit N]",
+  "  set-params [--epoch-seconds N] [--epoch-anchor ISO8601] [--round-seconds N] [--close-buffer N] [--vrf-timeout N] [--min-deposit N] [--house-cut-bps N]",
   "  pause",
   "  unpause",
   "  fund-jackpot --amount N   (N is raw atomic hexUSDC, 6 decimals)",
@@ -104,6 +105,7 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
         "close-buffer"?: string;
         "vrf-timeout"?: string;
         "min-deposit"?: string;
+        "house-cut-bps"?: string;
       };
       try {
         ({ values } = parseArgs({
@@ -115,6 +117,7 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
             "close-buffer": { type: "string" },
             "vrf-timeout": { type: "string" },
             "min-deposit": { type: "string" },
+            "house-cut-bps": { type: "string" },
           },
           allowPositionals: false,
         }));
@@ -140,6 +143,9 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
         }),
         ...(values["min-deposit"] !== undefined && {
           minDeposit: nonNegativeBigInt("min-deposit", values["min-deposit"]),
+        }),
+        ...(values["house-cut-bps"] !== undefined && {
+          houseCutBps: houseCutBps("house-cut-bps", values["house-cut-bps"]),
         }),
       };
       if (Object.keys(params).length === 0) {

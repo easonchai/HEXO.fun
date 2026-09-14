@@ -59,6 +59,22 @@ async function deposit(pool: PoolCtx, owner: Wallet, amount: bigint) {
     .rpc();
 }
 
+async function setHouseCutBps(pool: PoolCtx, houseCutBps: number) {
+  return program.methods
+    .setParams({
+      epochSeconds: null,
+      epochAnchor: null,
+      roundSeconds: null,
+      closeBuffer: null,
+      vrfTimeout: null,
+      minDeposit: null,
+      houseCutBps,
+    })
+    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
+    .signers([pool.authority])
+    .rpc();
+}
+
 async function setPause(pool: PoolCtx, paused: boolean) {
   return program.methods
     .setPause(paused)
@@ -232,7 +248,7 @@ async function expectClosed(pda: PublicKey) {
 
 describe("rounds", () => {
   it(
-    "winner takes the whole pot, loser's entries are gone, total entries conserved",
+    "winner takes the pot net of the House cut, loser's entries are gone, total entries conserved",
     async () => {
       const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
       const alice = await pool.fundedWallet(10_000_000n);
@@ -259,9 +275,12 @@ describe("rounds", () => {
         bob.keypair.publicKey,
       );
 
+      const houseBefore = await program.account.player.fetch(pool.house);
       const settled = await playToSettlement(pool, round, endsAt, 0); // tile 0 wins
       expect(settled.status).toBe(2); // Settled
+      // The pot stays gross; the House's share is recorded beside it.
       expect(settled.pot.toString()).toBe("2000000");
+      expect(settled.houseCut.toString()).toBe("120000"); // 6% of 2M
 
       await settlePosition(pool, round, alice.keypair.publicKey);
       await settlePosition(pool, round, bob.keypair.publicKey);
@@ -272,13 +291,19 @@ describe("rounds", () => {
       const bobAfter = await program.account.player.fetch(
         playerPda(pool.pool, bob.keypair.publicKey),
       );
-      // Alice staked 1M of her 5M, then wins the whole 2M pot: 5M - 1M + 2M.
-      expect(aliceAfter.entries.toString()).toBe("6000000");
+      const houseAfter = await program.account.player.fetch(pool.house);
+      // Alice staked 1M of her 5M, then takes the 2M pot less the 120k House
+      // cut: 5M - 1M + 1.88M.
+      expect(aliceAfter.entries.toString()).toBe("5880000");
       // Bob staked 1M and lost it outright.
       expect(bobAfter.entries.toString()).toBe("4000000");
-      expect(aliceAfter.entries.add(bobAfter.entries).toString()).toBe(
-        "10000000",
+      expect(houseAfter.entries.sub(houseBefore.entries).toString()).toBe(
+        "120000",
       );
+      // Zero-sum across every Player, the House included.
+      expect(
+        aliceAfter.entries.add(bobAfter.entries).add(houseAfter.entries).toString(),
+      ).toBe("10000000");
 
       await expectClosed(alicePositionPda);
       await expectClosed(bobPositionPda);
@@ -307,6 +332,8 @@ describe("rounds", () => {
       // Small stakes chosen so the pro-rata split leaves a remainder:
       // pot = 12, tile 5's total = 8, so alice gets floor(12*3/8) = 4 and bob
       // gets floor(12*5/8) = 7 -- 11 total, 1 unit of dust stays unminted.
+      // The 6% House cut floors to 0 on a pot this small, so the winners
+      // split all 12 and the dust rule is the only rounding at work.
       await buyPosition(pool, alice, round, 1n << 5n, 3n);
       await buyPosition(pool, bob, round, 1n << 5n, 5n);
       await buyPosition(pool, carol, round, 1n << 6n, 4n);
@@ -314,6 +341,7 @@ describe("rounds", () => {
       const settled = await playToSettlement(pool, round, endsAt, 5);
       expect(settled.status).toBe(2); // Settled
       expect(settled.pot.toString()).toBe("12");
+      expect(settled.houseCut.toString()).toBe("0");
 
       await settlePosition(pool, round, alice.keypair.publicKey);
       await settlePosition(pool, round, bob.keypair.publicKey);
@@ -353,6 +381,8 @@ describe("rounds", () => {
       const settled = await playToSettlement(pool, round, endsAt, 7); // nobody on tile 7
       expect(settled.status).toBe(3); // Forfeited
       expect(settled.winningTile).toBe(7);
+      // The House already takes the whole pot, so no cut comes off it.
+      expect(settled.houseCut.toString()).toBe("0");
 
       const houseAfter = await program.account.player.fetch(pool.house);
       expect(houseAfter.entries.sub(houseBefore.entries).toString()).toBe(
@@ -375,6 +405,126 @@ describe("rounds", () => {
       expect(
         await provider.connection.getBalance(alice.keypair.publicKey),
       ).toBe(aliceBalBefore + aliceRentBefore);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "credits the House exactly the cut and leaves the winners the remainder",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      const bob = await pool.fundedWallet(10_000_000n);
+      const carol = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+      await deposit(pool, bob, 5_000_000n);
+      await deposit(pool, carol, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 6);
+      // Stakes chosen so the remainder divides exactly and no dust hides the
+      // arithmetic: pot 6M, cut 360k, 5.64M split 1:3 on tile 3.
+      await buyPosition(pool, alice, round, 1n << 3n, 1_000_000n);
+      await buyPosition(pool, bob, round, 1n << 3n, 3_000_000n);
+      await buyPosition(pool, carol, round, 1n << 4n, 2_000_000n);
+
+      const houseBefore = await program.account.player.fetch(pool.house);
+      const settled = await playToSettlement(pool, round, endsAt, 3);
+      expect(settled.status).toBe(2); // Settled
+      expect(settled.pot.toString()).toBe("6000000");
+      expect(settled.houseCut.toString()).toBe("360000");
+
+      await settlePosition(pool, round, alice.keypair.publicKey);
+      await settlePosition(pool, round, bob.keypair.publicKey);
+      await settlePosition(pool, round, carol.keypair.publicKey);
+
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
+      const bobAfter = await program.account.player.fetch(
+        playerPda(pool.pool, bob.keypair.publicKey),
+      );
+      const carolAfter = await program.account.player.fetch(
+        playerPda(pool.pool, carol.keypair.publicKey),
+      );
+      const houseAfter = await program.account.player.fetch(pool.house);
+
+      expect(houseAfter.entries.sub(houseBefore.entries).toString()).toBe(
+        "360000",
+      );
+      expect(aliceAfter.entries.toString()).toBe("5410000"); // 5M - 1M + 1.41M
+      expect(bobAfter.entries.toString()).toBe("6230000"); // 5M - 3M + 4.23M
+      expect(carolAfter.entries.toString()).toBe("3000000"); // stake gone
+      expect(
+        aliceAfter.entries
+          .add(bobAfter.entries)
+          .add(carolAfter.entries)
+          .add(houseAfter.entries)
+          .toString(),
+      ).toBe("15000000");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "pays the winner the whole pot when the House cut is zero",
+    async () => {
+      const pool = await setupPool({
+        roundSeconds: 6,
+        closeBuffer: 2,
+        houseCutBps: 0,
+      });
+      const alice = await pool.fundedWallet(10_000_000n);
+      const bob = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+      await deposit(pool, bob, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 6);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
+      await buyPosition(pool, bob, round, 1n << 1n, 1_000_000n);
+
+      const houseBefore = await program.account.player.fetch(pool.house);
+      const settled = await playToSettlement(pool, round, endsAt, 0);
+      expect(settled.status).toBe(2); // Settled
+      expect(settled.houseCut.toString()).toBe("0");
+
+      await settlePosition(pool, round, alice.keypair.publicKey);
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
+      const houseAfter = await program.account.player.fetch(pool.house);
+      expect(aliceAfter.entries.toString()).toBe("6000000"); // 5M - 1M + 2M
+      expect(houseAfter.entries.toString()).toBe(houseBefore.entries.toString());
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "rejects a House cut above 100% and applies a new rate to the next round settled",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      await expect(setHouseCutBps(pool, 10_001)).rejects.toThrow();
+      await setHouseCutBps(pool, 1_000); // 10%
+      const poolAfter = await program.account.pool.fetch(pool.pool);
+      expect(poolAfter.houseCutBps).toBe(1_000);
+
+      const alice = await pool.fundedWallet(10_000_000n);
+      const bob = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+      await deposit(pool, bob, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 6);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
+      await buyPosition(pool, bob, round, 1n << 1n, 1_000_000n);
+
+      const settled = await playToSettlement(pool, round, endsAt, 0);
+      expect(settled.status).toBe(2); // Settled
+      expect(settled.houseCut.toString()).toBe("200000"); // 10% of 2M, not 6%
+
+      await settlePosition(pool, round, alice.keypair.publicKey);
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
+      expect(aliceAfter.entries.toString()).toBe("5800000"); // 5M - 1M + 1.8M
     },
     TIMEOUT,
   );
@@ -487,9 +637,9 @@ describe("rounds", () => {
       const bobAfter = await program.account.player.fetch(
         playerPda(pool.pool, bob.keypair.publicKey),
       );
-      // Same pro-rata payout as a round settled after ends_at: alice wins the
-      // whole 2M pot, bob's stake is gone.
-      expect(aliceAfter.entries.toString()).toBe("6000000"); // 5M - 1M + 2M
+      // Same pro-rata payout as a round settled after ends_at: alice takes
+      // the 2M pot less the 120k House cut, bob's stake is gone.
+      expect(aliceAfter.entries.toString()).toBe("5880000"); // 5M - 1M + 1.88M
       expect(bobAfter.entries.toString()).toBe("4000000"); // 5M - 1M, lost
     },
     TIMEOUT,

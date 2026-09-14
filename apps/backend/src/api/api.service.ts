@@ -404,4 +404,5 @@ const summarizeRound = (round: Round) => ({
   endsAt: round.endsAt,
   status: round.status,
   pot: round.pot,
+  houseCut: round.houseCut,
 });

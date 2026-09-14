@@ -173,6 +173,10 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         closeBuffer: new BN(CLOSE_BUFFER),
         vrfTimeout: new BN(120),
         minDeposit: new BN(1_000_000),
+        // Rate zero on purpose: a cut gives the House Entries, so it registers
+        // for the draw and can win it, and the assertions below expect exactly
+        // the two depositors. tests/02-rounds covers the cut itself.
+        houseCutBps: 0,
       })
         .accountsPartial({
           authority: authority.publicKey,
@@ -197,6 +201,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         closeBuffer: null,
         vrfTimeout: null,
         minDeposit: null,
+        houseCutBps: null,
       })
         .accountsPartial({ authority: authority.publicKey, pool })
         .rpc();

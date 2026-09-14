@@ -52,6 +52,12 @@ describe("parseAdminCommand", () => {
       kind: "set-params",
       params: { minDeposit: 0n },
     });
+    expect(
+      parseAdminCommand(["set-params", "--house-cut-bps", "600"]),
+    ).toEqual({
+      kind: "set-params",
+      params: { houseCutBps: 600 },
+    });
   });
 
   it("rejects set-params with no flags at all", () => {
@@ -65,6 +71,15 @@ describe("parseAdminCommand", () => {
     expect(() =>
       parseAdminCommand(["set-params", "--close-buffer=-1"]),
     ).toThrow(/non-negative whole number/);
+  });
+
+  it("rejects a House cut rate above 10000", () => {
+    expect(() =>
+      parseAdminCommand(["set-params", "--house-cut-bps", "10001"]),
+    ).toThrow(/0 to 10000/);
+    expect(() =>
+      parseAdminCommand(["set-params", "--house-cut-bps=-1"]),
+    ).toThrow(/0 to 10000/);
   });
 
   it("rejects an unknown command", () => {

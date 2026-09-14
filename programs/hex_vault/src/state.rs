@@ -38,6 +38,9 @@ pub struct Pool {
     /// Seconds after a randomness request before void / rollover is allowed.
     pub vrf_timeout: i64,
     pub min_deposit: u64,
+    /// Share of every settled round pot credited to the House, in basis
+    /// points, 0..=10_000. Applies to the next round settled.
+    pub house_cut_bps: u16,
     pub paused: bool,
     /// 0 before the first epoch.
     pub current_epoch_id: u64,
@@ -96,7 +99,11 @@ pub struct Round {
     pub status: u8,
     pub tile_totals: [u64; TILE_COUNT as usize],
     /// Entries staked in this round plus any carry from a voided round.
+    /// Stays gross: the House cut is never subtracted from it.
     pub pot: u64,
+    /// Entries taken out of `pot` for the House at settlement. 0 until then,
+    /// and on forfeited or voided rounds.
+    pub house_cut: u64,
     pub vrf_seed: [u8; 32],
     pub requested_at: i64,
     pub winning_tile: u8,

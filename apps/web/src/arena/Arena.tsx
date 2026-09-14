@@ -90,7 +90,13 @@ export function LogoWordmark({
   );
 }
 
-export function RoundPotPill({ value }: { value: bigint }) {
+export function RoundPotPill({
+  value,
+  houseCutBps,
+}: {
+  value: bigint;
+  houseCutBps: number;
+}) {
   return (
     <div
       className="hexpot"
@@ -103,8 +109,8 @@ export function RoundPotPill({ value }: { value: bigint }) {
         <div className="hexpot-tooltip">
           <div className="hexpot-tooltip-title">ROUND POT</div>
           <div>
-            Tickets everyone has staked on this round. Winning tiles split it;
-            the losing share goes to the House.
+            Tickets everyone has staked on this round. {houseCutBps / 100}%
+            goes to the House and the winning tiles split the rest.
           </div>
         </div>
       </div>
@@ -120,6 +126,8 @@ export interface ArenaProps {
   onToggleTile: (displayNumber: number) => void;
   /** True when the backend status pill is amber: the operator isn't ticking. */
   operatorStale?: boolean;
+  /** Live pool rate, for the pot tooltip. */
+  houseCutBps: number;
 }
 
 export function Arena({
@@ -127,6 +135,7 @@ export function Arena({
   canPick,
   onToggleTile,
   operatorStale = false,
+  houseCutBps,
 }: ArenaProps) {
   const {
     phase,
@@ -385,7 +394,7 @@ export function Arena({
           ) : null}
         </div>
 
-        <RoundPotPill value={pot} />
+        <RoundPotPill value={pot} houseCutBps={houseCutBps} />
       </div>
 
       {/* Round win takeover */}

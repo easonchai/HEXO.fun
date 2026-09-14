@@ -20,6 +20,7 @@ pub struct ParamsSet {
     pub close_buffer: i64,
     pub vrf_timeout: i64,
     pub min_deposit: u64,
+    pub house_cut_bps: u16,
 }
 
 #[event]
@@ -67,9 +68,12 @@ pub struct PositionBought {
 pub struct RoundSettled {
     pub round_id: u64,
     pub winning_tile: u8,
+    /// Gross: the House cut has not been subtracted from it.
     pub pot: u64,
     /// True when nobody covered the winning tile and the pot went to the House.
     pub forfeited: bool,
+    /// Entries taken out of `pot` for the House. 0 on a forfeited round.
+    pub house_cut: u64,
 }
 
 #[event]

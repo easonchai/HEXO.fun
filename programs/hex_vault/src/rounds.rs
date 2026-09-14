@@ -6,7 +6,7 @@
 
 use anchor_lang::prelude::*;
 
-use crate::constants::{round_status, SEED_EPOCH, SEED_PLAYER, SEED_POOL, SEED_POSITION, SEED_ROUND, TILE_COUNT};
+use crate::constants::{round_status, BPS_DENOMINATOR, SEED_EPOCH, SEED_PLAYER, SEED_POOL, SEED_POSITION, SEED_ROUND, TILE_COUNT};
 use crate::errors::HexVaultError;
 use crate::events::{PositionBought, PositionSettled, RoundOpened, RoundSettled, RoundVoided};
 use crate::state::{Epoch, Player, Pool, Position, Round};
@@ -67,6 +67,7 @@ pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> 
     round.status = round_status::OPEN;
     round.tile_totals = [0; TILE_COUNT as usize];
     round.pot = pot;
+    round.house_cut = 0;
     round.vrf_seed = vrf_seed;
     round.requested_at = 0;
     round.winning_tile = 0;
@@ -210,23 +211,49 @@ pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
     let tile_total = round.tile_total(winning_tile)?;
     let forfeited = tile_total == 0;
 
-    if forfeited {
-        // A Round whose Epoch already rolled over already had its Entries
-        // returned to Principal by `touch`; crediting the House here would
-        // mint Entries the invariant doesn't allow (audit-fixes/01), so the
-        // pot just evaporates instead.
-        if round.epoch_id == pool.current_epoch_id {
-            let house = &mut ctx.accounts.house;
-            touch(house, pool, now)?;
-            house.entries = house
-                .entries
-                .checked_add(pot)
-                .ok_or(HexVaultError::ArithmeticOverflow)?;
-        }
-        round.status = round_status::FORFEITED;
+    // A Round whose Epoch already rolled over already had its Entries
+    // returned to Principal by `touch`; crediting the House here would mint
+    // Entries the invariant doesn't allow (audit-fixes/01), so the House's
+    // share just evaporates instead. Same rule for the whole forfeited pot
+    // and for the cut on a settled one.
+    let epoch_is_current = round.epoch_id == pool.current_epoch_id;
+
+    // On a forfeited round the House already takes the whole pot, so there is
+    // nothing left to cut. On a settled one it takes `house_cut_bps` of the
+    // gross pot and the winners split the rest in `settle_position`.
+    let house_cut = if forfeited {
+        0
     } else {
-        round.status = round_status::SETTLED;
+        let cut = u128::from(pot)
+            .checked_mul(u128::from(pool.house_cut_bps))
+            .ok_or(HexVaultError::ArithmeticOverflow)?
+            / u128::from(BPS_DENOMINATOR);
+        // cut <= pot because house_cut_bps <= BPS_DENOMINATOR, so the cast
+        // back to u64 cannot truncate.
+        u64::try_from(cut).map_err(|_| HexVaultError::ArithmeticOverflow)?
+    };
+    // A forfeited round always touches the House, even on an empty pot, so
+    // its Entries reset on schedule across an epoch boundary. A settled one
+    // only touches it when there is a cut to credit, so a pool at rate zero
+    // behaves exactly as it did before the cut existed.
+    let house_credit = if forfeited { pot } else { house_cut };
+
+    if epoch_is_current && (forfeited || house_credit > 0) {
+        let house = &mut ctx.accounts.house;
+        touch(house, pool, now)?;
+        house.entries = house
+            .entries
+            .checked_add(house_credit)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
     }
+
+    round.status = if forfeited {
+        round_status::FORFEITED
+    } else {
+        round_status::SETTLED
+    };
+    // Recorded even when it evaporated, so the Round is a complete record.
+    round.house_cut = house_cut;
     round.winning_tile = winning_tile;
     pool.open_round_id = 0;
 
@@ -236,6 +263,7 @@ pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
         winning_tile,
         pot,
         forfeited,
+        house_cut,
     });
     Ok(())
 }
@@ -268,7 +296,13 @@ pub fn settle_position(ctx: Context<SettlePosition>) -> Result<()> {
         // than Forfeited) when some position covers winning_tile, and this
         // one does, so it contributed at least stake_per_tile to it.
         let tile_total = round.tile_total(round.winning_tile)?;
-        let reward_u128 = u128::from(round.pot)
+        // The House already took `house_cut` in `settle_round`; the winners
+        // split what is left of the gross pot.
+        let payable = round
+            .pot
+            .checked_sub(round.house_cut)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        let reward_u128 = u128::from(payable)
             .checked_mul(u128::from(position.stake_per_tile))
             .ok_or(HexVaultError::ArithmeticOverflow)?
             / u128::from(tile_total);

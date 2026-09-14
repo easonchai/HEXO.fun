@@ -80,6 +80,14 @@
 
     set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --close-buffer 15
 
+  House cut: the set-params flag
+
+  --house-cut-bps sets the pool's House cut rate in basis points, a whole number from 0 to
+  10000 inclusive (0% to 100%). The default at pool creation is 600, 6%. A change applies to
+  the next round settled, never to one already settled.
+
+    set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --house-cut-bps 600
+
   Epoch anchor: when the draw lands
 
   epoch_anchor is a unix timestamp on the Pool, and it is a phase reference rather than a start time. Every epoch boundary is a point

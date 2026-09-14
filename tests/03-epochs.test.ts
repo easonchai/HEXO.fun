@@ -142,6 +142,7 @@ async function setParams(pool: PoolCtx, epochSeconds: number) {
       closeBuffer: null,
       vrfTimeout: null,
       minDeposit: null,
+      houseCutBps: null,
     })
     .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
     .signers([pool.authority])
@@ -903,6 +904,11 @@ describe("epochs", () => {
 
       const settled = await program.account.round.fetch(roundPda(pool.pool, 1n));
       expect(settled.status).toBe(round_status.SETTLED);
+      // The Round records the cut it would have taken, but the Epoch has
+      // rolled over, so it evaporated with the rest of the pot instead of
+      // reaching the House.
+      expect(settled.houseCut.toString()).toBe("120000"); // 6% of 2M
+      expect((await fetchPlayer(pool, pool.authority.publicKey)).entries.toString()).toBe("0");
 
       const alicePositionPda = positionPda(roundPda(pool.pool, 1n), alice.keypair.publicKey);
       const bobPositionPda = positionPda(roundPda(pool.pool, 1n), bob.keypair.publicKey);

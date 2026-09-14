@@ -28,6 +28,7 @@ const round = (overrides: Partial<RoundLike> = {}): RoundLike => ({
   status: 0,
   winningTile: 0,
   pot: 0n,
+  houseCut: 0n,
   tileTotals: new Array(36).fill(0n),
   ...overrides,
 });
@@ -114,6 +115,21 @@ describe("round engine", () => {
       stakePerTile: 2n,
     });
     expect(expectedReward(settled, winner)).toBe(6n);
+    // A zero House cut leaves the whole pot for the pro-rata split.
+    expect(expectedReward({ ...settled, houseCut: 0n }, winner)).toBe(6n);
+    // A non-zero House cut comes off the pot first: (700 - 100) * 3 / 250 =
+    // 7.2, floored to 7.
+    const taxed = round({
+      status: 2,
+      winningTile: 7,
+      pot: 700n,
+      houseCut: 100n,
+      tileTotals: round().tileTotals.map((_, tile) =>
+        tile === 7 ? 250n : 100n,
+      ),
+    });
+    const taxedWinner = position({ tiles: 1n << 7n, stakePerTile: 3n });
+    expect(expectedReward(taxed, taxedWinner)).toBe(7n);
     // A losing tile pays nothing even with the same stake.
     const loser = position({ tiles: 1n << 3n, stakePerTile: 2n });
     expect(expectedReward(settled, loser)).toBe(0n);

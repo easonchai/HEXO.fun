@@ -2,8 +2,9 @@
 
 A no-loss lottery on Solana with a game bolted on. Deposit USDC, keep your principal, and
 your time-weighted Entries are your odds in the draw for the pool's prize. Between draws, put
-Entries on a 36-tile hex board and take the round pot from the other players when your tile
-is drawn. Principal never moves except back to you.
+Entries on a 36-tile hex board. When your tile is drawn, the House takes a configurable cut,
+6% by default, and the rest of the pot splits among whoever covered it. Principal never moves
+except back to you.
 
 The code, the API and this file say **Entries**; the screens currently say **Tickets**. Same
 thing. [`CONTEXT.md`](CONTEXT.md) is the arbiter and it says Entries, so the UI is the side
@@ -59,7 +60,7 @@ in the navbar; the rest are routable and linked from inside the app.
 | HOME | [`/`](https://hexofun-beta.vercel.app/) | The landing frame. Today's prize as a whole-dollar hero, a countdown to the draw, one button into the vault. |
 | EARN | [`/#earn`](https://hexofun-beta.vercel.app/#earn) | The dashboard. Your principal, this epoch's prize and draw clock, your odds, past winners, your own history. Where EARN lands. |
 | VAULT | [`/#deposit`](https://hexofun-beta.vercel.app/#deposit) | The deposit widget, one hop in from the dashboard's Deposit / Withdraw buttons. Principal and Entries move together, so a withdrawal needs both. |
-| PLAY | [`/#play`](https://hexofun-beta.vercel.app/#play) | The 36-tile hex board plus the control panel. Stake Entries on tiles (ODD / EVEN / 1-36 cover the board in one click), the round closes, ORAO's VRF picks the tile, the pot goes to whoever covered it. Auto-rounds repeats the same bet. |
+| PLAY | [`/#play`](https://hexofun-beta.vercel.app/#play) | The 36-tile hex board plus the control panel. Stake Entries on tiles (ODD / EVEN / 1-36 cover the board in one click), the round closes, ORAO's VRF picks the tile, and whoever covered it splits the pot after the House takes a configurable cut (6% by default). Auto-rounds repeats the same bet. |
 | DAILY DRAW | [`/#draw`](https://hexofun-beta.vercel.app/#draw) | The epoch draw: prize, your Weight and odds, past winners. Sends `register` as the permissionless fallback if the operator has not cranked it. |
 | LEADERBOARD | [`/#ranks`](https://hexofun-beta.vercel.app/#ranks) | Top ten players by Weight in the current epoch, straight from `GET /leaderboard`. Read-only. |
 | ABOUT | [`/#about`](https://hexofun-beta.vercel.app/#about) | What this is and what can go wrong, stated plainly. |

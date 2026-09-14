@@ -2,6 +2,9 @@
 pub const TILE_COUNT: u8 = 36;
 pub const TILE_MASK: u64 = (1u64 << TILE_COUNT) - 1;
 
+/// 100% in basis points. `Pool::house_cut_bps` is capped at this.
+pub const BPS_DENOMINATOR: u16 = 10_000;
+
 pub const SEED_POOL: &[u8] = b"pool";
 pub const SEED_PRINCIPAL: &[u8] = b"principal";
 pub const SEED_JACKPOT: &[u8] = b"jackpot";

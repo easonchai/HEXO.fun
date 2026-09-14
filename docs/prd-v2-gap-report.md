@@ -44,7 +44,7 @@ Phase 0 per v2 section 13 is: sections 3, 5, 7.1 to 7.3, 7.6, backend indexer/op
 ### 2.2 Built to v1, contradicts v2
 
 1. **House win split is 50/20/30.** `epochs.rs:287-320`: `buyback_amount = amount / 2`, `treasury_amount = amount / 5`, the rest stays in the vault. v2 says 20% treasury / 80% buyback. Open decision 5 recommends 20/30/50, which is a third split, so hold until decided.
-2. **No round fee.** `settle_position` (`rounds.rs:243`) pays `pot × stake / tile_total` with no deduction. The House gets Entries only on forfeit (`rounds.rs:216-225`). v2 5.4 says 6% to the House on every settled round. Open decision 4, but v2 marks it as recommended to keep.
+2. **No round fee.** `settle_position` (`rounds.rs:243`) pays `pot × stake / tile_total` with no deduction. The House gets Entries only on forfeit (`rounds.rs:216-225`). v2 5.4 says 6% to the House on every settled round. Open decision 4, but v2 marks it as recommended to keep. Closed 2026-09-11 by the House cut. See `docs/plan/house-cut/spec.md` and `docs/adr/0007-house-cut-on-settled-rounds.md`.
 3. **Naming.** Program crate, IDL and types are `hex_vault` / `HexVaultProgram`. The About screen opens with "HexVault is a no-loss lottery prototype" (`About.tsx:12`). The nav logo already says HEXO (`App.tsx:347`). `CONTEXT.md` still says HexVault, HEX, and the 50/30/20 split.
 
 ### 2.3 Matches v2 (unchanged sections, verified)

@@ -15,7 +15,10 @@ import {
   jsonify,
   poolRow,
   registrationWeight,
+  ROUND_STATUS,
+  roundRow,
   type DecodedPool,
+  type DecodedRound,
 } from "./decode";
 
 const idl = loadIdl();
@@ -26,6 +29,11 @@ const PROGRAM_ID = new PublicKey(idl.address);
 const parser = new EventParser(PROGRAM_ID, new BorshCoder(convertIdlToCamelCase(idl)));
 
 const u8 = (value: number): Buffer => Buffer.from([value]);
+const u16 = (value: number): Buffer => {
+  const buf = Buffer.alloc(2);
+  buf.writeUInt16LE(value);
+  return buf;
+};
 const bool = (value: boolean): Buffer => Buffer.from([value ? 1 : 0]);
 
 const u64 = (value: bigint): Buffer => {
@@ -89,6 +97,7 @@ const CASES: Case[] = [
       i64(5n),
       i64(120n),
       u64(1_000_000n),
+      u16(600),
     ],
     data: {
       pool: POOL,
@@ -98,6 +107,7 @@ const CASES: Case[] = [
       closeBuffer: "5",
       vrfTimeout: "120",
       minDeposit: "1000000",
+      houseCutBps: 600,
     },
   },
   {
@@ -133,8 +143,14 @@ const CASES: Case[] = [
   },
   {
     name: "RoundSettled",
-    fields: [u64(4n), u8(35), u64(9_000n), bool(false)],
-    data: { roundId: "4", winningTile: 35, pot: "9000", forfeited: false },
+    fields: [u64(4n), u8(35), u64(9_000n), bool(false), u64(540n)],
+    data: {
+      roundId: "4",
+      winningTile: 35,
+      pot: "9000",
+      forfeited: false,
+      houseCut: "540",
+    },
   },
   {
     name: "RoundVoided",
@@ -261,6 +277,7 @@ describe("poolRow", () => {
       epochSeconds: new BN(86_400),
       epochAnchor: new BN(1_789_315_200),
       roundSeconds: new BN(60),
+      houseCutBps: 600,
       paused: false,
       currentEpochId: new BN(3),
       currentEpochEndsAt: new BN(1_789_488_000),
@@ -273,7 +290,25 @@ describe("poolRow", () => {
       epochAnchor: 1_789_315_200n,
       currentEpochEndsAt: 1_789_488_000n,
       previousEpochEndsAt: 1_789_401_600n,
+      houseCutBps: 600,
     });
+  });
+});
+
+describe("roundRow", () => {
+  it("carries the House cut", () => {
+    const round: DecodedRound = {
+      roundId: new BN(4),
+      epochId: new BN(2),
+      startsAt: new BN(1_700_000_000),
+      endsAt: new BN(1_700_000_060),
+      status: ROUND_STATUS.SETTLED,
+      tileTotals: Array(36).fill(new BN(0)),
+      pot: new BN(9_000),
+      houseCut: new BN(540),
+      winningTile: 35,
+    };
+    expect(roundRow(round)).toMatchObject({ pot: 9_000n, houseCut: 540n });
   });
 });
 

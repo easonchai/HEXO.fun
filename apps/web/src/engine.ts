@@ -28,6 +28,8 @@ export interface RoundLike {
   status: number;
   winningTile: number;
   pot: bigint;
+  /** Entries the House took from the pot at settlement; 0 until then. */
+  houseCut: bigint;
   tileTotals: bigint[];
 }
 
@@ -89,7 +91,10 @@ export function decideReveal(
 export const covers = (mask: bigint, tile: number): boolean =>
   ((mask >> BigInt(tile)) & 1n) === 1n;
 
-/** Round reward in Entries: pot × stake / staked-on-winning-tile, floored. */
+/**
+ * Round reward in Entries: (pot − House cut) × stake / staked-on-winning-tile,
+ * floored. Only runs on settled rounds, so the stored cut is always present.
+ */
 export function expectedReward(
   round: RoundLike,
   position: PositionLike,
@@ -98,7 +103,7 @@ export function expectedReward(
   if (!covers(position.tiles, round.winningTile)) return 0n;
   const winningTotal = round.tileTotals[round.winningTile] ?? 0n;
   if (winningTotal === 0n) return 0n;
-  return (round.pot * position.stakePerTile) / winningTotal;
+  return ((round.pot - round.houseCut) * position.stakePerTile) / winningTotal;
 }
 
 /**
