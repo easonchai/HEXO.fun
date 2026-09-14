@@ -109,7 +109,7 @@ export const isLocalRpc = (url: string | undefined): boolean => {
     const { hostname } = new URL(url ?? "");
     return hostname === "localhost" || hostname === "127.0.0.1";
   } catch {
-    // No VITE_RPC_URL set: chain.ts defaults to the local validator.
+    // No VITE_PUBLIC_RPC_URL set: chain.ts defaults to the local validator.
     return url === undefined || url.trim() === "";
   }
 };
@@ -122,4 +122,4 @@ export const burnerEnabled = (
   environment: Record<string, string | undefined>,
 ): boolean =>
   environment.VITE_BURNER_WALLET?.trim() === "1" &&
-  isLocalRpc(environment.VITE_RPC_URL);
+  isLocalRpc(environment.VITE_PUBLIC_RPC_URL);

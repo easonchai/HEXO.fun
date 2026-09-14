@@ -26,9 +26,10 @@ import {
   PublicKey,
   Transaction,
   VersionedTransaction,
-  clusterApiUrl,
   type PublicKey as PubkeyType,
 } from "@solana/web3.js";
+
+import { RPC_URL } from "./chain.js";
 
 export type WalletMode = "privy" | "standard";
 
@@ -74,7 +75,6 @@ const privyAppIdFrom = (
 export interface WalletEnvironment extends Record<string, string | undefined> {
   VITE_PRIVY_APP_ID?: string;
   VITE_PRIVY_CLIENT_ID?: string;
-  VITE_RPC_URL?: string;
 }
 
 /** Privy boots only when an App ID is configured; otherwise standard wallets. */
@@ -84,9 +84,6 @@ export const walletModeFor = (env: WalletEnvironment): WalletMode =>
 // Built once: connectors register wallet-standard listeners, and a fresh set
 // per render (or per StrictMode double-mount) can miss Phantom's injection.
 const SOLANA_CONNECTORS = toSolanaWalletConnectors({ shouldAutoConnect: true });
-
-/** Public devnet unless overridden; .env.example pins the local validator. */
-const DEFAULT_RPC_URL = clusterApiUrl("devnet");
 
 /**
  * WebSocket endpoint for an HTTP RPC URL. The local validator serves
@@ -126,8 +123,7 @@ export function WalletLayer({
 }) {
   const appId = privyAppIdFrom(env);
   const clientId = env.VITE_PRIVY_CLIENT_ID?.trim() || undefined;
-  const rpcUrl = env.VITE_RPC_URL?.trim() || DEFAULT_RPC_URL;
-  const rpcs = useMemo(() => solanaRpcsFor(rpcUrl), [rpcUrl]);
+  const rpcs = useMemo(() => solanaRpcsFor(RPC_URL), []);
   if (appId) {
     return (
       <PrivyProvider
