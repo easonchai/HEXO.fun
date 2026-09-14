@@ -1,10 +1,13 @@
-/** Activity-feed row mappers: indexed history and live program events → FeedRow. */
+/**
+ * Activity-feed row mapper: `GET /feed` rows → FeedRow. Ticket 07: the feed
+ * is polled (see App.tsx), not pushed over a log subscription, so there is
+ * only the one shape to map now.
+ */
 import type { EventDto } from "./api.js";
 import { eventKey } from "./chain.js";
 import { displayTile, type FeedRow } from "./engine.js";
 import { formatAddress, formatAtomic2 } from "./lib/money.js";
 import { popcount } from "./lib/protocol.js";
-import type { LiveEvent } from "./useProgramEvents.js";
 
 /** Atomic string (6dp) → truncated two-decimal text without floats. */
 export function atomicShort(text: string): string {
@@ -12,7 +15,8 @@ export function atomicShort(text: string): string {
   return formatAtomic2(BigInt(clean), 6);
 }
 
-/** Program fields arrive snake_case from the API and camelCase from a log. */
+/** Program fields arrive snake_case in some events, camelCase in others — the
+ *  raw shape `emit!` wrote, unchanged by the API. */
 const field = (data: Record<string, unknown>, ...names: string[]): string => {
   for (const name of names) {
     const value = data[name];
@@ -21,20 +25,9 @@ const field = (data: Record<string, unknown>, ...names: string[]): string => {
   return "0";
 };
 
-/**
- * The API sends addresses as base58 strings; a decoded log hands back a
- * PublicKey object. Both reduce to the same base58 text.
- */
-const addressOf = (value: unknown): string | null => {
-  if (typeof value === "string") return value;
-  if (
-    value &&
-    typeof (value as { toBase58?: unknown }).toBase58 === "function"
-  ) {
-    return (value as { toBase58(): string }).toBase58();
-  }
-  return null;
-};
+/** The API sends addresses as base58 strings. */
+const addressOf = (value: unknown): string | null =>
+  typeof value === "string" ? value : null;
 
 const whoOf = (value: unknown, owner: string | undefined): string => {
   const key = addressOf(value);
@@ -133,11 +126,6 @@ export function eventsToRows(
   return out;
 }
 
-export const liveEventToRow = (
-  event: LiveEvent,
-  owner: string | undefined,
-): FeedRow | null => toRow(event.key, event.name, event.data ?? {}, owner);
-
 /** Where a row's Round stands relative to the reveal choreography (ticket 05). */
 export type RevealHoldState = "pending" | "firing" | "landed" | "none";
 
@@ -152,16 +140,4 @@ export type RevealHoldState = "pending" | "firing" | "landed" | "none";
 export function isRowVisible(row: FeedRow, hold: RevealHoldState): boolean {
   if (row.roundId === undefined) return true;
   return hold === "landed" || hold === "none";
-}
-
-export function mergeFeed(live: FeedRow[], history: FeedRow[]): FeedRow[] {
-  const seen = new Set<string>();
-  const out: FeedRow[] = [];
-  for (const row of [...live, ...history]) {
-    if (seen.has(row.key)) continue;
-    seen.add(row.key);
-    out.push(row);
-    if (out.length >= 12) break;
-  }
-  return out;
 }

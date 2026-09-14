@@ -1,8 +1,15 @@
 /**
- * The game choreography: maps chain state onto the designer prototype's
- * phases and animation timeline. Chain is authoritative for state; this hook
- * adds only time-bound presentation (laser path, dot pops, fly tokens,
- * takeovers). All timings derive from chain time via the chain clock.
+ * The game choreography: maps protocol state onto the designer prototype's
+ * phases and animation timeline. This hook adds only time-bound presentation
+ * (laser path, dot pops, fly tokens, takeovers). All timings derive from
+ * chain time via the chain clock.
+ *
+ * Ticket 07: inputs come from the consolidated `GET /state` poll and the
+ * `GET /feed` poll instead of a chain account batch and a log subscription
+ * — see `useStatePoll.ts` and `App.tsx`. One consequence: a Round's reveal
+ * can now begin up to one poll interval after it actually settles, since the
+ * browser learns about it on the next poll rather than the instant a log
+ * arrives. That lag is accepted.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
@@ -20,6 +27,7 @@ import {
   secondsLeft,
   type FeedRow,
   type Phase,
+  type PositionLike,
   type RoundLike,
 } from "./engine.js";
 import {
@@ -30,7 +38,6 @@ import {
 } from "./arena/geo.js";
 import { formatAtomic2 } from "./lib/money.js";
 import { sfx } from "./sfx.js";
-import type { PositionRow, RoundRow } from "./read.js";
 
 const GEO = computeGeo();
 /** The core shakes this long after the result lands before it detonates and
@@ -81,16 +88,17 @@ export interface EngineOutput {
   /** `input.feed`, with a held row's Round removed until the reveal lands. */
   feed: FeedRow[];
   /** The user's position in the tracked round, if any. */
-  activePosition: PositionRow | null;
+  activePosition: PositionLike | null;
 }
 
 export interface EngineInput {
-  round: RoundRow | null;
-  position: PositionRow | null;
+  round: RoundLike | null;
+  position: PositionLike | null;
   owner: PublicKey | undefined;
   closeBuffer: bigint;
   clockNow: bigint | null;
-  /** Live rows only — history from `GET /feed` is never held, so it bypasses the engine. */
+  /** Rows from the `GET /feed` poll; a row about the tracked Round's reveal
+   *  is held here (see `activityRows.ts` `isRowVisible`) until it lands. */
   feed: FeedRow[];
 }
 

@@ -46,6 +46,10 @@ const HUGE_U128 = "123456789012345678901234567890";
 const FAKE_SIGNATURE = "FakeSignature1111111111111111111111111111111";
 /** What the fake RPC says sits in the jackpot vault while epoch 7 is open. */
 const VAULT_BALANCE = 5_000_000n;
+/** The seeded Pool row's `closeBuffer`/`minDeposit`, which the browser reads
+ *  off `/state` rather than off the chain (ticket 07). */
+const POOL_CLOSE_BUFFER = 15n;
+const POOL_MIN_DEPOSIT = 1_000_000n;
 
 /** A Clock sysvar account's data, `unix_timestamp` at byte offset 32 (see
  *  operator/chain-state.ts `clockUnixTimestamp`). The other fields are unused. */
@@ -466,6 +470,9 @@ describe("API routes", () => {
     it("returns the pool, current epoch, open round, status and chain time for a given owner", async () => {
       const { body } = await http.get(`/state?owner=${ALICE}`).expect(200);
       expect(body.pool).toMatchObject({ address: POOL_ADDRESS, currentEpochId: "7" });
+      // The browser needs both and no longer reads the Pool account itself.
+      expect(body.pool.closeBuffer).toBe(POOL_CLOSE_BUFFER.toString());
+      expect(body.pool.minDeposit).toBe(POOL_MIN_DEPOSIT.toString());
       expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
       // Open epoch: same live-vault-balance rule as GET /epochs/current.
       expect(body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
@@ -487,6 +494,11 @@ describe("API routes", () => {
         houseCut: "0",
       });
       expect(body.player).toMatchObject({ owner: ALICE, odds: "100.00" });
+      // round: the open Round's full state, no `round=` needed — it falls
+      // back to `openRound`'s id.
+      expect(body.round).toMatchObject({ id: "100", status: 0, winningTile: null });
+      // position: Alice's Position in that same Round, found the same way.
+      expect(body.position).toEqual({ tiles: "7", stakePerTile: "1000000" });
       expect(body.status.operator).toMatchObject({ lastAction: "settle_round" });
       expect(body.status.cursor.lastSlot).toBe("15");
       expect(BigInt(body.chainTime)).toBeGreaterThanOrEqual(CHAIN_NOW);
@@ -500,7 +512,38 @@ describe("API routes", () => {
       expect(body.currentEpoch).toBeDefined();
       expect(body.openRound).toBeDefined();
       expect(body.status).toBeDefined();
+      // No owner: still resolves the open Round as `round`, but no Position.
+      expect(body.round).toMatchObject({ id: "100" });
+      expect(body.position).toBeNull();
       assertNoLargeNumbers(body, "/state");
+    });
+
+    it("keeps returning a settled Round's full state — winning tile and tile totals included — once it is no longer the open Round", async () => {
+      // Round 99 settled before this session ever polled: `openRound` never
+      // shows it, but naming it with `round=` still returns everything the
+      // reveal needs, and Bob's Position in it follows the same param.
+      const { body } = await http.get(`/state?owner=${BOB}&round=99`).expect(200);
+      expect(body.openRound).toMatchObject({ id: "100" });
+      expect(body.round).toMatchObject({
+        id: "99",
+        epochId: "7",
+        status: 2,
+        winningTile: 17,
+        pot: "4000",
+        houseCut: "240",
+      });
+      expect(body.position).toEqual({ tiles: "3", stakePerTile: "500000" });
+      assertNoLargeNumbers(body, "/state?round=99");
+    });
+
+    it("returns a null round and Position for a round id nothing was seeded under", async () => {
+      const { body } = await http.get(`/state?owner=${ALICE}&round=404`).expect(200);
+      expect(body.round).toBeNull();
+      expect(body.position).toBeNull();
+    });
+
+    it("rejects a malformed round id", async () => {
+      await http.get("/state?round=not-a-number").expect(400);
     });
 
     it("returns a null Player, not a 404, for a wallet with no Player account yet", async () => {
@@ -686,6 +729,8 @@ async function seed(prisma: PrismaService): Promise<void> {
       epochSeconds: EPOCH_LENGTH,
       epochAnchor: CURRENT_START,
       roundSeconds: 60n,
+      closeBuffer: POOL_CLOSE_BUFFER,
+      minDeposit: POOL_MIN_DEPOSIT,
       houseCutBps: 600,
       paused: false,
       currentEpochId: CURRENT_EPOCH,
@@ -767,6 +812,29 @@ async function seed(prisma: PrismaService): Promise<void> {
       // Withdrew everything, so no entries and no weight this epoch.
       emptyPlayer(BOB),
       { ...emptyPlayer(HOUSE), isHouse: true },
+    ],
+  });
+
+  await prisma.position.createMany({
+    data: [
+      // Alice's Position in the open round (100): the default case, no
+      // `round` query param needed to find it.
+      {
+        address: Keypair.generate().publicKey.toBase58(),
+        owner: ALICE,
+        roundId: 100n,
+        tiles: 7n,
+        stakePerTile: 1_000_000n,
+      },
+      // Bob's Position in round 99, already Settled: only reachable by
+      // naming it explicitly with `round=99`, since it is not `openRound`.
+      {
+        address: Keypair.generate().publicKey.toBase58(),
+        owner: BOB,
+        roundId: 99n,
+        tiles: 3n,
+        stakePerTile: 500_000n,
+      },
     ],
   });
 

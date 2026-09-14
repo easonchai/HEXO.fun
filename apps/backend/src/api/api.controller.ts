@@ -106,9 +106,16 @@ export class ApiController {
    * Ticket 06: the Pool, current Epoch, open Round, operator status and
    * chain time in one response, plus `owner`'s Player when given. Screens
    * poll this instead of their own separate requests.
+   *
+   * Ticket 07: `round`, when given, also returns that Round's full state
+   * (any status) as `round`, plus `owner`'s Position in it — see
+   * `ApiService.getState`'s comment for why this differs from `openRound`.
    */
   @Get("state")
-  getState(@Query("owner") owner?: string) {
-    return this.api.getState(owner ? parseOwner(owner) : undefined);
+  getState(@Query("owner") owner?: string, @Query("round") round?: string) {
+    return this.api.getState(
+      owner ? parseOwner(owner) : undefined,
+      round !== undefined ? parseRoundId(round) : undefined,
+    );
   }
 }

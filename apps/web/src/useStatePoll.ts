@@ -1,0 +1,139 @@
+/**
+ * Ticket 07: the Indexer is the browser's read model, so this is the one
+ * poll every screen reads from — `GET /state`, selected into props by App.
+ * Runs every 2 s, tightens to 500 ms for 15 s after `kick()` (call once a
+ * sent transaction confirms), pauses while the tab is hidden and does one
+ * immediate poll on focus.
+ *
+ * Also carries whichever Round the game screen is tracking: once a Round is
+ * seen open, its id rides along on every request (`round=`), so the response
+ * keeps returning that Round's full state — winning tile and tile totals
+ * included — through settlement, until a newer Round replaces it (see
+ * api.service.ts `getState`'s comment for the backend half of this).
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { fetchState, type StateDto } from "./api.js";
+
+const NORMAL_MS = 2_000;
+const BURST_MS = 500;
+const BURST_WINDOW_MS = 15_000;
+
+export interface StatePollResult {
+  data: StateDto | null;
+  error: string | null;
+  /** True from `kick()` until the watched state changes or 15 s pass. */
+  pending: boolean;
+  /** True once 15 s have passed since `kick()` with no change: the send is
+   *  still confirming, not failed. */
+  stillConfirming: boolean;
+  /** Call right after a transaction confirms: tightens polling to 500 ms for
+   *  15 s and watches for the next poll's state to differ from right now. */
+  kick: () => void;
+}
+
+/**
+ * Only the parts a transaction moves. Chain time and the operator heartbeat
+ * change on every poll by themselves, and so do the Player's Weight and odds,
+ * which accrue with chain time: comparing those would call a deposit landed
+ * one poll after it was sent, whatever the chain did.
+ */
+export function snapshot(data: StateDto): string {
+  const player = data.player;
+  return JSON.stringify({
+    principal: player?.principal ?? null,
+    entries: player?.entries ?? null,
+    position: data.position,
+    round: data.round,
+    openRound: data.openRound,
+    jackpot: data.currentEpoch.jackpotAmount,
+    totalPrincipal: data.pool.totalPrincipal,
+  });
+}
+
+export function useStatePoll(baseUrl: string, owner: string | undefined): StatePollResult {
+  const [data, setData] = useState<StateDto | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [stillConfirming, setStillConfirming] = useState(false);
+
+  const dataRef = useRef<StateDto | null>(null);
+  const trackedRoundRef = useRef<string | undefined>(undefined);
+  const burstUntilRef = useRef(0);
+  const watchBaselineRef = useRef<string | null>(null);
+  const runRef = useRef<() => void>(() => {});
+
+  const kick = useCallback(() => {
+    burstUntilRef.current = Date.now() + BURST_WINDOW_MS;
+    watchBaselineRef.current = dataRef.current ? snapshot(dataRef.current) : null;
+    setPending(true);
+    setStillConfirming(false);
+    runRef.current();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const controller = new AbortController();
+
+    const scheduleNext = (): void => {
+      if (cancelled) return;
+      const inBurst = Date.now() < burstUntilRef.current;
+      timer = setTimeout(() => void run(), inBurst ? BURST_MS : NORMAL_MS);
+    };
+
+    // A `kick()` mid-flight cancels whatever was scheduled and runs now;
+    // `run` itself is not otherwise re-entrant-safe against overlapping
+    // fetches, which a demo-scale poll interval never triggers in practice.
+    const run = async (): Promise<void> => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (document.hidden) return; // resumed by the visibility listener below
+      const result = await fetchState(baseUrl, owner, trackedRoundRef.current, controller.signal);
+      if (cancelled) return;
+      if (result.ok) {
+        dataRef.current = result.data;
+        setData(result.data);
+        setError(null);
+        trackedRoundRef.current = result.data.openRound?.id ?? trackedRoundRef.current;
+        const baseline = watchBaselineRef.current;
+        if (baseline !== null) {
+          if (snapshot(result.data) !== baseline) {
+            watchBaselineRef.current = null;
+            setPending(false);
+            setStillConfirming(false);
+          } else if (Date.now() >= burstUntilRef.current) {
+            setStillConfirming(true);
+          }
+        }
+      } else {
+        setError(result.reason);
+      }
+      scheduleNext();
+    };
+    runRef.current = () => void run();
+
+    void run();
+
+    const onVisibility = (): void => {
+      if (document.hidden) return;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      void run();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (timer !== null) clearTimeout(timer);
+      controller.abort();
+    };
+  }, [baseUrl, owner]);
+
+  return { data, error, pending, stillConfirming, kick };
+}

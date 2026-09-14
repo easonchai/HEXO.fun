@@ -20,6 +20,8 @@ model Pool {
   epochSeconds        BigInt
   epochAnchor         BigInt
   roundSeconds        BigInt
+  closeBuffer         BigInt
+  minDeposit          BigInt
   paused              Boolean
   currentEpochId      BigInt
   currentEpochEndsAt  BigInt

@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { eventsToRows, isRowVisible, liveEventToRow } from "./activityRows.js";
+import { eventsToRows, isRowVisible } from "./activityRows.js";
 import type { EventDto } from "./api.js";
 import type { FeedRow } from "./engine.js";
-import type { LiveEvent } from "./useProgramEvents.js";
 
 const OWNER = "OwnerPubkey11111111111111111111111111111";
 
@@ -17,15 +16,6 @@ const historyRow = (
   name,
   data,
   blockTime: null,
-});
-
-const liveRow = (name: string, data: Record<string, unknown>): LiveEvent => ({
-  key: `k-${name}`,
-  name,
-  slot: 1,
-  signature: "SIG",
-  data,
-  at: 0,
 });
 
 describe("activity feed row mappers", () => {
@@ -65,16 +55,18 @@ describe("activity feed row mappers", () => {
     expect(rows[0]?.action).toBe("−3.00 Tickets");
   });
 
-  it("reads the same events off a live log, camelCased by Anchor", () => {
+  it("reads an event name already camelCased the same as a PascalCase one", () => {
     expect(
-      liveEventToRow(liveRow("deposited", { owner: OWNER, amount: "1500000" }), OWNER)
-        ?.tileLabel,
+      eventsToRows(
+        [historyRow("deposited", { owner: OWNER, amount: "1500000" })],
+        OWNER,
+      )[0]?.tileLabel,
     ).toBe("deposit");
     expect(
-      liveEventToRow(
-        liveRow("roundSettled", { winningTile: 7, pot: "10", forfeited: false }),
+      eventsToRows(
+        [historyRow("roundSettled", { winningTile: 7, pot: "10", forfeited: false })],
         OWNER,
-      )?.action,
+      )[0]?.action,
     ).toBe("tile 8");
   });
 
@@ -99,29 +91,29 @@ describe("activity feed row mappers", () => {
 
   it("drops a zero-reward settle and anything it does not recognise", () => {
     expect(
-      liveEventToRow(liveRow("positionSettled", { owner: OWNER, reward: "0" }), OWNER),
-    ).toBeNull();
-    expect(liveEventToRow(liveRow("paramsSet", {}), OWNER)).toBeNull();
+      eventsToRows([historyRow("positionSettled", { owner: OWNER, reward: "0" })], OWNER),
+    ).toEqual([]);
+    expect(eventsToRows([historyRow("paramsSet", {})], OWNER)).toEqual([]);
   });
 
   it("carries the round id on the two rows a reveal can hold, not on others", () => {
     expect(
-      liveEventToRow(
-        liveRow("roundSettled", { roundId: "42", winningTile: 2, forfeited: false }),
+      eventsToRows(
+        [historyRow("roundSettled", { roundId: "42", winningTile: 2, forfeited: false })],
         OWNER,
-      )?.roundId,
+      )[0]?.roundId,
     ).toBe("42");
     expect(
-      liveEventToRow(
-        liveRow("positionSettled", { owner: OWNER, roundId: "42", reward: "500" }),
+      eventsToRows(
+        [historyRow("positionSettled", { owner: OWNER, roundId: "42", reward: "500" })],
         OWNER,
-      )?.roundId,
+      )[0]?.roundId,
     ).toBe("42");
     expect(
-      liveEventToRow(
-        liveRow("positionBought", { owner: OWNER, tiles: "1", total: "1" }),
+      eventsToRows(
+        [historyRow("positionBought", { owner: OWNER, tiles: "1", total: "1" })],
         OWNER,
-      )?.roundId,
+      )[0]?.roundId,
     ).toBeUndefined();
   });
 });

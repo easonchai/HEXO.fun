@@ -255,10 +255,20 @@ export class ApiService {
    * would otherwise re-read on their own connections — goes through one
    * `RepeatableRead` transaction; the player scan only runs when an owner is
    * given or the previous epoch is mid-draw. The chain-cached reads (jackpot
-   * balance, rpc health, clock) run after the transaction closes.
+   * balance, rpc health, clock, pool config) run after the transaction closes.
+   *
+   * Ticket 07: `roundId`, when given, also returns that Round's full state —
+   * any status, winning tile and tile totals included — as `round`, plus
+   * `owner`'s Position in it. `openRound` stays filtered to Open/Requested
+   * (an existing contract other callers rely on), so it goes null the moment
+   * a Round settles; `round` is how the browser keeps watching the same
+   * Round through settlement without a chain read, and how it learns the
+   * viewer's Position once that Round is no longer the open one. Falls back
+   * to the open Round's id when `roundId` is not given, so a first load with
+   * no known id yet still gets a Position for whatever Round is open.
    */
-  async getState(owner?: string) {
-    const { pool, epoch, previousEpoch, openRound, operator, cursor, players } =
+  async getState(owner?: string, roundId?: bigint) {
+    const { pool, epoch, previousEpoch, openRound, operator, cursor, players, round, position } =
       await this.prisma.$transaction(
         async (tx) => {
           const pool = await tx.pool.findFirst();
@@ -284,8 +294,17 @@ export class ApiService {
             (previousEpoch !== null &&
               (previousEpoch.status === EPOCH_REGISTERING ||
                 previousEpoch.status === EPOCH_DRAWING));
-          const players = needsPlayers ? await tx.player.findMany() : [];
-          return { pool, epoch, previousEpoch, openRound, operator, cursor, players };
+          const trackedRoundId = roundId ?? openRound?.id;
+          const [players, round, position] = await Promise.all([
+            needsPlayers ? tx.player.findMany() : Promise.resolve([]),
+            trackedRoundId === undefined
+              ? Promise.resolve(null)
+              : tx.round.findUnique({ where: { id: trackedRoundId } }),
+            owner === undefined || trackedRoundId === undefined
+              ? Promise.resolve(null)
+              : tx.position.findFirst({ where: { owner, roundId: trackedRoundId } }),
+          ]);
+          return { pool, epoch, previousEpoch, openRound, operator, cursor, players, round, position };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
       );
@@ -315,7 +334,10 @@ export class ApiService {
         drawing: drawingProgressFrom(previousEpoch, players),
       },
       openRound: openRound === null ? null : summarizeRound(openRound),
+      round,
       player: mine === undefined ? null : playerDto(mine, total),
+      position:
+        position === null ? null : { tiles: position.tiles, stakePerTile: position.stakePerTile },
       status: statusFrom(operator, cursor, rpc, this.aprBps),
       chainTime,
     };

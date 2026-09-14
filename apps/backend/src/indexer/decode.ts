@@ -124,6 +124,8 @@ export interface DecodedPool {
   epochSeconds: BN;
   epochAnchor: BN;
   roundSeconds: BN;
+  closeBuffer: BN;
+  minDeposit: BN;
   houseCutBps: number;
   paused: boolean;
   currentEpochId: BN;
@@ -192,6 +194,8 @@ export function poolRow(
     epochSeconds: big(pool.epochSeconds),
     epochAnchor: big(pool.epochAnchor),
     roundSeconds: big(pool.roundSeconds),
+    closeBuffer: big(pool.closeBuffer),
+    minDeposit: big(pool.minDeposit),
     houseCutBps: pool.houseCutBps,
     paused: pool.paused,
     currentEpochId: big(pool.currentEpochId),
