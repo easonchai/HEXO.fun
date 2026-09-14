@@ -16,6 +16,7 @@ import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { loadIdl } from "../chain/idl";
 import { PrismaService } from "../prisma/prisma.service";
+import { CountingConnection } from "../test-utils/counting-connection";
 import { IndexerService, type LogBatch } from "./indexer.service";
 
 const idl = loadIdl();
@@ -25,48 +26,9 @@ const POOL_ID = 1n;
 // the log fixtures can be laid out at module scope.
 const coder = new BorshCoder(convertIdlToCamelCase(idl));
 
-interface StoredAccount {
-  pubkey: PublicKey;
-  data: Buffer;
-}
-
-/** Only the three calls the indexer makes; everything else stays unimplemented. */
-class FakeConnection {
-  slot = 100;
-  accounts: StoredAccount[] = [];
-
-  /** The indexer reads unfiltered and sorts by discriminator itself. */
-  getProgramAccounts(): Promise<{
-    context: { slot: number };
-    value: { pubkey: PublicKey; account: { data: Buffer } }[];
-  }> {
-    return Promise.resolve({
-      context: { slot: this.slot },
-      value: this.accounts.map(({ pubkey, data }) => ({ pubkey, account: { data } })),
-    });
-  }
-
-  /** Every address the indexer asked to list or subscribe on. */
-  watched: PublicKey[] = [];
-
-  getSignaturesForAddress(address: PublicKey): Promise<never[]> {
-    this.watched = [...this.watched, address];
-    return Promise.resolve([]);
-  }
-
-  onLogs(address: PublicKey): number {
-    this.watched = [...this.watched, address];
-    return 1;
-  }
-
-  removeOnLogsListener(): Promise<void> {
-    return Promise.resolve();
-  }
-}
-
 let prisma: PrismaService;
 let chain: ChainService;
-let connection: FakeConnection;
+let connection: CountingConnection;
 let indexer: IndexerService;
 
 const OWNER = Keypair.generate().publicKey;
@@ -75,7 +37,7 @@ const STRANGER = Keypair.generate().publicKey;
 beforeAll(async () => {
   prisma = new PrismaService();
   await prisma.$connect();
-  connection = new FakeConnection();
+  connection = new CountingConnection();
   const env: Partial<HexVaultEnv> = {
     AUTHORITY_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
     POOL_ID: POOL_ID.toString(),
@@ -86,8 +48,8 @@ beforeAll(async () => {
   const config = {
     get: (key: keyof HexVaultEnv) => env[key],
   } as unknown as ConfigService<HexVaultEnv, true>;
-  // SAFETY: the fake stands in for the RPC calls listed on FakeConnection;
-  // this suite drives no code path that reaches any other Connection method.
+  // SAFETY: the fake stands in for the RPC calls the indexer makes; this
+  // suite drives no code path that reaches any other Connection method.
   chain = new ChainService(connection as unknown as Connection, config);
   indexer = new IndexerService(prisma, chain);
 });
@@ -98,7 +60,17 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  connection.accounts = [];
+  connection.clearAccounts();
+  connection.pageSize = 1_000;
+  connection.watched = [];
+  connection.resetCalls();
+  connection.failOnCallNumber = undefined;
+  connection.noProgramAccountsV2 = false;
+  // The indexer is built once for the suite, so the flag it latches when an
+  // RPC lacks V2 has to be cleared between tests, and so does what the live
+  // path has written (a fresh process starts with neither).
+  indexer["v2Unsupported"] = false;
+  indexer["freshWrites"].clear();
   await wipe();
 });
 
@@ -123,7 +95,7 @@ const zeros = (length: number): number[] => new Array<number>(length).fill(0);
 // passes; a casing drift in Anchor breaks the encode here and the fetch there.
 async function put(name: string, pubkey: PublicKey, account: object): Promise<void> {
   const data = await chain.program.coder.accounts.encode(name, account);
-  connection.accounts.push({ pubkey, data });
+  connection.setAccount(pubkey, data);
 }
 
 const poolAccount = (overrides: object = {}) => ({
@@ -260,7 +232,11 @@ describe("account sync", () => {
     expect((await prisma.round.findUniqueOrThrow({ where: { id: 1n } })).winningTile).toBe(17);
   });
 
-  it("deletes a Position row once settle_position has closed the account", async () => {
+  it("no longer deletes a Position by its absence from a sweep", async () => {
+    // A closed account and an unchanged one both look like "not returned" to
+    // an incremental walk, so a sweep can no longer tell them apart; only the
+    // `PositionSettled` event (see "event ingest" below) may remove the row.
+    indexer["lastSyncedSlot"] = undefined;
     const round = chain.roundAddress(1n);
     const pool = chain.poolAddress();
     await put("pool", pool, poolAccount());
@@ -269,10 +245,141 @@ describe("account sync", () => {
     await indexer.syncAccounts();
     expect(await prisma.position.count()).toBe(1);
 
-    connection.accounts = connection.accounts.filter(
-      (account) => account.pubkey.equals(round) || account.pubkey.equals(pool),
-    );
+    connection.deleteAccount(chain.positionAddress(round, OWNER));
     await indexer.syncAccounts();
+    expect(await prisma.position.count()).toBe(1);
+  });
+
+  it("walks every page of a multi-page result into the same rows a single page would", async () => {
+    indexer["lastSyncedSlot"] = undefined;
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await put("player", chain.playerAddress(OWNER), playerAccount(OWNER));
+    await put("position", chain.positionAddress(round, OWNER), positionAccount(OWNER, round));
+    connection.pageSize = 1; // four accounts, one per page: four calls
+
+    await indexer.syncAccounts();
+
+    expect(connection.callsTo("getProgramAccountsV2")).toBe(4);
+    expect(await prisma.pool.findUniqueOrThrow({ where: { address: chain.poolAddress().toBase58() } }))
+      .toMatchObject({ poolId: POOL_ID });
+    expect(await prisma.round.findUniqueOrThrow({ where: { id: 1n } })).toMatchObject({ id: 1n });
+    expect(await prisma.player.findUniqueOrThrow({ where: { owner: OWNER.toBase58() } }))
+      .toMatchObject({ owner: OWNER.toBase58() });
+    expect(await prisma.position.findMany()).toMatchObject([
+      { owner: OWNER.toBase58(), roundId: 1n },
+    ]);
+  });
+
+  it("an incremental sweep asks for changedSinceSlot and only touches the rows the RPC reports", async () => {
+    indexer["lastSyncedSlot"] = undefined;
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await put("position", chain.positionAddress(round, OWNER), positionAccount(OWNER, round));
+    await indexer.syncAccounts(); // full walk, establishes lastSyncedSlot
+    const syncedSlot = indexer["lastSyncedSlot"];
+    if (typeof syncedSlot !== "bigint") throw new Error("expected lastSyncedSlot to be set by the full walk above");
+    expect(syncedSlot).toBe(100n);
+
+    connection.resetCalls();
+    // Simulate the RPC reporting only the Pool as changed; Round and Position
+    // are unchanged and so absent from this result.
+    connection.clearAccounts();
+    await put("pool", chain.poolAddress(), poolAccount({ carryPot: bn(999) }));
+    await indexer.syncAccounts();
+
+    expect(connection.callsTo("getProgramAccountsV2")).toBe(1);
+    // SAFETY: the fake only ever receives [programId, config] from the indexer.
+    const [, config] = connection.lastParams("getProgramAccountsV2") as [string, { changedSinceSlot?: number }];
+    expect(config.changedSinceSlot).toBe(Number(syncedSlot));
+
+    expect((await prisma.pool.findUniqueOrThrow({ where: { address: chain.poolAddress().toBase58() } })).carryPot)
+      .toBe(999n);
+    // The old absence-based delete would have wiped these; they must survive.
+    expect(await prisma.round.count()).toBe(1);
+    expect(await prisma.position.count()).toBe(1);
+  });
+
+  it("forces a fresh full walk once the safety interval has elapsed, even with a known slot", async () => {
+    indexer["lastSyncedSlot"] = 42n;
+    indexer["lastFullWalkAt"] = Date.now() - (60 * 60 * 1000 + 1);
+    await put("pool", chain.poolAddress(), poolAccount());
+    connection.resetCalls();
+
+    await indexer.syncAccounts();
+
+    // SAFETY: the fake only ever receives [programId, config] from the indexer.
+    const [, config] = connection.lastParams("getProgramAccountsV2") as [string, { changedSinceSlot?: number }];
+    expect(config.changedSinceSlot).toBeUndefined();
+  });
+
+  it("a page failure mid-walk leaves the previous synced state and slot intact", async () => {
+    indexer["lastSyncedSlot"] = undefined;
+    await put("pool", chain.poolAddress(), poolAccount());
+    await indexer.syncAccounts();
+    const syncedSlot = indexer["lastSyncedSlot"];
+
+    connection.pageSize = 1;
+    connection.setAccount(Keypair.generate().publicKey, Buffer.alloc(8));
+    connection.resetCalls(); // count fresh from this walk's first page
+    connection.failOnCallNumber = { method: "getProgramAccountsV2", number: 2 }; // the walk's second page
+
+    await expect(indexer.syncAccounts()).rejects.toThrow();
+
+    expect(indexer["lastSyncedSlot"]).toBe(syncedSlot);
+    expect(await prisma.pool.findUniqueOrThrow({ where: { address: chain.poolAddress().toBase58() } }))
+      .toMatchObject({ poolId: POOL_ID });
+  });
+
+  it("the counting connection: seven calls for a full walk, one for a quiet incremental sweep", async () => {
+    indexer["lastSyncedSlot"] = undefined;
+    indexer["lastFullWalkAt"] = 0;
+    await put("pool", chain.poolAddress(), poolAccount());
+    // Padding so the walk spans seven one-account pages; the padding never
+    // matches a real discriminator, so it is silently dropped, same as any
+    // account from an abandoned program build.
+    for (let i = 0; i < 6; i++) {
+      connection.setAccount(Keypair.generate().publicKey, Buffer.alloc(8));
+    }
+    connection.pageSize = 1;
+    connection.resetCalls();
+
+    await indexer.syncAccounts();
+    expect(connection.callsTo("getProgramAccountsV2")).toBe(7);
+
+    connection.resetCalls();
+    connection.clearAccounts();
+    await indexer.syncAccounts();
+    expect(connection.callsTo("getProgramAccountsV2")).toBe(1);
+  });
+
+  it("falls back to the plain call on an RPC without getProgramAccountsV2, and stops asking for it", async () => {
+    indexer["lastSyncedSlot"] = undefined;
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await put("position", chain.positionAddress(round, OWNER), positionAccount(OWNER, round));
+    connection.noProgramAccountsV2 = true;
+    connection.resetCalls();
+
+    await indexer.syncAccounts();
+
+    // One V2 attempt, then the plain call answers with the same rows.
+    expect(connection.callsTo("getProgramAccountsV2")).toBe(1);
+    expect(connection.callsTo("getProgramAccounts")).toBe(1);
+    expect(await prisma.round.count()).toBe(1);
+    expect(await prisma.position.findMany()).toMatchObject([{ owner: OWNER.toBase58(), roundId: 1n }]);
+
+    // A second sweep does not retry V2, and without changedSinceSlot it walks
+    // everything again, so a closed Position is still caught by its absence.
+    connection.resetCalls();
+    connection.deleteAccount(chain.positionAddress(round, OWNER));
+    await indexer.syncAccounts();
+
+    expect(connection.callsTo("getProgramAccountsV2")).toBe(0);
+    expect(connection.callsTo("getProgramAccounts")).toBe(1);
     expect(await prisma.position.count()).toBe(0);
   });
 
@@ -291,7 +398,7 @@ describe("account sync", () => {
     // A pool bootstrapped before the epoch-anchor upgrade is 22 bytes short
     // of the current layout; decoding it must not fail the whole sweep.
     const stale = await chain.program.coder.accounts.encode("pool", poolAccount());
-    connection.accounts.push({ pubkey: Keypair.generate().publicKey, data: stale.subarray(0, -22) });
+    connection.setAccount(Keypair.generate().publicKey, stale.subarray(0, -22));
     await put("pool", chain.poolAddress(), poolAccount());
     await indexer.syncAccounts();
     expect(await prisma.pool.count()).toBe(1);
@@ -348,8 +455,24 @@ const roundOpened = dataLine("RoundOpened", {
   endsAt: bn(1_060),
   carryIn: bn(0),
 });
+const positionSettled = dataLine("PositionSettled", {
+  roundId: bn(1),
+  owner: OWNER,
+  reward: bn(0),
+});
 
 describe("event ingest", () => {
+  it("deletes the Position row when PositionSettled lands, without a sweep", async () => {
+    await prisma.position.create({
+      data: { address: "pos-x", owner: OWNER.toBase58(), roundId: 1n, tiles: 1n, stakePerTile: 1n },
+    });
+
+    expect(await indexer.ingestLogs(batch("sig-settle", 30n, [positionSettled]))).toBe(1);
+
+    expect(await prisma.position.count()).toBe(0);
+  });
+
+
   it("stores each event once and leaves the cursor on the newest batch", async () => {
     const first = batch("sig1", 10n, [deposited, epochBegan]);
     const second = batch("sig2", 11n, [roundOpened]);
@@ -410,6 +533,128 @@ describe("event ingest", () => {
 
     const pool = chain.poolAddress().toBase58();
     expect(connection.watched.map((address) => address.toBase58())).toEqual([pool, pool, pool]);
+  });
+
+  // Ticket 04: the live path costs no `getBlockTime` call, and must not
+  // borrow the backfill path's real block time or fall back to wall time.
+  it("timestamps a live event from the last observed chain time, not a block-time lookup", async () => {
+    await put("pool", chain.poolAddress(), poolAccount());
+    chain.recordChainTime(1_234_567n);
+    indexer["subscribeToLogs"]();
+
+    const pool = chain.poolAddress();
+    connection.fireLogs(
+      pool,
+      "finalized",
+      { err: null, signature: "sig-live", logs: batch("sig-live", 0n, [deposited]).logs },
+      77,
+    );
+    await indexer["queue"];
+
+    const event = await prisma.event.findFirstOrThrow({ where: { signature: "sig-live" } });
+    expect(event.blockTime).toBe(1_234_567n);
+    expect(event.slot).toBe(77n);
+  });
+
+  it("keeps the transaction's own block time on a backfilled event, even with a different chain time observed live", async () => {
+    chain.recordChainTime(999_999n);
+    expect(await indexer.ingestLogs(batch("sig-backfill", 40n, [deposited]))).toBe(1);
+    const event = await prisma.event.findFirstOrThrow({ where: { signature: "sig-backfill" } });
+    // batch()'s own fixed block time, not the 999_999n last observed live.
+    expect(event.blockTime).toBe(1_700_000_000n);
+  });
+});
+
+// `getProgramAccountsV2`'s index runs 13 to 24 seconds behind the chain
+// (measured against devnet), so a sweep fired by a log hands back a snapshot
+// from before the transaction that fired it. A confirmed log re-reads the
+// accounts it names instead, and the sweep must not undo that.
+describe("live account refresh", () => {
+  const fire = async (logs: string[], slot: number): Promise<void> => {
+    indexer["subscribeToSync"]();
+    connection.fireLogs(
+      chain.poolAddress(),
+      "confirmed",
+      { err: null, signature: `sig-${slot}`, logs: batch(`sig-${slot}`, BigInt(slot), logs).logs },
+      slot,
+    );
+    await indexer["queue"];
+  };
+
+  it("re-reads the accounts one log names, in a single call, and writes them", async () => {
+    const round = chain.roundAddress(4n);
+    await put("pool", chain.poolAddress(), poolAccount({ openRoundId: bn(4), nextRoundId: bn(5) }));
+    await put("epoch", chain.epochAddress(2n), epochAccount({ epochId: bn(2) }));
+    await put("round", round, roundAccount({ roundId: bn(4), epochId: bn(2) }));
+    await put("player", chain.playerAddress(OWNER), playerAccount(OWNER));
+    connection.resetCalls();
+
+    await fire([roundOpened, deposited], 300);
+
+    expect(connection.callsTo("getMultipleAccountsInfo")).toBe(1);
+    // The walk is the safety net now, not the live path: no page of it here.
+    expect(connection.callsTo("_rpcRequest")).toBe(0);
+    expect(await prisma.round.findUniqueOrThrow({ where: { id: 4n } })).toMatchObject({
+      epochId: 2n,
+      status: 0,
+    });
+    expect(await prisma.player.findUniqueOrThrow({ where: { owner: OWNER.toBase58() } }))
+      .toMatchObject({ principal: 3_000_000n });
+  });
+
+  it("drops a Position the settle closed, without waiting for a full walk", async () => {
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await put("position", chain.positionAddress(round, OWNER), positionAccount(OWNER, round));
+    await indexer.syncAccounts();
+    expect(await prisma.position.count()).toBe(1);
+
+    // settle_position closed it: the account reads back as gone.
+    connection.clearAccounts();
+    await put("pool", chain.poolAddress(), poolAccount());
+    await fire([positionSettled], 301);
+
+    expect(await prisma.position.count()).toBe(0);
+  });
+
+  it("keeps a sweep's older snapshot from overwriting what the log path wrote", async () => {
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    // The open Round is asked for by position rather than by event, so it
+    // has to be one the mirror already knows about.
+    await indexer.syncAccounts();
+
+    // The live read sees the settled Round…
+    await put("round", round, roundAccount({ status: 2, winningTile: 17 }));
+    await fire([], 500);
+    expect((await prisma.round.findUniqueOrThrow({ where: { id: 1n } })).winningTile).toBe(17);
+
+    // …and a sweep whose snapshot predates it still reports it Open. The
+    // fake answers every walk from slot 100, well behind the log's 500.
+    await put("round", round, roundAccount({ status: 0, winningTile: 0 }));
+    await indexer.syncAccounts();
+
+    const stored = await prisma.round.findUniqueOrThrow({ where: { id: 1n } });
+    expect(stored.status).toBe(2);
+    expect(stored.winningTile).toBe(17);
+  });
+
+  it("lets a sweep that has caught up write again", async () => {
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await indexer.syncAccounts();
+
+    await put("round", round, roundAccount({ status: 2, winningTile: 17 }));
+    await fire([], 50); // behind the fake's own sweep slot of 100
+
+    await put("round", round, roundAccount({ status: 0, winningTile: 0 }));
+    await indexer.syncAccounts();
+
+    expect((await prisma.round.findUniqueOrThrow({ where: { id: 1n } })).status).toBe(0);
+    expect(indexer["freshWrites"].size).toBe(0);
   });
 });
 

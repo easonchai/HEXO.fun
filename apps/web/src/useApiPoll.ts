@@ -1,10 +1,11 @@
 /**
  * Polls one `api.ts` fetcher on an interval and keeps the last good value on
- * screen if a poll fails, matching `read.ts`'s "never blank the screen"
- * convention. The header status pill polls every 2 s because it drives the
- * OPERATOR PAUSED state; the screens poll every 10 s and call `refresh()`
- * after an action instead, since epoch and leaderboard rows only move on a
- * transaction or a draw.
+ * screen if a poll fails, matching the "never blank the screen" convention
+ * `useStatePoll.ts` also follows. Ticket 07: the consolidated `GET /state`
+ * poll (Pool, Epoch, Player, Round, operator status) has its own hook now;
+ * this one is left for the list-data endpoints that stay on a slower,
+ * independent poll — epoch history, leaderboard, the activity feed, rounds
+ * played — since none of them belongs on a short interval.
  *
  * ponytail: no backoff beyond the plain interval tick. Add one if the API
  * proves flaky enough under load to need it.

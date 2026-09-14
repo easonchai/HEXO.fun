@@ -20,6 +20,8 @@ model Pool {
   epochSeconds        BigInt
   epochAnchor         BigInt
   roundSeconds        BigInt
+  closeBuffer         BigInt
+  minDeposit          BigInt
   paused              Boolean
   currentEpochId      BigInt
   currentEpochEndsAt  BigInt
@@ -108,6 +110,11 @@ model FaucetClaim {
 model OperatorState {
   id               Int     @id
   lastTickAt       BigInt?
+  /** Wall-clock unix seconds of the scheduler's next planned wake, so the
+   *  web status summary can read a long deadline-driven sleep as live
+   *  instead of stale (ticket 03, spec.md "Operator status learns about
+   *  sleeping"). */
+  nextWakeAt       BigInt?
   lastAction       String?
   lastError        String?
   registeredCount  Int?

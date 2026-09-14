@@ -6,19 +6,24 @@
  *
  * The deposit widget lives one hop further in (VAULT): the two buttons on the
  * left card are the only way to reach it, each carrying which tab it opens on.
+ *
+ * Ticket 07: `currentEpoch` and `player` come from App's one `GET /state`
+ * poll instead of two duplicate polls of this screen's own. Epoch history,
+ * account history and the winners' rounds-played chip stay on their own
+ * slower polls — list data, not live state.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import {
   apiBaseUrl,
-  fetchCurrentEpoch,
   fetchEpochs,
   fetchFeed,
-  fetchPlayer,
   fetchPositionCounts,
+  type CurrentEpochDto,
   type EpochDto,
   type EventDto,
+  type PlayerDto,
 } from "../api.js";
 import { eventKey } from "../chain.js";
 import { dhmsParts } from "../engine.js";
@@ -66,7 +71,10 @@ export interface DashboardScreenProps {
   entries: bigint;
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
-  /** Basis points from GET /status; null while the backend is unreachable. */
+  currentEpoch: CurrentEpochDto | null;
+  /** Null until the owner's Player is indexed, or no wallet is connected. */
+  player: PlayerDto | null;
+  /** Basis points from GET /state's status; null while the backend is unreachable. */
   aprBps: number | null;
   onDeposit: () => void;
   onWithdraw: () => void;
@@ -144,6 +152,8 @@ export function Dashboard(props: DashboardScreenProps) {
     principal,
     entries,
     now,
+    currentEpoch,
+    player,
     aprBps,
     onDeposit,
     onWithdraw,
@@ -156,20 +166,9 @@ export function Dashboard(props: DashboardScreenProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyLimit = historyOpen ? HISTORY_ROWS_EXPANDED : HISTORY_ROWS;
 
-  const loadCurrentEpoch = useCallback(
-    (signal: AbortSignal) => fetchCurrentEpoch(apiBaseUrl(), signal),
-    [],
-  );
   const loadEpochs = useCallback(
     (signal: AbortSignal) => fetchEpochs(apiBaseUrl(), EPOCH_LOOKBACK, signal),
     [],
-  );
-  const loadPlayer = useCallback(
-    (signal: AbortSignal) =>
-      ownerBase58
-        ? fetchPlayer(apiBaseUrl(), ownerBase58, signal)
-        : Promise.resolve({ ok: false as const, reason: "no wallet connected" }),
-    [ownerBase58],
   );
   const loadHistory = useCallback(
     (signal: AbortSignal) =>
@@ -181,9 +180,7 @@ export function Dashboard(props: DashboardScreenProps) {
     [ownerBase58, historyLimit],
   );
 
-  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
   const epochs = useApiPoll(loadEpochs, 10_000);
-  const player = useApiPoll(loadPlayer, 10_000);
   const history = useApiPoll(loadHistory, 10_000);
 
   const winners = useMemo(
@@ -225,8 +222,8 @@ export function Dashboard(props: DashboardScreenProps) {
   }, [winnerKey]);
 
   const remaining =
-    epoch.data && now !== null ? BigInt(epoch.data.endsAt) - now : null;
-  const drawing = epoch.data?.drawing !== null && epoch.data?.drawing !== undefined;
+    currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : null;
+  const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
   const parts = remaining === null ? null : dhmsParts(remaining);
 
   const yieldText =
@@ -235,7 +232,7 @@ export function Dashboard(props: DashboardScreenProps) {
   // backend knows this wallet. Before the first deposit the whole strip goes.
   const showBoost = entries > 0n;
 
-  const apiError = epoch.error ?? epochs.error;
+  const apiError = epochs.error;
 
   return (
     <div className="screen-dash" data-testid="dashboard-screen">
@@ -285,7 +282,7 @@ export function Dashboard(props: DashboardScreenProps) {
             <Star />
           </div>
           <div className="dash-prize" data-testid="dash-prize">
-            {epoch.data ? wholeDollars(epoch.data.jackpotAmount) : "$—"}
+            {currentEpoch ? wholeDollars(currentEpoch.jackpotAmount) : "$—"}
           </div>
           <div className="dash-clock-label">NEXT DRAW IN</div>
           {drawing || (remaining !== null && remaining <= 0n) ? (
@@ -315,7 +312,7 @@ export function Dashboard(props: DashboardScreenProps) {
               <span>
                 Your Odds:{" "}
                 <span className="dash-lime">
-                  {player.data ? `${player.data.odds}%` : "—"}
+                  {player ? `${player.odds}%` : "—"}
                 </span>
               </span>
             </h3>

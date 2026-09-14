@@ -24,6 +24,13 @@ export const BATCH_SIZE = 8;
  *  opening the next Round. The reveal now fires the moment the draw lands,
  *  usually before `endsAt`, so one second of slack is all it needs. */
 export const REVEAL_SECONDS = 1n;
+/**
+ * How far apart the scheduler's slow safety tick runs (ticket 03, spec.md
+ * "The Operator becomes deadline-driven"), and the ceiling `nextWakeAt` falls
+ * back to when nothing on chain gives it a closer deadline. A mis-computed
+ * deadline then degrades to "checked on this cadence", not a stall.
+ */
+export const SAFETY_INTERVAL_SECONDS = 60n;
 /** Every epoch's jackpot, in atomic units: 42069 hexUSDC. Demo value, minted
  *  by the operator; there is no real yield source. */
 export const JACKPOT_AMOUNT = 42_069_000_000n;
@@ -90,11 +97,81 @@ export interface TickOutcome {
   /** Present whenever step 4 checked `playersToRegister`, for the service to
    *  remember as next tick's `lastRegisterCheck`. */
   readonly registerCheck?: RegisterCheck;
+  /**
+   * The chain timestamp at which this decision could next differ: a Round
+   * closing, an Epoch ending, a VRF timeout, the reveal wait after the last
+   * Round, or the safety interval when none of those apply. Not a wall-clock
+   * value and not a duration; the scheduler converts it (see
+   * `operator.service.ts`).
+   */
+  readonly nextWakeAt: bigint;
 }
 
-const NOTHING: TickOutcome = { action: null };
+/** `runTick`'s decision, before the deadline is attached. Every branch below
+ *  still returns one of these; `runTick` is the thin wrapper that adds
+ *  `nextWakeAt` in one place instead of at every return statement. */
+type Decision = Omit<TickOutcome, "nextWakeAt">;
+
+const NOTHING: Decision = { action: null };
+
+/**
+ * The next chain timestamp at which `decide` could return something
+ * different, given the same ctx it just ran on. Pure: everything it reads
+ * already lives on `ctx`, so it never touches the clock or the network.
+ *
+ * Acting this tick (`acted`) always makes that "now": a batched step
+ * (register, the settle sweep) may have more left to do, and the state that
+ * triggered the action is still the state on `ctx`, so recomputing off it
+ * would otherwise just repeat the same boundary that already fired.
+ */
+function nextWakeAt(ctx: TickContext, acted: boolean): bigint {
+  const { pool, currentEpoch, previousEpoch, openRound, lastRound, now } = ctx;
+  const candidates: bigint[] = [now + SAFETY_INTERVAL_SECONDS];
+
+  if (acted) candidates.push(now);
+  if (openRound?.status === ROUND_STATUS.OPEN) {
+    candidates.push(openRound.endsAt - pool.closeBuffer);
+  }
+  if (openRound?.status === ROUND_STATUS.REQUESTED) {
+    candidates.push(openRound.requestedAt + pool.vrfTimeout);
+  }
+  if (currentEpoch) candidates.push(currentEpoch.endsAt);
+  if (previousEpoch?.status === EPOCH_STATUS.DRAWING) {
+    candidates.push(previousEpoch.requestedAt + pool.vrfTimeout);
+  }
+  if (
+    pool.openRoundId === 0n &&
+    lastRound &&
+    lastRound.status !== ROUND_STATUS.VOIDED
+  ) {
+    candidates.push(lastRound.endsAt + REVEAL_SECONDS);
+  }
+
+  return candidates
+    .filter((candidate) => candidate >= now)
+    .reduce((soonest, candidate) => (candidate < soonest ? candidate : soonest));
+}
+
+/** Wall-clock ms until the scheduler should look again: the chain-seconds gap
+ * to `deadline`, clamped to the safety interval and never negative. The clamp
+ * is what keeps a fast local validator from under-serving the protocol: chain
+ * time there can run ahead of wall time, so a raw `deadline - now` read as
+ * wall-clock milliseconds would sleep past the point the safety tick exists
+ * to catch. The caller re-reads the chain on every wake, so a clamp that
+ * fires early costs one extra tick, never a stale one.
+ */
+export function msUntilWake(now: bigint, deadline: bigint): number {
+  const chainSeconds = Number(deadline - now);
+  const clamped = Math.min(Math.max(chainSeconds, 0), Number(SAFETY_INTERVAL_SECONDS));
+  return clamped * 1000;
+}
 
 export async function runTick(ctx: TickContext): Promise<TickOutcome> {
+  const decision = await decide(ctx);
+  return { ...decision, nextWakeAt: nextWakeAt(ctx, decision.action !== null) };
+}
+
+async function decide(ctx: TickContext): Promise<Decision> {
   const { pool, currentEpoch, previousEpoch, openRound, now } = ctx;
 
   // 1. Round: an Open round past its close asks for randomness, the same

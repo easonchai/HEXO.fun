@@ -12,7 +12,7 @@ import { Test } from "@nestjs/testing";
 import { Prisma, type Player } from "@prisma/client";
 import { Keypair, type PublicKey, type TransactionInstruction } from "@solana/web3.js";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ChainService } from "../chain/chain.service";
 import { ConfigModule } from "../config/config.module";
@@ -20,7 +20,7 @@ import { HealthController } from "../health/health.controller";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApiModule } from "./api.module";
-import { oddsPercent, weightAt } from "./api.service";
+import { CHAIN_CLOCK_TTL_MS, JACKPOT_BALANCE_TTL_MS, oddsPercent, weightAt } from "./api.service";
 
 const NOW = BigInt(Math.floor(Date.now() / 1000));
 const EPOCH_LENGTH = 86_400n;
@@ -46,6 +46,10 @@ const HUGE_U128 = "123456789012345678901234567890";
 const FAKE_SIGNATURE = "FakeSignature1111111111111111111111111111111";
 /** What the fake RPC says sits in the jackpot vault while epoch 7 is open. */
 const VAULT_BALANCE = 5_000_000n;
+/** The seeded Pool row's `closeBuffer`/`minDeposit`, which the browser reads
+ *  off `/state` rather than off the chain (ticket 07). */
+const POOL_CLOSE_BUFFER = 15n;
+const POOL_MIN_DEPOSIT = 1_000_000n;
 
 /** A Clock sysvar account's data, `unix_timestamp` at byte offset 32 (see
  *  operator/chain-state.ts `clockUnixTimestamp`). The other fields are unused. */
@@ -56,16 +60,33 @@ function clockSysvarData(unixTimestamp: bigint): Buffer {
 }
 
 const sentInstructions: TransactionInstruction[][] = [];
+
+/** Counts calls the caching tests assert against, so they check the chain
+ *  seam rather than the response body. */
+let clockReads = 0;
+let jackpotReads = 0;
+/** When set, the next `getTokenAccountBalance` call throws once and resets it. */
+let failNextJackpotRead = false;
+/** What the fake Clock sysvar reads. Mutable so a test can make the chain
+ *  clock regress the way a real one does when it drifts behind wall time. */
+let chainClockValue = CHAIN_NOW;
+
 const fakeChain = {
   connection: {
     rpcEndpoint: "http://127.0.0.1:8899",
     getSlot: async (): Promise<number> => 1234,
-    getAccountInfo: async (): Promise<{ data: Buffer }> => ({
-      data: clockSysvarData(CHAIN_NOW),
-    }),
-    getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => ({
-      value: { amount: VAULT_BALANCE.toString() },
-    }),
+    getAccountInfo: async (): Promise<{ data: Buffer }> => {
+      clockReads += 1;
+      return { data: clockSysvarData(chainClockValue) };
+    },
+    getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => {
+      jackpotReads += 1;
+      if (failNextJackpotRead) {
+        failNextJackpotRead = false;
+        throw new Error("simulated jackpot vault balance read failure");
+      }
+      return { value: { amount: VAULT_BALANCE.toString() } };
+    },
   },
   jackpotVaultAddress: (): PublicKey => Keypair.generate().publicKey,
   keypair: Keypair.generate(),
@@ -448,6 +469,233 @@ describe("API routes", () => {
     assertNoLargeNumbers(body, "/status");
   });
 
+  describe("GET /state", () => {
+    it("returns the pool, current epoch, open round, status and chain time for a given owner", async () => {
+      const { body } = await http.get(`/state?owner=${ALICE}`).expect(200);
+      expect(body.pool).toMatchObject({ address: POOL_ADDRESS, currentEpochId: "7" });
+      // The browser needs both and no longer reads the Pool account itself.
+      expect(body.pool.closeBuffer).toBe(POOL_CLOSE_BUFFER.toString());
+      expect(body.pool.minDeposit).toBe(POOL_MIN_DEPOSIT.toString());
+      expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
+      // Open epoch: same live-vault-balance rule as GET /epochs/current.
+      expect(body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      // Epoch 6 (the one that just ended) is seeded Registering, so the
+      // mid-draw case is exercised by the default seed, not extra setup.
+      expect(body.currentEpoch.drawing).toEqual({
+        epochId: "6",
+        registeredCount: 1,
+        eligible: 1,
+        status: 1,
+      });
+      expect(body.openRound).toEqual({
+        id: "100",
+        epochId: "7",
+        startsAt: String(CURRENT_START),
+        endsAt: String(CURRENT_START + 60n),
+        status: 0,
+        pot: "5000",
+        houseCut: "0",
+      });
+      expect(body.player).toMatchObject({ owner: ALICE, odds: "100.00" });
+      // round: the open Round's full state, no `round=` needed — it falls
+      // back to `openRound`'s id.
+      expect(body.round).toMatchObject({ id: "100", status: 0, winningTile: null });
+      // position: Alice's Position in that same Round, found the same way.
+      expect(body.position).toEqual({ tiles: "7", stakePerTile: "1000000" });
+      expect(body.status.operator).toMatchObject({ lastAction: "settle_round" });
+      expect(body.status.cursor.lastSlot).toBe("15");
+      expect(BigInt(body.chainTime)).toBeGreaterThanOrEqual(CHAIN_NOW);
+      assertNoLargeNumbers(body, "/state?owner");
+    });
+
+    it("omits the Player with no owner given, so a disconnected visitor gets a complete page", async () => {
+      const { body } = await http.get("/state").expect(200);
+      expect(body.player).toBeNull();
+      expect(body.pool).toBeDefined();
+      expect(body.currentEpoch).toBeDefined();
+      expect(body.openRound).toBeDefined();
+      expect(body.status).toBeDefined();
+      // No owner: still resolves the open Round as `round`, but no Position.
+      expect(body.round).toMatchObject({ id: "100" });
+      expect(body.position).toBeNull();
+      assertNoLargeNumbers(body, "/state");
+    });
+
+    it("keeps returning a settled Round's full state — winning tile and tile totals included — once it is no longer the open Round", async () => {
+      // Round 99 settled before this session ever polled: `openRound` never
+      // shows it, but naming it with `round=` still returns everything the
+      // reveal needs, and Bob's Position in it follows the same param.
+      const { body } = await http.get(`/state?owner=${BOB}&round=99`).expect(200);
+      expect(body.openRound).toMatchObject({ id: "100" });
+      expect(body.round).toMatchObject({
+        id: "99",
+        epochId: "7",
+        status: 2,
+        winningTile: 17,
+        pot: "4000",
+        houseCut: "240",
+      });
+      expect(body.position).toEqual({ tiles: "3", stakePerTile: "500000" });
+      assertNoLargeNumbers(body, "/state?round=99");
+    });
+
+    it("returns a null round and Position for a round id nothing was seeded under", async () => {
+      const { body } = await http.get(`/state?owner=${ALICE}&round=404`).expect(200);
+      expect(body.round).toBeNull();
+      expect(body.position).toBeNull();
+    });
+
+    it("rejects a malformed round id", async () => {
+      await http.get("/state?round=not-a-number").expect(400);
+    });
+
+    it("returns a null Player, not a 404, for a wallet with no Player account yet", async () => {
+      const stranger = Keypair.generate().publicKey.toBase58();
+      const { body } = await http.get(`/state?owner=${stranger}`).expect(200);
+      expect(body.player).toBeNull();
+    });
+
+    it("returns a null open Round once the epoch has none open", async () => {
+      await prisma.round.update({ where: { id: 100n }, data: { status: 2 } });
+      try {
+        const { body } = await http.get("/state").expect(200);
+        expect(body.openRound).toBeNull();
+      } finally {
+        await prisma.round.update({ where: { id: 100n }, data: { status: 0 } });
+      }
+    });
+
+    it("rejects a malformed owner", async () => {
+      await http.get("/state?owner=not-a-wallet").expect(400);
+    });
+  });
+
+  describe("chain read caching", () => {
+    // Fakes only `Date`, leaving real timers and I/O alone, so `Date.now()`
+    // inside the service's TTL caches is controlled without slowing the
+    // suite down with real waits. Installed once for the whole block rather
+    // than per test: each test only ever advances this clock forward from
+    // wherever the previous one left it, so it can never land behind a
+    // cache timestamp an earlier test already stamped (which resetting to
+    // the real "now" between tests could do, reading a still-fresh cache as
+    // stale-checked-clean by accident).
+    beforeAll(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+    });
+
+    afterAll(() => {
+      vi.useRealTimers();
+    });
+
+    it("collapses a concurrent burst of chain-clock reads to one call, then reads again after the window", async () => {
+      // Past the window from whatever an earlier test left cached, so the
+      // burst below starts from a cold cache.
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      const before = clockReads;
+
+      const burst = await Promise.all([
+        http.get(`/players/${ALICE}`),
+        http.get("/leaderboard"),
+        http.get(`/players/${ALICE}`),
+      ]);
+      burst.forEach((response) => expect(response.status).toBe(200));
+      expect(clockReads).toBe(before + 1);
+
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      await http.get(`/players/${ALICE}`).expect(200);
+      expect(clockReads).toBe(before + 2);
+    });
+
+    it("never serves a chainTime below one it already served, when the chain clock drifts behind wall time", async () => {
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      const first = await http.get("/state").expect(200);
+      const served = BigInt(first.body.chainTime);
+
+      // The Clock sysvar advances slower than wall time, so the window's
+      // wall-time extrapolation overshoots and the next fresh read lands
+      // below what the previous response already carried.
+      chainClockValue = CHAIN_NOW - 5n;
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      try {
+        const second = await http.get("/state").expect(200);
+        expect(BigInt(second.body.chainTime)).toBeGreaterThanOrEqual(served);
+      } finally {
+        chainClockValue = CHAIN_NOW;
+      }
+    });
+
+    it("collapses a concurrent burst of jackpot balance reads to one call, then reads again after the window", async () => {
+      vi.setSystemTime(Date.now() + JACKPOT_BALANCE_TTL_MS + 1);
+      const before = jackpotReads;
+
+      const burst = await Promise.all([
+        http.get("/epochs/current"),
+        http.get("/epochs/current"),
+        http.get("/epochs/current"),
+      ]);
+      burst.forEach((response) => {
+        expect(response.status).toBe(200);
+        expect(response.body.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      });
+      expect(jackpotReads).toBe(before + 1);
+
+      vi.setSystemTime(Date.now() + JACKPOT_BALANCE_TTL_MS + 1);
+      await http.get("/epochs/current").expect(200);
+      expect(jackpotReads).toBe(before + 2);
+    });
+
+    it("falls back to the indexed snapshot on a failed jackpot read, without caching the fallback", async () => {
+      vi.setSystemTime(Date.now() + JACKPOT_BALANCE_TTL_MS + 1);
+      const before = jackpotReads;
+      failNextJackpotRead = true;
+
+      const failed = await http.get("/epochs/current").expect(200);
+      // Epoch 7's indexed jackpotAmount is seeded at 0, distinct from
+      // VAULT_BALANCE, so this proves the fallback path ran rather than a
+      // stale success.
+      expect(failed.body.jackpotAmount).toBe("0");
+      expect(jackpotReads).toBe(before + 1);
+
+      // Still inside the window the failed read opened. A cache poisoned
+      // with the "0" fallback would keep serving it here; the failed
+      // attempt must instead have cleared the cache slot, so this retries
+      // the chain and sees the vault balance again.
+      const recovered = await http.get("/epochs/current").expect(200);
+      expect(recovered.body.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      expect(jackpotReads).toBe(before + 2);
+    });
+
+    it("GET /state advances the cached chain time by the wall time elapsed since it was observed, with no extra clock read", async () => {
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      const before = clockReads;
+
+      const fresh = await http.get("/state").expect(200);
+      expect(clockReads).toBe(before + 1);
+      expect(fresh.body.chainTime).toBe(CHAIN_NOW.toString());
+
+      // Still inside the TTL window: the same cached clock value, now
+      // extrapolated forward by the whole second that elapsed, with no new
+      // read of the chain.
+      vi.setSystemTime(Date.now() + 1_500);
+      const later = await http.get("/state").expect(200);
+      expect(clockReads).toBe(before + 1);
+      expect(later.body.chainTime).toBe((CHAIN_NOW + 1n).toString());
+    });
+
+    it("GET /state reuses the cached jackpot balance for the open epoch's live amount", async () => {
+      vi.setSystemTime(Date.now() + JACKPOT_BALANCE_TTL_MS + 1);
+      const before = jackpotReads;
+
+      const first = await http.get("/state").expect(200);
+      expect(first.body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      expect(jackpotReads).toBe(before + 1);
+
+      const second = await http.get("/state").expect(200);
+      expect(second.body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
+      expect(jackpotReads).toBe(before + 1);
+    });
+  });
+
   describe("POST /faucet", () => {
     it("rejects a body without a usable owner", async () => {
       await http.post("/faucet").send({}).expect(400);
@@ -502,6 +750,8 @@ async function seed(prisma: PrismaService): Promise<void> {
       epochSeconds: EPOCH_LENGTH,
       epochAnchor: CURRENT_START,
       roundSeconds: 60n,
+      closeBuffer: POOL_CLOSE_BUFFER,
+      minDeposit: POOL_MIN_DEPOSIT,
       houseCutBps: 600,
       paused: false,
       currentEpochId: CURRENT_EPOCH,
@@ -583,6 +833,29 @@ async function seed(prisma: PrismaService): Promise<void> {
       // Withdrew everything, so no entries and no weight this epoch.
       emptyPlayer(BOB),
       { ...emptyPlayer(HOUSE), isHouse: true },
+    ],
+  });
+
+  await prisma.position.createMany({
+    data: [
+      // Alice's Position in the open round (100): the default case, no
+      // `round` query param needed to find it.
+      {
+        address: Keypair.generate().publicKey.toBase58(),
+        owner: ALICE,
+        roundId: 100n,
+        tiles: 7n,
+        stakePerTile: 1_000_000n,
+      },
+      // Bob's Position in round 99, already Settled: only reachable by
+      // naming it explicitly with `round=99`, since it is not `openRound`.
+      {
+        address: Keypair.generate().publicKey.toBase58(),
+        owner: BOB,
+        roundId: 99n,
+        tiles: 3n,
+        stakePerTile: 500_000n,
+      },
     ],
   });
 

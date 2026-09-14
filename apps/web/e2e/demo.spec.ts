@@ -32,8 +32,8 @@
  */
 import { expect, test, type Page } from "playwright/test";
 
-/** Round length the target pool is running, for the settle-wait budget. Matches spec.md §7's 60s default; override for a faster demo pool (see the runbook's "changing epoch length" recipe, which also covers --round-seconds). */
-const ROUND_SECONDS = Number(process.env.E2E_ROUND_SECONDS ?? 60);
+/** Round length the target pool is running, for the settle-wait budget. Matches spec.md §7's 90s default; override for a faster demo pool (see the runbook's "changing epoch length" recipe, which also covers --round-seconds). */
+const ROUND_SECONDS = Number(process.env.E2E_ROUND_SECONDS ?? 90);
 const VRF_TIMEOUT_SECONDS = Number(process.env.E2E_VRF_TIMEOUT_SECONDS ?? 120);
 /** Generous: a round can void and retry once before ORAO answers. */
 const SETTLE_TIMEOUT_MS = (ROUND_SECONDS + VRF_TIMEOUT_SECONDS + 60) * 1000;

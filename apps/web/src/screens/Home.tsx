@@ -1,18 +1,21 @@
 /**
  * HOME tab: the Figma "Landing" frame. Today's prize (the epoch's
- * simulated yield, the same `/epochs/current` value DAILY DRAW labels
- * "Prize") as a whole-dollar hero, a DD:HH:MM:SS clock to `endsAt`, and one
- * button that jumps to the VAULT tab.
+ * simulated yield, the same current-Epoch value DAILY DRAW labels "Prize")
+ * as a whole-dollar hero, a DD:HH:MM:SS clock to `endsAt`, and one button
+ * that jumps to the VAULT tab.
+ *
+ * Ticket 07: `currentEpoch` comes from App's one `GET /state` poll instead
+ * of a duplicate `/epochs/current` poll of its own.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { apiBaseUrl, fetchCurrentEpoch } from "../api.js";
+import type { CurrentEpochDto } from "../api.js";
 import { dhmsParts } from "../engine.js";
-import { useApiPoll } from "../useApiPoll.js";
 
 export interface HomeProps {
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
+  currentEpoch: CurrentEpochDto | null;
   onDeposit: () => void;
 }
 
@@ -96,16 +99,10 @@ export const Star = () => (
   </svg>
 );
 
-export function Home({ now, onDeposit }: HomeProps) {
-  const loadCurrentEpoch = useCallback(
-    (signal: AbortSignal) => fetchCurrentEpoch(apiBaseUrl(), signal),
-    [],
-  );
-  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
-
+export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
   const remaining =
-    epoch.data && now !== null ? BigInt(epoch.data.endsAt) - now : null;
-  const drawing = epoch.data?.drawing !== null && epoch.data?.drawing !== undefined;
+    currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : null;
+  const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
   const parts = remaining === null ? null : dhmsParts(remaining);
 
   return (
@@ -128,7 +125,7 @@ export function Home({ now, onDeposit }: HomeProps) {
           <Star />
         </div>
         <div className="home-amount" data-testid="home-prize">
-          {epoch.data ? wholeDollars(epoch.data.jackpotAmount) : "$—"}
+          {currentEpoch ? wholeDollars(currentEpoch.jackpotAmount) : "$—"}
         </div>
         <p className="home-tagline">
           Save your <em>money</em>, play with <em>luck</em>

@@ -277,6 +277,8 @@ describe("poolRow", () => {
       epochSeconds: new BN(86_400),
       epochAnchor: new BN(1_789_315_200),
       roundSeconds: new BN(60),
+      closeBuffer: new BN(12),
+      minDeposit: new BN(1_000_000),
       houseCutBps: 600,
       paused: false,
       currentEpochId: new BN(3),
@@ -291,6 +293,10 @@ describe("poolRow", () => {
       currentEpochEndsAt: 1_789_488_000n,
       previousEpochEndsAt: 1_789_401_600n,
       houseCutBps: 600,
+      // The browser reads these two off the API now, so they have to survive
+      // the decode rather than being dropped (ticket 07).
+      closeBuffer: 12n,
+      minDeposit: 1_000_000n,
     });
   });
 });

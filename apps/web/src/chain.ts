@@ -117,7 +117,7 @@ export const PROGRAM_ID = new PublicKey(env("VITE_PROGRAM_ID") ?? idl.address);
 export const POOL_ID = BigInt(env("VITE_POOL_ID") ?? "1");
 
 /** Public devnet unless overridden; .env.example pins the local validator. */
-export const RPC_URL = env("VITE_RPC_URL") ?? clusterApiUrl("devnet");
+export const RPC_URL = env("VITE_PUBLIC_RPC_URL") ?? clusterApiUrl("devnet");
 
 export const API_URL = env("VITE_API_URL") ?? "http://127.0.0.1:8080";
 

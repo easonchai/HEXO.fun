@@ -7,19 +7,18 @@
  *
  * "Epoch" stays the mechanism name in code and the API; on screen it is a
  * day (ticket 14, renamed from a week by the epoch-anchor effort).
+ *
+ * Ticket 07: `currentEpoch` and `player` come from App's one `GET /state`
+ * poll instead of two duplicate polls of this screen's own; epoch history
+ * stays on its own slower poll (list data). `onDone` tightens the state poll
+ * (`useStatePoll.ts` `kick`) instead of triggering a chain re-read.
  */
 import { useCallback, useMemo, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import { atomicShort } from "../activityRows.js";
 import { register, type TxSigner } from "../actions.js";
-import {
-  apiBaseUrl,
-  fetchCurrentEpoch,
-  fetchEpochs,
-  fetchPlayer,
-  type EpochDto,
-} from "../api.js";
+import { apiBaseUrl, fetchEpochs, type CurrentEpochDto, type EpochDto, type PlayerDto } from "../api.js";
 import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
 import { formatAddress } from "../lib/money.js";
@@ -40,32 +39,22 @@ export interface WeeklyDrawScreenProps {
   pool: PoolLike | null;
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
+  currentEpoch: CurrentEpochDto | null;
+  /** Null until the owner's Player is indexed, or no wallet is connected. */
+  player: PlayerDto | null;
   onDone: () => void;
 }
 
 export function WeeklyDraw(props: WeeklyDrawScreenProps) {
-  const { program, owner, sendTransaction, pool, now, onDone } = props;
+  const { program, owner, sendTransaction, pool, now, currentEpoch, player, onDone } = props;
   const ownerBase58 = owner?.toBase58();
 
-  const loadCurrentEpoch = useCallback(
-    (signal: AbortSignal) => fetchCurrentEpoch(apiBaseUrl(), signal),
-    [],
-  );
   const loadEpochs = useCallback(
     (signal: AbortSignal) => fetchEpochs(apiBaseUrl(), EPOCH_LOOKBACK, signal),
     [],
   );
-  const loadPlayer = useCallback(
-    (signal: AbortSignal) =>
-      ownerBase58
-        ? fetchPlayer(apiBaseUrl(), ownerBase58, signal)
-        : Promise.resolve({ ok: false as const, reason: "no wallet connected" }),
-    [ownerBase58],
-  );
 
-  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
   const history = useApiPoll(loadEpochs, 10_000);
-  const player = useApiPoll(loadPlayer, 10_000);
 
   const winners = useMemo(
     () =>
@@ -76,10 +65,10 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
   );
 
   const countdown =
-    epoch.data && now !== null
-      ? hmText(BigInt(epoch.data.endsAt) - now)
+    currentEpoch && now !== null
+      ? hmText(BigInt(currentEpoch.endsAt) - now)
       : "--:--";
-  const drawing = epoch.data?.drawing ?? null;
+  const drawing = currentEpoch?.drawing ?? null;
 
   const [registerBusy, setRegisterBusy] = useState(false);
   const [registerNote, setRegisterNote] = useState<string | null>(null);
@@ -96,15 +85,14 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
       );
       setRegisterNote("registered your weight for this draw");
       onDone();
-      player.refresh();
     } catch (error) {
       setRegisterNote(error instanceof Error ? error.message : String(error));
     } finally {
       setRegisterBusy(false);
     }
-  }, [drawing, program, pool, owner, sendTransaction, onDone, player.refresh]);
+  }, [drawing, program, pool, owner, sendTransaction, onDone]);
 
-  const apiError = epoch.error ?? player.error ?? history.error;
+  const apiError = history.error;
 
   return (
     <div className="screen-vault" data-testid="daily-draw-screen">
@@ -126,15 +114,15 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
           <Stat
             label="Prize (simulated 5% APR)"
             value={
-              epoch.data ? `${atomicShort(epoch.data.jackpotAmount)} ${SYMBOL}` : "—"
+              currentEpoch ? `${atomicShort(currentEpoch.jackpotAmount)} ${SYMBOL}` : "—"
             }
             testid="prize-amount"
           />
           <Stat
             label="Your weight"
             value={
-              player.data
-                ? atomicShort(player.data.liveWeight)
+              player
+                ? atomicShort(player.liveWeight)
                 : ownerBase58
                   ? "—"
                   : "connect a wallet"
@@ -143,10 +131,10 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
           />
           <Stat
             label="Your odds"
-            value={player.data ? `${player.data.odds}%` : "—"}
+            value={player ? `${player.odds}%` : "—"}
             testid="your-odds"
           />
-          <Stat label="Day" value={epoch.data ? `#${epoch.data.id}` : "—"} small />
+          <Stat label="Day" value={currentEpoch ? `#${currentEpoch.id}` : "—"} small />
         </StatGrid>
       </PanelCard>
 

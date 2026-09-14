@@ -1,6 +1,8 @@
 /**
- * Indexer REST client (spec §3.5). The API is a cache; chain stays
- * authoritative. Nothing here throws: a failed call comes back as
+ * Indexer REST client (spec §3.5). Ticket 07: the Indexer is the browser's
+ * read model, the only path by which it learns about the protocol — a read
+ * model may not be bypassed, unlike a cache, and the chain stays
+ * authoritative behind it. Nothing here throws: a failed call comes back as
  * `{ ok: false, reason }` so a screen can show a banner instead of crashing.
  *
  * Every u64/u128/timestamp arrives as a decimal string (spec §3.2), so these
@@ -49,6 +51,11 @@ export interface PoolDto {
   epochSeconds: string;
   epochAnchor: string;
   roundSeconds: string;
+  /** Seconds before a Round's end that Positions close. */
+  closeBuffer: string;
+  minDeposit: string;
+  /** Share of a settled round's pot credited to the House, in basis points. */
+  houseCutBps: number;
   paused: boolean;
   currentEpochId: string;
   currentEpochEndsAt: string;
@@ -77,6 +84,8 @@ export interface RoundDto {
   endsAt: string;
   status: StatusValue;
   pot: string;
+  /** Entries the House took from the pot at settlement; "0" until then. */
+  houseCut: string;
   /** Null until the round settles. */
   winningTile: number | null;
   tileTotals: string[];
@@ -125,6 +134,9 @@ export interface EventDto {
 export interface OperatorStateDto {
   id: number;
   lastTickAt: string | null;
+  /** When the crank plans to look again. It sleeps to a deadline, so a gap
+   *  between ticks is only a stall once this has passed. */
+  nextWakeAt: string | null;
   lastAction: string | null;
   lastError: string | null;
   registeredCount: number | null;
@@ -165,6 +177,31 @@ export type CurrentEpochDto = EpochDto & {
   drawing: DrawingProgressDto | null;
 };
 
+/** The caller's Position in `GET /state`'s tracked Round; see `StateDto.position`. */
+export interface PositionDto {
+  tiles: string;
+  stakePerTile: string;
+}
+
+/**
+ * Ticket 07: `GET /state`, the browser's one poll. `openRound` stays filtered
+ * to Open/Requested; `round` is whichever Round the `round=` query asked
+ * about, any status, so the browser can keep watching the same Round (and
+ * `position` inside it) straight through settlement without a chain read of
+ * its own.
+ */
+export interface StateDto {
+  pool: PoolDto;
+  currentEpoch: CurrentEpochDto;
+  openRound: RoundSummaryDto | null;
+  round: RoundDto | null;
+  player: PlayerDto | null;
+  position: PositionDto | null;
+  status: StatusDto;
+  /** Chain time as the backend last observed it, extrapolated to now (decimal, unix seconds). */
+  chainTime: string;
+}
+
 export const fetchPoolSummary = (
   baseUrl: string,
   signal?: AbortSignal,
@@ -177,12 +214,6 @@ export const fetchEpochs = (
   signal?: AbortSignal,
 ): Promise<ApiResult<EpochDto[]>> =>
   get<EpochDto[]>(baseUrl, `/epochs?limit=${limit}`, signal);
-
-export const fetchCurrentEpoch = (
-  baseUrl: string,
-  signal?: AbortSignal,
-): Promise<ApiResult<CurrentEpochDto>> =>
-  get<CurrentEpochDto>(baseUrl, "/epochs/current", signal);
 
 export const fetchRounds = (
   baseUrl: string,
@@ -197,13 +228,6 @@ export const fetchRound = (
   signal?: AbortSignal,
 ): Promise<ApiResult<RoundDto>> =>
   get<RoundDto>(baseUrl, `/rounds/${roundId}`, signal);
-
-export const fetchPlayer = (
-  baseUrl: string,
-  owner: string,
-  signal?: AbortSignal,
-): Promise<ApiResult<PlayerDto>> =>
-  get<PlayerDto>(baseUrl, `/players/${owner}`, signal);
 
 export const fetchLeaderboard = (
   baseUrl: string,
@@ -249,10 +273,24 @@ export const fetchPositionCounts = (
     signal,
   );
 
-export const fetchStatus = (
+/**
+ * Ticket 07: the one poll every screen reads from (see `useStatePoll.ts`).
+ * `round`, when given, names whichever Round the caller wants the full state
+ * of, whatever its status — pass the last Round seen open, so the browser
+ * keeps watching it straight through settlement.
+ */
+export const fetchState = (
   baseUrl: string,
+  owner: string | undefined,
+  round: string | undefined,
   signal?: AbortSignal,
-): Promise<ApiResult<StatusDto>> => get<StatusDto>(baseUrl, "/status", signal);
+): Promise<ApiResult<StateDto>> => {
+  const params = new URLSearchParams();
+  if (owner) params.set("owner", owner);
+  if (round) params.set("round", round);
+  const query = params.toString();
+  return get<StateDto>(baseUrl, `/state${query ? `?${query}` : ""}`, signal);
+};
 
 export const fetchHealth = (
   baseUrl: string,

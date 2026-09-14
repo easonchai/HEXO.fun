@@ -2,12 +2,16 @@
  * VAULT tab: the Figma "Deposit" frame. One widget with DEPOSIT / WITHDRAW
  * tabs on the HOME halftone background. The program is the custody boundary:
  * Principal and Tickets move together, so a withdrawal needs both.
+ *
+ * Ticket 07: `currentEpoch` comes from App's one `GET /state` poll instead
+ * of a duplicate `/epochs/current` poll of its own; `onDone` tightens that
+ * poll (see `useStatePoll.ts` `kick`) instead of triggering a chain re-read.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import { deposit, withdraw, type TxSigner } from "../actions.js";
-import { apiBaseUrl, fetchCurrentEpoch } from "../api.js";
+import type { CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
 import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
@@ -21,7 +25,6 @@ import {
   withdrawable,
 } from "../lib/money.js";
 import type { PoolLike } from "../read.js";
-import { useApiPoll } from "../useApiPoll.js";
 import { GlyphRow } from "./Home.js";
 
 const DECIMALS = 6;
@@ -52,7 +55,8 @@ export interface VaultScreenProps {
   paused: boolean;
   /** Chain clock seconds, for the "rest unlocks in HH:MM" countdown. */
   now: bigint | null;
-  /** Basis points from GET /status; null while the backend is unreachable. */
+  currentEpoch: CurrentEpochDto | null;
+  /** Basis points from GET /state's status; null while the backend is unreachable. */
   aprBps: number | null;
   /**
    * Which tab the widget opens on. The dashboard's two buttons are the only
@@ -77,6 +81,7 @@ export function Vault(props: VaultScreenProps) {
     walletBalance,
     paused,
     now,
+    currentEpoch,
     aprBps,
     initialMode,
     onConnect,
@@ -95,13 +100,6 @@ export function Vault(props: VaultScreenProps) {
   );
   /** Atomic amount of the deposit that just landed; null closes the modal. */
   const [confirmed, setConfirmed] = useState<bigint | null>(null);
-
-  // The epoch's own `endsAt`, same source Home, Dashboard and DAILY DRAW read.
-  const loadCurrentEpoch = useCallback(
-    (signal: AbortSignal) => fetchCurrentEpoch(apiBaseUrl(), signal),
-    [],
-  );
-  const epoch = useApiPoll(loadCurrentEpoch, 10_000);
 
   const connected = owner !== null && program !== null && pool !== null;
   const matched = withdrawable(principal, entries);
@@ -149,7 +147,7 @@ export function Vault(props: VaultScreenProps) {
   // epoch reset, not before. See CONTEXT.md "Entries".
   const locked = principal > entries ? principal - entries : 0n;
   const resetsIn =
-    epoch.data && now !== null ? hmText(BigInt(epoch.data.endsAt) - now) : null;
+    currentEpoch && now !== null ? hmText(BigInt(currentEpoch.endsAt) - now) : null;
 
   const overCap = connected && amount !== null && amount > cap;
   const underMin =

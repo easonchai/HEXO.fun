@@ -23,16 +23,16 @@ describe("dev burner gate", () => {
   it("needs the opt-in flag as well as the local endpoint", () => {
     const local = "http://127.0.0.1:8899";
     expect(
-      burnerEnabled({ VITE_BURNER_WALLET: "1", VITE_RPC_URL: local }),
+      burnerEnabled({ VITE_BURNER_WALLET: "1", VITE_PUBLIC_RPC_URL: local }),
     ).toBe(true);
-    expect(burnerEnabled({ VITE_RPC_URL: local })).toBe(false);
-    expect(burnerEnabled({ VITE_BURNER_WALLET: "0", VITE_RPC_URL: local })).toBe(
-      false,
-    );
+    expect(burnerEnabled({ VITE_PUBLIC_RPC_URL: local })).toBe(false);
+    expect(
+      burnerEnabled({ VITE_BURNER_WALLET: "0", VITE_PUBLIC_RPC_URL: local }),
+    ).toBe(false);
     expect(
       burnerEnabled({
         VITE_BURNER_WALLET: "1",
-        VITE_RPC_URL: "https://api.devnet.solana.com",
+        VITE_PUBLIC_RPC_URL: "https://api.devnet.solana.com",
       }),
     ).toBe(false);
   });

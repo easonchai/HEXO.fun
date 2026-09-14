@@ -38,7 +38,13 @@ const TILES = 36;
 /** Stop this many seconds before `buy_position` starts refusing, so a slow
  *  confirmation does not land inside the close buffer. */
 const MARGIN = 2n;
-const TICK_MS = 2_000;
+/**
+ * The safety net (ticket 03): the Operator wakes this service in-process the
+ * moment its own `create_round` confirms, so this interval only has to catch
+ * a Round opened by anyone else (or a missed wake). On the order of a minute,
+ * same as the Operator's own safety tick.
+ */
+const SAFETY_TICK_MS = 60_000;
 
 export interface SparringContext {
   /** Chain clock, not wall time, as everywhere else in this module. */
@@ -132,7 +138,8 @@ export class SparringService {
     );
   }
 
-  @Interval(TICK_MS)
+  /** The safety net; see `SAFETY_TICK_MS`. */
+  @Interval(SAFETY_TICK_MS)
   async tick(): Promise<void> {
     const keypair = this.keypair;
     if (!keypair || this.running) return;
@@ -151,6 +158,14 @@ export class SparringService {
     } finally {
       this.running = false;
     }
+  }
+
+  /** Called by the Operator once its own `create_round` confirms, so this
+   *  player buys in without waiting for the safety tick above. Fire-and-forget:
+   *  a failure here is logged by `tick()`'s own error handling, not thrown
+   *  back into the Operator's tick. */
+  wake(): void {
+    void this.tick();
   }
 
   /** Two account reads: pool + clock + Player, then Round + Position. */

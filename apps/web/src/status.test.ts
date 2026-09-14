@@ -9,6 +9,7 @@ const status = (overrides: Partial<StatusDto> = {}): StatusDto => ({
   operator: {
     id: 1,
     lastTickAt: "2026-09-06T00:00:08.000Z",
+    nextWakeAt: null,
     lastAction: "settleRound",
     lastError: null,
     registeredCount: null,
@@ -49,6 +50,7 @@ describe("summarizeStatus", () => {
       operator: {
         id: 1,
         lastTickAt: "2026-09-05T23:59:59.000Z",
+        nextWakeAt: null,
         lastAction: "settleRound",
         lastError: null,
         registeredCount: null,
@@ -66,6 +68,7 @@ describe("summarizeStatus", () => {
       operator: {
         id: 1,
         lastTickAt: "2026-09-06T00:00:09.000Z",
+        nextWakeAt: null,
         lastAction: "settleRound",
         lastError: "insufficient jackpot vault balance",
         registeredCount: null,
@@ -95,6 +98,45 @@ describe("summarizeStatus", () => {
     const result = summarizeStatus(quietRound, NOW);
     expect(result.tone).toBe("ok");
     expect(result.stale).toBe(false);
+  });
+
+  it("stays live through a long planned sleep: the tick is old but the wake has not come due", () => {
+    // 62 s since the last tick, far past FRESH_SECONDS, but the crank said it
+    // would look again 28 s from now.
+    const sleeping = status({
+      operator: {
+        id: 1,
+        lastTickAt: "2026-09-05T23:59:08.000Z",
+        nextWakeAt: "2026-09-06T00:00:38.000Z",
+        lastAction: "createRound",
+        lastError: null,
+        registeredCount: null,
+        registeredTotal: null,
+      },
+    });
+    const result = summarizeStatus(sleeping, NOW);
+    expect(result.tone).toBe("ok");
+    expect(result.label).toBe("LIVE");
+    expect(result.stale).toBe(false);
+  });
+
+  it("is stalled when a scheduled wake came and went", () => {
+    // Wake was due 11 s ago, one second past the margin.
+    const missed = status({
+      operator: {
+        id: 1,
+        lastTickAt: "2026-09-05T23:59:08.000Z",
+        nextWakeAt: "2026-09-05T23:59:59.000Z",
+        lastAction: "createRound",
+        lastError: null,
+        registeredCount: null,
+        registeredTotal: null,
+      },
+    });
+    const result = summarizeStatus(missed, NOW);
+    expect(result.tone).toBe("warn");
+    expect(result.label).toBe("STALLED");
+    expect(result.stale).toBe(true);
   });
 
   it("goes amber when the indexer cursor outlives a sweep even though the operator ticked", () => {

@@ -67,7 +67,7 @@ The yield the pool earned during an epoch, paid in full to the daily draw's sing
 _Avoid_: Jackpot (on screen), pot, reward (a game concept)
 
 **Hexpot**:
-The jackpot vault's current balance: this epoch's prize once funded, plus anything a rollover or the House's 30% seed left behind. Shown on the odometer under the board and read straight from the token account.
+The jackpot vault's current balance: this epoch's prize once funded, plus anything a rollover or the House's 30% seed left behind. Shown on the odometer under the board, served by the Read model, which reads the vault balance on the browser's behalf.
 _Avoid_: Jackpot (on screen), honeypot, prize pool
 
 **Registration**:
@@ -131,13 +131,17 @@ _Avoid_: Cancel, refund
 ### Operations
 
 **Operator**:
-The backend service that advances the protocol on a schedule: opens epochs and rounds, requests randomness, settles rounds and positions, cranks registration, funds the simulated yield, and pays the winner. Holds the authority keypair and the Sparring player's keypair; never holds a human depositor's funds.
+The backend service that advances the protocol: opens epochs and rounds, requests randomness, settles rounds and positions, cranks registration, funds the simulated yield, and pays the winner. Deadline-driven: it sleeps until the next moment a decision could change rather than running on a fixed schedule, with a slow safety tick as its backstop. Holds the authority keypair and the Sparring player's keypair; never holds a human depositor's funds.
 _Avoid_: Bot, cron, CLI, admin, authority (the on-chain role name)
 
 **Sparring player**:
 A backend-owned Player that deposits once and buys one Position in every Round, on six to eight random Tiles at one Ticket per tile, so a lone human always has someone to play against. On screen it is indistinguishable from any other wallet, and it competes in the draw like any Player. It is not the House.
 _Avoid_: Bot, house player, NPC, dummy user
 
+**Read model**:
+The Indexer's Postgres mirror of program accounts and finalized events, and the only path by which the browser learns anything about the protocol. A cache may be bypassed for a fresher read; the Read model may not, since the browser keeps no chain read of its own to fall back to.
+_Avoid_: Cache, backend
+
 **Indexer**:
-The backend component that mirrors program accounts and finalized events into Postgres and serves the read API the frontend uses.
+The backend component that mirrors program accounts and finalized events into Postgres. It is the Read model: the browser's only path to learning anything about the protocol.
 _Avoid_: Cache, backend (too broad)

@@ -3,7 +3,7 @@ import { AnchorProvider, Program } from "@anchor-lang/core";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { eventsToRows, liveEventToRow, mergeFeed } from "./activityRows.js";
+import { eventsToRows } from "./activityRows.js";
 import { Arena, LogoCog, LogoWordmark } from "./arena/Arena.js";
 import { BetDrawer } from "./panel/BetDrawer.js";
 import { ControlPanel } from "./panel/ControlPanel.js";
@@ -15,7 +15,7 @@ import { Leaderboard } from "./screens/Leaderboard.js";
 import { Vault, type VaultMode } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
 import { buyPosition, settlePosition } from "./actions.js";
-import { apiBaseUrl, fetchFeed, fetchStatus } from "./api.js";
+import { apiBaseUrl, fetchFeed, type RoundDto } from "./api.js";
 import { type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
@@ -27,24 +27,35 @@ import {
   phaseFor,
   type FeedRow,
   type RememberedBoard,
+  type RoundLike,
 } from "./engine.js";
-import {
-  formatAtomic,
-  formatAtomic2,
-  parseAtomic,
-  withdrawable,
-} from "./lib/money.js";
+import { formatAtomic, formatAtomic2, parseAtomic } from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { SoundIcon } from "./SoundIcon.js";
 import { WalletMenu } from "./WalletMenu.js";
-import { useChainState } from "./read.js";
+import { poolFromDto, useWalletBalance } from "./read.js";
 import { useChainClock } from "./useChainClock.js";
-import { useProgramEvents } from "./useProgramEvents.js";
 import { useApiPoll } from "./useApiPoll.js";
+import { snapshot, useStatePoll } from "./useStatePoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
 import { TABS, tabFromHash, type Tab } from "./tabs.js";
+
+/** `GET /state`'s tracked Round (any status) → the engine's `RoundLike`. */
+function roundLikeFrom(dto: RoundDto): RoundLike {
+  return {
+    roundId: BigInt(dto.id),
+    epochId: BigInt(dto.epochId),
+    startsAt: BigInt(dto.startsAt),
+    endsAt: BigInt(dto.endsAt),
+    status: Number(dto.status),
+    winningTile: dto.winningTile ?? -1,
+    pot: BigInt(dto.pot),
+    houseCut: BigInt(dto.houseCut),
+    tileTotals: dto.tileTotals.map((value) => BigInt(value)),
+  };
+}
 
 /** The accepted asset is USDC (6 decimals) for every pool in this build. */
 const SYMBOL = "USDC";
@@ -82,7 +93,6 @@ export function App() {
   const [addressCopied, setAddressCopied] = useState(false);
   const [deployBusy, setDeployBusy] = useState(false);
   const [deployNote, setDeployNote] = useState<string | null>(null);
-  const [feedHistory, setFeedHistory] = useState<FeedRow[]>([]);
   // Phone bet drawer (spec.md "Drawer"): controlled here so the deploy
   // success path and the win takeover path can both close it.
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -121,39 +131,49 @@ export function App() {
     [provider],
   );
 
-  const state = useChainState(connection, program, publicKey ?? undefined);
-  const pool = state.pool;
-  const player = state.player;
-  const round = state.round;
-  const { now } = useChainClock(connection);
-  const { events } = useProgramEvents(program, connection);
-  const loadStatus = useCallback(
-    (signal: AbortSignal) => fetchStatus(apiBaseUrl(), signal),
+  const ownerKey = publicKey?.toBase58();
+  const statePoll = useStatePoll(apiBaseUrl(), ownerKey);
+  const state = statePoll.data;
+  const pool = state ? poolFromDto(state.pool) : null;
+  const player = state?.player ?? null;
+  // The tracked Round: open, or the last one this session saw once it has
+  // settled (see api.service.ts `getState`'s comment on `round`).
+  const round = state?.round ? roundLikeFrom(state.round) : null;
+  const now = useChainClock(state ? BigInt(state.chainTime) : null, round?.roundId ?? null);
+  // The wallet balance is the one chain read left in the browser, so it
+  // reloads when something actually moved, not on every poll: `snapshot` is
+  // unchanged while only chain time and the heartbeat tick. The nonce covers
+  // the faucet, which mints to the wallet without touching `/state` at all.
+  const [balanceNonce, setBalanceNonce] = useState(0);
+  const walletBalance = useWalletBalance(
+    connection,
+    state?.pool.mint ?? null,
+    publicKey ?? undefined,
+    `${state ? snapshot(state) : ""}:${balanceNonce}`,
+  );
+  const status = useMemo(
+    () => summarizeStatus(state?.status ?? null, Date.now()),
+    [state?.status],
+  );
+  const loadFeed = useCallback(
+    (signal: AbortSignal) => fetchFeed(apiBaseUrl(), 12, signal),
     [],
   );
-  const statusPoll = useApiPoll(loadStatus, 2000);
-  const status = useMemo(
-    () => summarizeStatus(statusPoll.data, Date.now()),
-    [statusPoll.data],
+  const feedPoll = useApiPoll(loadFeed, 2000);
+  const feedRows = useMemo<FeedRow[]>(
+    () => eventsToRows(feedPoll.data ?? [], ownerKey),
+    [feedPoll.data, ownerKey],
   );
-  // Live rows only; GET /feed history is never held, so it joins after the
-  // engine below rather than passing through the hold filter.
-  const ownerKey = publicKey?.toBase58();
-  const liveFeed = useMemo<FeedRow[]>(() => {
-    const rows: FeedRow[] = [];
-    for (const event of events) {
-      const row = liveEventToRow(event, ownerKey);
-      if (row) rows.push(row);
-    }
-    return rows;
-  }, [events, ownerKey]);
+  const trackedPosition = state?.position
+    ? { tiles: BigInt(state.position.tiles), stakePerTile: BigInt(state.position.stakePerTile) }
+    : null;
   const engine = useRoundEngine({
     round,
-    position: state.position,
+    position: trackedPosition,
     owner: publicKey ?? undefined,
     closeBuffer: pool?.closeBuffer ?? 0n,
     clockNow: now,
-    feed: liveFeed,
+    feed: feedRows,
   });
 
   // `takeover` only ever fires for the Player's own Position (useRoundEngine
@@ -163,9 +183,8 @@ export function App() {
     if (engine.takeover) setDrawerOpen(false);
   }, [engine.takeover]);
 
-  const refresh = state.refresh;
-  const principal = player?.principal ?? 0n;
-  const entries = player?.entries ?? 0n;
+  const principal = player ? BigInt(player.principal) : 0n;
+  const entries = player ? BigInt(player.entries) : 0n;
   const fmt = useCallback((value: bigint) => formatAtomic2(value, DECIMALS), []);
 
   // Header chip copies the full address; the truncated form is unusable for
@@ -180,25 +199,16 @@ export function App() {
     }
   }, []);
 
-  // Feed: /feed history first, then live events on top.
-  useEffect(() => {
-    const controller = new AbortController();
-    void (async () => {
-      const result = await fetchFeed(apiBaseUrl(), 12, controller.signal);
-      if (result.ok)
-        setFeedHistory(eventsToRows(result.data, publicKey?.toBase58()));
-    })();
-    return () => controller.abort();
-  }, [publicKey]);
-
-  const feed = useMemo(
-    () => mergeFeed(engine.feed, feedHistory),
-    [engine.feed, feedHistory],
-  );
+  const feed = engine.feed;
 
   // --- Actions ---------------------------------------------------------------
   const stake = parseAtomic(stakeText, DECIMALS) ?? 0n;
   const position = engine.activePosition;
+  // `round` is the tracked Round (any status once revealed); a genuinely
+  // open one for gating positions is status 0 specifically — Requested
+  // (VRF already in flight) never reaches here in practice since positions
+  // close before the operator requests it, but this keeps that guaranteed
+  // rather than assumed.
   const openRound = round && round.status === 0 ? round : null;
   const locked = Boolean(position) && Boolean(openRound);
   const deployedTotal = position
@@ -211,7 +221,7 @@ export function App() {
   // round, closed, already placed) is what the deploy button label already
   // says, so it only goes on the button as a tooltip.
   const problems: string[] = [];
-  if (!pool) problems.push("no pool found on chain yet");
+  if (!pool) problems.push("no pool found yet");
   if (spend > entries)
     problems.push("not enough Tickets — deposit to earn more");
   const deployHint = !openRound
@@ -235,7 +245,6 @@ export function App() {
           (acc, tile) => acc | (1n << BigInt(tile - 1)),
           0n,
         );
-        const spendNow = stakeAmount * BigInt(tiles.length);
         await buyPosition(
           program,
           txSigner,
@@ -244,13 +253,12 @@ export function App() {
           tileMask,
           stakeAmount,
         );
-        const entriesAfter = entries - spendNow;
-        setDeployNote(
-          `Tickets in ${fmt(spendNow)} · Tickets after ${fmt(entriesAfter)} · withdrawable after ${fmt(withdrawable(principal, entriesAfter))}`,
-        );
+        // No predicted Tickets balance: the panel shows "confirming…" (see
+        // `deployNote` below) until the next poll's Position actually moves.
+        setDeployNote(null);
         lastDeployRef.current = { tiles: [...tiles], stake: stakeAmount };
         sfx("prime");
-        refresh();
+        statePoll.kick();
         return true;
       } catch (error) {
         setDeployNote(error instanceof Error ? error.message : String(error));
@@ -259,7 +267,7 @@ export function App() {
         setDeployBusy(false);
       }
     },
-    [pool, openRound, txSigner, program, entries, principal, fmt, refresh],
+    [pool, openRound, txSigner, program, statePoll.kick],
   );
 
   // Auto-rounds: re-place the last board when a fresh round opens. The
@@ -348,13 +356,22 @@ export function App() {
           : "position settled",
       );
       if (settleState.reward > 0n) sfx("win");
-      refresh();
+      statePoll.kick();
     } catch (error) {
       setDeployNote(error instanceof Error ? error.message : String(error));
     } finally {
       setSettleBusy(false);
     }
-  }, [settleState, pool, txSigner, program, fmt, refresh]);
+  }, [settleState, pool, txSigner, program, fmt, statePoll.kick]);
+
+  // Shown in the deploy note area whenever a send is outstanding and no
+  // error replaced it: no predicted Tickets balance, just an honest "still
+  // waiting on the read model" (ticket 07).
+  const confirmingNote = statePoll.pending
+    ? statePoll.stillConfirming
+      ? "still confirming…"
+      : "confirming…"
+    : null;
 
   return (
     <main className="app" data-tab={tab}>
@@ -398,7 +415,7 @@ export function App() {
                 Tickets: {fmt(entries)}
               </span>
               <span className="chip" data-testid="topbar-balance">
-                {SYMBOL}: {fmt(state.walletBalance)}
+                {SYMBOL}: {fmt(walletBalance)}
               </span>
             </>
           ) : null}
@@ -420,11 +437,14 @@ export function App() {
             <WalletMenu
               address={signer.publicKey.toBase58()}
               tickets={fmt(entries)}
-              balance={fmt(state.walletBalance)}
+              balance={fmt(walletBalance)}
               symbol={SYMBOL}
               addressCopied={addressCopied}
               onCopy={(address) => void copyAddress(address)}
-              onFunded={refresh}
+              // Not `kick()`: a faucet grant changes nothing `/state` carries,
+              // so arming the change watch would leave "confirming…" up for
+              // good. The balance is what moved, so reload just that.
+              onFunded={() => setBalanceNonce((value) => value + 1)}
               onDisconnect={() => signer.disconnect()}
             />
           ) : (
@@ -444,15 +464,19 @@ export function App() {
         </div>
       </header>
 
-      {state.error ? (
-        <div className="screen-note err" data-testid="chain-error">
-          {state.error}
+      {statePoll.error ? (
+        <div className="screen-note err" data-testid="state-error">
+          {statePoll.error}
         </div>
       ) : null}
 
       <main className="main-content-split">
         {tab === "HOME" ? (
-          <Home now={now} onDeposit={() => setTab("DASHBOARD")} />
+          <Home
+            now={now}
+            currentEpoch={state?.currentEpoch ?? null}
+            onDeposit={() => setTab("DASHBOARD")}
+          />
         ) : null}
         {tab === "DASHBOARD" ? (
           <Dashboard
@@ -460,7 +484,9 @@ export function App() {
             principal={principal}
             entries={entries}
             now={now}
-            aprBps={statusPoll.data?.aprBps ?? null}
+            currentEpoch={state?.currentEpoch ?? null}
+            player={player}
+            aprBps={state?.status.aprBps ?? null}
             onDeposit={() => {
               setVaultMode("deposit");
               setTab("VAULT");
@@ -501,7 +527,7 @@ export function App() {
               deployProblems={problems}
               deployHint={deployHint}
               deployBusy={deployBusy}
-              deployNote={deployNote}
+              deployNote={deployNote ?? confirmingNote}
               locked={locked}
               deployedTotal={deployedTotal}
               lastWin={engine.lastWin}
@@ -543,7 +569,7 @@ export function App() {
                   deployProblems={problems}
                   deployHint={deployHint}
                   deployBusy={deployBusy}
-                  deployNote={deployNote}
+                  deployNote={deployNote ?? confirmingNote}
                   locked={locked}
                   deployedTotal={deployedTotal}
                   lastWin={engine.lastWin}
@@ -572,13 +598,14 @@ export function App() {
             pool={pool}
             principal={principal}
             entries={entries}
-            walletBalance={state.walletBalance}
+            walletBalance={walletBalance}
             paused={pool?.paused ?? false}
             now={now}
-            aprBps={statusPoll.data?.aprBps ?? null}
+            currentEpoch={state?.currentEpoch ?? null}
+            aprBps={state?.status.aprBps ?? null}
             initialMode={vaultMode}
             onConnect={() => signer.connect()}
-            onDone={refresh}
+            onDone={statePoll.kick}
             onPlay={() => setTab("MINE")}
           />
         ) : null}
@@ -589,7 +616,9 @@ export function App() {
             sendTransaction={sendTransaction}
             pool={pool}
             now={now}
-            onDone={refresh}
+            currentEpoch={state?.currentEpoch ?? null}
+            player={player}
+            onDone={statePoll.kick}
           />
         ) : null}
         {tab === "LEADERBOARD" ? (

@@ -10,9 +10,9 @@ const isLocal = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(baseURL);
 
 export default defineConfig({
   testDir: "./e2e",
-  // A round is 60s by default (spec.md §7) and the flow waits out one full
+  // A round is 90s by default (spec.md §7) and the flow waits out one full
   // round plus settlement, so the per-test budget has to clear that.
-  timeout: 180_000,
+  timeout: 210_000,
   fullyParallel: false,
   retries: 0,
   reporter: "list",

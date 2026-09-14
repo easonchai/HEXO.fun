@@ -7,7 +7,7 @@
   Then http://localhost:5173, Phantom set to devnet. Faucet gives you 1000 hexUSDC.
 
   Check it came up: curl localhost:8080/status should show rpcOk: true and a lastAction a few seconds old. Watch it work with docker
-  compose -f docker-compose.dev.yml logs -f backend — a round every ~65s.
+  compose -f docker-compose.dev.yml logs -f backend — a round every round_seconds plus a few seconds to settle.
 
   Shut down with down in place of up -d.
 
@@ -55,7 +55,8 @@
   lands about 2s after the window opens (blockhash fetch, send, confirm). close_buffer is set to 12s on 30s rounds: 2s to land
   the request, 4s to 7s for the draw, and the rest is margin. The web countdown ends at the close and the stage reads DRAWING
   until the settle lands, at which point the reveal fires, so a slow draw shows as a longer DRAWING rather than a timer stuck at
-  zero. The operator ticks every 1s and opens the next Round 1s after ends_at. vrf_timeout (120s) bounds the ORAO tail.
+  zero. The operator sleeps until its next deadline, so the next Round opens a second after ends_at; a 60s safety tick and the
+  randomness subscription are what else wakes it. vrf_timeout (120s) bounds the ORAO tail.
 
   Demo cadence (2026-09-10): epoch_seconds 86400, round_seconds 30, close_buffer 12, on the anchored pool bootstrapped with
   --epoch-anchor 2026-09-13T16:00:00Z. One draw a day, landing at 00:00 MYT. Rounds switch on the next Round, epochs on the next
@@ -66,6 +67,21 @@
 
     set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --epoch-seconds 86400 --round-seconds 30 --close-buffer 12
 
+  Round length: 90s (2026-09-14)
+
+  Every Round costs about five transactions, so round_seconds sets the biggest line on the RPC bill. At 60s the idle backend
+  projects to just over a 1M-credit free-tier month, and 30s is worse; at 90s it projects to about 560k. bootstrap now defaults to 90.
+  A live Pool keeps its old value until set-params moves it, and the change takes effect on the next Round. 120s roughly halves
+  the round-linked cost again if the bill comes in over.
+
+    Pool 7 (dev, .env):     epoch_seconds 86400, round_seconds 30, close_buffer 12. Move to 90: pending.
+    Pool 8 (VPS, .env.vps): epoch_seconds 86400, round_seconds 30, close_buffer 12. Move to 90: pending.
+
+    set -a; . ./.env; set +a
+    DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin set-params --round-seconds 90
+
+  Same again from a fresh shell with .env.vps for Pool 8. Replace "pending" with the signature and slot once each lands.
+
   The buffer only works once the program that honours it is deployed. Until 2026-09-06 devnet ran the program from before ff22d53,
   whose request_round_randomness required `now >= ends_at`, so every draw request was rejected with RoundNotEnded until the round
   ended and settled 4s to 7s after zero no matter what close_buffer said. The tell in the operator log is a run of
@@ -74,11 +90,22 @@
   set-params.
 
   Tune it with set-params if ORAO's latency changes, no redeploy needed. The program still enforces 0 <= close_buffer < round_seconds.
-  Run it with the root .env exported first: the CLI loads apps/backend/.env, which is the template with an empty mint, and exported
-  variables win over the file. (The docker `run --rm backend ... tsx` form in docs/plan does not work: the runtime image has no tsx
-  and no decorator config.)
+  Run it with the root .env exported first. The CLI reads process.env directly and loads no file of its own, so nothing reaches it
+  except what the shell exports. DATABASE_URL is the catch: admin validates the backend's full env but neither .env nor .env.vps sets
+  it (compose builds it from the POSTGRES_* keys), so a dummy value has to come along or the command dies on a missing key it never
+  uses. (The docker `run --rm backend ... tsx` form in docs/plan does not work: the runtime image has no tsx and no decorator config.)
 
-    set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --close-buffer 15
+    set -a; . ./.env; set +a
+    DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin set-params --close-buffer 15
+
+  House cut: the set-params flag
+
+  --house-cut-bps sets the pool's House cut rate in basis points, a whole number from 0 to
+  10000 inclusive (0% to 100%). The default at pool creation is 600, 6%. A change applies to
+  the next round settled, never to one already settled.
+
+    set -a; . ./.env; set +a
+    DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin set-params --house-cut-bps 600
 
   House cut: the set-params flag
 
@@ -113,23 +140,114 @@
   weekly grid, and ends at the first weekly point after it. You get one short transition epoch, then Mondays. Going back to 3600 or
   86400 works the same way.
 
-  Re-bootstrapping after the Pool layout change
+  Standing up a fresh pool after a Pool or Round layout change
 
-  epoch_anchor, current_epoch_ends_at and previous_epoch_ends_at are new fields on Pool, so the account is a different size. There is
-  no in-place upgrade and no migration: every pool created before this effort is abandoned, along with its deposits, Player accounts
-  and epoch history. Devnet had one; it is gone. Coming back up on a fresh pool:
+  Adding a field to Pool or Round changes the account size, and create_pool allocates exactly
+  8 + Pool::INIT_SPACE with no slack. An older pool is short by the new field's width, so Anchor
+  fails deserialization with error 3003 before any instruction body runs, withdraw included.
+  There is no in-place upgrade and no migration: the old pool's deposits, Player accounts and
+  epoch history are gone. Two changes have forced this so far, the epoch anchor fields and the
+  House cut.
 
-    1. Redeploy the program: anchor build, both sync-idls, solana program deploy --program-id target/deploy/hex_vault-keypair.json
-       target/deploy/hex_vault.so --url devnet.
-    2. Bump POOL_ID in the root .env, then bootstrap the new pool:
+  Both environments share one devnet program id, so the upgrade breaks dev and the VPS at the
+  same instant. Run the whole thing back to back, not over two days.
 
-       set -a; . ./.env; set +a; pnpm --filter @hexvault/backend bootstrap --epoch-anchor 2026-09-13T16:00:00Z --epoch-seconds 86400
+  Pool ids are global rather than per authority: the PDA seed is the id alone, so a VPS pool and
+  a dev pool can never share one. 1 through 6 are spent; the next two are 7 and 8.
 
-    3. Repoint both apps at it. Paste the printed HEXUSDC_MINT into the root .env next to the bumped POOL_ID, and set VITE_POOL_ID
-       (and VITE_PROGRAM_ID, if the program id moved) in apps/web/.env to match. Both derive the pool address from that id, so a
-       stale one reads an account that no longer exists.
-    4. Restart the indexer so it reloads the env and mirrors the new accounts from scratch: up -d --force-recreate --build backend.
-       Check curl localhost:8080/status shows rpcOk: true and a fresh lastAction.
+  Keep a rollback before touching anything. This is the only way back to the old layout:
+
+    solana program dump LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6 /tmp/hex_vault-prev.so --url devnet
+
+    1. Build without the test feature and deploy. tests/run-local.sh leaves a --features test-vrf
+       build in target/, which stubs the ORAO CPI, so a plain rebuild has to follow any test run.
+       The grep is the check that matters: it prints 0 on a deployable artifact.
+
+         anchor build
+         pnpm --filter @hexvault/backend sync-idl
+         pnpm --filter @hexvault/web sync-idl
+         strings target/deploy/hex_vault.so | grep -c test-vrf
+         solana program deploy --program-id target/deploy/hex_vault-keypair.json \
+           target/deploy/hex_vault.so --url devnet
+
+       "ExtendProgram requires a minimum of 10240 additional bytes" means run
+       solana program extend LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6 10240 --url devnet first.
+
+    2. Bootstrap the dev pool. Bump POOL_ID but leave HEXUSDC_MINT alone: bootstrap reuses a mint
+       that already exists with 6 decimals and the authority as mint authority, so every wallet
+       keeps its faucet balance. Principal does not carry over, because Player is a PDA of the
+       pool and every depositor starts at zero.
+
+         sed -i '' 's/^POOL_ID=.*/POOL_ID=7/' .env
+         set -a; . ./.env; set +a
+         pnpm --filter @hexvault/backend bootstrap \
+           --epoch-anchor 2026-09-13T16:00:00Z --epoch-seconds 86400 \
+           --round-seconds 30
+         DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin set-params --close-buffer 12
+
+       bootstrap takes no --close-buffer and no --vrf-timeout: create_pool always gets the
+       defaults from src/bootstrap/params.ts (close_buffer 5, vrf_timeout 120, min_deposit 1
+       hexUSDC). Only set-params changes them, which is why 12 is a second command. --house-cut-bps 600
+
+       600 bps is the default, so pass the flag only for a different rate. stdout is a pasteable
+       KEY=value block and progress goes to stderr, so `bootstrap > pool.env` gives a clean file.
+       Paste HEXUSDC_MINT back into .env if the block names a mint you did not already have.
+
+    3. Wipe the dev database and rebuild the stack. Epoch, Round and Player rows carry no pool
+       column, so the previous pool's rows collide with the new pool's ids on the same numbers.
+
+         docker compose -f docker-compose.dev.yml down -v
+         docker compose -f docker-compose.dev.yml up -d --build
+
+       The container runs prisma migrate deploy before node starts, which is what adds the new
+       columns. Confirm with curl localhost:8080/pool for the new poolId and curl
+       localhost:8080/status for rpcOk true and a lastAction a few seconds old.
+
+    4. Repoint the dev frontend: VITE_POOL_ID=7 in apps/web/.env, plus VITE_PROGRAM_ID if the
+       program id moved. Vite reloads on its own. A stale id reads an account that no longer
+       exists and the screen sits empty.
+
+    5. Sparring player, once per pool. Its Principal lived on the old pool, so the deposit has to
+       happen again; the script reuses SPARRING_KEYPAIR from .env and only redoes what is missing.
+
+         set -a; . ./.env; set +a; pnpm --filter @hexvault/backend sparring-setup
+
+    6. Now the VPS, which has its own authority, mint and pool. .env.vps is the local mirror of
+       the .env that lives on the box, and bootstrap runs from here against it:
+
+         sed -i '' 's/^POOL_ID=.*/POOL_ID=8/' .env.vps
+         set -a; . ./.env.vps; set +a
+         pnpm --filter @hexvault/backend bootstrap \
+           --epoch-anchor 2026-09-13T16:00:00Z --epoch-seconds 86400 \
+           --round-seconds 30
+         DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin set-params --close-buffer 12
+         pnpm --filter @hexvault/backend sparring-setup
+
+       Open a new shell first. `set -a` on a second env file does not unset what the first one
+       exported, so leftover dev values silently win wherever .env.vps happens to be missing a
+       key, and the command runs against the wrong authority.
+
+    7. On the box, set POOL_ID=8 in its .env, then pull and recreate. Compose hardcodes
+       env_file: .env, so the file is named .env there whatever it is called in this repo.
+       Wipe the volume for the same reason step 3 does: Epoch, Round and Player are keyed by
+       chain id alone, so the previous pool's rows collide with the new pool's ids. FaucetClaim
+       goes with it, so anyone who already claimed may claim again.
+
+         sed -i 's/^POOL_ID=.*/POOL_ID=8/' .env
+         git pull
+         docker compose down -v
+         docker compose up -d --build
+
+    8. Vercel: set VITE_POOL_ID to 8 on the project pointed at api-hexo.elvtd.io and redeploy.
+       A Vercel env var only reaches the bundle on the next build, so a redeploy is required.
+
+    9. Smoke it once a round has settled. The authority's Player account is the House:
+
+         curl -s https://api-hexo.elvtd.io/rounds/<id> | jq '{pot, houseCut}'
+         curl -s https://api-hexo.elvtd.io/players/<authority> | jq .entries
+
+       houseCut is floor(pot × house_cut_bps ÷ 10000) and the House's entries rise by exactly
+       that. A forfeited round reads houseCut 0 with the whole pot going to the House instead.
 
   The Sparring player
 
@@ -160,3 +278,24 @@
 
     local (pool 1): 8fiH2kWupGjj7MbScxXkbD6aaWpbLkAnvBqt26jc3A8B
     VPS (pools 2 and 3): 2phBznrAD5cHHQ1zq6z3Qf7dmHzrcuYsNtNPL9M8oT4B
+
+  Frontend RPC endpoint and checking for a leaked key
+
+  The browser reads chain data through VITE_PUBLIC_RPC_URL, a public endpoint that Vite inlines into the shipped bundle at build
+  time, defaulting to devnet's public cluster URL when unset. Never set this to a keyed URL: whatever the variable holds ships in
+  plaintext to every visitor, in the JS bundle and again in the wss:// URL the wallet layer derives from that same string. The
+  backend's own RPC endpoint is a separate, server-only variable and never reaches the frontend build. Everything else the browser
+  shows comes from the backend API, mostly one poll of GET /state; the wallet's own token balance is the only thing it still reads
+  from the chain directly.
+
+  Check a local build for a leaked key:
+
+    pnpm --filter @hexvault/web build
+    grep -r "api-key=" apps/web/dist
+    grep -r "helius-rpc.com" apps/web/dist
+
+  Both greps should print nothing. Check a deployed site the same way, without a local build, by pulling down what the browser actually
+  downloads:
+
+    curl -s https://<deployed-host>/ | grep -oE '/assets/[^"]+\.js'
+    curl -s https://<deployed-host><asset-path-from-above> | grep -E "api-key=|helius-rpc.com"

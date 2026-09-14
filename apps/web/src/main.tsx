@@ -29,7 +29,9 @@ const ENV: Record<string, string | undefined> = {
     | string
     | undefined,
   VITE_BURNER_WALLET: import.meta.env.VITE_BURNER_WALLET as string | undefined,
-  VITE_RPC_URL: import.meta.env.VITE_RPC_URL as string | undefined,
+  // The resolved endpoint, not a raw env read: chain.ts is the one place
+  // that reads the RPC env var, so every consumer shares one definition.
+  VITE_PUBLIC_RPC_URL: RPC_URL,
 };
 
 const mode = walletModeFor(ENV);
