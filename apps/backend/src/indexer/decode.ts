@@ -93,6 +93,23 @@ export function decodeEventLogs(parser: EventParser, logs: string[]): DecodedEve
  */
 const declaredName = (name: string): string => name.charAt(0).toUpperCase() + name.slice(1);
 
+/**
+ * `settle_position` closes the Position account and refunds its rent,
+ * whether the Round it belongs to settled or was voided (`void_round` itself
+ * closes nothing; it only ever unlocks the settle). The owner and round id
+ * this event carries already identify the row Postgres keyed by address, so
+ * the indexer deletes it here instead of waiting for a sweep to notice the
+ * account is gone.
+ */
+export function settledPosition(event: DecodedEvent): { owner: string; roundId: bigint } | null {
+  if (event.name !== "PositionSettled") return null;
+  const { data } = event;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+  const { owner, roundId } = data;
+  if (typeof owner !== "string" || typeof roundId !== "string") return null;
+  return { owner, roundId: BigInt(roundId) };
+}
+
 const big = (value: BN): bigint => BigInt(value.toString());
 const isUnset = (key: PublicKey): boolean => key.equals(PublicKey.default);
 

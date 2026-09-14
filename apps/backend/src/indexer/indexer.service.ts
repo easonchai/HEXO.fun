@@ -20,6 +20,7 @@ import {
   positionRow,
   registrationWeight,
   roundRow,
+  settledPosition,
   type DecodedEpoch,
   type DecodedEvent,
   type DecodedPlayer,
@@ -30,10 +31,16 @@ import {
 
 /**
  * The account sync is event driven: a confirmed program log triggers one
- * `getProgramAccounts`. This sweep is the safety net for a dropped websocket,
- * and it is where the finalized event catch-up runs.
+ * `getProgramAccountsV2` walk. This sweep is the safety net for a dropped
+ * websocket, and it is where the finalized event catch-up runs.
  */
 const SWEEP_INTERVAL_MS = 60_000;
+/**
+ * A full, unfiltered walk is the backstop for anything an incremental sweep
+ * or an event missed. Every other sweep asks only for what changed since the
+ * last one, so this only bites once an hour instead of every minute.
+ */
+const FULL_WALK_INTERVAL_MS = 60 * 60 * 1000;
 const CURSOR_ID = 1;
 // One page of `getSignaturesForAddress`. Beyond this the oldest signatures
 // behind the cursor are dropped, which only happens if the indexer was down
@@ -62,10 +69,45 @@ export interface LogBatch {
   logs: string[];
 }
 
-/** Decoded accounts of one type, from the single `getProgramAccounts` read. */
+/** Decoded accounts of one type, from the paginated program-accounts walk. */
 interface AccountsByType {
   get<T>(name: string): { pubkey: PublicKey; account: T }[];
 }
+
+/** One account as `getProgramAccountsV2` reports it: base58 pubkey, data as
+ *  the standard `[base64, encoding]` tuple (requested with `encoding: "base64"`). */
+interface RawProgramAccount {
+  pubkey: string;
+  account: { data: [string, string] };
+}
+
+/**
+ * `getProgramAccountsV2` is a Helius extension, probed 2026-09-14 against the
+ * devnet key on the Free plan: pages at 1,000 rows, keyed by `paginationKey`,
+ * and honours `changedSinceSlot`. It is not in @solana/web3.js 1.98.4's
+ * `Connection`, so there is no typed response shape to import; this mirrors
+ * the envelope every other `withContext` call on this RPC already uses
+ * (`context.slot` alongside a `value` carrying the method's own payload).
+ */
+interface ProgramAccountsV2Response {
+  context: { slot: number };
+  value: {
+    accounts: RawProgramAccount[];
+    count: number;
+    paginationKey?: string;
+  };
+}
+
+/** Raised when the RPC has no `getProgramAccountsV2`, so the walk retries on
+ *  the plain call. Not an error the sweep reports: it is a provider fact. */
+class MethodNotFound extends Error {}
+
+/**
+ * JSON-RPC reserves -32601 for an unknown method, but providers differ on
+ * whether they set it, so the message is matched as well.
+ */
+const isMethodNotFound = (error: { code?: number; message: string }): boolean =>
+  error.code === -32601 || /method not found/i.test(error.message);
 
 interface SocketLike {
   on(event: string, listener: (...args: unknown[]) => void): void;
@@ -92,6 +134,14 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   private queue: Promise<void> = Promise.resolve();
   private lastFailure: string | undefined;
   private socketState = "connected";
+  /** Slot the last successful sweep was consistent as of. Undefined before
+   *  the first walk, which forces every process boot to start full. */
+  private lastSyncedSlot: bigint | undefined;
+  /** Wall time of the last full walk, gating `FULL_WALK_INTERVAL_MS`. */
+  private lastFullWalkAt = 0;
+  /** Set once an RPC answers "method not found" for `getProgramAccountsV2`,
+   *  which a local validator and most non-Helius providers do. */
+  private v2Unsupported = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -229,21 +279,34 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * One unfiltered `getProgramAccounts` (the program owns a few hundred
-   * accounts at most), sorted by Anchor discriminator locally, then one
-   * Prisma transaction per type.
+   * Walks `getProgramAccountsV2` (a full, unfiltered walk on boot and once an
+   * hour, an incremental `changedSinceSlot` walk every other sweep), sorted
+   * by Anchor discriminator locally, then one Prisma transaction per type.
    *
    * Every account is checked against the PDA it must live at for the
    * configured pool. Epoch, Round and Player carry no pool field, and the
    * Postgres tables are keyed by epoch id, round id and owner, so a second
    * pool's accounts would collide with this one's.
+   *
+   * A closed Position never appears here to begin with on an incremental
+   * walk (an absent account looks identical to an unchanged one), so a
+   * settled Position is not detected by its absence any more: the
+   * `PositionSettled` event `persist()` ingests removes the row instead, the
+   * moment it lands, sweep or no sweep. A full walk still deletes by absence
+   * as a second guard, which is the only guard on an RPC without V2.
    */
   async syncAccounts(): Promise<void> {
     const pool = this.chain.poolAddress();
-    const { slot, accounts } = await this.fetchAll();
+    const fullWalk =
+      this.lastSyncedSlot === undefined ||
+      this.v2Unsupported ||
+      Date.now() - this.lastFullWalkAt >= FULL_WALK_INTERVAL_MS;
+    const { slot, accounts } = await this.fetchAll(fullWalk ? undefined : this.lastSyncedSlot);
 
     const pools = accounts.get<DecodedPool>(ACCOUNT.pool).filter(({ pubkey }) => pubkey.equals(pool));
-    if (pools.length === 0) {
+    // An incremental walk legitimately reports nothing when the Pool has not
+    // changed; only a full walk finding it missing means misconfiguration.
+    if (fullWalk && pools.length === 0) {
       throw new Error(`configured pool ${pool.toBase58()} is not on chain or does not decode with the current IDL`);
     }
     await this.prisma.$transaction(
@@ -317,21 +380,123 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           update: row,
         }),
       ),
-      // `settle_position` and `void_round` close the account and refund the
-      // rent, so a row with no account behind it is a settled position.
-      this.prisma.position.deleteMany({
-        where: live.length > 0 ? { address: { notIn: live } } : {},
-      }),
+      // A full walk does see that a closed account is gone, so it stays a
+      // second guard behind the `PositionSettled` event. An incremental walk
+      // cannot: there, absence only means unchanged.
+      ...(fullWalk
+        ? [
+            this.prisma.position.deleteMany({
+              where: live.length > 0 ? { address: { notIn: live } } : {},
+            }),
+          ]
+        : []),
     ]);
+
+    // Recorded only once every page of this walk has landed: a page failure
+    // above throws before this line, so a partial walk never advances the
+    // slot past pages it never read.
+    if (fullWalk) this.lastFullWalkAt = Date.now();
+    this.lastSyncedSlot = slot;
   }
 
-  /** Every account the program owns, in one RPC call, keyed by type. */
-  private async fetchAll(): Promise<{ slot: bigint; accounts: AccountsByType }> {
+  /**
+   * `getProgramAccountsV2` has no typed method on web3.js's `Connection`
+   * (probed 2026-09-14: available on the Free plan, not in
+   * @solana/web3.js 1.98.4). Reaching into the connection's own internal
+   * transport avoids opening a second `Connection`, so every call still
+   * shares the one client's commitment, headers and retry behaviour; the
+   * fake the tests substitute for `ChainService`'s connection implements the
+   * same method, so this stays testable behind that fake.
+   */
+  private async programAccountsPage(
+    paginationKey: string | undefined,
+    changedSinceSlot: bigint | undefined,
+  ): Promise<ProgramAccountsV2Response> {
+    // SAFETY: `_rpcRequest` is web3.js's own private JSON-RPC transport,
+    // the same one every typed `Connection` method calls internally. It is
+    // absent from the public types because it is meant to stay internal.
+    const connection = this.chain.connection as unknown as {
+      _rpcRequest(
+        method: string,
+        params: unknown[],
+      ): Promise<{
+        result?: ProgramAccountsV2Response;
+        error?: { code?: number; message: string };
+      }>;
+    };
+    const response = await connection._rpcRequest("getProgramAccountsV2", [
+      this.chain.programId.toBase58(),
+      {
+        encoding: "base64",
+        withContext: true,
+        ...(paginationKey !== undefined ? { paginationKey } : {}),
+        ...(changedSinceSlot !== undefined ? { changedSinceSlot: Number(changedSinceSlot) } : {}),
+      },
+    ]);
+    if (response.error) {
+      if (isMethodNotFound(response.error)) throw new MethodNotFound();
+      throw new Error(`getProgramAccountsV2 failed: ${response.error.message}`);
+    }
+    if (!response.result) {
+      throw new Error("getProgramAccountsV2 returned no result");
+    }
+    return response.result;
+  }
+
+  /**
+   * Every account the program owns (`changedSinceSlot` undefined), or only
+   * the ones that changed since that slot, walked page by page and keyed by
+   * type. `paginationKey` absent ends the walk.
+   *
+   * The returned slot is the first page's `context.slot`, the RPC's own
+   * consistency point for this sweep, not the newest account seen: an
+   * account that changes while the walk is still running is still ahead of
+   * that slot, so the next sweep asks for it again instead of skipping it.
+   */
+  private async fetchAll(
+    changedSinceSlot: bigint | undefined,
+  ): Promise<{ slot: bigint; accounts: AccountsByType }> {
     const coder = this.chain.program.coder.accounts;
-    const { context, value } = await this.chain.connection.getProgramAccounts(
-      this.chain.programId,
-      { withContext: true },
-    );
+    let slot: bigint | undefined;
+    let decoded: { pubkey: PublicKey; data: Buffer }[] = [];
+    if (!this.v2Unsupported) {
+      const raw: RawProgramAccount[] = [];
+      let paginationKey: string | undefined;
+      try {
+        do {
+          const page = await this.programAccountsPage(paginationKey, changedSinceSlot);
+          if (slot === undefined) slot = BigInt(page.context.slot);
+          raw.push(...page.value.accounts);
+          paginationKey = page.value.paginationKey;
+        } while (paginationKey !== undefined);
+      } catch (error: unknown) {
+        if (!(error instanceof MethodNotFound)) throw error;
+        this.logger.warn(
+          "this RPC has no getProgramAccountsV2; every sweep walks all program accounts from now on",
+        );
+        this.v2Unsupported = true;
+        slot = undefined;
+      }
+      decoded = raw.map(({ pubkey, account }) => ({
+        pubkey: new PublicKey(pubkey),
+        data: Buffer.from(account.data[0], "base64"),
+      }));
+    }
+    if (this.v2Unsupported) {
+      // ponytail: no changedSinceSlot without V2, so a provider that lacks it
+      // pays the full walk on every sweep. syncAccounts keeps absence-based
+      // Position deletion in that mode, which a full walk can still see.
+      const { context, value } = await this.chain.connection.getProgramAccounts(
+        this.chain.programId,
+        { withContext: true },
+      );
+      slot = BigInt(context.slot);
+      decoded = value.map(({ pubkey, account }) => ({ pubkey, data: account.data }));
+    }
+    if (slot === undefined) {
+      throw new Error("getProgramAccountsV2 returned no pages");
+    }
+
     const byType = new Map<string, { pubkey: PublicKey; data: Buffer }[]>();
     for (const name of Object.values(ACCOUNT)) {
       // SAFETY: the interface types `memcmp` as `any`; BorshAccountsCoder
@@ -340,13 +505,11 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       const discriminator = Buffer.from(bs58.decode(memcmp.bytes));
       byType.set(
         name,
-        value
-          .filter(({ account }) => account.data.subarray(0, discriminator.length).equals(discriminator))
-          .map(({ pubkey, account }) => ({ pubkey, data: account.data })),
+        decoded.filter(({ data }) => data.subarray(0, discriminator.length).equals(discriminator)),
       );
     }
     return {
-      slot: BigInt(context.slot),
+      slot,
       accounts: {
         // Accounts of an earlier program build (an abandoned pool from before
         // a layout change) still carry the discriminator but not the bytes;
@@ -389,9 +552,19 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       data: event.data as Prisma.InputJsonObject,
       blockTime: batch.blockTime,
     }));
+    // `settle_position` is what actually closes a Position account, whether
+    // its Round settled or was voided, so `PositionSettled` is the one event
+    // that means a row is gone; a batch settling several Positions at once
+    // carries one such event per Position.
+    const closed = events
+      .map((event) => settledPosition(event))
+      .filter((position): position is { owner: string; roundId: bigint } => position !== null);
 
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.event.createMany({ data: rows, skipDuplicates: true });
+      for (const { owner, roundId } of closed) {
+        await tx.position.deleteMany({ where: { owner, roundId } });
+      }
       const cursor = await tx.cursor.findUnique({ where: { id: CURSOR_ID } });
       // The live socket and the catch-up poll both write; only the poll walks
       // backwards, and it must not drag the resume point back with it.
