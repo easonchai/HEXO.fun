@@ -24,6 +24,7 @@ export interface PoolLike {
   acceptedMint: PublicKey;
   closeBuffer: bigint;
   minDeposit: bigint;
+  /** Share of a settled round's pot credited to the House, in basis points. */
   houseCutBps: number;
   paused: boolean;
 }
