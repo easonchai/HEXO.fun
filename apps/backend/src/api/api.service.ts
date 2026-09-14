@@ -321,6 +321,12 @@ export class ApiService {
           operator.lastTickAt == null
             ? null
             : new Date(Number(operator.lastTickAt) * 1000),
+        // Same treatment: the crank sleeps to a deadline, so the frontend
+        // needs to know when it plans to wake before calling it stalled.
+        nextWakeAt:
+          operator.nextWakeAt == null
+            ? null
+            : new Date(Number(operator.nextWakeAt) * 1000),
       },
       cursor: {
         lastSlot: cursor?.lastSlot ?? null,

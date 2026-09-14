@@ -32,7 +32,13 @@ import {
   type RoundState,
 } from "./chain-state";
 import { OperatorInstructions } from "./instructions";
-import { JACKPOT_AMOUNT, runTick, type TickContext } from "./tick";
+import {
+  JACKPOT_AMOUNT,
+  msUntilWake,
+  runTick,
+  SAFETY_INTERVAL_SECONDS,
+  type TickContext,
+} from "./tick";
 import { isFulfilled, keccak256, randomnessAddress, vrfSeed } from "./vrf";
 
 const AUTHORITY = Keypair.generate().publicKey;
@@ -161,6 +167,7 @@ async function tickLabels(over: Partial<TickContext> = {}): Promise<{
   action: string | null;
   labels: string[];
   transactions: number;
+  nextWakeAt: bigint;
 }> {
   const { ctx, sent } = context(over);
   const outcome = await runTick(ctx);
@@ -168,6 +175,7 @@ async function tickLabels(over: Partial<TickContext> = {}): Promise<{
     action: outcome.action,
     labels: (sent[0] ?? []).map(label),
     transactions: sent.length,
+    nextWakeAt: outcome.nextWakeAt,
   };
 }
 
@@ -176,6 +184,9 @@ describe("runTick", () => {
     const result = await tickLabels();
     expect(result.transactions).toBe(0);
     expect(result.action).toBeNull();
+    // Round end minus the close buffer is the closest of the round end,
+    // epoch end and safety-interval candidates.
+    expect(result.nextWakeAt).toBe(NOW + 30n);
   });
 
   // --- 1. Round: open-and-ended, requested, or voided. Runs before any Epoch
@@ -184,6 +195,9 @@ describe("runTick", () => {
   it("1. requests randomness for a round that has ended", async () => {
     const result = await tickLabels({ openRound: round({ endsAt: NOW }) });
     expect(result.labels).toEqual(["request_round_randomness"]);
+    // Acted this tick: look again immediately rather than waiting on a
+    // boundary that already fired.
+    expect(result.nextWakeAt).toBe(NOW);
   });
 
   it("1. does not request randomness one second before the close", async () => {
@@ -192,6 +206,8 @@ describe("runTick", () => {
       openRound: round({ endsAt: NOW + 6n }),
     });
     expect(result.transactions).toBe(0);
+    // The close buffer is part of the deadline: endsAt minus closeBuffer.
+    expect(result.nextWakeAt).toBe(NOW + 1n);
   });
 
   it("1. requests randomness at the close, `closeBuffer` seconds before `endsAt`", async () => {
@@ -393,6 +409,9 @@ describe("runTick", () => {
     expect((sent[0] ?? []).map(label)).toEqual(Array(8).fill("register"));
     expect(outcome.progress).toEqual({ count: 2, total: 12 });
     expect(outcome.registerCheck).toEqual({ epochId: 1n, empty: false });
+    // Acted this tick: a further batch may still be waiting, so look again
+    // immediately rather than on the running epoch's own, far-off end.
+    expect(outcome.nextWakeAt).toBe(NOW);
   });
 
   it("4. waits for a second empty tick before closing registration", async () => {
@@ -595,6 +614,9 @@ describe("runTick", () => {
       openRound: null,
     });
     expect(result.transactions).toBe(0);
+    // The epoch end is the closest candidate: sooner than the 60 s safety
+    // interval, and there is no open round to bound it further.
+    expect(result.nextWakeAt).toBe(NOW + 59n);
   });
 
   it("7. does not open a round while the pool is paused", async () => {
@@ -603,6 +625,9 @@ describe("runTick", () => {
       openRound: null,
     });
     expect(result.transactions).toBe(0);
+    // Nothing closer than the running epoch's own (far-off) end: falls back
+    // to the safety interval.
+    expect(result.nextWakeAt).toBe(NOW + SAFETY_INTERVAL_SECONDS);
   });
 
   // --- 7. The previous Round gets REVEAL_SECONDS (1 s) past its `endsAt`
@@ -620,6 +645,27 @@ describe("runTick", () => {
       lastRound: settledLastRound,
     });
     expect(result.transactions).toBe(0);
+    // The reveal wait (lastRound.endsAt + REVEAL_SECONDS) is the closest
+    // candidate.
+    expect(result.nextWakeAt).toBe(NOW + 1n);
+  });
+
+  it("computes the VRF timeout as the deadline when it is the closest one", async () => {
+    // Paused, so no Round opens: acting would make the deadline "now" and
+    // hide the candidate this test is about.
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWING,
+        requestedAt: NOW - 70n,
+      }),
+    });
+    expect(result.transactions).toBe(0);
+    // vrfTimeout (120n) minus the 70 elapsed seconds beats both the epoch
+    // end and the 60 s safety interval.
+    expect(result.nextWakeAt).toBe(NOW + 50n);
   });
 
   it("7. opens the next round one second past a settled lastRound's endsAt", async () => {
@@ -712,5 +758,21 @@ describe("clockUnixTimestamp", () => {
     clock.writeBigInt64LE(1_800_000_000n, 32);
     expect(clockUnixTimestamp(clock)).toBe(1_800_000_000n);
     expect(() => clockUnixTimestamp(undefined)).toThrow(/clock sysvar/);
+  });
+});
+
+describe("msUntilWake", () => {
+  it("converts a chain-seconds gap straight to wall-clock ms", () => {
+    expect(msUntilWake(NOW, NOW + 30n)).toBe(30_000);
+  });
+
+  it("never goes negative for a deadline already behind now", () => {
+    expect(msUntilWake(NOW, NOW - 5n)).toBe(0);
+  });
+
+  it("clamps to the safety interval for a far-off deadline", () => {
+    expect(msUntilWake(NOW, NOW + 86_400n)).toBe(
+      Number(SAFETY_INTERVAL_SECONDS) * 1000,
+    );
   });
 });

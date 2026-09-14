@@ -27,11 +27,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
-import { poolAddress } from "../chain/pda";
+import { epochAddress, poolAddress, roundAddress } from "../chain/pda";
 import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
+import { CountingConnection } from "../test-utils/counting-connection";
+import { EPOCH_STATUS } from "./chain-state";
 import type { IndexerQueries } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
+import type { SparringService } from "./sparring";
+import { msUntilWake, SAFETY_INTERVAL_SECONDS } from "./tick";
 
 const PROGRAM_ID = new PublicKey("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
 const POOL = poolAddress(PROGRAM_ID, 1n);
@@ -49,21 +53,9 @@ const program = new Program(
 
 const bn = (value: bigint | number): BN => new BN(value.toString());
 
-/** Only the one RPC call a tick with no open Round or Epoch makes. */
-class FakeConnection {
-  constructor(private readonly accounts: Map<string, Buffer>) {}
-
-  getMultipleAccountsInfo(
-    keys: PublicKey[],
-  ): Promise<({ data: Buffer } | null)[]> {
-    return Promise.resolve(
-      keys.map((key) => {
-        const data = this.accounts.get(key.toBase58());
-        return data ? { data } : null;
-      }),
-    );
-  }
-}
+/** A `SparringService` this suite never exercises: only `wake()` is called,
+ *  and only to notice a `create_round`, which none of these fixtures send. */
+const noopSparring = { wake: () => {} } as unknown as SparringService;
 
 const pool = (overrides: object = {}) => ({
   poolId: bn(1),
@@ -134,7 +126,7 @@ describe("OperatorService end-of-tick timestamp", () => {
       program,
       programId: PROGRAM_ID,
       keypair: Keypair.generate(),
-      connection: new FakeConnection(accounts),
+      connection: new CountingConnection(accounts),
       poolAddress: () => POOL,
       send: async (
         _instructions: TransactionInstruction[],
@@ -156,12 +148,16 @@ describe("OperatorService end-of-tick timestamp", () => {
       fakeChain as unknown as ChainService,
       prisma,
       indexer,
+      noopSparring,
       config,
     );
 
     try {
       const outcome = await operator.runOnce();
       expect(outcome.action).toBe("begin_epoch");
+      // Acted this tick, so the deadline (a chain timestamp) collapses to
+      // "now": zero wall-clock ms to wait before looking again.
+      expect(outcome.waitMs).toBe(0);
 
       const state = await prisma.operatorState.findUniqueOrThrow({
         where: { id: 1 },
@@ -173,8 +169,107 @@ describe("OperatorService end-of-tick timestamp", () => {
       expect(Number(state.lastTickAt)).toBeGreaterThan(
         Math.floor(START_MS / 1000),
       );
+      // nextWakeAt is written from the same wall clock as lastTickAt, waitMs
+      // (here 0) past it (ticket 03).
+      expect(state.nextWakeAt).toEqual(state.lastTickAt);
     } finally {
       dateNowSpy.mockRestore();
+      await prisma.operatorState.deleteMany({ where: { id: 1 } });
+      await prisma.$disconnect();
+    }
+  });
+});
+
+describe("OperatorService read budget", () => {
+  it("costs two account reads per tick and sleeps the safety interval when there is nothing to do", async () => {
+    const prisma = new PrismaService();
+    await prisma.$connect();
+    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+
+    const CHAIN_NOW = 1_800_000_000n;
+    // An Epoch running well past the safety interval, no open Round, paused so
+    // step 7 does not open one: the crank has nothing to do for a long time,
+    // which is the state it spends most of a Round in.
+    const idlePool = pool({
+      paused: true,
+      currentEpochId: bn(1),
+      currentEpochStart: bn(CHAIN_NOW - 100n),
+      currentEpochEndsAt: bn(CHAIN_NOW + 86_300n),
+    });
+    const accounts = new Map<string, Buffer>();
+    accounts.set(
+      POOL.toBase58(),
+      await program.coder.accounts.encode("pool", idlePool),
+    );
+    accounts.set(
+      epochAddress(PROGRAM_ID, POOL, 1n).toBase58(),
+      await program.coder.accounts.encode("epoch", {
+        epochId: bn(1),
+        startsAt: bn(CHAIN_NOW - 100n),
+        endsAt: bn(CHAIN_NOW + 86_300n),
+        // Registering, not Open: step 6b tops the jackpot up only while the
+        // Epoch is Open, and that read is not what this test is measuring.
+        status: EPOCH_STATUS.REGISTERING,
+        registeredWeight: bn(0),
+        registeredCount: 0,
+        jackpotAmount: bn(0),
+        vrfSeed: Array(32).fill(0),
+        requestedAt: bn(0),
+        target: bn(0),
+        winner: PublicKey.default,
+        bump: 255,
+      }),
+    );
+    const clock = Buffer.alloc(40);
+    clock.writeBigInt64LE(CHAIN_NOW, 32);
+    accounts.set(SYSVAR_CLOCK_PUBKEY.toBase58(), clock);
+
+    const connection = new CountingConnection(accounts);
+    const fakeChain = {
+      program,
+      programId: PROGRAM_ID,
+      keypair: Keypair.generate(),
+      connection,
+      poolAddress: () => POOL,
+      epochAddress: (id: bigint) => epochAddress(PROGRAM_ID, POOL, id),
+      roundAddress: (id: bigint) => roundAddress(PROGRAM_ID, POOL, id),
+      send: async () => {
+        throw new Error("an idle tick must not send anything");
+      },
+    };
+    const indexer: IndexerQueries = {
+      playersToRegister: async () => [],
+      unsettledPositions: async () => [],
+    };
+    const operator = new OperatorService(
+      fakeChain as unknown as ChainService,
+      prisma,
+      indexer,
+      noopSparring,
+      stubConfig({ HEXUSDC_MINT: Keypair.generate().publicKey.toBase58() }),
+    );
+
+    try {
+      for (let i = 0; i < 3; i++) {
+        const outcome = await operator.runOnce();
+        expect(outcome.action).toBeNull();
+        // runOnce swallows a failed tick into a null action, so without this
+        // a broken fixture would look like a quiet crank.
+        const state = await prisma.operatorState.findUniqueOrThrow({
+          where: { id: 1 },
+        });
+        expect(state.lastError).toBeNull();
+        expect(outcome.nextWakeAt).toBe(CHAIN_NOW + SAFETY_INTERVAL_SECONDS);
+        // The whole point of the ticket: an idle crank waits a minute, not a
+        // second. At one tick per second this line reads 1_000.
+        expect(outcome.waitMs).toBe(msUntilWake(CHAIN_NOW, outcome.nextWakeAt));
+        expect(outcome.waitMs).toBe(Number(SAFETY_INTERVAL_SECONDS) * 1000);
+      }
+
+      // Two batched reads per tick, the Pool with the clock and then the
+      // cycle, and nothing else. A reintroduced poll shows up here.
+      expect(connection.callCounts()).toEqual({ getMultipleAccountsInfo: 6 });
+    } finally {
       await prisma.operatorState.deleteMany({ where: { id: 1 } });
       await prisma.$disconnect();
     }

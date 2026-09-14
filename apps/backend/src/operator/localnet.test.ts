@@ -45,6 +45,7 @@ import {
 } from "./chain-state";
 import type { IndexerQueries } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
+import type { SparringService } from "./sparring";
 import { JACKPOT_AMOUNT } from "./tick";
 import { randomnessAddress } from "./vrf";
 
@@ -248,7 +249,10 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         },
       };
 
-      const operator = new OperatorService(chain, prisma, indexer, config);
+      // SAFETY: the Operator only ever calls `wake()` on the Sparring player,
+      // and this test drives the crank itself rather than running one.
+      const sparring = { wake: () => {} } as unknown as SparringService;
+      const operator = new OperatorService(chain, prisma, indexer, sparring, config);
 
       let stopped = false;
       const crank = (async () => {

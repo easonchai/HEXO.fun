@@ -31,6 +31,13 @@ const FRESH_SECONDS = 10;
  * age means "the sweep is running", not "an event just landed".
  */
 const CURSOR_FRESH_SECONDS = 90;
+/**
+ * The operator sleeps until the next moment a decision could change, so a
+ * quiet minute has no ticks in it and `FRESH_SECONDS` alone would call a
+ * healthy crank stalled. It publishes when it plans to wake; this is how long
+ * past that it gets, for a slow tick or a slow poll, before the pill turns.
+ */
+const WAKE_MARGIN_SECONDS = 10;
 
 const warn = (label: string, detail: string): StatusSummary => ({
   tone: "warn",
@@ -53,8 +60,18 @@ export function summarizeStatus(
   }
 
   const tickAge = (nowMs - Date.parse(lastTickAt)) / 1000;
+  // Seconds until the operator says it will wake; negative once that moment
+  // has passed. Null on an operator that predates the field.
+  const nextWakeAt = status.operator?.nextWakeAt ?? null;
+  const untilWake =
+    nextWakeAt === null ? null : (Date.parse(nextWakeAt) - nowMs) / 1000;
+  const sleeping =
+    untilWake !== null &&
+    Number.isFinite(untilWake) &&
+    untilWake > -WAKE_MARGIN_SECONDS;
   const tickFresh =
-    Number.isFinite(tickAge) && tickAge >= 0 && tickAge < FRESH_SECONDS;
+    sleeping ||
+    (Number.isFinite(tickAge) && tickAge >= 0 && tickAge < FRESH_SECONDS);
 
   const cursorAge = status.cursor.ageSeconds;
   const cursorFresh = cursorAge !== null && cursorAge < CURSOR_FRESH_SECONDS;

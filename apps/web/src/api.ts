@@ -125,6 +125,9 @@ export interface EventDto {
 export interface OperatorStateDto {
   id: number;
   lastTickAt: string | null;
+  /** When the crank plans to look again. It sleeps to a deadline, so a gap
+   *  between ticks is only a stall once this has passed. */
+  nextWakeAt: string | null;
   lastAction: string | null;
   lastError: string | null;
   registeredCount: number | null;
