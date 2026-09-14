@@ -38,8 +38,18 @@ const FEED_NAMES = [
 /** How long a `getSlot` probe answers for. `rpcOk` only needs to be roughly right. */
 const RPC_PROBE_TTL_MS = 300_000;
 
-/** How long the chain clock read behind live weights answers for, short enough that they still read as live. */
-export const CHAIN_CLOCK_TTL_MS = 2_000;
+/**
+ * How long the chain clock read behind live weights and `/state`'s `chainTime`
+ * answers for. `extrapolatedChainNow` advances a cache hit by the wall time
+ * since it was observed, so the served second stays live across the whole
+ * window; the read only re-grounds the value against the chain's own phase.
+ * It was 2 s, which matched the browser's poll interval exactly and so cost a
+ * chain read on nearly every poll — 27 calls a minute for as long as one tab
+ * stayed open, the largest single item in the RPC bill. The browser anchors
+ * its countdown once per round now (`useChainClock.ts`), and chain time gains
+ * only 0.19% on wall time, so a longer window changes nothing it shows.
+ */
+export const CHAIN_CLOCK_TTL_MS = 30_000;
 
 /**
  * How long the jackpot vault balance read behind the open epoch's amount
@@ -138,9 +148,9 @@ export class ApiService {
    * The highest chain time `getState` has served. The Clock sysvar runs a
    * little behind wall time, so `extrapolatedChainNow` overshoots inside the
    * cache window and the next fresh read can land below what the previous
-   * response carried. The browser resyncs its countdown to every `chainTime`
-   * it receives, so a value that went backwards made the round timer jump
-   * back up.
+   * response carried. The browser anchors its countdown on the `chainTime` it
+   * receives at a round boundary, so a value that went backwards made the
+   * round timer start the new round with a second it had already counted.
    *
    * ponytail: a high-water mark that never resets. A validator restart that
    * rewinds the chain clock pins it until the backend restarts; only local
