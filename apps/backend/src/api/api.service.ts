@@ -134,6 +134,20 @@ export class ApiService {
   private clock: CachedRead<ClockReading> | undefined;
   private jackpotBalance: CachedRead<bigint> | undefined;
 
+  /**
+   * The highest chain time `getState` has served. The Clock sysvar runs a
+   * little behind wall time, so `extrapolatedChainNow` overshoots inside the
+   * cache window and the next fresh read can land below what the previous
+   * response carried. The browser resyncs its countdown to every `chainTime`
+   * it receives, so a value that went backwards made the round timer jump
+   * back up.
+   *
+   * ponytail: a high-water mark that never resets. A validator restart that
+   * rewinds the chain clock pins it until the backend restarts; only local
+   * validators do that.
+   */
+  private lastServedChainTime = 0n;
+
   /** Simulated yield rate, so the Vault's "estimated yield" row is not hardcoded. */
   private readonly aprBps: number;
 
@@ -487,11 +501,17 @@ export class ApiService {
    * `chainNow` above, so this spends no extra call) advanced by the wall
    * time elapsed since it was observed, so a cache hit never serves a
    * second that is already stale. Used only by `getState` (ticket 06).
+   *
+   * Clamped to `lastServedChainTime`: the advance is wall time but the chain
+   * clock is not, so the two drift apart inside the window and an
+   * unclamped value walks backwards across the refresh.
    */
   private async extrapolatedChainNow(): Promise<bigint> {
     const { value, observedAt } = await this.chainClock();
     const elapsedSeconds = BigInt(Math.max(0, Math.floor((Date.now() - observedAt) / 1000)));
-    return value + elapsedSeconds;
+    const extrapolated = value + elapsedSeconds;
+    if (extrapolated > this.lastServedChainTime) this.lastServedChainTime = extrapolated;
+    return this.lastServedChainTime;
   }
 
   /** `chainNow`/`extrapolatedChainNow`'s shared cache. */

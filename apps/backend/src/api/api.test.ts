@@ -67,6 +67,9 @@ let clockReads = 0;
 let jackpotReads = 0;
 /** When set, the next `getTokenAccountBalance` call throws once and resets it. */
 let failNextJackpotRead = false;
+/** What the fake Clock sysvar reads. Mutable so a test can make the chain
+ *  clock regress the way a real one does when it drifts behind wall time. */
+let chainClockValue = CHAIN_NOW;
 
 const fakeChain = {
   connection: {
@@ -74,7 +77,7 @@ const fakeChain = {
     getSlot: async (): Promise<number> => 1234,
     getAccountInfo: async (): Promise<{ data: Buffer }> => {
       clockReads += 1;
-      return { data: clockSysvarData(CHAIN_NOW) };
+      return { data: clockSysvarData(chainClockValue) };
     },
     getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => {
       jackpotReads += 1;
@@ -601,6 +604,24 @@ describe("API routes", () => {
       vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
       await http.get(`/players/${ALICE}`).expect(200);
       expect(clockReads).toBe(before + 2);
+    });
+
+    it("never serves a chainTime below one it already served, when the chain clock drifts behind wall time", async () => {
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      const first = await http.get("/state").expect(200);
+      const served = BigInt(first.body.chainTime);
+
+      // The Clock sysvar advances slower than wall time, so the window's
+      // wall-time extrapolation overshoots and the next fresh read lands
+      // below what the previous response already carried.
+      chainClockValue = CHAIN_NOW - 5n;
+      vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
+      try {
+        const second = await http.get("/state").expect(200);
+        expect(BigInt(second.body.chainTime)).toBeGreaterThanOrEqual(served);
+      } finally {
+        chainClockValue = CHAIN_NOW;
+      }
     });
 
     it("collapses a concurrent burst of jackpot balance reads to one call, then reads again after the window", async () => {
