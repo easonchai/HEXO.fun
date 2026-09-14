@@ -12,6 +12,13 @@ describe("parsePoolParams", () => {
     expect(parsePoolParams([])).toEqual(DEFAULT_POOL_PARAMS);
   });
 
+  it("defaults round_seconds to 90, with close_buffer safely under it", () => {
+    expect(DEFAULT_POOL_PARAMS.roundSeconds).toBe(90);
+    expect(DEFAULT_POOL_PARAMS.closeBuffer).toBeLessThan(
+      DEFAULT_POOL_PARAMS.roundSeconds,
+    );
+  });
+
   it("overrides only the flags given", () => {
     expect(parsePoolParams(["--epoch-seconds", "120"])).toEqual({
       ...DEFAULT_POOL_PARAMS,

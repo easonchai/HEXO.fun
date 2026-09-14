@@ -7,7 +7,7 @@
   Then http://localhost:5173, Phantom set to devnet. Faucet gives you 1000 hexUSDC.
 
   Check it came up: curl localhost:8080/status should show rpcOk: true and a lastAction a few seconds old. Watch it work with docker
-  compose -f docker-compose.dev.yml logs -f backend — a round every ~65s.
+  compose -f docker-compose.dev.yml logs -f backend — a round every round_seconds plus a few seconds to settle.
 
   Shut down with down in place of up -d.
 
@@ -65,6 +65,21 @@
   there is no simulated yield any more.
 
     set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --epoch-seconds 86400 --round-seconds 30 --close-buffer 12
+
+  Round length: 90s (2026-09-14)
+
+  Every Round costs about five transactions, so round_seconds sets the biggest line on the RPC bill. At 60s the idle backend
+  projects to just over a 1M-credit free-tier month, and 30s is worse; at 90s it projects to about 560k. bootstrap now defaults to 90.
+  A live Pool keeps its old value until set-params moves it, and the change takes effect on the next Round. 120s roughly halves
+  the round-linked cost again if the bill comes in over.
+
+    Pool 7 (dev, .env):     epoch_seconds 86400, round_seconds 30, close_buffer 12. Move to 90: pending.
+    Pool 8 (VPS, .env.vps): epoch_seconds 86400, round_seconds 30, close_buffer 12. Move to 90: pending.
+
+    set -a; . ./.env; set +a
+    DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin set-params --round-seconds 90
+
+  Same again from a fresh shell with .env.vps for Pool 8. Replace "pending" with the signature and slot once each lands.
 
   The buffer only works once the program that honours it is deployed. Until 2026-09-06 devnet ran the program from before ff22d53,
   whose request_round_randomness required `now >= ends_at`, so every draw request was rejected with RoundNotEnded until the round

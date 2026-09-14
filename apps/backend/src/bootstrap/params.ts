@@ -36,7 +36,7 @@ export function nextSundayAnchor(now: Date): number {
 export const DEFAULT_POOL_PARAMS: PoolParams = {
   epochSeconds: 86_400,
   epochAnchor: nextSundayAnchor(new Date()),
-  roundSeconds: 60,
+  roundSeconds: 90,
   closeBuffer: 5,
   vrfTimeout: 120,
   minDeposit: 1_000_000n, // 1 hexUSDC at 6 decimals
