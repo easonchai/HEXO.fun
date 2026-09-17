@@ -27,8 +27,7 @@ import {
 } from "./chain-state";
 import { OperatorInstructions } from "./instructions";
 import {
-  MAX_TILES,
-  MIN_TILES,
+  ALL_TILES,
   STAKE_PER_TILE,
   playSparring,
   type SparringContext,
@@ -133,19 +132,16 @@ function onlyInstruction(sent: TransactionInstruction[][]): {
 }
 
 describe("playSparring", () => {
-  it("buys a position on six to eight tiles at one whole Ticket each", async () => {
+  it("buys a position on all 36 tiles at one whole Ticket each", async () => {
     const { bought, sent } = await play();
     expect(bought).toBe(true);
 
     const { ix, name, args } = onlyInstruction(sent);
     expect(name).toBe("buy_position");
 
-    const tiles = BigInt(String(args.tiles));
-    const covered = [...tiles.toString(2)].filter((bit) => bit === "1").length;
-    expect(covered).toBeGreaterThanOrEqual(MIN_TILES);
-    expect(covered).toBeLessThanOrEqual(MAX_TILES);
-    // Bits 0..35 only: anything above trips the program's tile_count check.
-    expect(tiles < 1n << 36n).toBe(true);
+    // Bits 0..35 all set, nothing above: that trips the program's tile_count check.
+    expect(BigInt(String(args.tiles))).toBe(ALL_TILES);
+    expect(ALL_TILES).toBe(0xfffffffffn);
     // The coder hands back the IDL's own field names, so snake_case.
     expect(String(args.stake_per_tile)).toBe(String(STAKE_PER_TILE));
 
@@ -159,15 +155,6 @@ describe("playSparring", () => {
       SystemProgram.programId.toBase58(),
     ]);
     expect(ix.keys[0]?.isSigner).toBe(true);
-  });
-
-  it("draws a different set of tiles each round", async () => {
-    const masks = new Set<string>();
-    for (let i = 0; i < 8; i += 1) {
-      const { sent } = await play();
-      masks.add(String(onlyInstruction(sent).args.tiles));
-    }
-    expect(masks.size).toBeGreaterThan(1);
   });
 
   it("skips a round it already holds a position in", async () => {
@@ -186,10 +173,13 @@ describe("playSparring", () => {
   });
 
   it("sits out when its Tickets are short", async () => {
-    // Below six tiles' worth, the smallest placement it ever makes.
-    const { bought, sent } = await play({ entries: STAKE_PER_TILE * 5n });
+    // One Ticket short of covering the board.
+    const { bought, sent } = await play({ entries: STAKE_PER_TILE * 35n });
     expect(bought).toBe(false);
     expect(sent).toHaveLength(0);
+
+    const exact = await play({ entries: STAKE_PER_TILE * 36n });
+    expect(exact.sent).toHaveLength(1);
   });
 
   it("does nothing with no open round", async () => {

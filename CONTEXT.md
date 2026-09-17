@@ -135,7 +135,7 @@ The backend service that advances the protocol: opens epochs and rounds, request
 _Avoid_: Bot, cron, CLI, admin, authority (the on-chain role name)
 
 **Sparring player**:
-A backend-owned Player that deposits once and buys one Position in every Round, on six to eight random Tiles at one Ticket per tile, so a lone human always has someone to play against. On screen it is indistinguishable from any other wallet, and it competes in the draw like any Player. It is not the House.
+A backend-owned Player that deposits once and buys one Position in every Round, on all 36 Tiles at one Ticket per tile, so a lone human always has someone to play against on whichever tile wins. On screen it is indistinguishable from any other wallet, and it competes in the draw like any Player. It is not the House.
 _Avoid_: Bot, house player, NPC, dummy user
 
 **Read model**:

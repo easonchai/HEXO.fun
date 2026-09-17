@@ -31,10 +31,10 @@ import { OperatorInstructions } from "./instructions";
 
 /** One whole Ticket per tile, matching the web app's default input. */
 export const STAKE_PER_TILE = 1_000_000n;
-export const MIN_TILES = 6;
-export const MAX_TILES = 8;
 /** Program's board size (`constants::TILE_COUNT`), bits 0..35 of the mask. */
-const TILES = 36;
+const TILES = 36n;
+/** Every tile, so whichever one wins, a human on it has someone to split with. */
+export const ALL_TILES = (1n << TILES) - 1n;
 /** Stop this many seconds before `buy_position` starts refusing, so a slow
  *  confirmation does not land inside the close buffer. */
 const MARGIN = 2n;
@@ -61,35 +61,20 @@ export interface SparringContext {
   send(instructions: TransactionInstruction[]): Promise<string>;
 }
 
-/** Six to eight of the 36, uniform and without replacement, as a bitmask. */
-function pickTiles(): { tiles: bigint; count: number } {
-  const count = MIN_TILES + Math.floor(Math.random() * (MAX_TILES - MIN_TILES + 1));
-  let tiles = 0n;
-  for (let picked = 0; picked < count; ) {
-    const bit = 1n << BigInt(Math.floor(Math.random() * TILES));
-    if (tiles & bit) continue; // already covered; draw again
-    tiles |= bit;
-    picked += 1;
-  }
-  return { tiles, count };
-}
-
 /** Buys one Position, or does nothing. Returns whether it bought. */
 export async function playSparring(ctx: SparringContext): Promise<boolean> {
   const { pool, openRound } = ctx;
   if (!openRound || openRound.status !== ROUND_STATUS.OPEN) return false;
   if (ctx.hasPosition) return false;
   if (ctx.now > openRound.endsAt - pool.closeBuffer - MARGIN) return false;
-
-  const { tiles, count } = pickTiles();
-  if (ctx.entries < STAKE_PER_TILE * BigInt(count)) return false;
+  if (ctx.entries < STAKE_PER_TILE * TILES) return false;
 
   await ctx.send(
     await ctx.ix.buyPosition(
       pool,
       openRound.roundId,
       ctx.owner,
-      tiles,
+      ALL_TILES,
       STAKE_PER_TILE,
     ),
   );

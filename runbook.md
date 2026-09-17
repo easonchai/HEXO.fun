@@ -251,8 +251,8 @@
 
   The Sparring player
 
-  The Sparring player is a backend-owned wallet that buys one Position in every Round, on six to eight random tiles at one Ticket per
-  tile, so a lone human is never playing against an empty board. It looks like any other wallet on screen and competes in the daily
+  The Sparring player is a backend-owned wallet that buys one Position in every Round, on all 36 tiles at one Ticket per tile
+  (36 Tickets a Round), so a lone human is never playing against an empty board and no pot is forfeited to the House. It looks like any other wallet on screen and competes in the daily
   draw like any Player. It is not the House and never touches the House account.
 
   SPARRING_KEYPAIR is the base58 secret of that wallet, and it is optional. When it is set the backend plays every Round; when it is
