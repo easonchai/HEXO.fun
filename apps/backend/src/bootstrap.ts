@@ -3,7 +3,7 @@
 // nothing and prints the same block.
 //
 // Deliberately a plain tsx script, not a Nest standalone context: ConfigModule
-// validates HEXUSDC_MINT as required at boot and this is the command that
+// validates ACCEPTED_MINT as required at boot and this is the command that
 // creates that mint, so a Nest context cannot start on a fresh cluster. It
 // still imports the pure chain modules rather than re-deriving seeds.
 //
@@ -87,8 +87,13 @@ async function step<T>(what: string, run: () => Promise<T>): Promise<T> {
 
 /**
  * The mint is the one piece that must survive between runs, and this script
- * writes no keypair file, so `HEXUSDC_MINT` is the input whenever it is set
+ * writes no keypair file, so `ACCEPTED_MINT` is the input whenever it is set
  * and a freshly generated mint is only printed for the caller to save.
+ *
+ * Creating one needs this key to be the mint authority; taking one that
+ * already exists does not. Real USDC on mainnet has an authority nobody here
+ * holds, and that is the normal case, not an error: it only means the faucet
+ * and every other mint call stay off.
  */
 async function ensureMint(
   connection: Connection,
@@ -103,30 +108,29 @@ async function ensureMint(
       authority.publicKey,
       HEXUSDC_DECIMALS,
     );
-    log(`created hexUSDC mint ${mint.toBase58()}`);
+    log(`created mint ${mint.toBase58()}`);
     return mint;
   }
 
   const mint = new PublicKey(envMint);
   const info = await getMint(connection, mint).catch((cause: unknown) => {
     throw new Error(
-      `HEXUSDC_MINT ${envMint} is not a mint on this cluster; unset it to create a fresh one`,
+      `ACCEPTED_MINT ${envMint} is not a mint on this cluster; unset it to create a fresh one`,
       { cause },
     );
   });
   if (info.decimals !== HEXUSDC_DECIMALS) {
     throw new Error(
-      `HEXUSDC_MINT ${envMint} has ${info.decimals} decimals, expected ${HEXUSDC_DECIMALS}`,
+      `ACCEPTED_MINT ${envMint} has ${info.decimals} decimals, expected ${HEXUSDC_DECIMALS}`,
     );
   }
-  // The operator mints the faucet and the simulated yield, so an authority it
-  // does not control is a dead pool rather than a warning.
   if (!info.mintAuthority?.equals(authority.publicKey)) {
-    throw new Error(
-      `HEXUSDC_MINT ${envMint} mint authority is ${info.mintAuthority?.toBase58() ?? "none"}, expected ${authority.publicKey.toBase58()}`,
+    log(
+      `mint ${envMint} is controlled by ${info.mintAuthority?.toBase58() ?? "nobody"}, not by this key: no faucet, no minting`,
     );
+    return mint;
   }
-  log(`hexUSDC mint ${envMint} already exists`);
+  log(`mint ${envMint} already exists`);
   return mint;
 }
 
@@ -308,19 +312,19 @@ async function main(): Promise<void> {
 
   // An existing pool has already recorded which mint and which token accounts
   // it accepts, so those win over anything this run would otherwise derive.
-  const envMint = process.env.HEXUSDC_MINT;
+  const envMint = process.env.ACCEPTED_MINT ?? process.env.HEXUSDC_MINT;
   if (
     existing &&
     envMint &&
     !existing.acceptedMint.equals(new PublicKey(envMint))
   ) {
     throw new Error(
-      `pool ${pool.toBase58()} accepts ${existing.acceptedMint.toBase58()}, but HEXUSDC_MINT is ${envMint}`,
+      `pool ${pool.toBase58()} accepts ${existing.acceptedMint.toBase58()}, but ACCEPTED_MINT is ${envMint}`,
     );
   }
   const mint = existing
     ? existing.acceptedMint
-    : await step("creating the hexUSDC mint", () =>
+    : await step("resolving the accepted mint", () =>
         ensureMint(connection, authority, envMint),
       );
 
@@ -380,7 +384,7 @@ async function main(): Promise<void> {
 
   process.stdout.write(
     [
-      `HEXUSDC_MINT=${mint.toBase58()}`,
+      `ACCEPTED_MINT=${mint.toBase58()}`,
       `PROGRAM_ID=${programId.toBase58()}`,
       `POOL_ID=${poolId}`,
       `POOL_ADDRESS=${pool.toBase58()}`,

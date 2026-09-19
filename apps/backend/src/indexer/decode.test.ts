@@ -13,10 +13,12 @@ import { loadIdl } from "../chain/idl";
 import {
   decodeEventLogs,
   jsonify,
+  playerRow,
   poolRow,
   registrationWeight,
   ROUND_STATUS,
   roundRow,
+  type DecodedPlayer,
   type DecodedPool,
   type DecodedRound,
 } from "./decode";
@@ -298,8 +300,11 @@ describe("poolRow", () => {
     const pool: DecodedPool = {
       poolId: new BN(7),
       admin: new PublicKey(OWNER),
-      operator: new PublicKey(OWNER),
+      operator: new PublicKey(MINT),
+      pendingAdmin: PublicKey.default,
       acceptedMint: new PublicKey(MINT),
+      pendingWithdrawals: new BN(250_000),
+      minJackpot: new BN(1_000_000),
       epochSeconds: new BN(86_400),
       epochAnchor: new BN(1_789_315_200),
       roundSeconds: new BN(60),
@@ -323,6 +328,92 @@ describe("poolRow", () => {
       // the decode rather than being dropped (ticket 07).
       closeBuffer: 12n,
       minDeposit: 1_000_000n,
+    });
+  });
+
+  // Ticket 03: the old single `authority` column is gone, and /status reads
+  // what depositors are owed off this row.
+  it("splits the roles and carries the withdrawal fields", () => {
+    const pool: DecodedPool = {
+      poolId: new BN(7),
+      admin: new PublicKey(OWNER),
+      operator: new PublicKey(MINT),
+      pendingAdmin: new PublicKey(POOL),
+      acceptedMint: new PublicKey(MINT),
+      pendingWithdrawals: new BN(250_000),
+      minJackpot: new BN(1_000_000),
+      epochSeconds: new BN(86_400),
+      epochAnchor: new BN(1_789_315_200),
+      roundSeconds: new BN(90),
+      closeBuffer: new BN(12),
+      minDeposit: new BN(1_000_000),
+      houseCutBps: 600,
+      paused: false,
+      currentEpochId: new BN(3),
+      currentEpochEndsAt: new BN(1_789_488_000),
+      previousEpochEndsAt: new BN(1_789_401_600),
+      totalPrincipal: new BN(3_000_000),
+      carryPot: new BN(0),
+    };
+    expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
+      admin: OWNER,
+      operator: MINT,
+      pendingAdmin: POOL,
+      pendingWithdrawals: 250_000n,
+      minJackpot: 1_000_000n,
+    });
+  });
+
+  it("reports no pending admin when the handover slot is the default key", () => {
+    const pool: DecodedPool = {
+      poolId: new BN(7),
+      admin: new PublicKey(OWNER),
+      operator: new PublicKey(MINT),
+      pendingAdmin: PublicKey.default,
+      acceptedMint: new PublicKey(MINT),
+      pendingWithdrawals: new BN(0),
+      minJackpot: new BN(0),
+      epochSeconds: new BN(86_400),
+      epochAnchor: new BN(0),
+      roundSeconds: new BN(90),
+      closeBuffer: new BN(12),
+      minDeposit: new BN(0),
+      houseCutBps: 0,
+      paused: false,
+      currentEpochId: new BN(0),
+      currentEpochEndsAt: new BN(0),
+      previousEpochEndsAt: new BN(0),
+      totalPrincipal: new BN(0),
+      carryPot: new BN(0),
+    };
+    expect(poolRow(new PublicKey(POOL), pool, 9n).pendingAdmin).toBeNull();
+  });
+});
+
+describe("playerRow", () => {
+  // Ticket 03: `request_withdraw` parks the amount on the Player and the
+  // vault screen reads it back off /players/:owner, so a field dropped here
+  // is a depositor who cannot see their own pending money.
+  it("carries the pending withdrawal and the epoch it pays in", () => {
+    const player: DecodedPlayer = {
+      owner: new PublicKey(OWNER),
+      principal: new BN(3_000_000),
+      entries: new BN(3_000_000),
+      weightAcc: new BN(0),
+      lastUpdate: new BN(1_700_000_000),
+      epochId: new BN(4),
+      frozenWeight: new BN(0),
+      frozenEpoch: new BN(0),
+      regEpoch: new BN(0),
+      regStart: new BN(0),
+      regEnd: new BN(0),
+      isHouse: false,
+      pendingWithdraw: new BN(750_000),
+      pendingEpoch: new BN(4),
+    };
+    expect(playerRow(player)).toMatchObject({
+      pendingWithdraw: 750_000n,
+      pendingEpoch: 4n,
     });
   });
 });

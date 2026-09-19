@@ -50,7 +50,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # RPC_URL, PROGRAM_ID, POOL_ID, OPERATOR_KEYPAIR, ADMIN_ADDRESS, HEXUSDC_MINT,
+    # RPC_URL, PROGRAM_ID, POOL_ID, OPERATOR_KEYPAIR, ADMIN_ADDRESS, ACCEPTED_MINT,
     # CORS_ORIGIN
     # and the tuning values all come from here.
     env_file: ${ENV_FILE:-.env}

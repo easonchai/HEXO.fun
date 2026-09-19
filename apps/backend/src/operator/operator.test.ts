@@ -8,15 +8,13 @@ import {
   Wallet,
   type Idl,
 } from "@anchor-lang/core";
-import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-  TokenInstruction,
-} from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   Connection,
   Keypair,
+  PACKET_DATA_SIZE,
   PublicKey,
+  Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
@@ -33,10 +31,10 @@ import {
 } from "./chain-state";
 import { OperatorInstructions } from "./instructions";
 import {
-  JACKPOT_AMOUNT,
   msUntilWake,
   runTick,
   SAFETY_INTERVAL_SECONDS,
+  WITHDRAW_BATCH_SIZE,
   type TickContext,
 } from "./tick";
 import { isFulfilled, keccak256, randomnessAddress, vrfSeed } from "./vrf";
@@ -76,7 +74,6 @@ function label(ix: TransactionInstruction): string {
   return ix.programId.toBase58();
 }
 
-const MINT_TO = `token:${TokenInstruction.MintTo}`;
 const CREATE_ATA_IDEMPOTENT = "ata:1";
 
 const NOW = 1_800_000_000n;
@@ -163,12 +160,10 @@ function context(over: Partial<TickContext> = {}): Recorder {
     lastRound: null,
     ix: instructions,
     lastRegisterCheck: null,
-    topUpAttempts: 0,
     fulfilled: async () => false,
-    authorityBalance: async () => 0n,
-    // Full by default so step 6b stays quiet in every test that is not about it.
-    jackpotBalance: async () => JACKPOT_AMOUNT,
-    recordTopUpAttempt: () => {},
+    principalVaultBalance: async () => 0n,
+    // Empty by default so step 6b stays quiet in every test that is not about it.
+    duePendingWithdrawals: async () => [],
     playersToRegister: async () => [],
     unsettledPositions: async () => [],
     forgetPositions: async () => {},
@@ -189,6 +184,7 @@ async function tickLabels(over: Partial<TickContext> = {}): Promise<{
   labels: string[];
   transactions: number;
   nextWakeAt: bigint;
+  withdrawShortfall: bigint | undefined;
 }> {
   const { ctx, sent } = context(over);
   const outcome = await runTick(ctx);
@@ -197,6 +193,7 @@ async function tickLabels(over: Partial<TickContext> = {}): Promise<{
     labels: (sent[0] ?? []).map(label),
     transactions: sent.length,
     nextWakeAt: outcome.nextWakeAt,
+    withdrawShortfall: outcome.withdrawShortfall,
   };
 }
 
@@ -657,59 +654,115 @@ describe("runTick", () => {
     expect(result.transactions).toBe(0);
   });
 
-  // --- 7. Create Round.
+  // --- 6b. Pending withdrawals whose epoch has ended.
 
-  // --- 6b. Jackpot top-up for the running epoch.
+  const pending = (count: number, amount = 1_000_000n) =>
+    Array.from({ length: count }, () => ({
+      owner: Keypair.generate().publicKey.toBase58(),
+      amount,
+    }));
 
-  it("6b. tops the jackpot up to JACKPOT_AMOUNT once the previous epoch is paid", async () => {
-    const attempts: bigint[] = [];
-    const result = await tickLabels({
-      jackpotBalance: async () => 1_000_000n,
-      authorityBalance: async () => JACKPOT_AMOUNT,
-      recordTopUpAttempt: (epochId) => attempts.push(epochId),
+  it("6b. pays a due withdrawal, creating the owner's token account first", async () => {
+    const due = pending(1);
+    const { ctx, sent } = context({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      duePendingWithdrawals: async (epochId) => (epochId === 2n ? due : []),
     });
-    expect(result.labels).toEqual(["fund_jackpot"]);
-    expect(result.action).toBe("fund_jackpot");
-    expect(attempts).toEqual([2n]);
+    const outcome = await runTick(ctx);
+
+    expect(outcome.action).toBe("process_withdraw");
+    expect((sent[0] ?? []).map(label)).toEqual([
+      CREATE_ATA_IDEMPOTENT,
+      "process_withdraw",
+    ]);
+    expect(outcome.withdrawShortfall).toBe(0n);
   });
 
-  it("6b. mints the shortfall to itself in the same transaction when short", async () => {
-    const result = await tickLabels({
-      jackpotBalance: async () => 0n,
-      authorityBalance: async () => 0n,
+  it("6b. pays at most WITHDRAW_BATCH_SIZE of them, in a transaction that fits", async () => {
+    const { ctx, sent } = context({
+      duePendingWithdrawals: async () => pending(WITHDRAW_BATCH_SIZE + 3),
     });
-    expect(result.labels).toEqual([MINT_TO, "fund_jackpot"]);
+    await runTick(ctx);
+
+    expect((sent[0] ?? []).map(label)).toEqual(
+      Array.from({ length: WITHDRAW_BATCH_SIZE }, () => [
+        CREATE_ATA_IDEMPOTENT,
+        "process_withdraw",
+      ]).flat(),
+    );
+    // Three accounts per payout plus an ATA creation is what caps the batch
+    // below BATCH_SIZE, so the ceiling is asserted rather than trusted.
+    const tx = new Transaction({
+      feePayer: AUTHORITY,
+      blockhash: PublicKey.default.toBase58(),
+      lastValidBlockHeight: 1,
+    }).add(...(sent[0] ?? []));
+    const size = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).length;
+    expect(size).toBeLessThanOrEqual(PACKET_DATA_SIZE);
   });
 
-  it("6b. leaves a full vault alone", async () => {
-    const result = await tickLabels({ jackpotBalance: async () => JACKPOT_AMOUNT });
-    expect(result.transactions).toBe(0);
-  });
-
-  it("6b. waits while the previous epoch is still being drawn", async () => {
-    const result = await tickLabels({
-      jackpotBalance: async () => 0n,
-      previousEpoch: epoch({
-        epochId: 1n,
-        status: EPOCH_STATUS.DRAWING,
-        requestedAt: NOW - 10n,
-      }),
+  it("6b. reports the gap and opens the round anyway when the vault is short", async () => {
+    const { ctx, sent, warned } = context({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      duePendingWithdrawals: async () => pending(3, 4_000_000n),
+      principalVaultBalance: async () => 5_000_000n,
+      send: async (ixs) => {
+        if (ixs.some((ix) => label(ix) === "process_withdraw")) {
+          throw new Error("InsufficientVaultLiquidity");
+        }
+        sent.push(ixs);
+        return "signature";
+      },
     });
-    expect(result.transactions).toBe(0);
+    const outcome = await runTick(ctx);
+
+    // 12 USDC due against 5 in the vault.
+    expect(outcome.withdrawShortfall).toBe(7_000_000n);
+    expect(warned).toHaveLength(1);
+    // A short vault delays cash, never the game: the round still opens.
+    expect(outcome.action).toBe("create_round");
+    expect((sent[0] ?? []).map(label)).toEqual(["create_round"]);
   });
 
-  it("6b. gives up after TOP_UP_ATTEMPTS tries", async () => {
+  it("6b. lets any other send failure fail the tick", async () => {
+    const { ctx } = context({
+      duePendingWithdrawals: async () => pending(1),
+      send: async () => {
+        throw new Error("blockhash expired");
+      },
+    });
+    await expect(runTick(ctx)).rejects.toThrow("blockhash expired");
+  });
+
+  it("6b. reports no shortfall and reads no balance when nothing is due", async () => {
     let reads = 0;
     const result = await tickLabels({
-      jackpotBalance: async () => {
+      principalVaultBalance: async () => {
         reads += 1;
         return 0n;
       },
-      topUpAttempts: 3,
     });
     expect(result.transactions).toBe(0);
+    expect(result.withdrawShortfall).toBe(0n);
     expect(reads).toBe(0);
   });
+
+  it("6b. leaves the last reported shortfall alone on a tick that acted earlier", async () => {
+    const { ctx } = context({
+      openRound: round({ endsAt: NOW }),
+      duePendingWithdrawals: async () => pending(1),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.action).toBe("request_round_randomness");
+    expect(outcome.withdrawShortfall).toBeUndefined();
+  });
+
+  // --- 7. Create Round.
 
   it("7. opens the next round when the last one is fully settled", async () => {
     const result = await tickLabels({

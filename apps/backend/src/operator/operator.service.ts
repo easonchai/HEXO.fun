@@ -8,17 +8,11 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
-import {
-  getAccount,
-  getAssociatedTokenAddressSync,
-  TokenAccountNotFoundError,
-} from "@solana/spl-token";
+import { getAccount, TokenAccountNotFoundError } from "@solana/spl-token";
 import { PublicKey, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
-import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   clockUnixTimestamp,
@@ -62,7 +56,6 @@ interface OperatorTickResult extends TickOutcome {
 export class OperatorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OperatorService.name);
   private readonly instructions: OperatorInstructions;
-  private readonly mint: PublicKey;
   private readonly testVrf: boolean;
   /** Single-flight: an overrunning tick skips the one that would overlap it. */
   private running = false;
@@ -72,8 +65,6 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   /** Ticket 04: whether `playersToRegister` came back empty last tick, and
    *  for which Epoch, so step 4 can require two consecutive empty ticks. */
   private lastRegisterCheck: RegisterCheck | null = null;
-  /** Step 6b's tries against one Epoch; resets when the Epoch changes. */
-  private topUp: { epochId: bigint; attempts: number } | null = null;
   /**
    * Positions this operator has already settled, by address, with when. The
    * indexer's sweep can re-insert one for a few seconds after the close: the
@@ -97,10 +88,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     @Inject(INDEXER_QUERIES) private readonly indexer: IndexerQueries,
     private readonly sparring: SparringService,
-    config: ConfigService<HexVaultEnv, true>,
   ) {
-    this.mint = new PublicKey(config.get("HEXUSDC_MINT", { infer: true }));
-
     // Which randomness account the program expects depends on how it was
     // compiled, and the IDL is the only thing that travels with the build.
     this.testVrf = chain.program.idl.instructions.some(
@@ -253,16 +241,10 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       lastRound,
       ix: this.instructions,
       lastRegisterCheck: this.lastRegisterCheck,
-      topUpAttempts:
-        this.topUp?.epochId === pool.currentEpochId ? this.topUp.attempts : 0,
       fulfilled: (seed) => this.fulfilled(seed),
-      authorityBalance: () => this.authorityBalance(),
-      jackpotBalance: () => this.jackpotBalance(),
-      recordTopUpAttempt: (epochId) => {
-        const attempts =
-          this.topUp?.epochId === epochId ? this.topUp.attempts + 1 : 1;
-        this.topUp = { epochId, attempts };
-      },
+      principalVaultBalance: () => this.principalVaultBalance(),
+      duePendingWithdrawals: (currentEpochId) =>
+        this.duePendingWithdrawals(currentEpochId),
       playersToRegister: (epochId) => this.indexer.playersToRegister(epochId),
       unsettledPositions: async () =>
         (await this.indexer.unsettledPositions()).filter(
@@ -376,17 +358,14 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     this.randomnessWatch = { address: wanted, subscriptionId };
   }
 
-  private async authorityBalance(): Promise<bigint> {
-    const address = getAssociatedTokenAddressSync(
-      this.mint,
-      this.chain.keypair.publicKey,
-    );
+  private async principalVaultBalance(): Promise<bigint> {
+    const address = this.chain.principalVaultAddress();
     try {
       return (await getAccount(this.chain.connection, address)).amount;
     } catch (cause) {
       if (cause instanceof TokenAccountNotFoundError) {
         throw new Error(
-          `authority hexUSDC account ${address.toBase58()} does not exist; run bootstrap first`,
+          `principal vault ${address.toBase58()} does not exist; run bootstrap first`,
           { cause },
         );
       }
@@ -394,20 +373,23 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async jackpotBalance(): Promise<bigint> {
-    try {
-      return (
-        await getAccount(this.chain.connection, this.chain.jackpotVaultAddress())
-      ).amount;
-    } catch (cause) {
-      if (cause instanceof TokenAccountNotFoundError) {
-        throw new Error(
-          `jackpot vault ${this.chain.jackpotVaultAddress().toBase58()} does not exist; run bootstrap first`,
-          { cause },
-        );
-      }
-      throw cause;
-    }
+  /** Step 6b's queue, straight off the Player mirror. Oldest request first,
+   *  so a batch that only covers part of the queue still drains it in order. */
+  private async duePendingWithdrawals(
+    currentEpochId: bigint,
+  ): Promise<{ owner: string; amount: bigint }[]> {
+    const players = await this.prisma.player.findMany({
+      where: {
+        pendingWithdraw: { gt: 0 },
+        pendingEpoch: { lt: currentEpochId },
+      },
+      orderBy: { pendingEpoch: "asc" },
+      select: { owner: true, pendingWithdraw: true },
+    });
+    return players.map((player) => ({
+      owner: player.owner,
+      amount: player.pendingWithdraw,
+    }));
   }
 
   /** The registered interval containing `target` (spec §3.4 step 6). */
@@ -437,7 +419,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    * and the web summary never have to reason about chain time (ticket 03).
    */
   private async writeState(
-    outcome: Pick<TickOutcome, "action" | "progress">,
+    outcome: Pick<TickOutcome, "action" | "progress" | "withdrawShortfall">,
     error: string | null,
     waitMs: number,
   ): Promise<void> {
@@ -453,6 +435,11 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
             registeredCount: outcome.progress.count,
             registeredTotal: outcome.progress.total,
           }),
+      // Absent on a tick that acted before step 6b: nothing looked, so the
+      // last reported figure is still the best one /status has.
+      ...(outcome.withdrawShortfall === undefined
+        ? {}
+        : { withdrawShortfall: outcome.withdrawShortfall }),
     };
     await this.prisma.operatorState.upsert({
       where: { id: 1 },

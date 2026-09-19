@@ -31,7 +31,7 @@
   picks the wrong randomness PDA off the IDL. And if solana program deploy says ExtendProgram requires a minimum of 10240 additional
   bytes, run solana program extend LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6 10240 --url devnet first.
 
-  Nothing needs re-bootstrapping. Only bump POOL_ID and re-run bootstrap if you want a clean pool, and then paste the new HEXUSDC_MINT
+  Nothing needs re-bootstrapping. Only bump POOL_ID and re-run bootstrap if you want a clean pool, and then paste the new ACCEPTED_MINT
   into .env.
 
   After the backend has been down
@@ -61,9 +61,16 @@
   Demo cadence (2026-09-10): epoch_seconds 86400, round_seconds 30, close_buffer 12, on the anchored pool bootstrapped with
   --epoch-anchor 2026-09-13T16:00:00Z. One draw a day, landing at 00:00 MYT. Rounds switch on the next Round, epochs on the next
   epoch, and epoch_seconds is now safe to change mid-epoch because touch reads the epoch's stored ends_at instead of adding the
-  parameter to the start. Before this the pool ran hourly at epoch_seconds 3600 off an arbitrary boundary. The operator tops the
-  jackpot vault up to 42069 hexUSDC (JACKPOT_AMOUNT in operator/tick.ts) once the previous epoch has paid, three tries at most;
-  there is no simulated yield any more.
+  parameter to the start. Before this the pool ran hourly at epoch_seconds 3600 off an arbitrary boundary. The operator no
+  longer funds the prize (ticket 03 deleted that step). Someone deposits it by hand before the epoch closes, from any wallet
+  holding the accepted mint:
+
+    set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin fund-jackpot --amount 42069000000
+
+  fund_jackpot is permissionless, so the wallet needs no role, only the tokens. close_registration snapshots whatever the
+  jackpot vault holds at that moment, and an epoch that closes under the pool's min_jackpot rolls over instead of paying a
+  token prize: the vault keeps its balance and the next epoch draws for it. Set that floor with `admin set-params
+  --min-jackpot`, or at bootstrap with `--min-jackpot`; the default is 1 USDC.
 
     set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --epoch-seconds 86400 --round-seconds 30 --close-buffer 12
 
@@ -90,6 +97,10 @@
   set-params.
 
   Tune it with set-params if ORAO's latency changes, no redeploy needed. The program still enforces 0 <= close_buffer < round_seconds.
+  set-params also carries --min-jackpot (whole USDC; an epoch closing under it rolls over instead of paying dust), --registration-window
+  (seconds past an epoch's end before close_registration is allowed, 0 <= this < epoch_seconds) and --payout-timeout (seconds a drawn
+  epoch waits for its payout before it may roll over unpaid, above 0), alongside --epoch-seconds, --epoch-anchor, --round-seconds,
+  --close-buffer, --vrf-timeout, --min-deposit and --house-cut-bps.
   Run it with the root .env exported first. The CLI reads process.env directly and loads no file of its own, so nothing reaches it
   except what the shell exports. DATABASE_URL is the catch: admin validates the backend's full env but neither .env nor .env.vps sets
   it (compose builds it from the POSTGRES_* keys), so a dummy value has to come along or the command dies on a missing key it never
@@ -174,7 +185,7 @@
        "ExtendProgram requires a minimum of 10240 additional bytes" means run
        solana program extend LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6 10240 --url devnet first.
 
-    2. Bootstrap the dev pool. Bump POOL_ID but leave HEXUSDC_MINT alone: bootstrap reuses a mint
+    2. Bootstrap the dev pool. Bump POOL_ID but leave ACCEPTED_MINT alone: bootstrap reuses a mint
        that already exists with 6 decimals and the authority as mint authority, so every wallet
        keeps its faucet balance. Principal does not carry over, because Player is a PDA of the
        pool and every depositor starts at zero.
@@ -192,7 +203,7 @@
 
        600 bps is the default, so pass the flag only for a different rate. stdout is a pasteable
        KEY=value block and progress goes to stderr, so `bootstrap > pool.env` gives a clean file.
-       Paste HEXUSDC_MINT back into .env if the block names a mint you did not already have.
+       Paste ACCEPTED_MINT back into .env if the block names a mint you did not already have.
 
     3. Wipe the dev database and rebuild the stack. Epoch, Round and Player rows carry no pool
        column, so the previous pool's rows collide with the new pool's ids on the same numbers.
@@ -360,3 +371,41 @@
 
   Rolling back is `docker compose --env-file .env.mainnet down` on its own. It leaves the devnet stack running, because the project
   names differ, and leaves the mainnet volume in place unless you add -v.
+
+  Admin actions through Squads
+
+  On mainnet the pool's admin is a Squads multisig and no machine holds its key, so the admin CLI cannot send. Set ADMIN_ADDRESS to
+  the multisig's vault address in the env you export. When it is set and differs from OPERATOR_KEYPAIR's pubkey, every admin-gated
+  command builds the instruction with the multisig as signer and fee payer and prints one base58 transaction on stdout instead of
+  sending it. Everything else it prints, the summary line and the warnings, goes to stderr, so the line pipes cleanly:
+
+    set -a; . ./.env.mainnet; set +a
+    DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin withdraw-principal --amount 25000 | pbcopy
+
+  The commands that print this way are set-params, unpause, withdraw-principal, set-operator, propose-admin and accept-admin.
+  pause and fund-jackpot always sign locally with the loaded key: the program lets either key pause, and funding the jackpot is
+  permissionless, so neither has to wait on the multisig. That matters in an incident, where pause is the one thing that has to be
+  instant.
+
+  Then, in the Squads app:
+
+    1. Transaction Builder, Add instruction, Import base58 encoded tx, paste.
+    2. Simulate. A simulation failure here is the program refusing the call, and the error name says which rule: BelowPendingWithdrawals
+       means the withdrawal would leave the vault short of what depositors have already requested, InvalidAdminTokenAccount means the
+       destination is not the admin's associated token account for the accepted mint.
+    3. Initiate, then collect approvals, then execute.
+
+  Do the paste right after the print. The transaction carries a blockhash that expires in about a minute, and an expired one can fail
+  the import or the simulation. Nothing is lost if it does: run the command again for a fresh line. Squads is expected to re-sign with
+  its own blockhash at execute, so the gap between initiating and the last approval should not matter. That is the part to confirm on
+  devnet before the mainnet cutover (ticket 08's rehearsal): initiate a set-params, leave it a few minutes, then approve and execute,
+  and record here what actually happened.
+
+  withdraw-principal takes whole USDC with up to six decimal places, not atomic units, and the CLI scales it by the mint's own
+  decimals. The destination is the admin's associated token account, which the program checks by address; when it does not exist yet
+  the CLI prepends its creation to the same transaction, paid for by the admin. Returning principal is a plain SPL transfer back to
+  the principal vault and needs no instruction from here.
+
+  The admin handover is two commands from two different keys. The current admin runs propose-admin --key <new-admin>, then the new
+  admin runs accept-admin, which signs as the pending admin: locally when a person is taking over, printed for Squads when
+  ADMIN_ADDRESS is the multisig taking over.

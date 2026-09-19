@@ -12,6 +12,6 @@ process.env.DATABASE_URL ??=
   "postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault";
 process.env.RPC_URL ??= "http://127.0.0.1:8899";
 process.env.OPERATOR_KEYPAIR ??= bs58.encode(Keypair.generate().secretKey);
-process.env.HEXUSDC_MINT ??= Keypair.generate().publicKey.toBase58();
+process.env.ACCEPTED_MINT ??= Keypair.generate().publicKey.toBase58();
 process.env.CORS_ORIGIN ??= "http://localhost:5173";
 process.env.POOL_ID ??= "1";

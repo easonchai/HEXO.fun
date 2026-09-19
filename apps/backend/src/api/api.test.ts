@@ -10,7 +10,21 @@ import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
 import { Prisma, type Player } from "@prisma/client";
-import { Keypair, type PublicKey, type TransactionInstruction } from "@solana/web3.js";
+import {
+  ACCOUNT_SIZE,
+  AccountLayout,
+  MINT_SIZE,
+  MintLayout,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import {
+  Keypair,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+  type AccountInfo,
+  type TransactionInstruction,
+} from "@solana/web3.js";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -20,6 +34,7 @@ import { HealthController } from "../health/health.controller";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApiModule } from "./api.module";
+import { FaucetController } from "./faucet.controller";
 import { CHAIN_CLOCK_TTL_MS, JACKPOT_BALANCE_TTL_MS, oddsPercent, weightAt } from "./api.service";
 
 const NOW = BigInt(Math.floor(Date.now() / 1000));
@@ -51,6 +66,18 @@ const VAULT_BALANCE = 5_000_000n;
 const POOL_CLOSE_BUFFER = 15n;
 const POOL_MIN_DEPOSIT = 1_000_000n;
 
+/** Ticket 03's `/status` figures: what the pool owes, what the principal
+ *  vault holds against it, and what the operator has left for fees. */
+const POOL_PENDING_WITHDRAWALS = 3_000_000n;
+const PRINCIPAL_VAULT_BALANCE = 9_000_000n;
+const OPERATOR_LAMPORTS = 2 * LAMPORTS_PER_SOL;
+
+/** The operator key, which is also the authority of the mint the faucet
+ *  mints from; the faucet resolves that at boot. */
+const OPERATOR = Keypair.generate();
+const ACCEPTED_MINT = new PublicKey(process.env.ACCEPTED_MINT as string);
+const PRINCIPAL_VAULT = Keypair.generate().publicKey;
+
 /** A Clock sysvar account's data, `unix_timestamp` at byte offset 32 (see
  *  operator/chain-state.ts `clockUnixTimestamp`). The other fields are unused. */
 function clockSysvarData(unixTimestamp: bigint): Buffer {
@@ -58,6 +85,56 @@ function clockSysvarData(unixTimestamp: bigint): Buffer {
   data.writeBigInt64LE(unixTimestamp, 32);
   return data;
 }
+
+/** An SPL mint account whose authority is `mintAuthority`, as the faucet's
+ *  boot check reads it. */
+function mintAccount(mintAuthority: PublicKey): AccountInfo<Buffer> {
+  const data = Buffer.alloc(MINT_SIZE);
+  MintLayout.encode(
+    {
+      mintAuthorityOption: 1,
+      mintAuthority,
+      supply: 0n,
+      decimals: 6,
+      isInitialized: true,
+      freezeAuthorityOption: 0,
+      freezeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return accountInfo(data, TOKEN_PROGRAM_ID);
+}
+
+/** An SPL token account holding `amount`, as `/status`'s liquidity read
+ *  unpacks it. */
+function tokenAccount(amount: bigint): AccountInfo<Buffer> {
+  const data = Buffer.alloc(ACCOUNT_SIZE);
+  AccountLayout.encode(
+    {
+      mint: ACCEPTED_MINT,
+      owner: PublicKey.default,
+      amount,
+      delegateOption: 0,
+      delegate: PublicKey.default,
+      delegatedAmount: 0n,
+      state: 1,
+      isNativeOption: 0,
+      isNative: 0n,
+      closeAuthorityOption: 0,
+      closeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return accountInfo(data, TOKEN_PROGRAM_ID);
+}
+
+const accountInfo = (data: Buffer, owner: PublicKey): AccountInfo<Buffer> => ({
+  data,
+  owner,
+  executable: false,
+  lamports: 1,
+  rentEpoch: 0,
+});
 
 const sentInstructions: TransactionInstruction[][] = [];
 
@@ -75,10 +152,21 @@ const fakeChain = {
   connection: {
     rpcEndpoint: "http://127.0.0.1:8899",
     getSlot: async (): Promise<number> => 1234,
-    getAccountInfo: async (): Promise<{ data: Buffer }> => {
+    // The mint for the faucet's boot check, the Clock sysvar for everything
+    // else: those are the only two accounts this suite reads one at a time.
+    getAccountInfo: async (address: PublicKey): Promise<AccountInfo<Buffer>> => {
+      if (address.equals(ACCEPTED_MINT)) return mintAccount(OPERATOR.publicKey);
       clockReads += 1;
-      return { data: clockSysvarData(chainClockValue) };
+      return accountInfo(clockSysvarData(chainClockValue), SystemProgram.programId);
     },
+    getMultipleAccountsInfo: async (
+      addresses: PublicKey[],
+    ): Promise<(AccountInfo<Buffer> | null)[]> =>
+      addresses.map((address) =>
+        address.equals(PRINCIPAL_VAULT)
+          ? tokenAccount(PRINCIPAL_VAULT_BALANCE)
+          : { ...accountInfo(Buffer.alloc(0), SystemProgram.programId), lamports: OPERATOR_LAMPORTS },
+      ),
     getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => {
       jackpotReads += 1;
       if (failNextJackpotRead) {
@@ -89,7 +177,8 @@ const fakeChain = {
     },
   },
   jackpotVaultAddress: (): PublicKey => Keypair.generate().publicKey,
-  keypair: Keypair.generate(),
+  principalVaultAddress: (): PublicKey => PRINCIPAL_VAULT,
+  keypair: OPERATOR,
   send: async (instructions: TransactionInstruction[]): Promise<string> => {
     sentInstructions.push(instructions);
     return FAKE_SIGNATURE;
@@ -109,6 +198,8 @@ const emptyPlayer = (owner: string): Player => ({
   regStart: new Prisma.Decimal(0),
   regEnd: new Prisma.Decimal(0),
   isHouse: false,
+  pendingWithdraw: 0n,
+  pendingEpoch: 0n,
 });
 
 const MAX_JSON_SAFE = 2 ** 53;
@@ -465,8 +556,19 @@ describe("API routes", () => {
     expect(body.cursor.ageSeconds).toBeLessThan(120);
     expect(body.rpcOk).toBe(true);
     expect(body.slot).toBe(1234);
-    expect(body.aprBps).toBe(500);
     assertNoLargeNumbers(body, "/status");
+  });
+
+  it("GET /status reports the withdrawal queue, the vault's liquidity and the operator's SOL", async () => {
+    const { body } = await http.get("/status").expect(200);
+    // u64 amounts as decimal strings, same as every other money field.
+    expect(body.pendingWithdrawals).toBe(POOL_PENDING_WITHDRAWALS.toString());
+    expect(body.vaultLiquidity).toBe(PRINCIPAL_VAULT_BALANCE.toString());
+    // Seeded on the OperatorState row, in atomic units like the rest.
+    expect(body.withdrawShortfall).toBe("250000");
+    // SOL, not lamports, so the warning threshold reads in the same unit.
+    expect(body.operatorSol).toBe(2);
+    expect(body.operatorSolLow).toBe(false);
   });
 
   describe("GET /state", () => {
@@ -721,6 +823,22 @@ describe("API routes", () => {
       expect(sentInstructions).toHaveLength(before + 1);
     });
 
+    it("is 404 when the operator is not the mint authority", async () => {
+      // What mainnet looks like: the accepted mint is real USDC and nobody
+      // here can mint it, so the route is not there at all.
+      const faucet = app.get(FaucetController);
+      const resolved = faucet.isMintAuthority;
+      expect(resolved).toBe(true);
+      faucet.isMintAuthority = false;
+      try {
+        const before = sentInstructions.length;
+        await http.post("/faucet").send({ owner: ALICE }).expect(404);
+        expect(sentInstructions).toHaveLength(before);
+      } finally {
+        faucet.isMintAuthority = resolved;
+      }
+    });
+
     // Last in the file: it deliberately burns the caller's per-IP budget.
     it("rate limits the caller by IP", async () => {
       let throttled = false;
@@ -745,8 +863,12 @@ async function seed(prisma: PrismaService): Promise<void> {
     data: {
       address: POOL_ADDRESS,
       poolId: 1n,
-      authority: HOUSE,
+      admin: HOUSE,
+      operator: HOUSE,
+      pendingAdmin: null,
       mint: Keypair.generate().publicKey.toBase58(),
+      pendingWithdrawals: POOL_PENDING_WITHDRAWALS,
+      minJackpot: 1_000_000n,
       epochSeconds: EPOCH_LENGTH,
       epochAnchor: CURRENT_START,
       roundSeconds: 60n,
@@ -884,6 +1006,7 @@ async function seed(prisma: PrismaService): Promise<void> {
       lastError: null,
       registeredCount: 1,
       registeredTotal: 3,
+      withdrawShortfall: 250_000n,
     },
   });
 }

@@ -5,6 +5,8 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  NotFoundException,
+  type OnModuleInit,
   Post,
   ServiceUnavailableException,
 } from "@nestjs/common";
@@ -13,6 +15,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
+  getMint,
 } from "@solana/spl-token";
 import { PublicKey } from "@solana/web3.js";
 
@@ -47,31 +50,59 @@ const parseOwner = (body: unknown): PublicKey => {
 };
 
 /**
- * The one write route in the API. The authority keypair is also the hexUSDC
- * mint authority, so the faucet mints straight to the caller's associated
- * token account. Test money only, and never on a real mint.
+ * The one write route in the API. It mints straight to the caller's
+ * associated token account, which only works while the operator key is the
+ * mint authority: true of the test mint on devnet, never of real USDC. The
+ * route is resolved once at boot and answers 404 when it is not, so a
+ * mainnet deployment has no faucet at all rather than a broken one.
  */
 @Controller("faucet")
-export class FaucetController {
+export class FaucetController implements OnModuleInit {
   private readonly logger = new Logger(FaucetController.name);
   private readonly mint: PublicKey;
   private readonly amount: bigint;
   private readonly intervalSeconds: bigint;
+  /** Resolved once in `onModuleInit`; public only so a test can flip it. */
+  isMintAuthority = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly chain: ChainService,
     config: ConfigService<HexVaultEnv, true>,
   ) {
-    this.mint = new PublicKey(config.get("HEXUSDC_MINT", { infer: true }));
+    this.mint = new PublicKey(config.get("ACCEPTED_MINT", { infer: true }));
     this.amount = BigInt(config.get("FAUCET_AMOUNT", { infer: true }));
     this.intervalSeconds = BigInt(
       config.get("FAUCET_INTERVAL_SECONDS", { infer: true }),
     );
   }
 
+  /** A mint this key cannot mint leaves the route off, and so does a read
+   *  that failed: an unknown authority is not permission to try. */
+  async onModuleInit(): Promise<void> {
+    const operator = this.chain.keypair.publicKey;
+    try {
+      const mint = await getMint(this.chain.connection, this.mint);
+      this.isMintAuthority = mint.mintAuthority?.equals(operator) ?? false;
+    } catch (cause) {
+      this.logger.warn(
+        `could not read mint ${this.mint.toBase58()}: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+      );
+    }
+    if (!this.isMintAuthority) {
+      this.logger.log(
+        `${operator.toBase58()} is not the authority of mint ${this.mint.toBase58()}; the faucet is off`,
+      );
+    }
+  }
+
   @Post()
   async request(@Body() body: unknown) {
+    if (!this.isMintAuthority) {
+      throw new NotFoundException("There is no faucet on this network.");
+    }
     const owner = parseOwner(body);
     const address = owner.toBase58();
     const now = BigInt(Math.floor(Date.now() / 1000));

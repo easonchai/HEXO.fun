@@ -33,6 +33,8 @@ const player = (owner: string, regStart: string, regEnd: string) => ({
   regStart,
   regEnd,
   isHouse: false,
+  pendingWithdraw: 0n,
+  pendingEpoch: 0n,
 });
 
 describe("winner lookup", () => {

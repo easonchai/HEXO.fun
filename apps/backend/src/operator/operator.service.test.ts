@@ -15,7 +15,6 @@ import {
   Wallet,
   type Idl,
 } from "@anchor-lang/core";
-import type { ConfigService } from "@nestjs/config";
 import {
   Connection,
   Keypair,
@@ -28,7 +27,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import { epochAddress, poolAddress, roundAddress } from "../chain/pda";
-import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { CountingConnection } from "../test-utils/counting-connection";
 import { EPOCH_STATUS, ROUND_STATUS } from "./chain-state";
@@ -93,15 +91,6 @@ const pool = (overrides: object = {}) => ({
   ...overrides,
 });
 
-/** OperatorService's constructor only ever calls `get` on the config. */
-function stubConfig(
-  env: Pick<HexVaultEnv, "HEXUSDC_MINT">,
-) {
-  return {
-    get: (key: keyof HexVaultEnv) => env[key as keyof typeof env],
-  } as unknown as ConfigService<HexVaultEnv, true>;
-}
-
 describe("OperatorService end-of-tick timestamp", () => {
   it("records lastTickAt at or after the instant a slow send resolves", async () => {
     const prisma = new PrismaService();
@@ -144,15 +133,11 @@ describe("OperatorService end-of-tick timestamp", () => {
       playersToRegister: async () => [],
       unsettledPositions: async () => [],
     };
-    const config = stubConfig({
-      HEXUSDC_MINT: Keypair.generate().publicKey.toBase58(),
-    });
     const operator = new OperatorService(
       fakeChain as unknown as ChainService,
       prisma,
       indexer,
       noopSparring,
-      config,
     );
 
     try {
@@ -250,7 +235,6 @@ describe("OperatorService read budget", () => {
       prisma,
       indexer,
       noopSparring,
-      stubConfig({ HEXUSDC_MINT: Keypair.generate().publicKey.toBase58() }),
     );
 
     try {
@@ -348,7 +332,6 @@ describe("OperatorService randomness subscription", () => {
       prisma,
       indexer,
       noopSparring,
-      stubConfig({ HEXUSDC_MINT: Keypair.generate().publicKey.toBase58() }),
     );
     return { prisma, connection, accounts, operator };
   }

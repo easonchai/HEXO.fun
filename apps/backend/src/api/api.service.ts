@@ -9,7 +9,8 @@ import {
   type Pool,
   type Round,
 } from "@prisma/client";
-import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
+import { unpackAccount } from "@solana/spl-token";
+import { LAMPORTS_PER_SOL, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
@@ -59,6 +60,13 @@ export const CHAIN_CLOCK_TTL_MS = 30_000;
  * browser tab stayed open.
  */
 export const JACKPOT_BALANCE_TTL_MS = 15_000;
+
+/**
+ * How long the principal vault balance and the operator's SOL answer for.
+ * Same reasoning as the jackpot's: both move a handful of times an epoch,
+ * and /status is polled every two seconds by every open tab.
+ */
+export const BALANCES_TTL_MS = 15_000;
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
 
@@ -118,6 +126,17 @@ interface RpcHealth {
   slot: number | null;
 }
 
+/**
+ * The two balances `/status` reports about the operator's ability to pay:
+ * what the principal vault holds against the pending withdrawals, and what
+ * the hot key has left for fees. Null when the read failed, which /status
+ * says rather than guessing a zero.
+ */
+interface ChainBalances {
+  vaultLiquidity: bigint | null;
+  operatorSol: number | null;
+}
+
 /** The cached Clock sysvar value plus the wall-clock moment it was observed
  *  (when the read resolved, not when `CachedRead.at` below was stamped). */
 interface ClockReading {
@@ -143,6 +162,7 @@ export class ApiService {
   private probe: CachedRead<RpcHealth> | undefined;
   private clock: CachedRead<ClockReading> | undefined;
   private jackpotBalance: CachedRead<bigint> | undefined;
+  private balances: CachedRead<ChainBalances> | undefined;
 
   /**
    * The highest chain time `getState` has served. The Clock sysvar runs a
@@ -158,15 +178,15 @@ export class ApiService {
    */
   private lastServedChainTime = 0n;
 
-  /** Simulated yield rate, so the Vault's "estimated yield" row is not hardcoded. */
-  private readonly aprBps: number;
+  /** SOL below which `/status` flags the operator as running dry. */
+  private readonly operatorSolWarn: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly chain: ChainService,
     config: ConfigService<HexVaultEnv, true>,
   ) {
-    this.aprBps = Number(config.get("APR_BPS", { infer: true }));
+    this.operatorSolWarn = Number(config.get("OPERATOR_SOL_WARN", { infer: true }));
   }
 
   async getPool() {
@@ -344,10 +364,11 @@ export class ApiService {
       );
     }
 
-    const [jackpotAmount, rpc, chainTime] = await Promise.all([
+    const [jackpotAmount, rpc, chainTime, balances] = await Promise.all([
       this.liveJackpot(epoch),
       this.rpcHealth(),
       this.extrapolatedChainNow(),
+      this.chainBalances(),
     ]);
 
     // Same extrapolated instant for the response's chainTime and for the
@@ -368,7 +389,7 @@ export class ApiService {
       player: mine === undefined ? null : playerDto(mine, total),
       position:
         position === null ? null : { tiles: position.tiles, stakePerTile: position.stakePerTile },
-      status: statusFrom(operator, cursor, rpc, this.aprBps),
+      status: statusFrom(operator, cursor, rpc, pool, balances, this.operatorSolWarn),
       chainTime,
     };
   }
@@ -442,12 +463,14 @@ export class ApiService {
   }
 
   async getStatus() {
-    const [operator, cursor, rpc] = await Promise.all([
+    const [operator, cursor, pool, rpc, balances] = await Promise.all([
       this.prisma.operatorState.findUnique({ where: { id: 1 } }),
       this.prisma.cursor.findUnique({ where: { id: 1 } }),
+      this.prisma.pool.findFirst(),
       this.rpcHealth(),
+      this.chainBalances(),
     ]);
-    return statusFrom(operator, cursor, rpc, this.aprBps);
+    return statusFrom(operator, cursor, rpc, pool, balances, this.operatorSolWarn);
   }
 
   private async requirePool(): Promise<Pool> {
@@ -533,6 +556,37 @@ export class ApiService {
     return this.clock.result;
   }
 
+  /**
+   * The principal vault's token balance and the operator's SOL, in one
+   * `getMultipleAccountsInfo` and cached for `BALANCES_TTL_MS`, so /status
+   * polling stays one chain call per window rather than two per client.
+   * A failed or missing read reports null rather than a zero that would
+   * read as "the vault is empty" or "the operator is out of fees".
+   */
+  private chainBalances(): Promise<ChainBalances> {
+    this.balances = this.cached(this.balances, BALANCES_TTL_MS, async () => {
+      const operator = this.chain.keypair.publicKey;
+      try {
+        const [vault, fees] = await this.chain.connection.getMultipleAccountsInfo([
+          this.chain.principalVaultAddress(),
+          operator,
+        ]);
+        return {
+          vaultLiquidity: vault
+            ? unpackAccount(this.chain.principalVaultAddress(), vault).amount
+            : null,
+          operatorSol: fees ? fees.lamports / LAMPORTS_PER_SOL : 0,
+        };
+      } catch (cause) {
+        this.logger.warn(
+          `balance read failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+        return { vaultLiquidity: null, operatorSol: null };
+      }
+    });
+    return this.balances.result;
+  }
+
   /** Cached so /status polling at 2 s does not turn into a getSlot per client. */
   private rpcHealth(): Promise<RpcHealth> {
     this.probe = this.cached(this.probe, RPC_PROBE_TTL_MS, () => this.probeRpc());
@@ -612,12 +666,14 @@ function drawingProgressFrom(previous: Epoch | null, players: Player[]) {
   };
 }
 
-/** GET /status's shape, from rows already read. */
+/** GET /status's shape, from rows and balances already read. */
 function statusFrom(
   operator: OperatorState | null,
   cursor: Cursor | null,
   rpc: RpcHealth,
-  aprBps: number,
+  pool: Pool | null,
+  balances: ChainBalances,
+  operatorSolWarn: number,
 ) {
   const now = nowSeconds();
   return {
@@ -640,7 +696,14 @@ function statusFrom(
       ageSeconds: cursor?.updatedAt == null ? null : Number(now - cursor.updatedAt),
     },
     ...rpc,
-    aprBps,
+    // What depositors are owed, what the vault can pay them with, and what
+    // the last crank found missing (ticket 03).
+    pendingWithdrawals: pool?.pendingWithdrawals ?? 0n,
+    vaultLiquidity: balances.vaultLiquidity,
+    withdrawShortfall: operator?.withdrawShortfall ?? 0n,
+    operatorSol: balances.operatorSol,
+    operatorSolLow:
+      balances.operatorSol !== null && balances.operatorSol < operatorSolWarn,
   };
 }
 

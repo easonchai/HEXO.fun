@@ -78,11 +78,11 @@ pnpm exec tsx src/bootstrap.ts "$@" >"$work/run1.out"
 
 # The mint keypair is not persisted anywhere, so run 1's mint is run 2's
 # input. That is the same handoff a human makes by pasting it into .env.
-HEXUSDC_MINT=$(sed -n 's/^HEXUSDC_MINT=//p' "$work/run1.out")
-export HEXUSDC_MINT
+ACCEPTED_MINT=$(sed -n 's/^ACCEPTED_MINT=//p' "$work/run1.out")
+export ACCEPTED_MINT
 
 echo
-echo "=== run 2 (same cluster, HEXUSDC_MINT from run 1) ==="
+echo "=== run 2 (same cluster, ACCEPTED_MINT from run 1) ==="
 pnpm exec tsx src/bootstrap.ts "$@" >"$work/run2.out"
 
 echo

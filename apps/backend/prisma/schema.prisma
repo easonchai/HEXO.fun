@@ -15,7 +15,12 @@ datasource db {
 model Pool {
   address             String  @id
   poolId              BigInt
-  authority           String
+  /// Squads multisig on mainnet: set_params, unpause, admin_withdraw, set_operator.
+  admin               String
+  /// The hot crank key the backend signs with.
+  operator            String
+  /// Half of a two-step admin handover; null when no handover is open.
+  pendingAdmin        String?
   mint                String
   epochSeconds        BigInt
   epochAnchor         BigInt
@@ -27,6 +32,10 @@ model Pool {
   currentEpochEndsAt  BigInt
   previousEpochEndsAt BigInt
   totalPrincipal      BigInt
+  /// Requested withdrawals the principal vault still owes.
+  pendingWithdrawals  BigInt
+  /// An epoch closing under this rolls over instead of paying a token prize.
+  minJackpot          BigInt
   carryPot            BigInt
   houseCutBps         Int
   updatedSlot         BigInt
@@ -69,6 +78,10 @@ model Player {
   regStart     Decimal @db.Decimal(40, 0)
   regEnd       Decimal @db.Decimal(40, 0)
   isHouse      Boolean
+  /// Requested but not yet paid; `process_withdraw` pays it and zeroes it.
+  pendingWithdraw BigInt
+  /// The epoch the request was made in. It pays once the pool has moved past it.
+  pendingEpoch    BigInt
 }
 
 model Position {
@@ -119,4 +132,8 @@ model OperatorState {
   lastError        String?
   registeredCount  Int?
   registeredTotal  Int?
+  /** How much the principal vault was short of the withdrawals due on the
+   *  last tick that tried to pay them. 0 when the last try covered them all,
+   *  null before any tick has looked. */
+  withdrawShortfall BigInt?
 }

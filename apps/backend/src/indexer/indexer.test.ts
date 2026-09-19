@@ -100,7 +100,9 @@ async function put(name: string, pubkey: PublicKey, account: object): Promise<vo
 
 const poolAccount = (overrides: object = {}) => ({
   poolId: bn(POOL_ID),
-  authority: OWNER,
+  admin: OWNER,
+  operator: OWNER,
+  pendingAdmin: PublicKey.default,
   acceptedMint: STRANGER,
   principalVault: chain.principalVaultAddress(),
   jackpotVault: chain.jackpotVaultAddress(),
@@ -127,6 +129,10 @@ const poolAccount = (overrides: object = {}) => ({
   bump: 255,
   principalVaultBump: 254,
   jackpotVaultBump: 253,
+  pendingWithdrawals: bn(0),
+  minJackpot: bn(1_000_000),
+  registrationWindow: bn(0),
+  payoutTimeout: bn(86_400),
   ...overrides,
 });
 
@@ -175,6 +181,8 @@ const playerAccount = (owner: PublicKey, overrides: object = {}) => ({
   regEnd: bn(0),
   isHouse: false,
   bump: 255,
+  pendingWithdraw: bn(0),
+  pendingEpoch: bn(0),
   ...overrides,
 });
 
@@ -679,6 +687,8 @@ describe("operator queries", () => {
     regStart: "0",
     regEnd: "0",
     isHouse: false,
+    pendingWithdraw: 0n,
+    pendingEpoch: 0n,
     ...overrides,
   });
 

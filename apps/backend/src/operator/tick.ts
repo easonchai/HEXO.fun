@@ -1,8 +1,8 @@
 // Spec §3.4: the seven steps, in order, at most one transaction per tick,
-// plus 6b (jackpot top-up for the running epoch, after the previous one has
-// paid). Round steps (1-2) run before the Epoch steps (3+) so a Round can
-// never straddle an Epoch boundary; `begin_epoch` (3) waits for both the
-// sweep and the previous Epoch to be settled.
+// plus 6b (paying out the withdrawals whose epoch has ended). Round steps
+// (1-2) run before the Epoch steps (3+) so a Round can never straddle an
+// Epoch boundary; `begin_epoch` (3) waits for both the sweep and the previous
+// Epoch to be settled.
 //
 // Everything the steps touch arrives in the context, so a test drives them
 // with a fabricated chain state and a recording `send`, and the service is
@@ -31,11 +31,16 @@ export const REVEAL_SECONDS = 1n;
  * deadline then degrades to "checked on this cadence", not a stall.
  */
 export const SAFETY_INTERVAL_SECONDS = 60n;
-/** Every epoch's jackpot, in atomic units: 42069 hexUSDC. Demo value, minted
- *  by the operator; there is no real yield source. */
-export const JACKPOT_AMOUNT = 42_069_000_000n;
-/** Step 6b gives up on topping up an epoch's jackpot after this many tries. */
-export const TOP_UP_ATTEMPTS = 3;
+/**
+ * Pending withdrawals per transaction (step 6b). Smaller than BATCH_SIZE
+ * because each one carries three accounts of its own (owner, Player, the
+ * owner's token account) plus an idempotent ATA creation, and eight of those
+ * overflow a legacy transaction.
+ */
+export const WITHDRAW_BATCH_SIZE = 4;
+/** What the program answers when the principal vault cannot cover a payout;
+ *  `ChainService.mapSendError` puts the IDL name in `Error.message`. */
+const SHORT_VAULT = "InsufficientVaultLiquidity";
 
 /**
  * What step 4 remembers about the last tick's `playersToRegister` check, so
@@ -61,17 +66,19 @@ export interface TickContext {
   readonly ix: OperatorInstructions;
   /** Null before the first tick has ever checked. */
   readonly lastRegisterCheck: RegisterCheck | null;
-  /** How many times step 6b has already tried to top up `currentEpoch`. */
-  readonly topUpAttempts: number;
   /** Has the oracle answered the request for this seed? */
   fulfilled(seed: Uint8Array): Promise<boolean>;
-  /** The authority's own hexUSDC balance, in atomic units. */
-  authorityBalance(): Promise<bigint>;
-  /** The jackpot vault's balance, in atomic units. */
-  jackpotBalance(): Promise<bigint>;
-  /** Called before every step 6b try, including one that finds the vault
-   *  already full, so the service can count attempts against `epochId`. */
-  recordTopUpAttempt(epochId: bigint): void;
+  /** The principal vault's balance, in atomic units. Read only when a payout
+   *  has already failed for want of liquidity, to size the shortfall. */
+  principalVaultBalance(): Promise<bigint>;
+  /**
+   * Players from the Read model whose withdrawal request is payable now:
+   * `pendingWithdraw > 0` and `pendingEpoch < currentEpochId`. Oldest
+   * request first, so a long queue still drains in order.
+   */
+  duePendingWithdrawals(
+    currentEpochId: bigint,
+  ): Promise<{ owner: string; amount: bigint }[]>;
   playersToRegister(epochId: bigint): Promise<string[]>;
   /**
    * Positions still on chain whose Round has reached a terminal status
@@ -100,6 +107,12 @@ export interface TickOutcome {
   /** Present whenever step 4 checked `playersToRegister`, for the service to
    *  remember as next tick's `lastRegisterCheck`. */
   readonly registerCheck?: RegisterCheck;
+  /**
+   * How much the principal vault was short of everything step 6b owed, 0
+   * when it covered them all. Present only on a tick that reached step 6b,
+   * so a tick that acted earlier leaves the last reported figure standing.
+   */
+  readonly withdrawShortfall?: bigint;
   /**
    * The chain timestamp at which this decision could next differ: a Round
    * closing, an Epoch ending, a VRF timeout, the reveal wait after the last
@@ -335,25 +348,28 @@ async function decide(ctx: TickContext): Promise<Decision> {
     // indexer has not caught up with the registrations.
   }
 
-  // 6b. Top the jackpot up to JACKPOT_AMOUNT for the epoch now running, once
-  // the previous one has been paid (or rolled over), so the prize is on
-  // display for the whole epoch and `close_registration` snapshots it.
-  // Runs after the payout because the vault is shared: funding earlier would
-  // hand the top-up to the previous epoch's winner. Every try counts, so a
-  // vault found already full stops the checks after TOP_UP_ATTEMPTS ticks.
-  if (
-    currentEpoch?.status === EPOCH_STATUS.OPEN &&
-    previousDone &&
-    ctx.topUpAttempts < TOP_UP_ATTEMPTS
-  ) {
-    ctx.recordTopUpAttempt(currentEpoch.epochId);
-    const vault = await ctx.jackpotBalance();
-    if (vault < JACKPOT_AMOUNT) {
-      const amount = JACKPOT_AMOUNT - vault;
-      const held = await ctx.authorityBalance();
-      const shortfall = amount > held ? amount - held : 0n;
-      await ctx.send(await ctx.ix.fundJackpot(pool, amount, shortfall));
-      return { action: "fund_jackpot" };
+  // 6b. Pay out the withdrawals whose epoch has ended. Permissionless on the
+  // program side, so the operator only pays the fee; it runs behind every
+  // step above, which is what keeps a late return from the yield venue from
+  // delaying a round, a draw or a payout. A vault too short to cover the
+  // next batch reports the gap and waits for the admin to bring principal
+  // back, retrying on the following tick.
+  const due = await ctx.duePendingWithdrawals(pool.currentEpochId);
+  let withdrawShortfall = 0n;
+  if (due.length > 0) {
+    try {
+      await ctx.send(
+        await ctx.ix.processWithdrawals(pool, due.slice(0, WITHDRAW_BATCH_SIZE)),
+      );
+      return { action: "process_withdraw", withdrawShortfall: 0n };
+    } catch (cause) {
+      if ((cause instanceof Error ? cause.message : "") !== SHORT_VAULT) throw cause;
+      const owed = due.reduce((sum, entry) => sum + entry.amount, 0n);
+      const held = await ctx.principalVaultBalance();
+      withdrawShortfall = owed > held ? owed - held : 0n;
+      ctx.warn(
+        `principal vault holds ${held} against ${owed} of due withdrawals; short by ${withdrawShortfall}`,
+      );
     }
   }
 
@@ -375,10 +391,10 @@ async function decide(ctx: TickContext): Promise<Decision> {
     await ctx.send(
       await ctx.ix.createRound(pool, now, now + pool.roundSeconds),
     );
-    return { action: "create_round" };
+    return { action: "create_round", withdrawShortfall };
   }
 
-  return NOTHING;
+  return { ...NOTHING, withdrawShortfall };
 }
 
 /**
@@ -393,6 +409,10 @@ export const EXPECTED_ERRORS: ReadonlySet<string> = new Set([
   "EpochNotDrawn",
   "EpochNotEnded",
   "EpochNotRegistering",
+  // A pending withdrawal the Player mirror still shows: either a depositor
+  // cranked their own payout first (the UI offers that), or a second
+  // request re-stamped `pending_epoch` to the epoch now running.
+  "NothingPending",
   "NotPreviousEpoch",
   // The oracle answered between the tick's read and its void/rollover
   // landing, which is exactly the race the program guard exists for.
@@ -404,4 +424,5 @@ export const EXPECTED_ERRORS: ReadonlySet<string> = new Set([
   "RoundNotRequested",
   "RoundNotSettled",
   "VrfTimeoutNotElapsed",
+  "WithdrawalNotDue",
 ]);

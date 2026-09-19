@@ -121,7 +121,10 @@ export interface DecodedPool {
   poolId: BN;
   admin: PublicKey;
   operator: PublicKey;
+  pendingAdmin: PublicKey;
   acceptedMint: PublicKey;
+  pendingWithdrawals: BN;
+  minJackpot: BN;
   epochSeconds: BN;
   epochAnchor: BN;
   roundSeconds: BN;
@@ -173,6 +176,8 @@ export interface DecodedPlayer {
   regStart: BN;
   regEnd: BN;
   isHouse: boolean;
+  pendingWithdraw: BN;
+  pendingEpoch: BN;
 }
 
 export interface DecodedPosition {
@@ -190,10 +195,13 @@ export function poolRow(
   return {
     address: address.toBase58(),
     poolId: big(pool.poolId),
-    // The Prisma column is still called `authority` and carries the operator.
-    // Ticket 03 splits it into `admin` and `operator` alongside the migration.
-    authority: pool.operator.toBase58(),
+    admin: pool.admin.toBase58(),
+    operator: pool.operator.toBase58(),
+    // The default key means no handover is open.
+    pendingAdmin: isUnset(pool.pendingAdmin) ? null : pool.pendingAdmin.toBase58(),
     mint: pool.acceptedMint.toBase58(),
+    pendingWithdrawals: big(pool.pendingWithdrawals),
+    minJackpot: big(pool.minJackpot),
     epochSeconds: big(pool.epochSeconds),
     epochAnchor: big(pool.epochAnchor),
     roundSeconds: big(pool.roundSeconds),
@@ -254,6 +262,8 @@ export function playerRow(player: DecodedPlayer): Prisma.PlayerCreateInput {
     regStart: player.regStart.toString(),
     regEnd: player.regEnd.toString(),
     isHouse: player.isHouse,
+    pendingWithdraw: big(player.pendingWithdraw),
+    pendingEpoch: big(player.pendingEpoch),
   };
 }
 

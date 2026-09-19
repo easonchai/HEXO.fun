@@ -4,7 +4,6 @@
 import { BN, type Idl, type Program } from "@anchor-lang/core";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
@@ -19,6 +18,7 @@ import {
   jackpotVaultAddress,
   playerAddress,
   positionAddress,
+  principalVaultAddress,
   roundAddress,
 } from "../chain/pda";
 import type { EpochState, PoolState, RoundState } from "./chain-state";
@@ -120,40 +120,44 @@ export class OperatorInstructions {
   }
 
   /**
-   * Step 6b: top the operator's own hexUSDC up when it is short (it is the
-   * mint authority) and move `amount` into the jackpot vault, in one
-   * transaction so a mint can never land without its funding.
+   * Step 6b: pay one batch of due withdrawal requests. `process_withdraw`
+   * takes no signer, so the operator is here only as the fee payer and as
+   * the payer of the owner token accounts it creates. Each payout is
+   * preceded by an idempotent ATA creation: the program transfers to a
+   * token account of the accepted mint owned by `player.owner`, and a
+   * depositor who closed theirs between the request and the payout would
+   * otherwise block their own money.
    */
-  async fundJackpot(
+  async processWithdrawals(
     pool: PoolState,
-    amount: bigint,
-    shortfall: bigint,
+    owners: readonly { owner: string }[],
   ): Promise<TransactionInstruction[]> {
-    const source = getAssociatedTokenAddressSync(pool.acceptedMint, this.operator);
-    const mintTo =
-      shortfall > 0n
-        ? [
-            createMintToInstruction(
-              pool.acceptedMint,
-              source,
-              this.operator,
-              shortfall,
-            ),
-          ]
-        : [];
-
-    const fund = await this.method("fundJackpot", bn(amount))
-      .accountsPartial({
-        sourceAuthority: this.operator,
-        pool: pool.address,
-        acceptedMint: pool.acceptedMint,
-        source,
-        jackpotVault: jackpotVaultAddress(this.programId, pool.address),
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .instruction();
-
-    return [...mintTo, fund];
+    const principalVault = principalVaultAddress(this.programId, pool.address);
+    const batches = await Promise.all(
+      owners.map(async (entry) => {
+        const owner = new PublicKey(entry.owner);
+        const ownerToken = getAssociatedTokenAddressSync(pool.acceptedMint, owner);
+        return [
+          createAssociatedTokenAccountIdempotentInstruction(
+            this.operator,
+            ownerToken,
+            owner,
+            pool.acceptedMint,
+          ),
+          await this.method("processWithdraw")
+            .accountsPartial({
+              pool: pool.address,
+              player: this.player(pool, owner),
+              acceptedMint: pool.acceptedMint,
+              ownerToken,
+              principalVault,
+              tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .instruction(),
+        ];
+      }),
+    );
+    return batches.flat();
   }
 
   /** Step 4's tail: the epoch draws on whatever the jackpot vault holds. */
