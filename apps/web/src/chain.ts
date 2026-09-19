@@ -1,4 +1,5 @@
 /** Program id, env, PDA derivation. The chain is authoritative. */
+import { clusterFrom } from "./cluster.js";
 import idl from "./idl/hex_vault.json";
 import { BN, Program } from "@anchor-lang/core";
 import type { Idl } from "@anchor-lang/core";
@@ -110,14 +111,27 @@ const env = (key: string): string | undefined => {
   return value?.trim() || undefined;
 };
 
+/** The cluster this bundle was built for; `vite.config.ts` rejects a bad one. */
+export const CLUSTER = clusterFrom(
+  import.meta.env as Record<string, string | undefined>,
+);
+
+/**
+ * Wallet-standard chain id. Privy signs against it and registers the app's
+ * RPC under it; a local validator answers to the devnet genesis, so it rides
+ * along with devnet.
+ */
+export const SIGNING_CHAIN =
+  CLUSTER === "devnet" ? "solana:devnet" : "solana:mainnet";
+
 /** VITE_PROGRAM_ID wins so one bundle can point at a redeployed program. */
 export const PROGRAM_ID = new PublicKey(env("VITE_PROGRAM_ID") ?? idl.address);
 
 /** The single pool this build talks to; the demo runs pool 1. */
 export const POOL_ID = BigInt(env("VITE_POOL_ID") ?? "1");
 
-/** Public devnet unless overridden; .env.example pins the local validator. */
-export const RPC_URL = env("VITE_PUBLIC_RPC_URL") ?? clusterApiUrl("devnet");
+/** The cluster's public endpoint unless overridden; .env.example pins the local validator. */
+export const RPC_URL = env("VITE_PUBLIC_RPC_URL") ?? clusterApiUrl(CLUSTER);
 
 export const API_URL = env("VITE_API_URL") ?? "http://127.0.0.1:8080";
 

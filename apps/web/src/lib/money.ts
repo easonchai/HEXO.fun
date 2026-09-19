@@ -84,66 +84,48 @@ export function formatAddress(address: string): string {
     : `${address.slice(0, 4)}…${address.slice(-4)}`;
 }
 
-/**
- * Principal the program will let you take out right now. `withdraw(x)` needs
- * both Principal and Entries of at least x, and buying a position spends
- * Entries without touching Principal, so the ceiling is min(principal, entries).
- */
-export function withdrawable(principal: bigint, entries: bigint): bigint {
-  return principal < entries ? principal : entries;
-}
-
-/** Preview of the board consequence: entries spent, balances after the buy. */
-export function previewBuy(
-  principal: bigint,
-  entries: bigint,
-  tileCount: number,
-  stakePerTile: bigint,
-): {
-  spend: bigint;
-  entriesAfter: bigint;
-  withdrawableAfter: bigint;
-  affordable: boolean;
-} {
-  const spend = BigInt(tileCount) * stakePerTile;
-  const entriesAfter = entries - spend;
-  return {
-    spend,
-    entriesAfter,
-    withdrawableAfter: withdrawable(principal, entriesAfter),
-    affordable: entriesAfter >= 0n,
-  };
-}
-
-/**
- * A year of simulated yield on `amount` at `aprBps` basis points, in atomic
- * units. Same integer math as the operator's `yieldAmount` over a full year.
- */
-export function estimatedYield(amount: bigint, aprBps: number): bigint {
-  return (amount * BigInt(aprBps)) / 10_000n;
-}
-
 /** `current + step`, held at `cap` when one is given (the Vault's quick pills). */
 export function addCapped(current: bigint, step: bigint, cap: bigint | null): bigint {
   const next = current + step;
   return cap !== null && next > cap ? cap : next;
 }
 
-/** Preview a withdrawal in atomic units, including matched capacity before/after. */
+/**
+ * What `request_withdraw(amount)` does to the two balances: Principal drops
+ * by the whole amount, Tickets by min(Tickets, amount). The old
+ * `entries >= amount` rule is gone (ADR 0009), so a player who spent every
+ * Ticket in the game can still request their whole Principal.
+ */
 export function previewWithdraw(
-  principal: bigint,
   entries: bigint,
   amount: bigint,
-): {
-  principalAfter: bigint;
-  entriesAfter: bigint;
-  withdrawableBefore: bigint;
-  withdrawableAfter: bigint;
-} {
-  return {
-    principalAfter: principal - amount,
-    entriesAfter: entries - amount,
-    withdrawableBefore: withdrawable(principal, entries),
-    withdrawableAfter: withdrawable(principal - amount, entries - amount),
-  };
+): { entriesAfter: bigint } {
+  return { entriesAfter: entries > amount ? entries - amount : 0n };
+}
+
+/**
+ * Where a requested withdrawal stands, for the Vault's pending row.
+ *
+ * `pending` waits out the epoch it was requested in. `due` is past that
+ * boundary, so `process_withdraw` will go through and the screen offers the
+ * button. `processing` covers the gap between sending that transaction and
+ * the read model catching up, which is when a second click would only fail
+ * with `NothingPending`.
+ */
+export type PendingWithdrawal =
+  | { kind: "none" }
+  | { kind: "pending" | "due" | "processing"; amount: bigint; epoch: bigint };
+
+export function pendingWithdrawal(
+  amount: bigint,
+  pendingEpoch: bigint,
+  currentEpoch: bigint | null,
+  payoutSent: boolean,
+): PendingWithdrawal {
+  if (amount <= 0n) return { kind: "none" };
+  if (payoutSent) return { kind: "processing", amount, epoch: pendingEpoch };
+  // An unknown current epoch (backend unreachable) reads as not yet due: the
+  // button would only fail with WithdrawalNotDue.
+  const due = currentEpoch !== null && currentEpoch > pendingEpoch;
+  return { kind: due ? "due" : "pending", amount, epoch: pendingEpoch };
 }

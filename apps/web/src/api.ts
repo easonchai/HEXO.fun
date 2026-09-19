@@ -110,6 +110,10 @@ export interface PlayerDto {
   regStart: string;
   regEnd: string;
   isHouse: boolean;
+  /** Requested but unpaid Principal, atomic units. "0" when nothing is pending. */
+  pendingWithdraw: string;
+  /** Epoch the pending amount was requested in; it pays out after that one ends. */
+  pendingEpoch: string;
   /** weightAcc + entries × (now − lastUpdate). */
   liveWeight: string;
   /** Share of the epoch's live weight as a percentage, two decimals: "12.34". */
@@ -154,8 +158,6 @@ export interface StatusDto {
   };
   rpcOk: boolean;
   slot: number | null;
-  /** Simulated yield rate in basis points (500 = 5% APR). */
-  aprBps: number;
 }
 
 export interface PoolSummaryDto {

@@ -5,10 +5,12 @@
  * The Figma's hero and closing buttons were dropped: the tab bar already
  * routes to PLAY and EARN.
  *
- * Copy is the Figma's, except the draw cadence. Epochs are a day long
- * (`epochSeconds` 86_400), and `touch` sets `entries = principal` on every
- * rollover, so both the draw and the ticket reset are daily. The base yield
- * has no payout schedule in the program, so those two lines still say weekly.
+ * Copy is the Figma's, except the draw cadence and the yield. Epochs are a
+ * day long (`epochSeconds` 86_400), and `touch` sets `entries = principal`
+ * on every rollover, so both the draw and the ticket reset are daily. The
+ * Figma's headline yield rate is gone: the pool pays no rate, the whole
+ * yield becomes the day's Prize, and principal leaves the vault for a
+ * lending venue during the epoch (ADR 0009, ADR 0010).
  */
 import { DemoBoard } from "../arena/DemoBoard.js";
 import { LogoCog, LogoWordmark } from "../arena/Arena.js";
@@ -16,7 +18,7 @@ import { Textile } from "../arena/Textile.js";
 import { GlyphRow } from "./Home.js";
 
 const STATS = [
-  ["5%", "APR base yield, paid out weekly"],
+  ["0", "Fees charged on your deposit"],
   ["1", "Jackpot draw, every day"],
   ["100%", "Of your principal, protected"],
   ["60s", "Mini games to boost your chances"],
@@ -28,12 +30,12 @@ const HOW = [
     "Your money goes into the pool and stays yours. It starts earning straight away.",
   ],
   [
-    "Earn 5%",
-    "You earn 5% APR yield, paid out every week, whether you play or not.",
+    "The pool earns, you keep your deposit",
+    "Your USDC is lent out during the day. Everything it earns becomes that day's prize, whether you play or not.",
   ],
   [
     "Every dollar is a ticket",
-    "$1 deposited is 1 ticket in the daily jackpot. The jackpot is funded by everyone's additional yield.",
+    "$1 deposited is 1 ticket in the daily jackpot. The jackpot is the yield the whole pool earned that day.",
   ],
   [
     "Sit tight, or play for more",
@@ -44,11 +46,11 @@ const HOW = [
 const RULES = [
   [
     "Where your deposit sits?",
-    "Your USDC is lent out through established lending protocols. That lending is where the 5% comes from. It is never used to fund the jackpot, pay winners, or run games.",
+    "During the day the admin may move the pool's principal out of the vault and lend it on a third-party venue. What it earns there is the prize, and the principal comes back to the vault before any payout goes out. That venue is someone else's code, and this is a private beta with no audit, so a failure there is a real risk to the deposit.",
   ],
   [
     "Withdrawals",
-    "You can withdraw at any time by burning that day's tickets. Spent half your tickets? Half your deposit is still free to go. Spent them all? The rest is yours again at the next daily reset, when tickets refresh.",
+    "You can ask to withdraw at any time, and the money arrives after the current day ends. Requesting it takes the amount out of your principal and out of your tickets straight away, so it stops counting toward the draw at once. Once the day is over, anyone can push the payout, including you from the vault screen.",
   ],
   [
     "We play too",
@@ -71,19 +73,19 @@ const FAQ = [
   ],
   [
     "What if I lose a game round?",
-    "You lose the tickets you put in. Your deposit and your 5% aren't touched, and your tickets refresh tomorrow.",
+    "You lose the tickets you put in. Your deposit isn't touched, and your tickets refresh tomorrow.",
   ],
   [
     "Where does the jackpot come from?",
-    "From the yield the pool earns above 5%. Nothing else.",
+    "From the yield the pool earned that day. Nothing else.",
   ],
   [
-    "Is the 5% guaranteed?",
-    "It's the base yield the pool pays before any of it becomes the jackpot. It comes from lending your USDC out to earn yield, so if that yield ever dropped below 5%, the base would too. Your deposit still wouldn't be touched.",
+    "How big is the prize?",
+    "Whatever the pool earned that day, split with nobody. There is no promised rate: a quiet day is a small prize, and a day that earns less than the pool's minimum rolls into tomorrow instead of paying out.",
   ],
   [
     "Can I withdraw anytime?",
-    "Yes. Withdrawing burns that day's tickets, so you can take out whatever share of your tickets you still hold. Spend them all and the rest comes back to you at the daily reset.",
+    "You can ask anytime. The USDC arrives after the current day ends, because the principal is out earning for most of the day. Your principal and tickets drop the moment you ask.",
   ],
   [
     "Do you take any of the prize?",
@@ -215,8 +217,8 @@ export function About() {
           <em>1 jackpot.</em>
         </h2>
         <p className="about-jackpot-body">
-          The winner takes the jackpot. Everyone else keeps their deposit and
-          their 5%. Nobody goes home with less than they arrived with.
+          The winner takes the jackpot. Everyone else keeps their deposit.
+          Nobody goes home with less than they arrived with.
         </p>
         <GlyphRow />
       </section>
@@ -232,7 +234,6 @@ export function About() {
             <h3>You Won't Lose</h3>
             <ul>
               <li>Your USDC deposit</li>
-              <li>Your 5% base yield</li>
               <li>Your right to withdraw</li>
             </ul>
           </div>

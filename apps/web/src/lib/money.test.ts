@@ -3,22 +3,16 @@ import { describe, expect, it } from "vitest";
 import {
   addCapped,
   clampDecimals,
-  estimatedYield,
   formatAddress,
   formatAtomic,
   formatAtomic2,
   formatMoney2,
   parseAtomic,
-  previewBuy,
-  withdrawable,
+  pendingWithdrawal,
+  previewWithdraw,
 } from "./money.js";
 
 describe("vault widget math", () => {
-  it("estimates a year of yield at the APR", () => {
-    expect(estimatedYield(2_400_000_000n, 500)).toBe(120_000_000n);
-    expect(estimatedYield(0n, 500)).toBe(0n);
-  });
-
   it("typed amounts stop at two decimals", () => {
     expect(clampDecimals("12.3456", 2)).toBe("12.34");
     expect(clampDecimals("1.2.3", 2)).toBe("1.23");
@@ -76,36 +70,13 @@ describe("atomic formatting", () => {
   });
 });
 
-describe("withdrawable math", () => {
-  it("is the matched minimum of principal and entries", () => {
-    // Entries spent on a position: principal > entries, entries binds.
-    expect(withdrawable(10n, 4n)).toBe(4n);
-    // Entries won in a round: principal < entries, principal binds.
-    expect(withdrawable(4n, 10n)).toBe(4n);
-    // Untouched since the epoch reset: equal, and both bind to the same value.
-    expect(withdrawable(7n, 7n)).toBe(7n);
-    expect(withdrawable(0n, 0n)).toBe(0n);
-    expect(withdrawable(0n, 10n)).toBe(0n);
-    expect(withdrawable(10n, 0n)).toBe(0n);
-    expect(withdrawable(5_000_000n, 5_000_000n)).toBe(5_000_000n);
-  });
-
-  it("previews a board purchase before confirmation", () => {
-    // 3 tiles at 1.000000 each against 5.000000 principal / 4.000000 entries.
-    expect(previewBuy(5_000_000n, 4_000_000n, 3, 1_000_000n)).toEqual({
-      spend: 3_000_000n,
-      entriesAfter: 1_000_000n,
-      withdrawableAfter: 1_000_000n,
-      affordable: true,
-    });
-  });
-
-  it("flags purchases that would overdraw entries", () => {
-    const preview = previewBuy(5_000_000n, 2_000_000n, 3, 1_000_000n);
-    expect(preview.affordable).toBe(false);
-    expect(preview.entriesAfter).toBe(-1_000_000n);
-    // Negative is shown on purpose: the buy would be rejected on-chain.
-    expect(preview.withdrawableAfter).toBe(-1_000_000n);
+describe("withdrawal math", () => {
+  it("takes Tickets down by at most the requested amount", () => {
+    expect(previewWithdraw(5_000_000n, 2_000_000n).entriesAfter).toBe(3_000_000n);
+    // Tickets spent in the game: the request still goes through, and Tickets
+    // floor at zero instead of going negative.
+    expect(previewWithdraw(1_000_000n, 5_000_000n).entriesAfter).toBe(0n);
+    expect(previewWithdraw(0n, 5_000_000n).entriesAfter).toBe(0n);
   });
 
   it("keeps addresses short for display", () => {
@@ -113,5 +84,43 @@ describe("withdrawable math", () => {
       "6aDF…SGvB",
     );
     expect(formatAddress("short")).toBe("short");
+  });
+});
+
+describe("pending withdrawal row", () => {
+  it("is none while nothing has been requested", () => {
+    expect(pendingWithdrawal(0n, 0n, 7n, false)).toEqual({ kind: "none" });
+    // A sent payout with nothing pending is still nothing pending.
+    expect(pendingWithdrawal(0n, 6n, 7n, true)).toEqual({ kind: "none" });
+  });
+
+  it("is pending inside the epoch it was requested in", () => {
+    expect(pendingWithdrawal(5_000_000n, 7n, 7n, false)).toEqual({
+      kind: "pending",
+      amount: 5_000_000n,
+      epoch: 7n,
+    });
+  });
+
+  it("is due once that epoch has ended", () => {
+    expect(pendingWithdrawal(5_000_000n, 7n, 8n, false)).toEqual({
+      kind: "due",
+      amount: 5_000_000n,
+      epoch: 7n,
+    });
+  });
+
+  it("is processing while the payout transaction is out", () => {
+    expect(pendingWithdrawal(5_000_000n, 7n, 8n, true)).toEqual({
+      kind: "processing",
+      amount: 5_000_000n,
+      epoch: 7n,
+    });
+  });
+
+  it("stays pending when the current epoch is unknown", () => {
+    // Backend unreachable: offering "pay out now" would only earn a
+    // WithdrawalNotDue from the program.
+    expect(pendingWithdrawal(5_000_000n, 7n, null, false).kind).toBe("pending");
   });
 });

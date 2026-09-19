@@ -1,5 +1,5 @@
 /**
- * DAILY DRAW tab: the epoch's simulated yield as today's prize, on the
+ * DAILY DRAW tab: the epoch's yield as today's prize, on the
  * tab ticket 10 emptied out when it deleted the old EXPLORE screen. Everything
  * here is aggregate state from the API (epoch, prize amount, your weight and
  * odds, past winners). `register` is the one on-chain write it sends, and
@@ -104,15 +104,13 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
         }
       >
         <p className="screen-copy">
-          Today's prize is the pool's yield, simulated at a published 5%
-          APR and labeled as such everywhere it appears. The daily draw pays
-          it in full to one winner; your odds are your share of the day's
-          Weight at the draw, assuming nobody deposits, withdraws or plays
-          before then.
+          Today's prize is what the pool's principal earned today, paid in
+          full to one winner. Your odds are your share of the day's Weight at
+          the draw, assuming nobody deposits, withdraws or plays before then.
         </p>
         <StatGrid>
           <Stat
-            label="Prize (simulated 5% APR)"
+            label="Prize"
             value={
               currentEpoch ? `${atomicShort(currentEpoch.jackpotAmount)} ${SYMBOL}` : "—"
             }

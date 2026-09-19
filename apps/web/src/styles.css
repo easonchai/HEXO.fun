@@ -2921,6 +2921,22 @@ input::placeholder {
   margin: 0;
 }
 
+/* Pending withdrawal row: state text, and the payout button when it is due. */
+.vault-pending-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.vault-payout {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
 .vault-cta {
   height: 43px;
   border: none;

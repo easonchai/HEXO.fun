@@ -1,8 +1,11 @@
 /**
  * VAULT tab: the Figma "Deposit" frame. One widget with DEPOSIT / WITHDRAW
  * tabs on the HOME halftone background. The program is the custody boundary.
- * WITHDRAW sends `request_withdraw`, which deducts Principal now and pays
- * out after the epoch ends; ticket 05 builds the pending state around it.
+ * WITHDRAW sends `request_withdraw`, which deducts Principal and Tickets now
+ * and pays out after the epoch ends (ADR 0009). The pending row below the
+ * widget carries that wait: the amount, the day it pays in, and a "pay out
+ * now" button that sends the permissionless `process_withdraw` when the
+ * operator has not.
  *
  * Ticket 07: `currentEpoch` comes from App's one `GET /state` poll instead
  * of a duplicate `/epochs/current` poll of its own; `onDone` tightens that
@@ -11,19 +14,22 @@
 import { useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
-import { deposit, requestWithdraw, type TxSigner } from "../actions.js";
+import {
+  deposit,
+  processWithdraw,
+  requestWithdraw,
+  type TxSigner,
+} from "../actions.js";
 import type { CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
 import type { HexVaultProgram } from "../chain.js";
-import { hmText } from "../engine.js";
 import {
   addCapped,
   clampDecimals,
-  estimatedYield,
   formatAtomic2,
   parseAtomic,
+  pendingWithdrawal,
   previewWithdraw,
-  withdrawable,
 } from "../lib/money.js";
 import type { PoolLike } from "../read.js";
 import { GlyphRow } from "./Home.js";
@@ -40,6 +46,23 @@ const INPUT_DECIMALS = 2;
 /** The Figma quick pills: each adds this many whole USDC. */
 const QUICK_ADDS = [50n, 100n, 500n] as const;
 
+/**
+ * `InsufficientVaultLiquidity` (6036): the admin has not brought the
+ * principal back from the lending venue yet. Nothing the depositor did, and
+ * nothing they can fix, so the raw Anchor error would only alarm them.
+ */
+const VAULT_SHORT_CODE = "6036";
+const VAULT_SHORT_NOTE =
+  "The vault is being topped up. Try the payout again in a few minutes.";
+
+const payoutError = (error: unknown): string => {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes(VAULT_SHORT_CODE) ||
+    text.includes("InsufficientVaultLiquidity")
+    ? VAULT_SHORT_NOTE
+    : text;
+};
+
 export type VaultMode = "deposit" | "withdraw";
 type Mode = VaultMode;
 
@@ -54,11 +77,11 @@ export interface VaultScreenProps {
   entries: bigint;
   walletBalance: bigint;
   paused: boolean;
-  /** Chain clock seconds, for the "rest unlocks in HH:MM" countdown. */
-  now: bigint | null;
   currentEpoch: CurrentEpochDto | null;
-  /** Basis points from GET /state's status; null while the backend is unreachable. */
-  aprBps: number | null;
+  /** Requested but unpaid Principal; 0 when nothing is pending. */
+  pendingWithdraw: bigint;
+  /** The epoch that pending amount was requested in, so the day it pays after. */
+  pendingEpoch: bigint;
   /**
    * Which tab the widget opens on. The dashboard's two buttons are the only
    * way in, and they arrive with an intent already; App unmounts the screen on
@@ -81,9 +104,9 @@ export function Vault(props: VaultScreenProps) {
     entries,
     walletBalance,
     paused,
-    now,
     currentEpoch,
-    aprBps,
+    pendingWithdraw,
+    pendingEpoch,
     initialMode,
     onConnect,
     onDone,
@@ -101,12 +124,34 @@ export function Vault(props: VaultScreenProps) {
   );
   /** Atomic amount of the deposit that just landed; null closes the modal. */
   const [confirmed, setConfirmed] = useState<bigint | null>(null);
+  /**
+   * A `process_withdraw` has been sent and the read model has not caught up.
+   * Keyed on the pending amount so the flag clears itself the moment the
+   * payout lands (or a fresh request books a different amount).
+   */
+  const [payoutSent, setPayoutSent] = useState<bigint | null>(null);
 
   const connected = owner !== null && program !== null && pool !== null;
-  const matched = withdrawable(principal, entries);
   const amount = parseAtomic(amountText, DECIMALS);
-  /** What the pills clamp to: wallet on deposit, matched on withdraw. */
-  const cap = mode === "deposit" ? walletBalance : matched;
+  /**
+   * What the pills clamp to: wallet on deposit, Principal on withdraw.
+   * `request_withdraw` only checks Principal now (ADR 0009), so Tickets
+   * spent in the game no longer hold any of it back.
+   */
+  const cap = mode === "deposit" ? walletBalance : principal;
+
+  // The payout landed (or the request was never there): drop the flag, so a
+  // later request for the same amount does not inherit this one's state.
+  useEffect(() => {
+    if (pendingWithdraw === 0n) setPayoutSent(null);
+  }, [pendingWithdraw]);
+
+  const pending = pendingWithdrawal(
+    pendingWithdraw,
+    pendingEpoch,
+    currentEpoch ? BigInt(currentEpoch.id) : null,
+    payoutSent !== null && payoutSent === pendingWithdraw,
+  );
 
   const switchMode = (next: Mode) => {
     if (next === mode) return;
@@ -129,7 +174,7 @@ export function Vault(props: VaultScreenProps) {
       } else {
         setNote({
           tone: "ok",
-          text: `${label} confirmed: ${signature.slice(0, 16)}…`,
+          text: `${label}: ${signature.slice(0, 16)}…`,
         });
       }
       setAmountText("");
@@ -144,21 +189,11 @@ export function Vault(props: VaultScreenProps) {
     }
   };
 
-  // Entries lost to the game (principal > entries) come back at the next
-  // epoch reset, not before. See CONTEXT.md "Entries".
-  const locked = principal > entries ? principal - entries : 0n;
-  const resetsIn =
-    currentEpoch && now !== null ? hmText(BigInt(currentEpoch.endsAt) - now) : null;
-
   const overCap = connected && amount !== null && amount > cap;
   const underMin =
     mode === "deposit" && pool !== null && amount !== null && amount < pool.minDeposit;
-  const yearlyYield =
-    amount !== null && aprBps !== null ? estimatedYield(amount, aprBps) : null;
   const withdrawPreview =
-    mode === "withdraw" && amount !== null
-      ? previewWithdraw(principal, entries, amount)
-      : null;
+    mode === "withdraw" && amount !== null ? previewWithdraw(entries, amount) : null;
 
   const submit = () => {
     if (!connected || !amount) return;
@@ -166,7 +201,26 @@ export function Vault(props: VaultScreenProps) {
     if (mode === "deposit") {
       void run("Deposit", () => deposit(program, signer, pool, amount));
     } else {
-      void run("Withdraw", () => requestWithdraw(program, signer, pool, amount));
+      void run("Withdraw requested", () =>
+        requestWithdraw(program, signer, pool, amount),
+      );
+    }
+  };
+
+  const payOutNow = async () => {
+    if (!connected) return;
+    setBusy(true);
+    setNote(null);
+    setPayoutSent(pendingWithdraw);
+    try {
+      await processWithdraw(program, { publicKey: owner, sendTransaction }, pool);
+      setNote({ tone: "ok", text: "Payout sent." });
+      onDone();
+    } catch (error) {
+      setPayoutSent(null);
+      setNote({ tone: "err", text: payoutError(error) });
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -238,13 +292,8 @@ export function Vault(props: VaultScreenProps) {
               <span className="vault-amount-available" data-testid="withdrawable-now">
                 {mode === "deposit"
                   ? `Available ${fmt2(walletBalance)} ${SYMBOL}`
-                  : `Available ${fmt2(matched)} tickets`}
+                  : `Withdrawable at day end ${fmt2(principal)} ${SYMBOL}`}
               </span>
-              {mode === "withdraw" && locked > 0n ? (
-                <span className="vault-amount-locked" data-testid="unlock-note">
-                  Principal {fmt2(principal)} · rest unlocks in {resetsIn ?? "--:--"}
-                </span>
-              ) : null}
             </label>
 
             <div className="vault-quick">
@@ -269,24 +318,14 @@ export function Vault(props: VaultScreenProps) {
 
             <dl className="vault-rows">
               {mode === "deposit" ? (
-                <>
-                  <div className="vault-line">
-                    <dt>Tickets</dt>
-                    <dd>{fmt2(amount ?? 0n)}</dd>
-                  </div>
-                  <div className="vault-line">
-                    <dt>Estimated yield</dt>
-                    <dd>
-                      {yearlyYield === null
-                        ? "—"
-                        : `$${fmt2(yearlyYield)} (${aprBps! / 100}% APR)`}
-                    </dd>
-                  </div>
-                </>
+                <div className="vault-line">
+                  <dt>Tickets</dt>
+                  <dd>{fmt2(amount ?? 0n)}</dd>
+                </div>
               ) : (
                 <>
                   <div className="vault-line">
-                    <dt>You receive</dt>
+                    <dt>You receive at day end</dt>
                     <dd>
                       {fmt2(amount ?? 0n)} {SYMBOL}
                     </dd>
@@ -298,6 +337,33 @@ export function Vault(props: VaultScreenProps) {
                     </dd>
                   </div>
                 </>
+              )}
+              {pending.kind === "none" ? null : (
+                <div className="vault-line" data-testid="pending-withdraw">
+                  <dt>
+                    Pending {fmt2(pending.amount)} {SYMBOL}
+                  </dt>
+                  <dd className="vault-pending-state">
+                    <span data-testid="pending-withdraw-state">
+                      {pending.kind === "pending"
+                        ? `pays out after day #${pending.epoch} ends`
+                        : pending.kind === "processing"
+                          ? "paying out…"
+                          : "processing"}
+                    </span>
+                    {pending.kind === "due" ? (
+                      <button
+                        type="button"
+                        className="vault-pill vault-payout"
+                        data-testid="pay-out-now"
+                        disabled={busy}
+                        onClick={() => void payOutNow()}
+                      >
+                        PAY OUT NOW
+                      </button>
+                    ) : null}
+                  </dd>
+                </div>
               )}
             </dl>
 
@@ -317,11 +383,17 @@ export function Vault(props: VaultScreenProps) {
                   Pool is paused: deposits are blocked; withdrawals stay live.
                 </span>
               ) : null}
+              {mode === "withdraw" ? (
+                <span className="vault-note" data-testid="withdraw-lock-note">
+                  Principal and Tickets leave your account now. The USDC pays
+                  out once today's draw is over.
+                </span>
+              ) : null}
               {overCap ? (
                 <span className="vault-note" data-testid={`${mode}-over-balance`}>
                   {mode === "deposit"
                     ? "Amount is more than your wallet balance."
-                    : "Amount is more than what you can withdraw right now."}
+                    : "Amount is more than your Principal."}
                 </span>
               ) : null}
               {mode === "deposit" && pool ? (

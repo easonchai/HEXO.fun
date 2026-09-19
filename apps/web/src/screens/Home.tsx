@@ -1,16 +1,18 @@
 /**
- * HOME tab: the Figma "Landing" frame. Today's prize (the epoch's
- * simulated yield, the same current-Epoch value DAILY DRAW labels "Prize")
- * as a whole-dollar hero, a DD:HH:MM:SS clock to `endsAt`, and one button
- * that jumps to the VAULT tab.
+ * HOME tab: the Figma "Landing" frame. Today's prize (the yield the pool
+ * earned this epoch, the same current-Epoch value DAILY DRAW labels
+ * "Prize") as a whole-dollar hero, a DD:HH:MM:SS clock to `endsAt`, the
+ * last few prizes paid, and one button that jumps to the VAULT tab.
  *
  * Ticket 07: `currentEpoch` comes from App's one `GET /state` poll instead
- * of a duplicate `/epochs/current` poll of its own.
+ * of a duplicate `/epochs/current` poll of its own. Epoch history is list
+ * data, so it keeps its own slower poll here, as on the other screens.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { CurrentEpochDto } from "../api.js";
+import { apiBaseUrl, fetchEpochs, type CurrentEpochDto, type EpochDto } from "../api.js";
 import { dhmsParts } from "../engine.js";
+import { useApiPoll } from "../useApiPoll.js";
 
 export interface HomeProps {
   /** Chain clock seconds, for the draw countdown. */
@@ -26,6 +28,10 @@ export function wholeDollars(atomic: string): string {
 }
 
 const CLOCK_LABELS = ["DAYS", "HRS", "MIN", "SEC"] as const;
+
+/** Rollovers leave `winner: null`, so look back further than the three shown. */
+const EPOCH_LOOKBACK = 20;
+const PRIZES_SHOWN = 3;
 
 /** Hand-traced from the Figma glyph row: star, square, target, cross, frame, plus. */
 const GLYPHS = [
@@ -105,6 +111,19 @@ export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
   const parts = remaining === null ? null : dhmsParts(remaining);
 
+  const loadEpochs = useCallback(
+    (signal: AbortSignal) => fetchEpochs(apiBaseUrl(), EPOCH_LOOKBACK, signal),
+    [],
+  );
+  const epochs = useApiPoll(loadEpochs, 10_000);
+  const paid = useMemo(
+    () =>
+      (epochs.data ?? [])
+        .filter((row: EpochDto) => row.winner !== null)
+        .slice(0, PRIZES_SHOWN),
+    [epochs.data],
+  );
+
   return (
     <div className="home" data-testid="home-screen">
       {/* Pre-dithered coin ring (scripts/dither-video.mjs). Without autoplay the poster stays. */}
@@ -162,6 +181,17 @@ export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
         </button>
         <GlyphRow />
       </div>
+
+      {paid.length > 0 ? (
+        <div className="home-footer" data-testid="home-last-prizes">
+          <span>LAST PRIZES</span>
+          {paid.map((row) => (
+            <span key={row.id}>
+              DAY #{row.id} {wholeDollars(row.jackpotAmount)}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       <div className="home-footer">
         <span>NO-LOSS</span>

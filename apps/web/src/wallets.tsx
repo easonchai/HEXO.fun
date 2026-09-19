@@ -29,7 +29,7 @@ import {
   type PublicKey as PubkeyType,
 } from "@solana/web3.js";
 
-import { RPC_URL } from "./chain.js";
+import { RPC_URL, SIGNING_CHAIN } from "./chain.js";
 
 export type WalletMode = "privy" | "standard";
 
@@ -97,11 +97,12 @@ export const rpcSubscriptionsUrlFor = (rpcUrl: string): string => {
 };
 
 /**
- * Privy's transaction UI (simulation, sign-and-send) reads the chain RPC
- * from `config.solana.rpcs`; without a `solana:devnet` entry it throws
- * "No RPC configuration found for chain solana:devnet". Every environment
- * here answers to the devnet genesis (see SIGNING_CHAIN), so the app's own
- * RPC is registered under that id.
+ * Privy's transaction UI (the dry run before signing, and sign-and-send)
+ * reads the chain RPC
+ * from `config.solana.rpcs`; without an entry for the chain it signs on it
+ * throws "No RPC configuration found for chain solana:devnet". Both come
+ * from `VITE_CLUSTER` (see SIGNING_CHAIN in chain.ts), so the app's own RPC
+ * is registered under whichever chain this bundle signs against.
  */
 const solanaRpcsFor = (rpcUrl: string) => ({
   [SIGNING_CHAIN]: {
@@ -227,13 +228,6 @@ function StandardSignerSource({
     </GameSignerContext.Provider>
   );
 }
-
-/**
- * Wallet-standard chain id. Nothing but devnet and a local validator is in
- * scope, and the local validator answers to the devnet genesis in every
- * wallet that supports it, so this is a constant.
- */
-const SIGNING_CHAIN = "solana:devnet";
 
 function usePrivySigner(): GameSigner {
   const { login } = useLogin();

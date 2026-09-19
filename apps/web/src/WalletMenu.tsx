@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import { apiBaseUrl, requestFaucet } from "./api.js";
+import { CLUSTER } from "./chain.js";
+import { faucetEnabled } from "./cluster.js";
 
 type Props = {
   address: string;
@@ -27,6 +29,9 @@ type Faucet =
  * its `Copy <address>` title because demo.spec.ts reads the address off it.
  * Closes on outside click, Escape, and after Disconnect; Copy and Faucet keep
  * it open so the "Copied" / "Sent" flip is visible.
+ *
+ * The faucet item is devnet-only: on mainnet the backend route is gone and
+ * there is no test mint to hand out (see `faucetEnabled` in chain.ts).
  */
 export function WalletMenu({
   address,
@@ -133,17 +138,19 @@ export function WalletMenu({
             <span className="wallet-menu-row-label">{symbol}</span>
             <span className="wallet-menu-row-value">{balance}</span>
           </div>
-          <button
-            type="button"
-            role="menuitem"
-            className="wallet-menu-item"
-            data-testid="faucet"
-            disabled={faucet.kind === "busy" || faucet.kind === "wait"}
-            onClick={() => void pullFaucet()}
-          >
-            <FaucetIcon />
-            <span className="wallet-menu-item-label">{faucetLabel}</span>
-          </button>
+          {faucetEnabled(CLUSTER) ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="wallet-menu-item"
+              data-testid="faucet"
+              disabled={faucet.kind === "busy" || faucet.kind === "wait"}
+              onClick={() => void pullFaucet()}
+            >
+              <FaucetIcon />
+              <span className="wallet-menu-item-label">{faucetLabel}</span>
+            </button>
+          ) : null}
           <button
             type="button"
             role="menuitem"

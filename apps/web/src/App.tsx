@@ -185,6 +185,8 @@ export function App() {
 
   const principal = player ? BigInt(player.principal) : 0n;
   const entries = player ? BigInt(player.entries) : 0n;
+  const pendingWithdraw = player ? BigInt(player.pendingWithdraw) : 0n;
+  const pendingEpoch = player ? BigInt(player.pendingEpoch) : 0n;
   const fmt = useCallback((value: bigint) => formatAtomic2(value, DECIMALS), []);
 
   // Header chip copies the full address; the truncated form is unusable for
@@ -486,7 +488,6 @@ export function App() {
             now={now}
             currentEpoch={state?.currentEpoch ?? null}
             player={player}
-            aprBps={state?.status.aprBps ?? null}
             onDeposit={() => {
               setVaultMode("deposit");
               setTab("VAULT");
@@ -600,9 +601,9 @@ export function App() {
             entries={entries}
             walletBalance={walletBalance}
             paused={pool?.paused ?? false}
-            now={now}
             currentEpoch={state?.currentEpoch ?? null}
-            aprBps={state?.status.aprBps ?? null}
+            pendingWithdraw={pendingWithdraw}
+            pendingEpoch={pendingEpoch}
             initialMode={vaultMode}
             onConnect={() => signer.connect()}
             onDone={statePoll.kick}

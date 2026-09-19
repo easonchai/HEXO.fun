@@ -1,10 +1,11 @@
 /**
- * The five instructions this app sends. Each builds from the IDL by name,
+ * The six instructions this app sends. Each builds from the IDL by name,
  * signs with the connected wallet, confirms at `confirmed` and returns the
  * signature; the caller triggers the chain re-read.
  *
- * `settlePosition` and `register` are permissionless: the program takes no
- * signer for them, so the connected wallet is only the fee payer.
+ * `settlePosition`, `register` and `processWithdraw` are permissionless: the
+ * program takes no signer for them, so the connected wallet is only the fee
+ * payer.
  */
 import { createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 import { PublicKey, SystemProgram, type Transaction } from "@solana/web3.js";
@@ -111,6 +112,43 @@ export async function requestWithdraw(
       pool: pool.address,
       player: playerAddress(pool.address, o),
     });
+  return send(program, owner, builder);
+}
+
+/**
+ * Pays out the whole pending amount. The program takes no signer, so this is
+ * the depositor's own escape hatch when the operator has not pushed it yet:
+ * the wallet only pays the fee. Fails with `WithdrawalNotDue` before the
+ * requesting epoch has ended and `InsufficientVaultLiquidity` while the
+ * vault is short, so the caller gates it on the pending row's `due` state.
+ */
+export async function processWithdraw(
+  program: HexVaultProgram,
+  owner: TxSigner,
+  pool: PoolLike,
+): Promise<string> {
+  const o = owner.publicKey;
+  const ownerToken = acceptedAta(pool.acceptedMint, o);
+  const builder = method(program, "processWithdraw")()
+    .accounts({
+      pool: pool.address,
+      player: playerAddress(pool.address, o),
+      acceptedMint: pool.acceptedMint,
+      ownerToken,
+      principalVault: principalVaultAddress(pool.address),
+      tokenProgram: TOKEN_PROGRAM,
+    })
+    // A mainnet depositor may have closed the ATA since depositing; the
+    // transfer needs it back, and this costs nothing when it is already there.
+    .preInstructions([
+      createAssociatedTokenAccountIdempotentInstruction(
+        o,
+        ownerToken,
+        o,
+        pool.acceptedMint,
+        TOKEN_PROGRAM,
+      ),
+    ]);
   return send(program, owner, builder);
 }
 

@@ -1,7 +1,23 @@
 import react from "@vitejs/plugin-react";
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
+
+import { clusterFrom } from "./src/cluster.js";
+
+/**
+ * Fails the build, not the first page load, on a VITE_CLUSTER typo. A plugin
+ * rather than a callback config because vitest.config.ts merges this file,
+ * and `mergeConfig` refuses a config in callback form. Vercel hands its
+ * variables in through process.env, which loadEnv picks up along with the
+ * .env files a local build reads.
+ */
+const validateCluster: Plugin = {
+  name: "hexvault:validate-cluster",
+  config(_config, { mode }) {
+    clusterFrom(loadEnv(mode, process.cwd(), "VITE_"));
+  },
+};
 
 /**
  * The Solana packages need the Node `Buffer` global in the browser. `buffer` is
@@ -30,7 +46,7 @@ function bufferPackagePath(): string {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [validateCluster, react()],
   resolve: {
     alias: {
       buffer: bufferPackagePath(),

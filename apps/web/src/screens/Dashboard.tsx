@@ -25,18 +25,20 @@ import {
   type EventDto,
   type PlayerDto,
 } from "../api.js";
-import { eventKey } from "../chain.js";
+import { CLUSTER, eventKey } from "../chain.js";
 import { dhmsParts } from "../engine.js";
-import { estimatedYield, formatAddress, formatMoney2 } from "../lib/money.js";
+import { formatAddress, formatMoney2 } from "../lib/money.js";
 import { useApiPoll } from "../useApiPoll.js";
 import { Star, wholeDollars } from "./Home.js";
 
 const DECIMALS = 6;
 const SYMBOL = "USDC";
 const CLOCK_LABELS = ["DAYS", "HRS", "MIN", "SEC"] as const;
-/** Every environment signs on devnet (see SIGNING_CHAIN in wallets.tsx). */
+/** Mainnet is the explorer's default; every other cluster needs the query. */
 const txExplorerUrl = (signature: string) =>
-  `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+  `https://explorer.solana.com/tx/${signature}${
+    CLUSTER === "devnet" ? "?cluster=devnet" : ""
+  }`;
 
 /** Atomic (6dp) string → "$2,423.55". */
 const dollars = (atomic: string) =>
@@ -74,8 +76,6 @@ export interface DashboardScreenProps {
   currentEpoch: CurrentEpochDto | null;
   /** Null until the owner's Player is indexed, or no wallet is connected. */
   player: PlayerDto | null;
-  /** Basis points from GET /state's status; null while the backend is unreachable. */
-  aprBps: number | null;
   onDeposit: () => void;
   onWithdraw: () => void;
   onPlay: () => void;
@@ -154,7 +154,6 @@ export function Dashboard(props: DashboardScreenProps) {
     now,
     currentEpoch,
     player,
-    aprBps,
     onDeposit,
     onWithdraw,
     onPlay,
@@ -226,8 +225,9 @@ export function Dashboard(props: DashboardScreenProps) {
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
   const parts = remaining === null ? null : dhmsParts(remaining);
 
-  const yieldText =
-    aprBps === null ? "—" : `$${fmt2(estimatedYield(principal, aprBps))} / yr`;
+  // Principal drops the moment a withdrawal is requested and the USDC lands a
+  // day later, so the card says where the difference went.
+  const pendingWithdraw = player ? BigInt(player.pendingWithdraw) : 0n;
   // Odds need the pool-wide weight denominator, so they only exist once the
   // backend knows this wallet. Before the first deposit the whole strip goes.
   const showBoost = entries > 0n;
@@ -249,10 +249,14 @@ export function Dashboard(props: DashboardScreenProps) {
                 {(entries / 10n ** BigInt(DECIMALS)).toLocaleString("en-US")}
               </dd>
             </div>
-            <div>
-              <dt>Estimated Yield</dt>
-              <dd>{yieldText}</dd>
-            </div>
+            {pendingWithdraw > 0n ? (
+              <div>
+                <dt>Withdrawing</dt>
+                <dd data-testid="dash-pending-withdraw">
+                  ${fmt2(pendingWithdraw)}
+                </dd>
+              </div>
+            ) : null}
           </dl>
           <div className="dash-card-actions">
             <button
