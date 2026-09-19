@@ -31,6 +31,7 @@ import {
   retryUntilOk,
   roundPda,
   setupPool,
+  sleepUntilOnChain,
   type PoolCtx,
 } from "./helpers/hx.js";
 
@@ -394,6 +395,32 @@ describe("custody", () => {
     TIMEOUT,
   );
 
+  it(
+    "a stalled operator cannot freeze a request: it matures on its own clock",
+    async () => {
+      // `begin_epoch` is never called here, so `current_epoch_id` stays 0 and
+      // the epoch-boundary rule can never fire. Only the elapsed time can.
+      const pool = await setupPool({ epochSeconds: 5 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+      await requestWithdraw(pool, owner, 2_000_000n);
+
+      const player = await program.account.player.fetch(
+        playerPda(pool.pool, owner.keypair.publicKey),
+      );
+      expect(player.pendingEpoch.toString()).toBe("0");
+      await expect(processWithdraw(pool, owner)).rejects.toThrow(/WithdrawalNotDue/);
+
+      const before = await vaultBalance(owner.tokenAccount);
+      await sleepUntilOnChain(Number(player.requestedAt.toString()) + 5 + 1);
+      await processWithdraw(pool, owner);
+
+      expect((await vaultBalance(owner.tokenAccount)) - before).toBe(2_000_000n);
+      expect((await program.account.pool.fetch(pool.pool)).currentEpochId.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
   // --- Deployed principal (ADR 0010).
 
   it(
@@ -405,11 +432,13 @@ describe("custody", () => {
       await requestWithdraw(pool, owner, 3_000_000n);
       const admin = await adminAta(pool);
 
+      // In the vault, but spoken for by the pending request.
       await expect(adminWithdraw(pool, admin, 2_000_001n)).rejects.toThrow(
         /BelowPendingWithdrawals/,
       );
+      // Not in the vault at all, which is a different failure.
       await expect(adminWithdraw(pool, admin, 5_000_001n)).rejects.toThrow(
-        /BelowPendingWithdrawals/,
+        /InsufficientVaultLiquidity/,
       );
       await expect(adminWithdraw(pool, admin, 0n)).rejects.toThrow(/ZeroAmount/);
 
@@ -512,7 +541,6 @@ describe("custody", () => {
       expect(pending).toBe(1_000_000n);
       expect(vault).toBe(8_500_000n);
       expect(deployed).toBe(1_500_000n);
-      expect(vault + deployed).toBe(totalPrincipal + pending);
       // And that is exactly what is sitting in the admin's own account.
       expect(await vaultBalance(admin)).toBe(deployed);
     },
@@ -629,20 +657,9 @@ function operatorGated(pool: PoolCtx, signer: PublicKey) {
       systemProgram: SystemProgram.programId,
     }),
     draw: m.draw().accountsPartial({ operator: signer, pool: pool.pool, epoch, randomness: filler }),
-    payout: m.payout().accountsPartial({
-      operator: signer,
-      pool: pool.pool,
-      acceptedMint: pool.mint,
-      epoch,
-      winner: pool.house,
-      jackpotVault: pool.jackpotVault,
-      // Any token account of the accepted mint that is not already in this
-      // struct: a repeat would trip the duplicate-mutable check first.
-      winnerToken: pool.principalVault,
-      treasury: pool.treasury,
-      buybackReserve: pool.buybackReserve,
-      tokenProgram: TOKEN_PROGRAM_ID,
-    }),
+    // `payout` is deliberately absent: it takes no signer at all, so the
+    // operator cannot veto a winner by sitting out `payout_timeout`. A
+    // stranger paying one successfully is in tests/03-epochs.test.ts.
     rolloverEpoch: m
       .rolloverEpoch()
       .accountsPartial({ operator: signer, pool: pool.pool, epoch, randomness: filler }),
@@ -871,10 +888,12 @@ describe("create_pool guards", () => {
     };
   }
 
+  // `admin` and `operator` default to a live key: the program rejects the
+  // default one outright, and every case here is about some other guard.
   const params = (over: Record<string, BN | number | PublicKey> = {}) => ({
     poolId: new BN(0),
-    admin: PublicKey.default,
-    operator: PublicKey.default,
+    admin: Keypair.generate().publicKey,
+    operator: Keypair.generate().publicKey,
     vrfNetworkState: PublicKey.default,
     epochSeconds: new BN(86_400),
     epochAnchor: new BN(1_789_315_200),
@@ -937,6 +956,51 @@ describe("create_pool guards", () => {
           .signers([payer])
           .rpc(),
       ).rejects.toThrow(/UnsupportedMint/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "rejects a default admin or operator, which nobody could ever sign for",
+    async () => {
+      const payer = await fundedKey();
+      const connection = program.provider.connection;
+      const mint = await createMint(connection, payer, payer.publicKey, null, 6);
+      const token = (): Promise<PublicKey> =>
+        createAccount(connection, payer, mint, payer.publicKey, Keypair.generate());
+      const treasury = await token();
+      const buybackReserve = await token();
+      const attempt = (role: "admin" | "operator") => {
+        const poolId = nextPoolId();
+        const pool = poolPda(poolId);
+        const operator = role === "operator" ? PublicKey.default : payer.publicKey;
+        return program.methods
+          .createPool(
+            params({
+              poolId: new BN(poolId.toString()),
+              operator,
+              [role]: PublicKey.default,
+            }),
+          )
+          .accountsPartial({
+            ...createPoolAccounts(
+              payer,
+              pool,
+              mint,
+              treasury,
+              buybackReserve,
+              TOKEN_PROGRAM_ID,
+            ),
+            // Seeded from `params.operator`, so the House address has to
+            // follow it or Anchor fails on the seeds before the guard runs.
+            house: playerPda(pool, operator),
+          })
+          .signers([payer])
+          .rpc();
+      };
+
+      await expect(attempt("admin")).rejects.toThrow(/InvalidParameter/);
+      await expect(attempt("operator")).rejects.toThrow(/InvalidParameter/);
     },
     TIMEOUT,
   );

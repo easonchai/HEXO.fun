@@ -83,6 +83,11 @@ pub struct Pool {
     /// Seconds after `Epoch.drawn_at` before a Drawn epoch may be rolled
     /// over unpaid. The escape hatch for a winner nobody can pay.
     pub payout_timeout: i64,
+    /// Jackpot already promised to an epoch that is Drawing or Drawn and has
+    /// not paid yet. `close_registration` snapshots the vault minus this, so
+    /// the next epoch cannot take a prize the previous one still owes.
+    /// Released on `payout` and on either branch of `rollover_epoch`.
+    pub jackpot_reserved: u64,
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.
@@ -107,6 +112,12 @@ pub struct Epoch {
     /// When `draw` landed. 0 until then. `rollover_epoch` measures
     /// `Pool.payout_timeout` from here.
     pub drawn_at: i64,
+    /// When `begin_epoch` moved this epoch to Registering, which is when
+    /// anyone could first register for it. 0 until then.
+    /// `close_registration` measures `Pool.registration_window` from the
+    /// later of this and `ends_at`, so an operator who delays `begin_epoch`
+    /// cannot bundle the whole registration window into one transaction.
+    pub registration_opened_at: i64,
 }
 
 /// One 60 second game on the 36-tile hex board.
@@ -162,6 +173,10 @@ pub struct Player {
     /// The epoch the pending amount was requested in. It pays out once
     /// `pool.current_epoch_id` is past it.
     pub pending_epoch: u64,
+    /// When `request_withdraw` booked the pending amount. The second way a
+    /// request matures, so a stalled operator who never calls `begin_epoch`
+    /// cannot freeze a depositor's money.
+    pub requested_at: i64,
 }
 
 /// A Player's single immutable placement in one round.

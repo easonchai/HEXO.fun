@@ -42,6 +42,9 @@ pub struct ParamsSet {
     pub vrf_timeout: i64,
     pub min_deposit: u64,
     pub house_cut_bps: u16,
+    pub min_jackpot: u64,
+    pub registration_window: i64,
+    pub payout_timeout: i64,
 }
 
 #[event]
@@ -81,6 +84,7 @@ pub struct Withdrawn {
 /// SPL transfer into the vault, so there is no matching event for the return.
 #[event]
 pub struct PrincipalDeployed {
+    pub pool: Pubkey,
     pub amount: u64,
     pub vault_remaining: u64,
 }

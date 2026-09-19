@@ -1,8 +1,8 @@
 //! Epoch lifecycle (spec §2.3 "Epochs").
 //!
-//! `begin_epoch`, `close_registration`, `draw`, `payout` and `rollover_epoch`
-//! are operator-only via `has_one = operator` on the Pool account.
-//! `register` and `fund_jackpot` are permissionless.
+//! `begin_epoch`, `close_registration`, `draw` and `rollover_epoch` are
+//! operator-only via `has_one = operator` on the Pool account. `register`,
+//! `fund_jackpot` and `payout` are permissionless.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
@@ -64,9 +64,13 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
         require!(now >= previous.ends_at, HexVaultError::EpochNotEnded);
         let previous_ends_at = previous.ends_at;
         previous.status = epoch_status::REGISTERING;
+        // Registration only opens now, however late this call is, and
+        // `close_registration` measures its window from here.
+        previous.registration_opened_at = now;
 
         let mut buf = Vec::with_capacity(data.len());
         previous.try_serialize(&mut buf)?;
+        require!(buf.len() <= data.len(), HexVaultError::ArithmeticOverflow);
         data[..buf.len()].copy_from_slice(&buf);
 
         // Contiguous when the operator is merely late, so the schedule
@@ -108,6 +112,7 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
     new_epoch.winner = Pubkey::default();
     new_epoch.bump = ctx.bumps.new_epoch;
     new_epoch.drawn_at = 0;
+    new_epoch.registration_opened_at = 0;
 
     emit!(EpochBegan {
         epoch_id: new_epoch.epoch_id,
@@ -216,23 +221,31 @@ pub fn fund_jackpot(ctx: Context<FundJackpot>, amount: u64) -> Result<()> {
 
 pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
     let now = utils::now()?;
-    let pool = &ctx.accounts.pool;
+    let pool = &mut ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
 
     require!(
         epoch.status == epoch_status::REGISTERING,
         HexVaultError::EpochNotRegistering
     );
-    // Registration is permissionless and only opens once the epoch has
-    // ended, so the epoch cannot be drawn until everyone who earned weight
-    // in it has had this long to claim their interval.
-    let closes_at = epoch
-        .ends_at
+    // Registration is permissionless and only opens when `begin_epoch` flips
+    // this epoch to Registering, which the operator controls and can delay
+    // past `ends_at`. Measuring from the later of the two means the window
+    // is always a real window, not one the operator can have already spent.
+    let opened = epoch.registration_opened_at.max(epoch.ends_at);
+    let closes_at = opened
         .checked_add(pool.registration_window)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
     require!(now >= closes_at, HexVaultError::RegistrationWindowOpen);
 
-    epoch.jackpot_amount = ctx.accounts.jackpot_vault.amount;
+    // Whatever an epoch that has drawn but not paid still owes is not this
+    // epoch's to snapshot, or two epochs would promise the same USDC and the
+    // older one could never be paid.
+    epoch.jackpot_amount = ctx
+        .accounts
+        .jackpot_vault
+        .amount
+        .saturating_sub(pool.jackpot_reserved);
 
     // Nothing to draw for, or too little to be worth drawing for: roll the
     // prize into the next epoch rather than spend a randomness request on it.
@@ -260,6 +273,11 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
 
     epoch.status = epoch_status::DRAWING;
     epoch.requested_at = now;
+    // The prize is now promised to this epoch until it pays or rolls over.
+    pool.jackpot_reserved = pool
+        .jackpot_reserved
+        .checked_add(epoch.jackpot_amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
     Ok(())
 }
 
@@ -287,7 +305,7 @@ pub fn draw(ctx: Context<Draw>) -> Result<()> {
 }
 
 pub fn payout(ctx: Context<Payout>) -> Result<()> {
-    let pool = &ctx.accounts.pool;
+    let pool = &mut ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
     let winner = &ctx.accounts.winner;
 
@@ -364,6 +382,12 @@ pub fn payout(ctx: Context<Payout>) -> Result<()> {
 
     epoch.winner = winner.owner;
     epoch.status = epoch_status::PAID;
+    // Released whatever actually left the vault: a House win leaves 30% of
+    // it behind, and that share belongs to the next epoch's snapshot.
+    pool.jackpot_reserved = pool
+        .jackpot_reserved
+        .checked_sub(amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
 
     emit!(JackpotPaid {
         epoch_id: epoch.epoch_id,
@@ -376,7 +400,7 @@ pub fn payout(ctx: Context<Payout>) -> Result<()> {
 
 pub fn rollover_epoch(ctx: Context<RolloverEpoch>) -> Result<()> {
     let now = utils::now()?;
-    let pool = &ctx.accounts.pool;
+    let pool = &mut ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
 
     match epoch.status {
@@ -413,6 +437,12 @@ pub fn rollover_epoch(ctx: Context<RolloverEpoch>) -> Result<()> {
     }
 
     epoch.status = epoch_status::ROLLED_OVER;
+    // Both branches above leave Drawing or Drawn, so the prize this epoch
+    // was holding goes back into what the next close may snapshot.
+    pool.jackpot_reserved = pool
+        .jackpot_reserved
+        .checked_sub(epoch.jackpot_amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
 
     emit!(EpochRolledOver {
         epoch_id: epoch.epoch_id,
@@ -508,7 +538,12 @@ pub struct CloseRegistration<'info> {
     #[account(mut)]
     pub operator: Signer<'info>,
 
-    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = operator)]
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+        has_one = operator,
+    )]
     pub pool: Account<'info, Pool>,
 
     #[account(
@@ -567,17 +602,18 @@ pub struct Draw<'info> {
     pub randomness: UncheckedAccount<'info>,
 }
 
+/// No signer at all, like `process_withdraw`. The winner is fixed by the
+/// Player PDA's seeds and the destination by `token::authority = winner.owner`,
+/// so there is nothing here for a caller to steer. Gating it on the operator
+/// only let the operator veto a winner by sitting out `payout_timeout`.
 #[derive(Accounts)]
 pub struct Payout<'info> {
-    pub operator: Signer<'info>,
-
     // Boxed: unboxed, this struct's `try_accounts` overflows the BPF stack
     // frame (8 accounts including 5 token accounts).
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = operator,
         has_one = treasury,
         has_one = buyback_reserve,
     )]
@@ -623,7 +659,12 @@ pub struct Payout<'info> {
 pub struct RolloverEpoch<'info> {
     pub operator: Signer<'info>,
 
-    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = operator)]
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+        has_one = operator,
+    )]
     pub pool: Account<'info, Pool>,
 
     #[account(

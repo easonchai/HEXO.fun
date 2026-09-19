@@ -56,6 +56,12 @@ pub struct SetParamsArgs {
 }
 
 pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result<()> {
+    // Nobody holds the default key, so either of these would brick every
+    // admin path (or every crank) on a pool that cannot be fixed afterwards.
+    require!(
+        params.admin != Pubkey::default() && params.operator != Pubkey::default(),
+        HexVaultError::InvalidParameter
+    );
     require!(
         params.epoch_seconds > 0
             && params.epoch_anchor > 0
@@ -110,6 +116,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.registration_window = params.registration_window;
     pool.payout_timeout = params.payout_timeout;
     pool.pending_withdrawals = 0;
+    pool.jackpot_reserved = 0;
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
@@ -143,6 +150,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     house.bump = ctx.bumps.house;
     house.pending_withdraw = 0;
     house.pending_epoch = 0;
+    house.requested_at = 0;
 
     emit!(PoolCreated {
         pool: pool.key(),
@@ -214,6 +222,9 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         vrf_timeout: pool.vrf_timeout,
         min_deposit: pool.min_deposit,
         house_cut_bps: pool.house_cut_bps,
+        min_jackpot: pool.min_jackpot,
+        registration_window: pool.registration_window,
+        payout_timeout: pool.payout_timeout,
     });
     Ok(())
 }
@@ -382,6 +393,7 @@ pub fn request_withdraw(ctx: Context<RequestWithdraw>, amount: u64) -> Result<()
         .checked_add(amount)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
     player.pending_epoch = pool.current_epoch_id;
+    player.requested_at = now;
 
     emit!(WithdrawRequested {
         owner: ctx.accounts.owner.key(),
@@ -395,13 +407,23 @@ pub fn request_withdraw(ctx: Context<RequestWithdraw>, amount: u64) -> Result<()
 /// Pays a matured request. No signer at all: the operator pushes these every
 /// epoch, and the depositor (or anyone) can push their own if it does not.
 pub fn process_withdraw(ctx: Context<ProcessWithdraw>) -> Result<()> {
+    let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
     let player = &mut ctx.accounts.player;
 
     let pending = player.pending_withdraw;
     require!(pending > 0, HexVaultError::NothingPending);
+    // Either the epoch the request was made in has been left behind, or a
+    // whole epoch's worth of seconds has passed since the request. The
+    // second can never come first while the operator is alive, because the
+    // epoch the request landed in ends within `epoch_seconds` of it; it is
+    // the escape hatch for an operator that stopped calling `begin_epoch`.
+    let deadline = player
+        .requested_at
+        .checked_add(pool.epoch_seconds)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
     require!(
-        pool.current_epoch_id > player.pending_epoch,
+        pool.current_epoch_id > player.pending_epoch || now > deadline,
         HexVaultError::WithdrawalNotDue
     );
     // Checked before anything is written, so a vault still waiting on the
@@ -454,12 +476,14 @@ pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
     let pool = &ctx.accounts.pool;
     require!(amount > 0, HexVaultError::ZeroAmount);
 
+    // Two different failures: the vault does not hold this much at all, and
+    // the vault holds it but depositors have already asked for part of it.
     let remaining = ctx
         .accounts
         .principal_vault
         .amount
         .checked_sub(amount)
-        .ok_or(HexVaultError::BelowPendingWithdrawals)?;
+        .ok_or(HexVaultError::InsufficientVaultLiquidity)?;
     require!(
         remaining >= pool.pending_withdrawals,
         HexVaultError::BelowPendingWithdrawals
@@ -485,6 +509,7 @@ pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
     )?;
 
     emit!(PrincipalDeployed {
+        pool: pool.key(),
         amount,
         vault_remaining: remaining,
     });

@@ -87,7 +87,7 @@ The verifiable random selection of one point in an epoch's total registered Weig
 _Avoid_: Snapshot, lottery, raffle
 
 **Payout**:
-The operator-cranked transfer of the Prize to the winner's USDC account. No claim step. If the House wins, the Prize splits 50% buyback reserve, 30% stays for the next epoch, 20% treasury.
+The transfer of the Prize to the winner's USDC account. No claim step, and no signer: the operator cranks it, but anyone can, because the winner and the destination are both fixed on chain. If the House wins, the Prize splits 50% buyback reserve, 30% stays for the next epoch, 20% treasury.
 _Avoid_: Claim, redeem
 
 **Rollover**:
@@ -143,7 +143,7 @@ The multisig or wallet that changes pool parameters, unpauses, rotates the Opera
 _Avoid_: Authority (the removed program role), owner, admin wallet, Operator
 
 **Operator key**:
-The hot keypair on the VPS that the Operator service signs with, and `Pool.operator` in the program. It opens epochs and rounds, requests randomness, settles, registers, draws and pays out, and it owns the House Player. It cannot change parameters, unpause, or move principal. The Admin rotates it in one transaction.
+The hot keypair on the VPS that the Operator service signs with, and `Pool.operator` in the program. It opens epochs and rounds, requests randomness, settles and draws, and it owns the House Player. Paying the winner needs no signer, so it only pays that transaction's fee. It cannot change parameters, unpause, or move principal. The Admin rotates it in one transaction.
 _Avoid_: Authority keypair, pool authority, admin key, hot wallet
 
 **Operator**:

@@ -115,6 +115,9 @@ const CASES: Case[] = [
       i64(120n),
       u64(1_000_000n),
       u16(600),
+      u64(2_000_000n),
+      i64(600n),
+      i64(86_400n),
     ],
     data: {
       pool: POOL,
@@ -125,6 +128,9 @@ const CASES: Case[] = [
       vrfTimeout: "120",
       minDeposit: "1000000",
       houseCutBps: 600,
+      minJackpot: "2000000",
+      registrationWindow: "600",
+      payoutTimeout: "86400",
     },
   },
   {
@@ -149,8 +155,8 @@ const CASES: Case[] = [
   },
   {
     name: "PrincipalDeployed",
-    fields: [u64(40_000_000n), u64(2_000_000n)],
-    data: { amount: "40000000", vaultRemaining: "2000000" },
+    fields: [key(POOL), u64(40_000_000n), u64(2_000_000n)],
+    data: { pool: POOL, amount: "40000000", vaultRemaining: "2000000" },
   },
   {
     name: "RoundOpened",

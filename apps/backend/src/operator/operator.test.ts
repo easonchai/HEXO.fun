@@ -114,6 +114,7 @@ const epoch = (over: Partial<EpochState> = {}): EpochState => ({
   requestedAt: 0n,
   target: 0n,
   drawnAt: 0n,
+  registrationOpenedAt: 0n,
   ...over,
 });
 
@@ -505,6 +506,23 @@ describe("runTick", () => {
       lastRegisterCheck: { epochId: 1n, empty: true },
     });
     expect(result.labels).toEqual(["close_registration"]);
+  });
+
+  it("4. a late begin_epoch owes the window from when registration opened", async () => {
+    // The program anchors the window on `registrationOpenedAt` when that is
+    // later than `endsAt`, so the tick has to wait for the same instant or
+    // it burns a transaction on RegistrationWindowOpen every time.
+    const { ctx, sent } = context({
+      pool: pool({ registrationWindow: 50n, openRoundId: 0n, paused: true }),
+      openRound: null,
+      previousEpoch: registering({ registrationOpenedAt: NOW - 10n }),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+    });
+    const outcome = await runTick(ctx);
+
+    expect(sent).toHaveLength(0);
+    expect(outcome.action).toBeNull();
+    expect(outcome.nextWakeAt).toBe(NOW + 40n);
   });
 
   it("4. an empty-tick flag from a different epoch does not close registration", async () => {

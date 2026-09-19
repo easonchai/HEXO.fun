@@ -57,6 +57,10 @@ export interface EpochState {
   readonly target: bigint;
   /** When `draw` landed, 0 until then. */
   readonly drawnAt: bigint;
+  /** When `begin_epoch` moved this epoch to Registering, 0 until then. The
+   *  program measures `registrationWindow` from the later of this and
+   *  `endsAt`, so a late `begin_epoch` still owes the whole window. */
+  readonly registrationOpenedAt: bigint;
 }
 
 export interface RoundState {
@@ -122,6 +126,7 @@ export function decodeEpoch(program: Program<Idl>, data: Buffer): EpochState {
     requestedAt: big(raw.requestedAt),
     target: big(raw.target),
     drawnAt: big(raw.drawnAt),
+    registrationOpenedAt: big(raw.registrationOpenedAt),
   };
 }
 

@@ -197,11 +197,13 @@ async function draw(pool: PoolCtx, epochId: bigint, randomness: PublicKey) {
     .rpc();
 }
 
+/** Permissionless: no signer at all, so the test wallet (neither the pool's
+ *  admin nor its operator) just pays the fee. The operator cannot veto a
+ *  winner by sitting out `payout_timeout`. */
 async function payout(pool: PoolCtx, epochId: bigint, winner: PublicKey, winnerToken: PublicKey) {
   return program.methods
     .payout()
     .accountsPartial({
-      operator: pool.operator.publicKey,
       pool: pool.pool,
       acceptedMint: pool.mint,
       epoch: epochPda(pool.pool, epochId),
@@ -212,7 +214,6 @@ async function payout(pool: PoolCtx, epochId: bigint, winner: PublicKey, winnerT
       buybackReserve: pool.buybackReserve,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
-    .signers([pool.operator])
     .rpc();
 }
 
@@ -808,6 +809,58 @@ describe("epochs", () => {
   );
 
   it(
+    "an unpaid drawn epoch keeps its prize: the next close only snapshots the new deposits",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 6 });
+      // Both deposit before the first epoch opens, so each one's register
+      // takes the idle branch and cannot come out at zero weight.
+      const a = await pool.fundedWallet(10_000_000n);
+      const b = await pool.fundedWallet(10_000_000n);
+      const funder = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, a, 3_000_000n);
+      await deposit(pool, b, 3_000_000n);
+
+      await beginEpoch(pool, 0n); // epoch 1
+      await fundJackpot(pool, funder, 3_000_000n);
+
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch 2
+      await register(pool, 1n, a.keypair.publicKey);
+      await closeRegistration(pool, 1n);
+      const closed1 = await fetchEpoch(pool, 1n);
+      expect(closed1.jackpotAmount.toString()).toBe("3000000");
+      expect((await program.account.pool.fetch(pool.pool)).jackpotReserved.toString()).toBe(
+        "3000000",
+      );
+      await draw(pool, 1n, await fulfillRandomness(Uint8Array.from(closed1.vrfSeed)));
+
+      // Epoch 1 is Drawn and unpaid. Its 3M is still in the vault, and the
+      // next epoch must draw for its own 2M only.
+      await fundJackpot(pool, funder, 2_000_000n);
+      await retryUntilOk(() => beginEpoch(pool, 2n)); // epoch 3
+      await register(pool, 2n, b.keypair.publicKey);
+      await closeRegistration(pool, 2n);
+      const closed2 = await fetchEpoch(pool, 2n);
+      expect(closed2.jackpotAmount.toString()).toBe("2000000");
+      await draw(pool, 2n, await fulfillRandomness(Uint8Array.from(closed2.vrfSeed)));
+
+      const aBefore = await program.provider.connection.getTokenAccountBalance(a.tokenAccount);
+      await payout(pool, 1n, a.keypair.publicKey, a.tokenAccount);
+      const aAfter = await program.provider.connection.getTokenAccountBalance(a.tokenAccount);
+      expect(BigInt(aAfter.value.amount) - BigInt(aBefore.value.amount)).toBe(3_000_000n);
+
+      const bBefore = await program.provider.connection.getTokenAccountBalance(b.tokenAccount);
+      await payout(pool, 2n, b.keypair.publicKey, b.tokenAccount);
+      const bAfter = await program.provider.connection.getTokenAccountBalance(b.tokenAccount);
+      expect(BigInt(bAfter.value.amount) - BigInt(bBefore.value.amount)).toBe(2_000_000n);
+
+      const drained = await program.provider.connection.getTokenAccountBalance(pool.jackpotVault);
+      expect(drained.value.amount).toBe("0");
+      expect((await program.account.pool.fetch(pool.pool)).jackpotReserved.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  it(
     "rollover_epoch is refused once the draw's randomness has been fulfilled",
     async () => {
       const pool = await setupPool({ epochSeconds: 6, vrfTimeout: 2 });
@@ -849,6 +902,10 @@ describe("epochs", () => {
 
       await retryUntilOk(() => beginEpoch(pool, 1n));
       const epoch1 = await fetchEpoch(pool, 1n);
+      // Registration opened when `begin_epoch` ran, not when the epoch ended.
+      expect(Number(epoch1.registrationOpenedAt)).toBeGreaterThanOrEqual(
+        Number(epoch1.endsAt),
+      );
 
       // The epoch has ended and the operator would happily draw right now.
       await expect(closeRegistration(pool, 1n)).rejects.toThrow(
@@ -858,12 +915,47 @@ describe("epochs", () => {
       // Which is the point: this registration is still in time.
       await register(pool, 1n, a.keypair.publicKey);
 
-      await sleepUntilOnChain(Number(epoch1.endsAt.toString()) + 6);
+      await sleepUntilOnChain(Number(epoch1.registrationOpenedAt.toString()) + 6);
       await retryUntilOk(() => closeRegistration(pool, 1n));
 
       const closed = await fetchEpoch(pool, 1n);
       expect(closed.status).toBe(epoch_status.DRAWING);
       expect(BigInt(closed.registeredWeight.toString()) > 0n).toBe(true);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a begin_epoch delayed past the window still owes the window from when it ran",
+    async () => {
+      // The attack this closes: hold begin_epoch back until `ends_at +
+      // registration_window` has already gone by, then bundle begin_epoch,
+      // one register of the operator's own player, and close_registration
+      // into a single transaction and win alone.
+      const pool = await setupPool({ epochSeconds: 6, registrationWindow: 5 });
+      await beginEpoch(pool, 0n);
+
+      const a = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, a, 3_000_000n);
+
+      const epoch1Open = await fetchEpoch(pool, 1n);
+      // Late on purpose: past `ends_at + registration_window` already.
+      await sleepUntilOnChain(Number(epoch1Open.endsAt.toString()) + 5 + 2);
+      await beginEpoch(pool, 1n);
+
+      const epoch1 = await fetchEpoch(pool, 1n);
+      const opened = Number(epoch1.registrationOpenedAt.toString());
+      expect(opened).toBeGreaterThan(Number(epoch1.endsAt.toString()) + 5);
+
+      // Same slot as the late begin_epoch: the window has not started yet.
+      await expect(closeRegistration(pool, 1n)).rejects.toThrow(
+        /RegistrationWindowOpen/,
+      );
+      await register(pool, 1n, a.keypair.publicKey);
+
+      await sleepUntilOnChain(opened + 5);
+      await retryUntilOk(() => closeRegistration(pool, 1n));
+      expect((await fetchEpoch(pool, 1n)).status).toBe(epoch_status.DRAWING);
     },
     TIMEOUT,
   );
@@ -901,6 +993,8 @@ describe("epochs", () => {
       expect(rolled.winner.toString()).toBe(PublicKey.default.toString());
       const vault = await program.provider.connection.getTokenAccountBalance(pool.jackpotVault);
       expect(vault.value.amount).toBe("4000000");
+      // The reservation went with it, or the next close would snapshot 0.
+      expect((await program.account.pool.fetch(pool.pool)).jackpotReserved.toString()).toBe("0");
 
       // Nothing was paid, so the next epoch draws for the same prize.
       await retryUntilOk(() => beginEpoch(pool, 2n));

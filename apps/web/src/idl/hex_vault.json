@@ -394,6 +394,7 @@
         },
         {
           "name": "pool",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1023,13 +1024,6 @@
       ],
       "accounts": [
         {
-          "name": "operator",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
-        },
-        {
           "name": "pool",
           "writable": true,
           "pda": {
@@ -1600,6 +1594,7 @@
         },
         {
           "name": "pool",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -2904,6 +2899,17 @@
               "`Pool.payout_timeout` from here."
             ],
             "type": "i64"
+          },
+          {
+            "name": "registration_opened_at",
+            "docs": [
+              "When `begin_epoch` moved this epoch to Registering, which is when",
+              "anyone could first register for it. 0 until then.",
+              "`close_registration` measures `Pool.registration_window` from the",
+              "later of this and `ends_at`, so an operator who delays `begin_epoch`",
+              "cannot bundle the whole registration window into one transaction."
+            ],
+            "type": "i64"
           }
         ]
       }
@@ -3060,6 +3066,18 @@
           {
             "name": "house_cut_bps",
             "type": "u16"
+          },
+          {
+            "name": "min_jackpot",
+            "type": "u64"
+          },
+          {
+            "name": "registration_window",
+            "type": "i64"
+          },
+          {
+            "name": "payout_timeout",
+            "type": "i64"
           }
         ]
       }
@@ -3174,6 +3192,15 @@
               "`pool.current_epoch_id` is past it."
             ],
             "type": "u64"
+          },
+          {
+            "name": "requested_at",
+            "docs": [
+              "When `request_withdraw` booked the pending amount. The second way a",
+              "request matures, so a stalled operator who never calls `begin_epoch`",
+              "cannot freeze a depositor's money."
+            ],
+            "type": "i64"
           }
         ]
       }
@@ -3409,6 +3436,16 @@
               "over unpaid. The escape hatch for a winner nobody can pay."
             ],
             "type": "i64"
+          },
+          {
+            "name": "jackpot_reserved",
+            "docs": [
+              "Jackpot already promised to an epoch that is Drawing or Drawn and has",
+              "not paid yet. `close_registration` snapshots the vault minus this, so",
+              "the next epoch cannot take a prize the previous one still owes.",
+              "Released on `payout` and on either branch of `rollover_epoch`."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3532,6 +3569,10 @@
       "type": {
         "kind": "struct",
         "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
           {
             "name": "amount",
             "type": "u64"

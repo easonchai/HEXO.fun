@@ -382,6 +382,10 @@
     set -a; . ./.env.mainnet; set +a
     DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin withdraw-principal --amount 25000 | pbcopy
 
+  set-operator rotates `Pool.operator` but leaves the House Player's own `owner` on the retired key, so a Prize the House wins still
+  pays into that key's USDC associated token account. Keep the old operator's ATA open after every rotation; close it and a House
+  win is unpayable until `payout_timeout` lets the epoch roll over.
+
   The commands that print this way are set-params, unpause, withdraw-principal, set-operator, propose-admin and accept-admin.
   pause and fund-jackpot always sign locally with the loaded key: the program lets either key pause, and funding the jackpot is
   permissionless, so neither has to wait on the multisig. That matters in an incident, where pause is the one thing that has to be

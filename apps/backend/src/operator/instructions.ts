@@ -212,7 +212,11 @@ export class OperatorInstructions {
     ];
   }
 
-  /** The winner's token account may not exist yet, so create it idempotently. */
+  /**
+   * Permissionless: the instruction takes no signer, so the operator is here
+   * only as the fee payer and as the payer of the winner's token account,
+   * which may not exist yet and is created idempotently first.
+   */
   async payout(
     pool: PoolState,
     epochId: bigint,
@@ -228,7 +232,6 @@ export class OperatorInstructions {
       ),
       await this.method("payout")
         .accountsPartial({
-          operator: this.operator,
           pool: pool.address,
           acceptedMint: pool.acceptedMint,
           epoch: this.epoch(pool, epochId),

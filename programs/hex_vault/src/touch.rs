@@ -144,6 +144,7 @@ mod tests {
             min_jackpot: 1_000_000,
             registration_window: 0,
             payout_timeout: DAY,
+            jackpot_reserved: 0,
         }
     }
 
@@ -164,6 +165,7 @@ mod tests {
             bump: 0,
             pending_withdraw: 0,
             pending_epoch: 0,
+            requested_at: 0,
         }
     }
 

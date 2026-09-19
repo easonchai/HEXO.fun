@@ -131,6 +131,20 @@ type Decision = Omit<TickOutcome, "nextWakeAt">;
 const NOTHING: Decision = { action: null };
 
 /**
+ * The instant `close_registration` starts being accepted. The program
+ * measures the window from the later of the epoch's end and the moment
+ * `begin_epoch` actually opened registration, so an operator that ran late
+ * still owes the full window from when it ran.
+ */
+function registrationClosesAt(pool: PoolState, epoch: EpochState): bigint {
+  const opened =
+    epoch.registrationOpenedAt > epoch.endsAt
+      ? epoch.registrationOpenedAt
+      : epoch.endsAt;
+  return opened + pool.registrationWindow;
+}
+
+/**
  * The next chain timestamp at which `decide` could return something
  * different, given the same ctx it just ran on. Pure: everything it reads
  * already lives on `ctx`, so it never touches the clock or the network.
@@ -153,7 +167,7 @@ function nextWakeAt(ctx: TickContext, acted: boolean): bigint {
   }
   if (currentEpoch) candidates.push(currentEpoch.endsAt);
   if (previousEpoch?.status === EPOCH_STATUS.REGISTERING) {
-    candidates.push(previousEpoch.endsAt + pool.registrationWindow);
+    candidates.push(registrationClosesAt(pool, previousEpoch));
   }
   if (previousEpoch?.status === EPOCH_STATUS.DRAWING) {
     candidates.push(previousEpoch.requestedAt + pool.vrfTimeout);
@@ -290,7 +304,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
 
     // The program refuses to close before this instant, so that everyone who
     // earned weight in the epoch has had the window to register.
-    if (now < previousEpoch.endsAt + pool.registrationWindow) {
+    if (now < registrationClosesAt(pool, previousEpoch)) {
       return {
         action: null,
         registerCheck: { epochId: previousEpoch.epochId, empty: true },
