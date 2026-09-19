@@ -1,19 +1,24 @@
-// One-off admin CLI: set-params, pause, unpause, fund-jackpot. Same shape as
-// ../bootstrap.ts (plain tsx script, no command framework, argument parsing
-// split into its own file for a chain-free unit test) but this pool already
-// exists, so unlike bootstrap this reuses ChainService and the same full
-// .env the backend itself runs on, instead of re-deriving connections and
-// PDAs by hand.
+// One-off admin CLI: set-params, pause, unpause, fund-jackpot,
+// withdraw-principal, set-operator, propose-admin, accept-admin. Same shape
+// as ../bootstrap.ts (plain tsx script, no command framework, argument
+// parsing split into its own file for a chain-free unit test) but this pool
+// already exists, so unlike bootstrap this reuses ChainService and the same
+// full .env the backend itself runs on, instead of re-deriving connections
+// and PDAs by hand.
 //
-// stdout carries nothing; every line (including the tx signature) goes to
-// stderr, matching bootstrap.ts's stdout/stderr split.
+// In local mode stdout carries nothing; every line (including the tx
+// signature) goes to stderr, matching bootstrap.ts's stdout/stderr split. In
+// multisig mode stdout carries exactly one line, the base58 transaction, so
+// `admin ... | pbcopy` hands Squads something it can import.
 import "reflect-metadata"; // ChainService's @Injectable()/@Inject() decorators need this; NestFactory normally pulls it in, but there is no Nest app here.
 import { existsSync } from "node:fs";
 
 import { BN } from "@anchor-lang/core";
 import { ConfigService } from "@nestjs/config";
 import {
+  createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddressSync,
+  getMint,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
@@ -26,7 +31,14 @@ import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { validateEnv } from "../config/env";
 import { decodePool, type PoolState } from "../operator/chain-state";
-import { parseAdminCommand, type AdminCommand, type SetParamsInput } from "./args";
+import {
+  atomicUsdc,
+  checkRegistrationWindow,
+  parseAdminCommand,
+  type AdminCommand,
+  type SetParamsInput,
+} from "./args";
+import { adminMode, encodeForSquads, type AdminMode } from "./squads";
 
 const log = (message: string): void => {
   process.stderr.write(`${message}\n`);
@@ -70,21 +82,70 @@ async function readPool(chain: ChainService): Promise<PoolState> {
   return decodePool(chain.program, address, info.data);
 }
 
+/**
+ * Every admin-gated command ends here. Local mode signs and sends with the
+ * loaded key, as it always did. Multisig mode prints the unsigned
+ * transaction on stdout and nothing else, for Squads to import.
+ */
+async function submit(
+  chain: ChainService,
+  mode: AdminMode,
+  instructions: TransactionInstruction[],
+  summary: string,
+): Promise<void> {
+  if (!mode.multisig) {
+    log(`signature ${await chain.send(instructions)}`);
+    log(summary);
+    return;
+  }
+  // Same "finalized" blockhash as ChainService.send, and for the same
+  // reason: a "confirmed" one from a load-balanced pool is unknown to nodes
+  // a few slots behind, and Squads simulates the import against its own.
+  const { blockhash } = await chain.connection.getLatestBlockhash("finalized");
+  process.stdout.write(`${encodeForSquads(instructions, mode.signer, blockhash)}\n`);
+  log(summary);
+  log(
+    `unsigned, signer and fee payer ${mode.signer.toBase58()}; paste into Squads' "Import base58 encoded tx" now, the blockhash expires in about a minute`,
+  );
+}
+
 // `set_pause` takes the admin or the operator when pausing and the admin
-// alone when unpausing, so the loaded key decides which direction works.
-async function setPause(chain: ChainService, paused: boolean): Promise<void> {
-  const ix = await method(chain, "setPause", paused)
+// alone when unpausing. Pausing therefore always signs locally, whichever of
+// the two keys is loaded; unpausing goes through `submit` because on mainnet
+// the admin is the multisig.
+async function pause(chain: ChainService): Promise<void> {
+  const ix = await method(chain, "setPause", true)
     .accountsPartial({ signer: chain.keypair.publicKey, pool: chain.poolAddress() })
     .instruction();
   log(`signature ${await chain.send([ix])}`);
-  log(`pool ${paused ? "paused" : "unpaused"}`);
+  log("pool paused");
+}
+
+async function unpause(chain: ChainService, mode: AdminMode): Promise<void> {
+  const ix = await method(chain, "setPause", false)
+    .accountsPartial({ signer: mode.signer, pool: chain.poolAddress() })
+    .instruction();
+  await submit(chain, mode, [ix], "unpause the pool");
 }
 
 function bnOrNull(value: number | undefined): BN | null {
   return value === undefined ? null : new BN(value);
 }
 
-async function setParams(chain: ChainService, params: SetParamsInput): Promise<void> {
+async function setParams(
+  chain: ChainService,
+  mode: AdminMode,
+  params: SetParamsInput,
+): Promise<void> {
+  // args.ts already compared the window against --epoch-seconds when both
+  // were given; with only the window, the epoch it has to beat is the
+  // pool's, and the program would reject it with InvalidParameter.
+  if (params.registrationWindow !== undefined && params.epochSeconds === undefined) {
+    checkRegistrationWindow(
+      params.registrationWindow,
+      Number((await readPool(chain)).epochSeconds),
+    );
+  }
   const ix = await method(chain, "setParams", {
     epochSeconds: bnOrNull(params.epochSeconds),
     epochAnchor: bnOrNull(params.epochAnchor),
@@ -93,16 +154,19 @@ async function setParams(chain: ChainService, params: SetParamsInput): Promise<v
     vrfTimeout: bnOrNull(params.vrfTimeout),
     minDeposit: params.minDeposit === undefined ? null : new BN(params.minDeposit.toString()),
     houseCutBps: params.houseCutBps === undefined ? null : params.houseCutBps,
-    // No CLI flags for these three yet (ticket 04); null leaves them as they
-    // are.
-    minJackpot: null,
-    registrationWindow: null,
-    payoutTimeout: null,
+    minJackpot:
+      params.minJackpot === undefined ? null : new BN(params.minJackpot.toString()),
+    registrationWindow: bnOrNull(params.registrationWindow),
+    payoutTimeout: bnOrNull(params.payoutTimeout),
   })
-    .accountsPartial({ admin: chain.keypair.publicKey, pool: chain.poolAddress() })
+    .accountsPartial({ admin: mode.signer, pool: chain.poolAddress() })
     .instruction();
-  log(`signature ${await chain.send([ix])}`);
-  log("params updated (epoch/round changes apply to the next epoch/round, not the open one)");
+  await submit(
+    chain,
+    mode,
+    [ix],
+    "set params (epoch/round changes apply to the next epoch/round, not the open one)",
+  );
 }
 
 // ponytail: unlike the operator's automatic fundJackpot (operator/instructions.ts),
@@ -128,16 +192,96 @@ async function fundJackpot(chain: ChainService, amount: bigint): Promise<void> {
   log(`jackpot funded with ${amount} atomic units from ${source.toBase58()}`);
 }
 
-async function run(command: AdminCommand, chain: ChainService): Promise<void> {
+/**
+ * Moves principal out of the vault to the admin's associated token account,
+ * which the program checks by address. The amount is scaled by the mint's
+ * own decimals rather than an assumed six, because this is the one command
+ * that moves depositors' money.
+ */
+async function withdrawPrincipal(
+  chain: ChainService,
+  mode: AdminMode,
+  amount: string,
+): Promise<void> {
+  const pool = await readPool(chain);
+  const { decimals } = await getMint(chain.connection, pool.acceptedMint);
+  const atomic = atomicUsdc(amount, decimals);
+  // Off-curve is allowed on purpose: a Squads vault is a PDA, and its ATA
+  // derives the same way.
+  const adminToken = getAssociatedTokenAddressSync(pool.acceptedMint, mode.signer, true);
+
+  const instructions: TransactionInstruction[] = [];
+  if ((await chain.connection.getAccountInfo(adminToken)) === null) {
+    instructions.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        mode.signer,
+        adminToken,
+        mode.signer,
+        pool.acceptedMint,
+      ),
+    );
+  }
+  instructions.push(
+    await method(chain, "adminWithdraw", new BN(atomic.toString()))
+      .accountsPartial({
+        admin: mode.signer,
+        pool: pool.address,
+        acceptedMint: pool.acceptedMint,
+        adminToken,
+        principalVault: chain.principalVaultAddress(pool.address),
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .instruction(),
+  );
+  await submit(
+    chain,
+    mode,
+    instructions,
+    `withdraw ${amount} USDC (${atomic} atomic) of principal to ${adminToken.toBase58()}`,
+  );
+}
+
+async function run(
+  command: AdminCommand,
+  chain: ChainService,
+  mode: AdminMode,
+): Promise<void> {
   switch (command.kind) {
     case "pause":
-      return setPause(chain, true);
+      return pause(chain);
     case "unpause":
-      return setPause(chain, false);
+      return unpause(chain, mode);
     case "set-params":
-      return setParams(chain, command.params);
+      return setParams(chain, mode, command.params);
     case "fund-jackpot":
       return fundJackpot(chain, command.amount);
+    case "withdraw-principal":
+      return withdrawPrincipal(chain, mode, command.amount);
+    case "set-operator": {
+      const ix = await method(chain, "setOperator", command.key)
+        .accountsPartial({ admin: mode.signer, pool: chain.poolAddress() })
+        .instruction();
+      return submit(chain, mode, [ix], `set the operator to ${command.key.toBase58()}`);
+    }
+    case "propose-admin": {
+      const ix = await method(chain, "proposeAdmin", command.key)
+        .accountsPartial({ admin: mode.signer, pool: chain.poolAddress() })
+        .instruction();
+      return submit(
+        chain,
+        mode,
+        [ix],
+        `propose ${command.key.toBase58()} as the next admin; it then runs accept-admin`,
+      );
+    }
+    // Signed by the pending admin, which is whoever is taking the pool over:
+    // the loaded key when a person is, ADMIN_ADDRESS when the multisig is.
+    case "accept-admin": {
+      const ix = await method(chain, "acceptAdmin")
+        .accountsPartial({ pendingAdmin: mode.signer, pool: chain.poolAddress() })
+        .instruction();
+      return submit(chain, mode, [ix], `accept the admin role as ${mode.signer.toBase58()}`);
+    }
   }
 }
 
@@ -154,11 +298,15 @@ async function main(): Promise<void> {
   // Built directly, not through Nest DI: this script never boots a Nest
   // application, so ChainService's own constructor is the whole wiring.
   const chain = new ChainService(connection, new ConfigService<HexVaultEnv, true>(env));
+  const mode = adminMode(env.ADMIN_ADDRESS, chain.keypair.publicKey);
   log(
     `signer ${chain.keypair.publicKey.toBase58()} on ${connection.rpcEndpoint}, pool ${chain.poolAddress().toBase58()}`,
   );
+  if (mode.multisig) {
+    log(`admin is ${mode.signer.toBase58()}, not the loaded key: nothing will be sent`);
+  }
 
-  await run(command, chain);
+  await run(command, chain, mode);
 }
 
 main().catch((error: unknown) => {
