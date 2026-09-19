@@ -43,6 +43,34 @@ export const WITHDRAW_BATCH_SIZE = 4;
 const SHORT_VAULT = "InsufficientVaultLiquidity";
 
 /**
+ * Markers in a failed `payout`'s message that mean this winner cannot be
+ * paid at all, so step 6 warns and leaves the epoch Drawn for the
+ * `payout_timeout` rollover to take. Every other failure is a real one and
+ * has to reach `runOnce()`, or an RPC blip would look like an unpayable
+ * winner and retry silently with no `lastError` until the timeout.
+ *
+ * The first three are Anchor's own constraint names on `payout`'s
+ * `winner_token`, which `ChainService.mapSendError` surfaces verbatim. SPL
+ * Token's codes are in neither error table, so a frozen destination arrives
+ * as the raw custom error code instead; both spellings are listed because a
+ * test names the error and a validator names the code. Only SPL Token and
+ * this program run in a payout transaction, and this program's codes start
+ * at 0x1770, so 0x11 can only be SPL Token's.
+ */
+const UNPAYABLE_WINNER = [
+  "AccountNotInitialized",
+  "ConstraintTokenMint",
+  "ConstraintTokenOwner",
+  "AccountFrozen",
+  "custom program error: 0x11",
+];
+
+const cannotPayWinner = (cause: unknown): boolean => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return UNPAYABLE_WINNER.some((marker) => message.includes(marker));
+};
+
+/**
  * What step 4 remembers about the last tick's `playersToRegister` check, so
  * it can tell "empty again" from "empty for the first time". The service
  * persists this across ticks; the pure function only reads and returns it.
@@ -346,6 +374,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
         );
         return { action: "payout" };
       } catch (cause) {
+        if (!cannotPayWinner(cause)) throw cause;
         ctx.warn(
           `payout of epoch ${previousEpoch.epochId} to ${winner} failed: ${
             cause instanceof Error ? cause.message : String(cause)
@@ -371,14 +400,17 @@ async function decide(ctx: TickContext): Promise<Decision> {
   const due = await ctx.duePendingWithdrawals(pool.currentEpochId);
   let withdrawShortfall = 0n;
   if (due.length > 0) {
+    const batch = due.slice(0, WITHDRAW_BATCH_SIZE);
     try {
-      await ctx.send(
-        await ctx.ix.processWithdrawals(pool, due.slice(0, WITHDRAW_BATCH_SIZE)),
-      );
+      await ctx.send(await ctx.ix.processWithdrawals(pool, batch));
       return { action: "process_withdraw", withdrawShortfall: 0n };
     } catch (cause) {
       if ((cause instanceof Error ? cause.message : "") !== SHORT_VAULT) throw cause;
-      const owed = due.reduce((sum, entry) => sum + entry.amount, 0n);
+      // The batch that was actually tried, not the whole queue: the program
+      // refused to pay these four, and sizing the gap against a queue of
+      // forty would ask the admin to bring back ten times the principal the
+      // next transaction needs.
+      const owed = batch.reduce((sum, entry) => sum + entry.amount, 0n);
       const held = await ctx.principalVaultBalance();
       withdrawShortfall = owed > held ? owed - held : 0n;
       ctx.warn(

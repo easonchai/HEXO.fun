@@ -42,6 +42,32 @@ export const SOLANA_CONNECTION = Symbol("SOLANA_CONNECTION");
  */
 export const CONFIRM_TIMEOUT_MS = 30_000;
 
+/** Ceiling for a one-off RPC read that nothing else bounds: a boot check or
+ *  a read behind an HTTP request. */
+export const RPC_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * Rejects with a named error once `ms` has passed, if `promise` has not
+ * settled by then. web3.js takes no per-call timeout, so an RPC that accepts
+ * the connection and then says nothing would otherwise hold a boot step or a
+ * `/status` request open with no ceiling. `send` has its own bounded wait
+ * (`CONFIRM_TIMEOUT_MS` above); this is for the plain reads.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, expiry]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Connection, Program, operator keypair, PDA helpers and a signed-send
  * helper. No business logic (deposit/withdraw/etc calls) — that lands with

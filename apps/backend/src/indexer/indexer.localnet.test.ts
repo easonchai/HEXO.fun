@@ -181,6 +181,9 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await methods
       .createPool({
         poolId: new BN(poolId.toString()),
+        // One key plays both roles here: it pays, cranks and administers.
+        admin: authority.publicKey,
+        operator: authority.publicKey,
         vrfNetworkState: VRF_NETWORK_STATE,
         epochSeconds: new BN(3_600),
         epochAnchor: new BN(Math.floor(Date.now() / 1000)),
@@ -189,9 +192,15 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         vrfTimeout: new BN(5),
         minDeposit: new BN(1_000_000),
         houseCutBps: 600,
+        minJackpot: new BN(1),
+        // No window and a payout timeout far past this run: neither
+        // parameter is what this suite is about, and both would otherwise
+        // change its timing.
+        registrationWindow: new BN(0),
+        payoutTimeout: new BN(86_400),
       })
       .accountsPartial({
-        authority: authority.publicKey,
+        payer: authority.publicKey,
         pool,
         acceptedMint: mint,
         principalVault: chain.principalVaultAddress(),
@@ -207,7 +216,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await methods
       .beginEpoch()
       .accountsPartial({
-        authority: authority.publicKey,
+        operator: authority.publicKey,
         pool,
         currentEpoch: chain.epochAddress(0n),
         newEpoch: chain.epochAddress(1n),
@@ -245,7 +254,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await methods
       .createRound(new BN(startsAt), new BN(roundEndsAt))
       .accountsPartial({
-        authority: authority.publicKey,
+        operator: authority.publicKey,
         pool,
         currentEpoch: chain.epochAddress(1n),
         round,
@@ -253,7 +262,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
       })
       .rpc();
 
-    await methods
+    const buySignature = await methods
       .buyPosition(new BN(TILE_ZERO.toString()), new BN(STAKE.toString()))
       .accountsPartial({
         owner: depositor.publicKey,
@@ -265,6 +274,20 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
       })
       .signers([depositor])
       .rpc();
+
+    // The setup above is the history the indexer's boot backfill has to
+    // replay, and `getSignaturesForAddress("finalized")` cannot list a
+    // transaction that has not finalized yet. Booting before they do leaves
+    // the backfill with an empty page while the live finalized subscription
+    // moves the cursor to a later slot, and the next sweep then lists only
+    // what came after it. A validator finalizes in about 32 slots.
+    await waitFor(
+      "the setup transactions to finalize",
+      async () =>
+        (await connection.getSignatureStatus(buySignature)).value
+          ?.confirmationStatus === "finalized",
+      90_000,
+    );
 
     prisma = new PrismaService();
     await prisma.$connect();
@@ -355,7 +378,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await methods
       .settleRound()
       .accountsPartial({
-        authority: authority.publicKey,
+        operator: authority.publicKey,
         pool: chain.poolAddress(),
         round,
         randomness,

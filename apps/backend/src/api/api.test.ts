@@ -35,7 +35,13 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApiModule } from "./api.module";
 import { FaucetController } from "./faucet.controller";
-import { CHAIN_CLOCK_TTL_MS, JACKPOT_BALANCE_TTL_MS, oddsPercent, weightAt } from "./api.service";
+import {
+  BALANCES_TTL_MS,
+  CHAIN_CLOCK_TTL_MS,
+  JACKPOT_BALANCE_TTL_MS,
+  oddsPercent,
+  weightAt,
+} from "./api.service";
 
 const NOW = BigInt(Math.floor(Date.now() / 1000));
 const EPOCH_LENGTH = 86_400n;
@@ -142,8 +148,11 @@ const sentInstructions: TransactionInstruction[][] = [];
  *  seam rather than the response body. */
 let clockReads = 0;
 let jackpotReads = 0;
+let balanceReads = 0;
 /** When set, the next `getTokenAccountBalance` call throws once and resets it. */
 let failNextJackpotRead = false;
+/** Same, for the paired vault/operator balance read behind /status. */
+let failNextBalanceRead = false;
 /** What the fake Clock sysvar reads. Mutable so a test can make the chain
  *  clock regress the way a real one does when it drifts behind wall time. */
 let chainClockValue = CHAIN_NOW;
@@ -161,12 +170,18 @@ const fakeChain = {
     },
     getMultipleAccountsInfo: async (
       addresses: PublicKey[],
-    ): Promise<(AccountInfo<Buffer> | null)[]> =>
-      addresses.map((address) =>
+    ): Promise<(AccountInfo<Buffer> | null)[]> => {
+      balanceReads += 1;
+      if (failNextBalanceRead) {
+        failNextBalanceRead = false;
+        throw new Error("simulated balance read failure");
+      }
+      return addresses.map((address) =>
         address.equals(PRINCIPAL_VAULT)
           ? tokenAccount(PRINCIPAL_VAULT_BALANCE)
           : { ...accountInfo(Buffer.alloc(0), SystemProgram.programId), lamports: OPERATOR_LAMPORTS },
-      ),
+      );
+    },
     getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => {
       jackpotReads += 1;
       if (failNextJackpotRead) {
@@ -765,6 +780,29 @@ describe("API routes", () => {
       const recovered = await http.get("/epochs/current").expect(200);
       expect(recovered.body.jackpotAmount).toBe(VAULT_BALANCE.toString());
       expect(jackpotReads).toBe(before + 2);
+    });
+
+    it("reports the balances as unknown on a failed read, without caching that", async () => {
+      vi.setSystemTime(Date.now() + BALANCES_TTL_MS + 1);
+      const before = balanceReads;
+      failNextBalanceRead = true;
+
+      const { body } = await http.get("/status").expect(200);
+      expect(body.vaultLiquidity).toBeNull();
+      expect(body.operatorSol).toBeNull();
+      // Null, not false: a failed read is not evidence of a funded key, and
+      // false would keep the "operator is running dry" banner off for as
+      // long as the RPC stayed down.
+      expect(body.operatorSolLow).toBeNull();
+      expect(balanceReads).toBe(before + 1);
+
+      // Still inside the window the failed read opened. A slot left holding
+      // the failure would serve nulls for the whole TTL; it has to have
+      // been cleared, so this retries the chain.
+      const recovered = await http.get("/status").expect(200);
+      expect(recovered.body.vaultLiquidity).toBe(PRINCIPAL_VAULT_BALANCE.toString());
+      expect(recovered.body.operatorSolLow).toBe(false);
+      expect(balanceReads).toBe(before + 2);
     });
 
     it("GET /state advances the cached chain time by the wall time elapsed since it was observed, with no extra clock read", async () => {

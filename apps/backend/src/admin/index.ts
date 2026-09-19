@@ -241,7 +241,13 @@ async function withdrawPrincipal(
   );
 }
 
-async function run(
+/**
+ * The command dispatch, exported so `admin.test.ts` can drive it with a
+ * fabricated ChainService and watch what lands on stdout against stderr.
+ * `main.ts` is the entry point that actually invokes it, so importing this
+ * file never touches an env or a network.
+ */
+export async function run(
   command: AdminCommand,
   chain: ChainService,
   mode: AdminMode,
@@ -285,7 +291,7 @@ async function run(
   }
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   // Same file and precedence as Nest's ConfigModule: process.env wins.
   if (existsSync(".env")) process.loadEnvFile();
 
@@ -309,11 +315,11 @@ async function main(): Promise<void> {
   await run(command, chain, mode);
 }
 
-main().catch((error: unknown) => {
-  // Same cause-chain print as bootstrap.ts: outer message names the step
-  // (here, just "admin"), innermost names the RPC or program error.
+/** Same cause-chain print as bootstrap.ts: the outer message names the step
+ *  (here, just "admin"), the innermost names the RPC or program error. */
+export function reportFailure(error: unknown): void {
   for (let e: unknown = error; e instanceof Error; e = e.cause) {
     log(e === error ? `admin: ${e.message}` : `  caused by: ${e.message}`);
   }
   process.exitCode = 1;
-});
+}

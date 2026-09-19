@@ -17,7 +17,7 @@ const REQUIRED_KEYS = [
 export const DEFAULT_PROGRAM_ID = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6";
 
 /** SOL the operator is warned about falling below, in `/status`. */
-export const DEFAULT_OPERATOR_SOL_WARN = "0.3";
+export const DEFAULT_OPERATOR_SOL_WARN = 0.3;
 
 export interface HexVaultEnv {
   DATABASE_URL: string;
@@ -32,14 +32,35 @@ export interface HexVaultEnv {
   /** The mint the pool takes deposits in: the test mint on devnet, real
    *  USDC on mainnet. Named HEXUSDC_MINT before the mainnet work. */
   ACCEPTED_MINT: string;
-  /** SOL below which `/status` flags the operator as running out of fees. */
-  OPERATOR_SOL_WARN: string;
+  /** SOL below which `/status` flags the operator as running out of fees.
+   *  Parsed here rather than at the reader, so a typo fails the boot instead
+   *  of turning into a NaN comparison that is false forever. */
+  OPERATOR_SOL_WARN: number;
   FAUCET_AMOUNT: string;
   FAUCET_INTERVAL_SECONDS: string;
   CORS_ORIGIN: string;
   PORT: string;
   /** Sparring player secret, base58. Absent switches the Sparring player off. */
   SPARRING_KEYPAIR?: string;
+}
+
+/**
+ * A SOL threshold, as a number. Unset (or set to the empty string, which is
+ * how a compose file spells "not configured") takes the default; anything
+ * that is not a finite amount of SOL fails the boot, because the alternative
+ * is a NaN that silently reports the operator's balance as fine forever.
+ */
+function solWarn(raw: unknown): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_OPERATOR_SOL_WARN;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(
+      `OPERATOR_SOL_WARN must be a non-negative number of SOL, got "${String(raw)}"`,
+    );
+  }
+  return value;
 }
 
 /** @nestjs/config `validate` hook: runs once at boot, on the raw process.env. */
@@ -61,7 +82,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     POOL_ID: String(env.POOL_ID ?? "1"),
     OPERATOR_KEYPAIR: String(env.OPERATOR_KEYPAIR),
     ACCEPTED_MINT: String(acceptedMint),
-    OPERATOR_SOL_WARN: String(env.OPERATOR_SOL_WARN ?? DEFAULT_OPERATOR_SOL_WARN),
+    OPERATOR_SOL_WARN: solWarn(env.OPERATOR_SOL_WARN),
     FAUCET_AMOUNT: String(env.FAUCET_AMOUNT ?? "1000000000"),
     FAUCET_INTERVAL_SECONDS: String(env.FAUCET_INTERVAL_SECONDS ?? "3600"),
     CORS_ORIGIN: String(env.CORS_ORIGIN),

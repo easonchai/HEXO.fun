@@ -12,7 +12,11 @@ import {
 import { unpackAccount } from "@solana/spl-token";
 import { LAMPORTS_PER_SOL, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
-import { ChainService } from "../chain/chain.service";
+import {
+  ChainService,
+  RPC_READ_TIMEOUT_MS,
+  withTimeout,
+} from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { clockUnixTimestamp } from "../operator/chain-state";
 import { PrismaService } from "../prisma/prisma.service";
@@ -129,8 +133,10 @@ interface RpcHealth {
 /**
  * The two balances `/status` reports about the operator's ability to pay:
  * what the principal vault holds against the pending withdrawals, and what
- * the hot key has left for fees. Null when the read failed, which /status
- * says rather than guessing a zero.
+ * the hot key has left for fees. Null means the read failed and the figure
+ * is unknown, which /status says rather than guessing a zero. A missing
+ * account is not that case: a system account nobody has funded holds exactly
+ * 0 lamports, so `operatorSol` reports 0 there.
  */
 interface ChainBalances {
   vaultLiquidity: bigint | null;
@@ -186,7 +192,7 @@ export class ApiService {
     private readonly chain: ChainService,
     config: ConfigService<HexVaultEnv, true>,
   ) {
-    this.operatorSolWarn = Number(config.get("OPERATOR_SOL_WARN", { infer: true }));
+    this.operatorSolWarn = config.get("OPERATOR_SOL_WARN", { infer: true });
   }
 
   async getPool() {
@@ -557,33 +563,56 @@ export class ApiService {
   }
 
   /**
-   * The principal vault's token balance and the operator's SOL, in one
-   * `getMultipleAccountsInfo` and cached for `BALANCES_TTL_MS`, so /status
-   * polling stays one chain call per window rather than two per client.
-   * A failed or missing read reports null rather than a zero that would
-   * read as "the vault is empty" or "the operator is out of fees".
+   * The principal vault's token balance and the operator's SOL. A failed
+   * read reports both as null rather than a zero that would read as "the
+   * vault is empty" or "the operator is out of fees"; a missing vault
+   * account is the same unknown, while a missing operator account is a real
+   * zero, because an unfunded system account holds no lamports.
    */
-  private chainBalances(): Promise<ChainBalances> {
-    this.balances = this.cached(this.balances, BALANCES_TTL_MS, async () => {
-      const operator = this.chain.keypair.publicKey;
-      try {
-        const [vault, fees] = await this.chain.connection.getMultipleAccountsInfo([
-          this.chain.principalVaultAddress(),
-          operator,
-        ]);
-        return {
-          vaultLiquidity: vault
-            ? unpackAccount(this.chain.principalVaultAddress(), vault).amount
-            : null,
-          operatorSol: fees ? fees.lamports / LAMPORTS_PER_SOL : 0,
-        };
-      } catch (cause) {
-        this.logger.warn(
-          `balance read failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        );
-        return { vaultLiquidity: null, operatorSol: null };
-      }
-    });
+  private async chainBalances(): Promise<ChainBalances> {
+    try {
+      return await this.cachedBalances();
+    } catch (cause) {
+      // Computed off the failed promise, so it never becomes the cached
+      // value: `cachedBalances` has already cleared the slot.
+      this.logger.warn(
+        `balance read failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+      return { vaultLiquidity: null, operatorSol: null };
+    }
+  }
+
+  /**
+   * The chain call `chainBalances` caches: one `getMultipleAccountsInfo`
+   * held for `BALANCES_TTL_MS`, so /status polling stays one chain call per
+   * window rather than two per client. Same failure handling as
+   * `cachedJackpotBalance`: a rejected read clears its slot instead of
+   * sitting in it, so the next request retries the chain rather than
+   * serving the same "unknown" for the rest of the window.
+   */
+  private cachedBalances(): Promise<ChainBalances> {
+    if (
+      this.balances === undefined ||
+      Date.now() - this.balances.at > BALANCES_TTL_MS
+    ) {
+      const principalVault = this.chain.principalVaultAddress();
+      const result = withTimeout(
+        this.chain.connection.getMultipleAccountsInfo([
+          principalVault,
+          this.chain.keypair.publicKey,
+        ]),
+        RPC_READ_TIMEOUT_MS,
+        "balance read",
+      ).then(([vault, fees]) => ({
+        vaultLiquidity: vault ? unpackAccount(principalVault, vault).amount : null,
+        operatorSol: fees ? fees.lamports / LAMPORTS_PER_SOL : 0,
+      }));
+      const entry: CachedRead<ChainBalances> = { at: Date.now(), result };
+      this.balances = entry;
+      result.catch(() => {
+        if (this.balances === entry) this.balances = undefined;
+      });
+    }
     return this.balances.result;
   }
 
@@ -702,8 +731,12 @@ function statusFrom(
     vaultLiquidity: balances.vaultLiquidity,
     withdrawShortfall: operator?.withdrawShortfall ?? 0n,
     operatorSol: balances.operatorSol,
+    // Null, not false, when the balance is unknown: a failed read is not
+    // evidence that the operator still has fees.
     operatorSolLow:
-      balances.operatorSol !== null && balances.operatorSol < operatorSolWarn,
+      balances.operatorSol === null
+        ? null
+        : balances.operatorSol < operatorSolWarn,
   };
 }
 

@@ -382,9 +382,18 @@ async function main(): Promise<void> {
     );
   }
 
+  // The inline line above scrolls away behind create_pool's output, and a
+  // wrong ACCEPTED_MINT on devnet costs a faucet and every mint call, so the
+  // authority is repeated once more at the end where it is read.
+  const mintAuthority = await step(
+    "reading the mint authority",
+    async () => (await getMint(connection, mint)).mintAuthority,
+  );
+
   process.stdout.write(
     [
       `ACCEPTED_MINT=${mint.toBase58()}`,
+      `MINT_AUTHORITY=${mintAuthority?.toBase58() ?? "none"}`,
       `PROGRAM_ID=${programId.toBase58()}`,
       `POOL_ID=${poolId}`,
       `POOL_ADDRESS=${pool.toBase58()}`,
@@ -396,6 +405,12 @@ async function main(): Promise<void> {
       "",
     ].join("\n"),
   );
+
+  if (!mintAuthority?.equals(authority.publicKey)) {
+    log(
+      `mint ${mint.toBase58()} is controlled by ${mintAuthority?.toBase58() ?? "nobody"}, not by ${authority.publicKey.toBase58()}: no faucet, no minting`,
+    );
+  }
 }
 
 main().catch((error: unknown) => {

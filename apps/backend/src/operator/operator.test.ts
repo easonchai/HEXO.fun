@@ -617,6 +617,26 @@ describe("runTick", () => {
     ]);
   });
 
+  it("6. lets any other send failure fail the tick", async () => {
+    // An RPC blip is not an unpayable winner: swallowing it would retry
+    // quietly until `payout_timeout` rolled a payable epoch over, with
+    // /status showing no error the whole time.
+    const { ctx, warned } = context({
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+        drawnAt: NOW - 60n,
+      }),
+      winner: async () => Keypair.generate().publicKey.toBase58(),
+      send: async () => {
+        throw new Error("blockhash expired");
+      },
+    });
+    await expect(runTick(ctx)).rejects.toThrow("blockhash expired");
+    expect(warned).toEqual([]);
+  });
+
   it("6. wakes at the payout timeout of a drawn epoch", async () => {
     // Paused with no Round, so nothing else contributes a nearer deadline.
     const result = await tickLabels({
@@ -745,6 +765,27 @@ describe("runTick", () => {
     // A short vault delays cash, never the game: the round still opens.
     expect(outcome.action).toBe("create_round");
     expect((sent[0] ?? []).map(label)).toEqual(["create_round"]);
+  });
+
+  it("6b. sizes the shortfall against the batch it tried, not the whole queue", async () => {
+    const { ctx } = context({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      duePendingWithdrawals: async () =>
+        pending(WITHDRAW_BATCH_SIZE + 3, 4_000_000n),
+      principalVaultBalance: async () => 5_000_000n,
+      send: async () => {
+        throw new Error("InsufficientVaultLiquidity");
+      },
+    });
+    const outcome = await runTick(ctx);
+
+    // Four of the seven were sent: 16 USDC against 5 in the vault. Summing
+    // the whole queue would ask the admin for 23 instead of the 11 the next
+    // transaction actually needs.
+    expect(outcome.withdrawShortfall).toBe(
+      BigInt(WITHDRAW_BATCH_SIZE) * 4_000_000n - 5_000_000n,
+    );
   });
 
   it("6b. lets any other send failure fail the tick", async () => {

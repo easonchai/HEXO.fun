@@ -42,6 +42,25 @@ describe("validateEnv", () => {
     expect(
       validateEnv({ ...base, ACCEPTED_MINT: MINT, OPERATOR_SOL_WARN: "1.5" })
         .OPERATOR_SOL_WARN,
-    ).toBe("1.5");
+    ).toBe(1.5);
+  });
+
+  it("takes a blank operator SOL warning as unset", () => {
+    // How a compose file spells "leave this one alone".
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, OPERATOR_SOL_WARN: "   " })
+        .OPERATOR_SOL_WARN,
+    ).toBe(DEFAULT_OPERATOR_SOL_WARN);
+  });
+
+  it("fails the boot on an operator SOL warning that is not a number", () => {
+    // Number("0.3 SOL") is NaN, and a NaN threshold would report the
+    // operator's balance as healthy for the life of the process.
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, OPERATOR_SOL_WARN: "0.3 SOL" }),
+    ).toThrow(/OPERATOR_SOL_WARN/);
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, OPERATOR_SOL_WARN: "-1" }),
+    ).toThrow(/OPERATOR_SOL_WARN/);
   });
 });

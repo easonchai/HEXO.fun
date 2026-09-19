@@ -1,7 +1,11 @@
 // End to end against a solana-test-validator running the `test-vrf` build:
 //
 //   HEXVAULT_SKIP_BUILD=1 HEXVAULT_RPC_PORT=9299 \
-//     sh tests/run-local.sh src/operator/localnet
+//     sh tests/run-local.sh --root apps/backend --config vitest.config.ts \
+//     src/operator/localnet.test.ts
+//
+// run-local.sh ends in `pnpm exec vitest` from the repo root, so `--root`
+// points vitest at this package and `--config` is then relative to it.
 //
 // Skipped everywhere else, so `pnpm test` in this package stays offline. The
 // operator drives the whole protocol here; the test only deposits, buys two
@@ -141,9 +145,17 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         authority.publicKey,
         Keypair.generate(),
       );
-      // The operator mints into this when the jackpot is short; it has to
-      // exist first, which is what `bootstrap` does in production.
-      await getOrCreateAssociatedTokenAccount(connection, authority, mint, authority.publicKey);
+      // The admin's own token account, holding the prize it will hand to
+      // `fund_jackpot` below. The operator stopped minting the jackpot
+      // (ticket 03), so on a real cluster this is harvested yield; here it
+      // is minted once, up front.
+      const authorityToken = await getOrCreateAssociatedTokenAccount(
+        connection,
+        authority,
+        mint,
+        authority.publicKey,
+      );
+      await mintTo(connection, authority, mint, authorityToken.address, authority, JACKPOT);
 
       const poolId = BigInt(Date.now());
       const programId = String(loadIdl().address);
@@ -154,7 +166,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         POOL_ID: poolId.toString(),
         OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
         ACCEPTED_MINT: mint.toBase58(),
-        OPERATOR_SOL_WARN: "0.3",
+        OPERATOR_SOL_WARN: 0.3,
         FAUCET_AMOUNT: "0",
         FAUCET_INTERVAL_SECONDS: "0",
         CORS_ORIGIN: "http://localhost",
@@ -173,6 +185,9 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       const pool = chain.poolAddress();
       await method("createPool", {
         poolId: new BN(poolId.toString()),
+        // One key plays both roles here: it pays, cranks and administers.
+        admin: authority.publicKey,
+        operator: authority.publicKey,
         vrfNetworkState: VRF_NETWORK_STATE,
         epochSeconds: new BN(86_400),
         epochAnchor: new BN(Math.floor(Date.now() / 1000)),
@@ -184,9 +199,14 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         // for the draw and can win it, and the assertions below expect exactly
         // the two depositors. tests/02-rounds covers the cut itself.
         houseCutBps: 0,
+        minJackpot: new BN(1),
+        // No window and a payout timeout well past this run, so the timing
+        // of the suite is the same as before either parameter existed.
+        registrationWindow: new BN(0),
+        payoutTimeout: new BN(86_400),
       })
         .accountsPartial({
-          authority: authority.publicKey,
+          payer: authority.publicKey,
           pool,
           acceptedMint: mint,
           principalVault: chain.principalVaultAddress(),
@@ -209,8 +229,11 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         vrfTimeout: null,
         minDeposit: null,
         houseCutBps: null,
+        minJackpot: null,
+        registrationWindow: null,
+        payoutTimeout: null,
       })
-        .accountsPartial({ authority: authority.publicKey, pool })
+        .accountsPartial({ admin: authority.publicKey, pool })
         .rpc();
 
       const readPool = async (): Promise<PoolState> => {

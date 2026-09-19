@@ -19,7 +19,11 @@ import {
 } from "@solana/spl-token";
 import { PublicKey } from "@solana/web3.js";
 
-import { ChainService } from "../chain/chain.service";
+import {
+  ChainService,
+  RPC_READ_TIMEOUT_MS,
+  withTimeout,
+} from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -78,11 +82,16 @@ export class FaucetController implements OnModuleInit {
   }
 
   /** A mint this key cannot mint leaves the route off, and so does a read
-   *  that failed: an unknown authority is not permission to try. */
+   *  that failed or timed out: an unknown authority is not permission to
+   *  try, and boot must not hang on an RPC that never answers. */
   async onModuleInit(): Promise<void> {
     const operator = this.chain.keypair.publicKey;
     try {
-      const mint = await getMint(this.chain.connection, this.mint);
+      const mint = await withTimeout(
+        getMint(this.chain.connection, this.mint),
+        RPC_READ_TIMEOUT_MS,
+        `mint ${this.mint.toBase58()} read`,
+      );
       this.isMintAuthority = mint.mintAuthority?.equals(operator) ?? false;
     } catch (cause) {
       this.logger.warn(

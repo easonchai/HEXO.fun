@@ -168,6 +168,80 @@ describe("OperatorService end-of-tick timestamp", () => {
   });
 });
 
+// Step 6b's queue comes straight out of Postgres, so the predicate is the
+// query, not any JS the tick runs afterwards: a wrong `lt`/`lte` here either
+// pays a withdrawal a whole epoch early or never pays it at all.
+describe("OperatorService.duePendingWithdrawals", () => {
+  const owner = (): string => Keypair.generate().publicKey.toBase58();
+
+  const player = (over: {
+    owner: string;
+    pendingWithdraw: bigint;
+    pendingEpoch: bigint;
+  }) => ({
+    principal: 0n,
+    entries: 0n,
+    weightAcc: "0",
+    lastUpdate: 0n,
+    epochId: 0n,
+    frozenWeight: "0",
+    frozenEpoch: 0n,
+    regEpoch: 0n,
+    regStart: "0",
+    regEnd: "0",
+    isHouse: false,
+    ...over,
+  });
+
+  it("returns only the requests the pool has moved past, oldest first", async () => {
+    const prisma = new PrismaService();
+    await prisma.$connect();
+
+    const oldest = owner();
+    const newer = owner();
+    const thisEpoch = owner();
+    const zeroAmount = owner();
+    const owners = [oldest, newer, thisEpoch, zeroAmount];
+    await prisma.player.deleteMany({ where: { owner: { in: owners } } });
+    await prisma.player.createMany({
+      data: [
+        // Out of order on purpose: the ordering has to come from the query.
+        player({ owner: newer, pendingWithdraw: 2_000_000n, pendingEpoch: 4n }),
+        player({ owner: oldest, pendingWithdraw: 1_000_000n, pendingEpoch: 2n }),
+        // Requested in the epoch that is still running: locked until it ends.
+        player({ owner: thisEpoch, pendingWithdraw: 9_000_000n, pendingEpoch: 5n }),
+        // Already paid, so the row survives with nothing owed on it.
+        player({ owner: zeroAmount, pendingWithdraw: 0n, pendingEpoch: 1n }),
+      ],
+    });
+
+    const operator = new OperatorService(
+      {
+        program,
+        programId: PROGRAM_ID,
+        keypair: Keypair.generate(),
+        connection: new CountingConnection(new Map()),
+      } as unknown as ChainService,
+      prisma,
+      { playersToRegister: async () => [], unsettledPositions: async () => [] },
+      noopSparring,
+    );
+
+    try {
+      // Private: the seam this test needs is the query, and reaching it
+      // through a whole fabricated tick would assert the batching instead.
+      const due = await operator["duePendingWithdrawals"](5n);
+      expect(due.filter((entry) => owners.includes(entry.owner))).toEqual([
+        { owner: oldest, amount: 1_000_000n },
+        { owner: newer, amount: 2_000_000n },
+      ]);
+    } finally {
+      await prisma.player.deleteMany({ where: { owner: { in: owners } } });
+      await prisma.$disconnect();
+    }
+  });
+});
+
 describe("OperatorService read budget", () => {
   it("costs two account reads per tick and sleeps the safety interval when there is nothing to do", async () => {
     const prisma = new PrismaService();

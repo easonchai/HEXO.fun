@@ -1,3 +1,4 @@
+import { Keypair } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -91,6 +92,38 @@ describe("parsePoolParams", () => {
     expect(() => parsePoolParams(["--house-cut-bps", "1.5"])).toThrow(
       /0 to 10000/,
     );
+  });
+
+  it("takes the two role keys as base58 pubkeys", () => {
+    const admin = Keypair.generate().publicKey;
+    const operator = Keypair.generate().publicKey;
+    const params = parsePoolParams([
+      "--admin",
+      admin.toBase58(),
+      "--operator",
+      operator.toBase58(),
+    ]);
+    expect(params.admin?.equals(admin)).toBe(true);
+    expect(params.operator?.equals(operator)).toBe(true);
+  });
+
+  it("leaves both role keys unset when neither flag is given", () => {
+    // bootstrap.ts falls back to ADMIN_ADDRESS and then to the signer, so
+    // "absent" has to stay absent rather than becoming the default pubkey.
+    expect(parsePoolParams([])).not.toHaveProperty("admin");
+    expect(parsePoolParams([])).not.toHaveProperty("operator");
+  });
+
+  it("rejects a role key that is not a pubkey", () => {
+    // create_pool refuses a default admin or operator, and a typo caught
+    // here costs nothing, while one caught on chain costs the mint and both
+    // vaults that bootstrap has already created.
+    expect(() => parsePoolParams(["--admin", "not-a-pubkey"])).toThrow(
+      /--admin must be a base58 pubkey/,
+    );
+    expect(() =>
+      parsePoolParams(["--operator", Keypair.generate().publicKey.toBase58().slice(0, 10)]),
+    ).toThrow(/--operator must be a base58 pubkey/);
   });
 
   it("takes the anchor as an ISO 8601 time", () => {
