@@ -46,7 +46,9 @@ async function get<T>(
 export interface PoolDto {
   address: string;
   poolId: string;
-  authority: string;
+  admin: string;
+  operator: string;
+  pendingAdmin: string | null;
   mint: string;
   epochSeconds: string;
   epochAnchor: string;

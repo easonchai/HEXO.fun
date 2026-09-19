@@ -54,13 +54,22 @@ const QUICK_ADDS = [50n, 100n, 500n] as const;
 const VAULT_SHORT_CODE = "6036";
 const VAULT_SHORT_NOTE =
   "The vault is being topped up. Try the payout again in a few minutes.";
+/**
+ * `NothingPending` (6038): the operator's crank paid this withdrawal before
+ * the click landed. The money is already in the wallet.
+ */
+const NOTHING_PENDING_CODE = "6038";
+const NOTHING_PENDING_NOTE = "Already paid out. Refreshing your balance.";
 
-const payoutError = (error: unknown): string => {
+export const payoutError = (error: unknown): string => {
   const text = error instanceof Error ? error.message : String(error);
-  return text.includes(VAULT_SHORT_CODE) ||
-    text.includes("InsufficientVaultLiquidity")
-    ? VAULT_SHORT_NOTE
-    : text;
+  if (text.includes(VAULT_SHORT_CODE) || text.includes("InsufficientVaultLiquidity")) {
+    return VAULT_SHORT_NOTE;
+  }
+  if (text.includes(NOTHING_PENDING_CODE) || text.includes("NothingPending")) {
+    return NOTHING_PENDING_NOTE;
+  }
+  return text;
 };
 
 export type VaultMode = "deposit" | "withdraw";
@@ -217,8 +226,16 @@ export function Vault(props: VaultScreenProps) {
       setNote({ tone: "ok", text: "Payout sent." });
       onDone();
     } catch (error) {
-      setPayoutSent(null);
-      setNote({ tone: "err", text: payoutError(error) });
+      const text = payoutError(error);
+      // Already paid by the operator: the read model is stale, so refresh it
+      // the same way a successful payout does instead of offering the button again.
+      if (text === NOTHING_PENDING_NOTE) {
+        setNote({ tone: "ok", text });
+        onDone();
+      } else {
+        setPayoutSent(null);
+        setNote({ tone: "err", text });
+      }
     } finally {
       setBusy(false);
     }
@@ -349,7 +366,7 @@ export function Vault(props: VaultScreenProps) {
                         ? `pays out after day #${pending.epoch} ends`
                         : pending.kind === "processing"
                           ? "paying out…"
-                          : "processing"}
+                          : "ready"}
                     </span>
                     {pending.kind === "due" ? (
                       <button
