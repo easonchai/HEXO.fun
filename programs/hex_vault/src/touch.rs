@@ -140,6 +140,8 @@ mod tests {
             bump: 0,
             principal_vault_bump: 0,
             jackpot_vault_bump: 0,
+            pending_withdrawals: 0,
+            min_jackpot: 1_000_000,
         }
     }
 
@@ -158,6 +160,8 @@ mod tests {
             reg_end: 0,
             is_house: false,
             bump: 0,
+            pending_withdraw: 0,
+            pending_epoch: 0,
         }
     }
 

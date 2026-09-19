@@ -84,4 +84,16 @@ pub enum HexVaultError {
     Unauthorized,
     #[msg("no admin handover is pending")]
     NoPendingAdmin,
+
+    // Epoch-locked withdrawals and deployed principal. Appended too.
+    #[msg("the principal vault cannot cover this payout yet")]
+    InsufficientVaultLiquidity,
+    #[msg("the withdrawal's epoch has not ended yet")]
+    WithdrawalNotDue,
+    #[msg("no withdrawal is pending for this player")]
+    NothingPending,
+    #[msg("the pull would leave the vault below its pending withdrawals")]
+    BelowPendingWithdrawals,
+    #[msg("destination is not the admin's associated token account")]
+    InvalidAdminTokenAccount,
 }

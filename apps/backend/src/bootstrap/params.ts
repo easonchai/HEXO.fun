@@ -19,6 +19,9 @@ export interface PoolParams {
   readonly minDeposit: bigint;
   /** Basis points of every settled round pot credited to the House, 0..=10_000. */
   readonly houseCutBps: number;
+  /** Atomic units. An epoch closing with less than this in the jackpot vault
+   * rolls over instead of paying out dust. */
+  readonly minJackpot: bigint;
 }
 
 /**
@@ -47,10 +50,24 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
   vrfTimeout: 120,
   minDeposit: 1_000_000n, // 1 hexUSDC at 6 decimals
   houseCutBps: 600, // 6%, the rate PRD-V2 §5.4 asks for
+  minJackpot: 1_000_000n, // 1 hexUSDC at 6 decimals
 };
 
 export const USAGE =
-  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--admin PUBKEY] [--operator PUBKEY]";
+  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--admin PUBKEY] [--operator PUBKEY]";
+
+/** The accepted mint is 6 decimals on every cluster we run on (bootstrap.ts
+ * rejects any other), so whole USDC scales by a constant. */
+const USDC_DECIMALS = 1_000_000n;
+
+/** `--min-jackpot` is whole USDC, because dust is what the floor exists to
+ * stop and nobody wants to count zeros on the command line. */
+export function wholeUsdc(flag: string, raw: string): bigint {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`--${flag} must be a whole number of USDC, got "${raw}"`);
+  }
+  return BigInt(raw) * USDC_DECIMALS;
+}
 
 function pubkey(flag: string, raw: string): PublicKey {
   try {
@@ -102,6 +119,7 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     "round-seconds"?: string;
     "epoch-anchor"?: string;
     "house-cut-bps"?: string;
+    "min-jackpot"?: string;
     admin?: string;
     operator?: string;
   };
@@ -113,6 +131,7 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
         "round-seconds": { type: "string" },
         "epoch-anchor": { type: "string" },
         "house-cut-bps": { type: "string" },
+        "min-jackpot": { type: "string" },
         admin: { type: "string" },
         operator: { type: "string" },
       },
@@ -140,6 +159,9 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     ...(houseCut === undefined
       ? {}
       : { houseCutBps: houseCutBps("house-cut-bps", houseCut) }),
+    ...(values["min-jackpot"] === undefined
+      ? {}
+      : { minJackpot: wholeUsdc("min-jackpot", values["min-jackpot"]) }),
     ...(values.admin === undefined
       ? {}
       : { admin: pubkey("admin", values.admin) }),

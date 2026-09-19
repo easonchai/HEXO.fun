@@ -141,6 +141,31 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Retries `fn` until it stops throwing. The localnet validator's on-chain
+ * clock does not track wall-clock time closely enough to compute a sleep
+ * duration from an `i64` unix-seconds deadline and `Date.now()` (observed
+ * lagging real time by a few seconds over a short epoch), so every
+ * time-gated instruction (an epoch or round boundary, a vrf timeout) is
+ * driven by polling instead of a single calculated sleep.
+ */
+export async function retryUntilOk<T>(
+  fn: () => Promise<T>,
+  intervalMs = 750,
+  maxAttempts = 120,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      await sleep(intervalMs);
+    }
+  }
+  throw lastError;
+}
+
 /** The validator's actual on-chain clock (not `Date.now()`, which drifts a
  * few seconds from it and so is an unreliable proxy over a short window). */
 export async function onChainNowSeconds(): Promise<number> {
@@ -149,6 +174,13 @@ export async function onChainNowSeconds(): Promise<number> {
     const time = await connection.getBlockTime(slot);
     if (time !== null) return time;
     await sleep(200);
+  }
+}
+
+/** Blocks until the validator's own clock reaches `targetUnixSeconds`. */
+export async function sleepUntilOnChain(targetUnixSeconds: number): Promise<void> {
+  while ((await onChainNowSeconds()) < targetUnixSeconds) {
+    await sleep(500);
   }
 }
 
@@ -199,6 +231,10 @@ export interface PoolParamsOverrides {
   /** House cut in basis points, 0..=10_000. Defaults to the bootstrap rate,
    * so every round test settles against the cut the product ships with. */
   houseCutBps?: number;
+  /** Jackpot floor below which `close_registration` rolls the epoch over.
+   * Defaults to 0 (no floor) so a test that never funds the jackpot still
+   * reaches the draw; the low-jackpot test sets it. */
+  minJackpot?: number;
   /** Reuse an existing mint instead of creating a fresh one (e.g. to test
    * two pools sharing an accepted asset). The caller must not rely on this
    * pool's operator being the mint authority when a shared mint is passed. */
@@ -213,6 +249,7 @@ const DEFAULT_PARAMS = {
   vrfTimeout: 120,
   minDeposit: 1_000_000, // 1 hexUSDC at 6 decimals
   houseCutBps: 600, // 6%, the bootstrap default
+  minJackpot: 0,
 };
 
 export interface PoolCtx {
@@ -290,6 +327,7 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       vrfTimeout: new BN(params.vrfTimeout),
       minDeposit: new BN(params.minDeposit),
       houseCutBps: params.houseCutBps,
+      minJackpot: new BN(params.minJackpot),
     })
     .accountsPartial({
       payer: operator.publicKey,

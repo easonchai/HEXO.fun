@@ -93,6 +93,8 @@ async function setParams(chain: ChainService, params: SetParamsInput): Promise<v
     vrfTimeout: bnOrNull(params.vrfTimeout),
     minDeposit: params.minDeposit === undefined ? null : new BN(params.minDeposit.toString()),
     houseCutBps: params.houseCutBps === undefined ? null : params.houseCutBps,
+    // No CLI flag for this one yet (ticket 04); null leaves it as it is.
+    minJackpot: null,
   })
     .accountsPartial({ admin: chain.keypair.publicKey, pool: chain.poolAddress() })
     .instruction();

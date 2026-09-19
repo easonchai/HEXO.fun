@@ -3,7 +3,8 @@
 //!
 //! This module only declares instructions and delegates to their owning
 //! module. Custody (`create_pool`, `set_params`, `set_pause`, `deposit`,
-//! `withdraw`) is implemented in `custody.rs`. Rounds and epochs are stubs
+//! `request_withdraw`, `process_withdraw`, `admin_withdraw`) is implemented
+//! in `custody.rs`. Rounds and epochs are stubs
 //! here on purpose: their accounts are final so the IDL does not churn, but
 //! their bodies land in tickets 03 and 04, entirely inside `rounds.rs` and
 //! `epochs.rs` so this file never needs to change again for them.
@@ -65,8 +66,16 @@ pub mod hex_vault {
         custody::deposit(ctx, amount)
     }
 
-    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
-        custody::withdraw(ctx, amount)
+    pub fn request_withdraw(ctx: Context<RequestWithdraw>, amount: u64) -> Result<()> {
+        custody::request_withdraw(ctx, amount)
+    }
+
+    pub fn process_withdraw(ctx: Context<ProcessWithdraw>) -> Result<()> {
+        custody::process_withdraw(ctx)
+    }
+
+    pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
+        custody::admin_withdraw(ctx, amount)
     }
 
     // Rounds (spec §2.3 "Rounds") - stubs, ticket 03 implements these.

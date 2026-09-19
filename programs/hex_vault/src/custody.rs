@@ -1,18 +1,20 @@
 //! Pool lifecycle and Principal custody (spec §2.3 "Custody").
 //!
-//! `deposit` and `withdraw` are permissionless. `set_params`, `set_operator`,
-//! `propose_admin` and unpausing are admin-only via `has_one = admin` on the
-//! Pool account; pausing takes the admin or the operator, so `SetPause` names
-//! its signer `signer` and the handler decides.
+//! `deposit`, `request_withdraw` and `process_withdraw` are permissionless.
+//! `set_params`, `set_operator`, `propose_admin`, `admin_withdraw` and
+//! unpausing are admin-only via `has_one = admin` on the Pool account;
+//! pausing takes the admin or the operator, so `SetPause` names its signer
+//! `signer` and the handler decides.
 
 use anchor_lang::prelude::*;
+use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::constants::{BPS_DENOMINATOR, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
 use crate::errors::HexVaultError;
 use crate::events::{
     AdminChanged, AdminProposed, Deposited, OperatorChanged, ParamsSet, Paused, PoolCreated,
-    Withdrawn,
+    PrincipalDeployed, WithdrawRequested, Withdrawn,
 };
 use crate::state::{Player, Pool};
 use crate::touch::touch;
@@ -33,6 +35,7 @@ pub struct CreatePoolParams {
     pub vrf_timeout: i64,
     pub min_deposit: u64,
     pub house_cut_bps: u16,
+    pub min_jackpot: u64,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
@@ -44,6 +47,7 @@ pub struct SetParamsArgs {
     pub vrf_timeout: Option<i64>,
     pub min_deposit: Option<u64>,
     pub house_cut_bps: Option<u16>,
+    pub min_jackpot: Option<u64>,
 }
 
 pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result<()> {
@@ -83,6 +87,8 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.vrf_timeout = params.vrf_timeout;
     pool.min_deposit = params.min_deposit;
     pool.house_cut_bps = params.house_cut_bps;
+    pool.min_jackpot = params.min_jackpot;
+    pool.pending_withdrawals = 0;
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
@@ -114,6 +120,8 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     house.reg_end = 0;
     house.is_house = true;
     house.bump = ctx.bumps.house;
+    house.pending_withdraw = 0;
+    house.pending_epoch = 0;
 
     emit!(PoolCreated {
         pool: pool.key(),
@@ -157,6 +165,9 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
     if let Some(v) = params.house_cut_bps {
         require!(v <= BPS_DENOMINATOR, HexVaultError::InvalidParameter);
         pool.house_cut_bps = v;
+    }
+    if let Some(v) = params.min_jackpot {
+        pool.min_jackpot = v;
     }
 
     emit!(ParamsSet {
@@ -292,32 +303,78 @@ pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
     Ok(())
 }
 
-pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+/// Books a withdrawal without moving any USDC (ADR 0009). The principal is
+/// lent out for most of the epoch, so the transfer waits for
+/// `process_withdraw` after the epoch this request was made in has ended.
+///
+/// A second request while one is still pending merges into it and re-stamps
+/// `pending_epoch`, so an unpaid earlier request slides to the later epoch.
+/// The operator pays every due request at each epoch start, so that only
+/// costs a depositor who requests again before the first payout landed.
+pub fn request_withdraw(ctx: Context<RequestWithdraw>, amount: u64) -> Result<()> {
     let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
     let player = &mut ctx.accounts.player;
     touch(player, pool, now)?;
 
-    // Invariant 3: withdraw is never blocked by `paused`.
+    // Invariant 3: a withdrawal is never blocked by `paused`.
     require!(amount > 0, HexVaultError::ZeroAmount);
     require!(
         player.principal >= amount,
         HexVaultError::InsufficientPrincipal
     );
-    require!(player.entries >= amount, HexVaultError::InsufficientEntries);
 
     player.principal = player
         .principal
         .checked_sub(amount)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
-    player.entries = player
-        .entries
-        .checked_sub(amount)
-        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    // No `entries >= amount` rule: the payout lands after the boundary where
+    // Entries would have reset to Principal anyway, so a player who lost
+    // every Entry in rounds is not locked out for an extra epoch. Entries
+    // may exceed Principal pool-wide until that boundary.
+    player.entries = player.entries.saturating_sub(amount);
     pool.total_principal = pool
         .total_principal
         .checked_sub(amount)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+    player.pending_withdraw = player
+        .pending_withdraw
+        .checked_add(amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    pool.pending_withdrawals = pool
+        .pending_withdrawals
+        .checked_add(amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    player.pending_epoch = pool.current_epoch_id;
+
+    emit!(WithdrawRequested {
+        owner: ctx.accounts.owner.key(),
+        amount,
+        pending: player.pending_withdraw,
+        pending_epoch: player.pending_epoch,
+    });
+    Ok(())
+}
+
+/// Pays a matured request. No signer at all: the operator pushes these every
+/// epoch, and the depositor (or anyone) can push their own if it does not.
+pub fn process_withdraw(ctx: Context<ProcessWithdraw>) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    let player = &mut ctx.accounts.player;
+
+    let pending = player.pending_withdraw;
+    require!(pending > 0, HexVaultError::NothingPending);
+    require!(
+        pool.current_epoch_id > player.pending_epoch,
+        HexVaultError::WithdrawalNotDue
+    );
+    // Checked before anything is written, so a vault still waiting on the
+    // yield venue leaves the request exactly as it was for the next attempt.
+    require!(
+        ctx.accounts.principal_vault.amount >= pending,
+        HexVaultError::InsufficientVaultLiquidity
+    );
 
     let pool_id_bytes = pool.pool_id.to_le_bytes();
     let pool_bump = [pool.bump];
@@ -334,15 +391,67 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
             },
             &[signer_seeds],
         ),
+        pending,
+        ctx.accounts.accepted_mint.decimals,
+    )?;
+
+    player.pending_withdraw = 0;
+    pool.pending_withdrawals = pool
+        .pending_withdrawals
+        .checked_sub(pending)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+    emit!(Withdrawn {
+        owner: player.owner,
+        amount: pending,
+        principal: player.principal,
+        entries: player.entries,
+    });
+    Ok(())
+}
+
+/// Sends principal to the admin's own associated token account so it can be
+/// lent off-program (ADR 0010). `total_principal` is untouched: depositor
+/// claims do not change with where the USDC is sitting, and readers derive
+/// the deployed amount as `total_principal - vault.amount`. Bringing it back
+/// is a plain SPL transfer into the vault, with no instruction behind it.
+pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
+    let pool = &ctx.accounts.pool;
+    require!(amount > 0, HexVaultError::ZeroAmount);
+
+    let remaining = ctx
+        .accounts
+        .principal_vault
+        .amount
+        .checked_sub(amount)
+        .ok_or(HexVaultError::BelowPendingWithdrawals)?;
+    require!(
+        remaining >= pool.pending_withdrawals,
+        HexVaultError::BelowPendingWithdrawals
+    );
+
+    let pool_id_bytes = pool.pool_id.to_le_bytes();
+    let pool_bump = [pool.bump];
+    let signer_seeds: &[&[u8]] = &[SEED_POOL, &pool_id_bytes, &pool_bump];
+
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.principal_vault.to_account_info(),
+                mint: ctx.accounts.accepted_mint.to_account_info(),
+                to: ctx.accounts.admin_token.to_account_info(),
+                authority: pool.to_account_info(),
+            },
+            &[signer_seeds],
+        ),
         amount,
         ctx.accounts.accepted_mint.decimals,
     )?;
 
-    emit!(Withdrawn {
-        owner: ctx.accounts.owner.key(),
+    emit!(PrincipalDeployed {
         amount,
-        principal: player.principal,
-        entries: player.entries,
+        vault_remaining: remaining,
     });
     Ok(())
 }
@@ -521,9 +630,9 @@ pub struct Deposit<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// No token accounts: the request moves nothing.
 #[derive(Accounts)]
-pub struct Withdraw<'info> {
-    #[account(mut)]
+pub struct RequestWithdraw<'info> {
     pub owner: Signer<'info>,
 
     #[account(
@@ -539,6 +648,25 @@ pub struct Withdraw<'info> {
         bump = player.bump,
     )]
     pub player: Account<'info, Player>,
+}
+
+#[derive(Accounts)]
+pub struct ProcessWithdraw<'info> {
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+    )]
+    pub pool: Box<Account<'info, Pool>>,
+
+    /// Seeded from its own `owner`, which is what makes this safe without a
+    /// signer: the destination below has to belong to that same owner.
+    #[account(
+        mut,
+        seeds = [SEED_PLAYER, pool.key().as_ref(), player.owner.as_ref()],
+        bump = player.bump,
+    )]
+    pub player: Box<Account<'info, Player>>,
 
     #[account(address = pool.accepted_mint @ HexVaultError::MintMismatch)]
     pub accepted_mint: Box<InterfaceAccount<'info, Mint>>,
@@ -546,10 +674,50 @@ pub struct Withdraw<'info> {
     #[account(
         mut,
         token::mint = accepted_mint,
-        token::authority = owner,
+        token::authority = player.owner,
         token::token_program = token_program,
     )]
     pub owner_token: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [SEED_PRINCIPAL, pool.key().as_ref()],
+        bump = pool.principal_vault_bump,
+        token::mint = accepted_mint,
+        token::authority = pool,
+        token::token_program = token_program,
+    )]
+    pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct AdminWithdraw<'info> {
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+        has_one = admin,
+    )]
+    pub pool: Box<Account<'info, Pool>>,
+
+    #[account(address = pool.accepted_mint @ HexVaultError::MintMismatch)]
+    pub accepted_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// Checked by address, not just by owner: a fat-fingered destination
+    /// fails here rather than landing somewhere the admin has to chase.
+    #[account(
+        mut,
+        address = get_associated_token_address_with_program_id(
+            &admin.key(),
+            &accepted_mint.key(),
+            &token_program.key(),
+        ) @ HexVaultError::InvalidAdminTokenAccount,
+    )]
+    pub admin_token: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         mut,

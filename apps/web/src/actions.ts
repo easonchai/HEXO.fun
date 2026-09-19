@@ -90,7 +90,12 @@ export async function deposit(
   return send(program, owner, builder);
 }
 
-export async function withdraw(
+/**
+ * Books the withdrawal. No USDC moves here: `process_withdraw` pays it out
+ * once the epoch this lands in has ended (ADR 0009). Ticket 05 builds the UI
+ * around the wait; this is the same button pointed at the new instruction.
+ */
+export async function requestWithdraw(
   program: HexVaultProgram,
   owner: TxSigner,
   pool: PoolLike,
@@ -99,16 +104,12 @@ export async function withdraw(
   const o = owner.publicKey;
   const builder = method(
     program,
-    "withdraw",
+    "requestWithdraw",
   )(bn(amount))
     .accounts({
       owner: o,
       pool: pool.address,
       player: playerAddress(pool.address, o),
-      acceptedMint: pool.acceptedMint,
-      ownerToken: acceptedAta(pool.acceptedMint, o),
-      principalVault: principalVaultAddress(pool.address),
-      tokenProgram: TOKEN_PROGRAM,
     });
   return send(program, owner, builder);
 }

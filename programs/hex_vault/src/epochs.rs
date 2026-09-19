@@ -225,7 +225,9 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
 
     epoch.jackpot_amount = ctx.accounts.jackpot_vault.amount;
 
-    if epoch.registered_weight == 0 {
+    // Nothing to draw for, or too little to be worth drawing for: roll the
+    // prize into the next epoch rather than spend a randomness request on it.
+    if epoch.registered_weight == 0 || epoch.jackpot_amount < pool.min_jackpot {
         epoch.status = epoch_status::ROLLED_OVER;
         emit!(EpochRolledOver {
             epoch_id: epoch.epoch_id,

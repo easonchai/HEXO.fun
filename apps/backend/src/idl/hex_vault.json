@@ -54,6 +54,96 @@
       "args": []
     },
     {
+      "name": "admin_withdraw",
+      "discriminator": [
+        160,
+        166,
+        147,
+        222,
+        46,
+        220,
+        75,
+        224
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "admin_token",
+          "docs": [
+            "Checked by address, not just by owner: a fat-fingered destination",
+            "fails here rather than landing somewhere the admin has to chase."
+          ],
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "begin_epoch",
       "discriminator": [
         56,
@@ -1068,6 +1158,112 @@
       "args": []
     },
     {
+      "name": "process_withdraw",
+      "discriminator": [
+        166,
+        189,
+        47,
+        170,
+        19,
+        135,
+        210,
+        19
+      ],
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "docs": [
+            "Seeded from its own `owner`, which is what makes this safe without a",
+            "signer: the destination below has to belong to that same owner."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "owner_token",
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "propose_admin",
       "discriminator": [
         121,
@@ -1307,6 +1503,80 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "request_withdraw",
+      "discriminator": [
+        137,
+        95,
+        187,
+        96,
+        250,
+        138,
+        31,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "rollover_epoch",
@@ -1836,117 +2106,6 @@
         }
       ],
       "args": []
-    },
-    {
-      "name": "withdraw",
-      "discriminator": [
-        183,
-        18,
-        70,
-        156,
-        148,
-        109,
-        161,
-        34
-      ],
-      "accounts": [
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "pool",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  111,
-                  108
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "pool.pool_id",
-                "account": "Pool"
-              }
-            ]
-          }
-        },
-        {
-          "name": "player",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "pool"
-              },
-              {
-                "kind": "account",
-                "path": "owner"
-              }
-            ]
-          }
-        },
-        {
-          "name": "accepted_mint"
-        },
-        {
-          "name": "owner_token",
-          "writable": true
-        },
-        {
-          "name": "principal_vault",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  105,
-                  110,
-                  99,
-                  105,
-                  112,
-                  97,
-                  108
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "pool"
-              }
-            ]
-          }
-        },
-        {
-          "name": "token_program"
-        }
-      ],
-      "args": [
-        {
-          "name": "amount",
-          "type": "u64"
-        }
-      ]
     }
   ],
   "accounts": [
@@ -2200,6 +2359,19 @@
       ]
     },
     {
+      "name": "PrincipalDeployed",
+      "discriminator": [
+        246,
+        19,
+        6,
+        131,
+        183,
+        199,
+        220,
+        131
+      ]
+    },
+    {
       "name": "Registered",
       "discriminator": [
         11,
@@ -2249,6 +2421,19 @@
         201,
         103,
         69
+      ]
+    },
+    {
+      "name": "WithdrawRequested",
+      "discriminator": [
+        114,
+        16,
+        240,
+        206,
+        93,
+        128,
+        151,
+        39
       ]
     },
     {
@@ -2445,6 +2630,31 @@
       "code": 6035,
       "name": "NoPendingAdmin",
       "msg": "no admin handover is pending"
+    },
+    {
+      "code": 6036,
+      "name": "InsufficientVaultLiquidity",
+      "msg": "the principal vault cannot cover this payout yet"
+    },
+    {
+      "code": 6037,
+      "name": "WithdrawalNotDue",
+      "msg": "the withdrawal's epoch has not ended yet"
+    },
+    {
+      "code": 6038,
+      "name": "NothingPending",
+      "msg": "no withdrawal is pending for this player"
+    },
+    {
+      "code": 6039,
+      "name": "BelowPendingWithdrawals",
+      "msg": "the pull would leave the vault below its pending withdrawals"
+    },
+    {
+      "code": 6040,
+      "name": "InvalidAdminTokenAccount",
+      "msg": "destination is not the admin's associated token account"
     }
   ],
   "types": [
@@ -2536,6 +2746,10 @@
           {
             "name": "house_cut_bps",
             "type": "u16"
+          },
+          {
+            "name": "min_jackpot",
+            "type": "u64"
           }
         ]
       }
@@ -2887,6 +3101,22 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "pending_withdraw",
+            "docs": [
+              "Principal already deducted and waiting for `process_withdraw` to move",
+              "the USDC. 0 when nothing is owed."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pending_epoch",
+            "docs": [
+              "The epoch the pending amount was requested in. It pays out once",
+              "`pool.current_epoch_id` is past it."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3089,6 +3319,22 @@
           {
             "name": "jackpot_vault_bump",
             "type": "u8"
+          },
+          {
+            "name": "pending_withdrawals",
+            "docs": [
+              "Σ `Player.pending_withdraw` across the pool. `admin_withdraw` refuses",
+              "to leave the principal vault holding less than this."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "min_jackpot",
+            "docs": [
+              "An epoch whose jackpot vault holds less than this at",
+              "`close_registration` rolls over instead of paying out dust."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3198,6 +3444,26 @@
           },
           {
             "name": "reward",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PrincipalDeployed",
+      "docs": [
+        "The admin pulled principal out to a yield venue. Coming back is a plain",
+        "SPL transfer into the vault, so there is no matching event for the return."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "vault_remaining",
             "type": "u64"
           }
         ]
@@ -3441,12 +3707,51 @@
             "type": {
               "option": "u16"
             }
+          },
+          {
+            "name": "min_jackpot",
+            "type": {
+              "option": "u64"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "WithdrawRequested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "This request alone."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pending",
+            "docs": [
+              "Everything the player now has waiting, this request included."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pending_epoch",
+            "type": "u64"
           }
         ]
       }
     },
     {
       "name": "Withdrawn",
+      "docs": [
+        "A `Withdrawn` event follows once `process_withdraw` moves the USDC."
+      ],
       "type": {
         "kind": "struct",
         "fields": [

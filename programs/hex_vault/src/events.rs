@@ -59,11 +59,30 @@ pub struct Deposited {
 }
 
 #[event]
+pub struct WithdrawRequested {
+    pub owner: Pubkey,
+    /// This request alone.
+    pub amount: u64,
+    /// Everything the player now has waiting, this request included.
+    pub pending: u64,
+    pub pending_epoch: u64,
+}
+
+/// A `Withdrawn` event follows once `process_withdraw` moves the USDC.
+#[event]
 pub struct Withdrawn {
     pub owner: Pubkey,
     pub amount: u64,
     pub principal: u64,
     pub entries: u64,
+}
+
+/// The admin pulled principal out to a yield venue. Coming back is a plain
+/// SPL transfer into the vault, so there is no matching event for the return.
+#[event]
+pub struct PrincipalDeployed {
+    pub amount: u64,
+    pub vault_remaining: u64,
 }
 
 #[event]

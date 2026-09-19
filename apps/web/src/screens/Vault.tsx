@@ -1,7 +1,8 @@
 /**
  * VAULT tab: the Figma "Deposit" frame. One widget with DEPOSIT / WITHDRAW
- * tabs on the HOME halftone background. The program is the custody boundary:
- * Principal and Tickets move together, so a withdrawal needs both.
+ * tabs on the HOME halftone background. The program is the custody boundary.
+ * WITHDRAW sends `request_withdraw`, which deducts Principal now and pays
+ * out after the epoch ends; ticket 05 builds the pending state around it.
  *
  * Ticket 07: `currentEpoch` comes from App's one `GET /state` poll instead
  * of a duplicate `/epochs/current` poll of its own; `onDone` tightens that
@@ -10,7 +11,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
-import { deposit, withdraw, type TxSigner } from "../actions.js";
+import { deposit, requestWithdraw, type TxSigner } from "../actions.js";
 import type { CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
 import type { HexVaultProgram } from "../chain.js";
@@ -165,7 +166,7 @@ export function Vault(props: VaultScreenProps) {
     if (mode === "deposit") {
       void run("Deposit", () => deposit(program, signer, pool, amount));
     } else {
-      void run("Withdraw", () => withdraw(program, signer, pool, amount));
+      void run("Withdraw", () => requestWithdraw(program, signer, pool, amount));
     }
   };
 

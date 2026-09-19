@@ -70,6 +70,12 @@ pub struct Pool {
     pub bump: u8,
     pub principal_vault_bump: u8,
     pub jackpot_vault_bump: u8,
+    /// Σ `Player.pending_withdraw` across the pool. `admin_withdraw` refuses
+    /// to leave the principal vault holding less than this.
+    pub pending_withdrawals: u64,
+    /// An epoch whose jackpot vault holds less than this at
+    /// `close_registration` rolls over instead of paying out dust.
+    pub min_jackpot: u64,
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.
@@ -140,6 +146,12 @@ pub struct Player {
     pub reg_end: u128,
     pub is_house: bool,
     pub bump: u8,
+    /// Principal already deducted and waiting for `process_withdraw` to move
+    /// the USDC. 0 when nothing is owed.
+    pub pending_withdraw: u64,
+    /// The epoch the pending amount was requested in. It pays out once
+    /// `pool.current_epoch_id` is past it.
+    pub pending_epoch: u64,
 }
 
 /// A Player's single immutable placement in one round.
