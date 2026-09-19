@@ -20,24 +20,32 @@ _Avoid_: Stake, mine, buy-in
 A depositor's 1:1 claim on the USDC they deposited, tracked as a number in their Player account. Never at risk in the game or the draw.
 _Avoid_: PT, principal token, receipt, balance
 
+**Deployed principal**:
+The USDC the Admin has moved out of the principal vault to earn yield during an epoch. Readers derive it as `total_principal` minus the vault's balance; no account stores it. `admin_withdraw` refuses a pull that would leave the vault holding less than the pool's Pending withdrawals.
+_Avoid_: Invested principal, float, TVL, deployed capital
+
 **Withdraw**:
-Removing principal from the pool. A withdrawal of `x` requires both Principal and Tickets of at least `x`, and reduces both by `x`.
-_Avoid_: Unstake, redeem, cash out
+Removing principal from the pool, in two steps. A request for `x` requires Principal of at least `x`, and deducts `x` from Principal and `min(Tickets, x)` from Tickets at once. It pays out after the epoch in which it was requested ends, when anyone may push the transfer. A pause never blocks a request. Code calls the two instructions `request_withdraw` and `process_withdraw`.
+_Avoid_: Unstake, redeem, cash out, instant withdrawal
+
+**Pending withdrawal**:
+A requested withdrawal whose USDC has not moved yet. It lives on the Player as `pending_withdraw` and `pending_epoch`, and is summed across the pool as `Pool.pending_withdrawals`. The Principal and Tickets behind it are already gone; the transfer happens on the first `process_withdraw` after `pending_epoch` ends, and fails with `InsufficientVaultLiquidity` while the vault is short.
+_Avoid_: Queue, unbonding, escrow, claim
 
 **Player**:
 One wallet's account in one pool: its Principal, Tickets, weight accumulator, and registration interval.
 _Avoid_: User account, position (a game concept)
 
 **House**:
-The Player account owned by the pool authority. It holds no Principal, receives forfeited round pots as Tickets, and competes in the draw like any player. Its Tickets reset to zero each epoch.
+The Player account owned by the Operator key. It holds no Principal, receives forfeited round pots as Tickets, and competes in the draw like any player. Its Tickets reset to zero each epoch.
 _Avoid_: Admin wallet, protocol player, operator (a service, not an account)
 
 **Treasury**:
-The authority-owned USDC account that receives 20% of a prize the House wins.
+The USDC account that receives 20% of a prize the House wins. `create_pool` is given its address, and on mainnet that address is the Admin multisig's associated token account.
 _Avoid_: Fee account, protocol revenue
 
 **Buyback reserve**:
-The authority-owned USDC account that receives 50% of a prize the House wins, earmarked for a future token buyback.
+The USDC account that receives 50% of a prize the House wins, earmarked for a future token buyback. Its address is set at `create_pool` like the Treasury's.
 _Avoid_: Buyback wallet, HEX fund
 
 ### Lottery
@@ -63,7 +71,7 @@ The player-facing name for one epoch's draw and payout. The screen says "daily d
 _Avoid_: Jackpot, lottery, raffle
 
 **Prize**:
-The yield the pool earned during an epoch, paid in full to the daily draw's single winner. The demo's yield is simulated at a published rate and labeled as such. Code and the API call this amount the jackpot (`jackpotAmount`, `fund_jackpot`).
+The yield the pool earned during an epoch, paid in full to the daily draw's single winner. The Admin harvests the yield and funds the jackpot vault by hand before the draw, through the permissionless `fund_jackpot`. Code and the API call this amount the jackpot (`jackpotAmount`, `fund_jackpot`).
 _Avoid_: Jackpot (on screen), pot, reward (a game concept)
 
 **Hexpot**:
@@ -83,7 +91,7 @@ The operator-cranked transfer of the Prize to the winner's USDC account. No clai
 _Avoid_: Claim, redeem
 
 **Rollover**:
-A Prize that stays in the hexpot for the next epoch because nobody registered or the draw's randomness never arrived.
+A Prize that stays in the hexpot for the next epoch because nobody registered, the draw's randomness never arrived, or the jackpot vault held less than the pool's `min_jackpot` when registration closed.
 _Avoid_: Expiry, unclaimed prize
 
 ### Game
@@ -130,9 +138,17 @@ _Avoid_: Cancel, refund
 
 ### Operations
 
+**Admin**:
+The multisig or wallet that changes pool parameters, unpauses, rotates the Operator key, and moves principal out of the vault to a yield venue and back. It is `Pool.admin` in the program, a Squads multisig on mainnet, and it never signs a round. The role moves in two steps, `propose_admin` then `accept_admin`, so a typo cannot hand the pool to an address nobody holds.
+_Avoid_: Authority (the removed program role), owner, admin wallet, Operator
+
+**Operator key**:
+The hot keypair on the VPS that the Operator service signs with, and `Pool.operator` in the program. It opens epochs and rounds, requests randomness, settles, registers, draws and pays out, and it owns the House Player. It cannot change parameters, unpause, or move principal. The Admin rotates it in one transaction.
+_Avoid_: Authority keypair, pool authority, admin key, hot wallet
+
 **Operator**:
-The backend service that advances the protocol: opens epochs and rounds, requests randomness, settles rounds and positions, cranks registration, funds the simulated yield, and pays the winner. Deadline-driven: it sleeps until the next moment a decision could change rather than running on a fixed schedule, with a slow safety tick as its backstop. Holds the authority keypair and the Sparring player's keypair; never holds a human depositor's funds.
-_Avoid_: Bot, cron, CLI, admin, authority (the on-chain role name)
+The backend service that advances the protocol: opens epochs and rounds, requests randomness, settles rounds and positions, cranks registration, pays the winner, and pushes each Pending withdrawal once its epoch has ended. Deadline-driven: it sleeps until the next moment a decision could change rather than running on a fixed schedule, with a slow safety tick as its backstop. Signs with the Operator key and the Sparring player's keypair; never holds a human depositor's funds.
+_Avoid_: Bot, cron, CLI, admin (a separate role), authority (the removed program role)
 
 **Sparring player**:
 A backend-owned Player that deposits once and buys one Position in every Round, on all 36 Tiles at one Ticket per tile, so a lone human always has someone to play against on whichever tile wins. On screen it is indistinguishable from any other wallet, and it competes in the draw like any Player. It is not the House.

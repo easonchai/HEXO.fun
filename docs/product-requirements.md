@@ -27,6 +27,8 @@ The demo runs on Solana devnet with a test USDC mint we control. Yield is simula
 
 ### 3.1 Custody
 
+> Superseded by [`plan/mainnet/spec.md`](plan/mainnet/spec.md) and ADR 0009. `withdraw` is now `request_withdraw`, which deducts `x` Principal and `min(Entries, x)` Entries and pays the USDC out after the epoch it was requested in ends. The Entries-of-at-least-`x` rule is gone, and epoch state does block the cash. The principal vault also pays `admin_withdraw`, which sends principal to the admin for the epoch.
+
 - Deposit `x` credits `x` Principal and `x` Entries. Minimum deposit 1 hexUSDC.
 - Withdraw `x` requires Principal of at least `x` and Entries of at least `x`, and reduces both by `x`. This is the only withdrawal rule. It is never blocked by pause, epoch state, or operator action.
 - Consequence shown before every position purchase: "After this round your withdrawable balance is min(Principal, Entries)". If you stake 40 of 100 Entries and lose, you can withdraw 60 now and the other 40 after the epoch resets your Entries.
@@ -50,6 +52,8 @@ The demo runs on Solana devnet with a test USDC mint we control. Yield is simula
 - If nobody registered any weight, or the randomness never arrives, the jackpot rolls over into the next epoch.
 
 ### 3.4 Simulated yield
+
+> Superseded by [`plan/mainnet/spec.md`](plan/mainnet/spec.md) and ADR 0010. The operator no longer mints or computes a jackpot. The admin lends the principal on Kamino through a Squads multisig and funds the harvested yield into the jackpot vault with the same permissionless `fund_jackpot`, so the prize is real and its size is whatever the venue paid. An epoch closing below `min_jackpot`, 1 USDC by default, rolls over instead of paying. The pool does deploy principal, off the program and by hand.
 
 - At registration close the operator computes `jackpot = total_principal × 5% × epoch_seconds / 365 days`, with a floor of 10 hexUSDC so an empty demo pool still shows a prize, and transfers it from the sponsor wallet into the jackpot vault.
 - Every place the UI shows a jackpot, APR, or yield it says "simulated". The pool does not lend, stake, or otherwise deploy principal anywhere.
@@ -110,12 +114,16 @@ The existing Vite React app in `apps/web`, rewired. Reads its own Player account
 
 ## 7. Trust and safety, honestly stated
 
+> Superseded by [`plan/mainnet/spec.md`](plan/mainnet/spec.md), ADR 0009 and ADR 0010. Principal is still out of reach of the game and the draw, but `admin_withdraw` moves it to the admin for the epoch, so a depositor now trusts the admin and the lending venue as well as the code. The one key is split in two: the operator key on the VPS cranks the protocol and cannot change parameters, unpause or touch principal, while the admin, a Squads multisig on mainnet, holds those powers and no round. Either key can pause; only the admin unpauses. Withdrawals are delayed by epoch state by design.
+
 - Principal is never at risk from the game, the draw, or the operator. The program has no instruction that moves principal anywhere but back to its owner.
 - Randomness is ORAO VRF on devnet. Round tiles and jackpot winners are selected from the fulfilled randomness by the program, not by the backend.
 - The operator key can open and settle rounds and epochs, and fund the jackpot. It cannot change the winner, touch principal, or block withdrawals. It can pause deposits and new positions.
 - This is a devnet prototype. One key, one server, simulated yield, no audit, no legal review. Nothing in the UI may say "risk-free", "guaranteed", or quote an APR without the word "simulated".
 
 ## 8. Out of scope for this build
+
+> Superseded in part by [`plan/mainnet/spec.md`](plan/mainnet/spec.md). Mainnet, a real yield source and a multisig are in scope for the private beta: real USDC on a second stack, principal lent by hand from a Squads multisig that is also the pool admin. Still out: an on-chain yield adapter or Kamino CPI, a timelock, an audit, legal classification, KYC, geo-blocking, deposit caps, and cancelling a pending withdrawal.
 
 - The HEX token, buyback execution, and game rewards paid in a token. The buyback reserve account exists so the future token launch inherits an auditable balance; nothing else is built.
 - A real yield source. The funding instruction is the boundary; the adapter is future work.
