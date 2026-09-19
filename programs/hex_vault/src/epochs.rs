@@ -107,6 +107,7 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
     new_epoch.target = 0;
     new_epoch.winner = Pubkey::default();
     new_epoch.bump = ctx.bumps.new_epoch;
+    new_epoch.drawn_at = 0;
 
     emit!(EpochBegan {
         epoch_id: new_epoch.epoch_id,
@@ -222,6 +223,14 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
         epoch.status == epoch_status::REGISTERING,
         HexVaultError::EpochNotRegistering
     );
+    // Registration is permissionless and only opens once the epoch has
+    // ended, so the epoch cannot be drawn until everyone who earned weight
+    // in it has had this long to claim their interval.
+    let closes_at = epoch
+        .ends_at
+        .checked_add(pool.registration_window)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    require!(now >= closes_at, HexVaultError::RegistrationWindowOpen);
 
     epoch.jackpot_amount = ctx.accounts.jackpot_vault.amount;
 
@@ -255,6 +264,7 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
 }
 
 pub fn draw(ctx: Context<Draw>) -> Result<()> {
+    let now = utils::now()?;
     let epoch = &mut ctx.accounts.epoch;
 
     require!(
@@ -266,6 +276,7 @@ pub fn draw(ctx: Context<Draw>) -> Result<()> {
 
     epoch.target = vrf::unbiased_u128(&randomness, epoch.registered_weight)?;
     epoch.status = epoch_status::DRAWN;
+    epoch.drawn_at = now;
 
     emit!(EpochDrawn {
         epoch_id: epoch.epoch_id,
@@ -368,15 +379,38 @@ pub fn rollover_epoch(ctx: Context<RolloverEpoch>) -> Result<()> {
     let pool = &ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
 
-    require!(
-        epoch.status == epoch_status::DRAWING,
-        HexVaultError::EpochNotDrawing
-    );
-    let deadline = epoch
-        .requested_at
-        .checked_add(pool.vrf_timeout)
-        .ok_or(HexVaultError::ArithmeticOverflow)?;
-    require!(now > deadline, HexVaultError::VrfTimeoutNotElapsed);
+    match epoch.status {
+        epoch_status::DRAWING => {
+            // A fulfilled request has to go through `draw`, or the operator
+            // could read the target, see who won, and wait out the timeout.
+            require_keys_eq!(
+                ctx.accounts.randomness.key(),
+                vrf::randomness_address(&epoch.vrf_seed),
+                HexVaultError::InvalidRandomnessAccount
+            );
+            require!(
+                !vrf::is_fulfilled(&ctx.accounts.randomness.to_account_info(), &epoch.vrf_seed),
+                HexVaultError::RandomnessAlreadyFulfilled
+            );
+            let deadline = epoch
+                .requested_at
+                .checked_add(pool.vrf_timeout)
+                .ok_or(HexVaultError::ArithmeticOverflow)?;
+            require!(now > deadline, HexVaultError::VrfTimeoutNotElapsed);
+        }
+        // The winner is known but cannot be paid: a frozen or closed token
+        // account would otherwise leave this epoch open forever and hand its
+        // prize to whoever wins the next one by accident. The jackpot stays
+        // in the vault, so the next epoch draws for it deliberately.
+        epoch_status::DRAWN => {
+            let deadline = epoch
+                .drawn_at
+                .checked_add(pool.payout_timeout)
+                .ok_or(HexVaultError::ArithmeticOverflow)?;
+            require!(now > deadline, HexVaultError::PayoutTimeoutNotElapsed);
+        }
+        _ => return Err(HexVaultError::EpochNotDrawing.into()),
+    }
 
     epoch.status = epoch_status::ROLLED_OVER;
 
@@ -598,6 +632,12 @@ pub struct RolloverEpoch<'info> {
         bump = epoch.bump,
     )]
     pub epoch: Account<'info, Epoch>,
+
+    /// CHECK: ORAO randomness account for this epoch's draw, matched against
+    /// `vrf::randomness_address` in the handler the same way `draw` does.
+    /// Only read on the Drawing branch, where an unfulfilled (or absent)
+    /// account is the normal case.
+    pub randomness: UncheckedAccount<'info>,
 }
 
 #[cfg(test)]

@@ -1645,6 +1645,14 @@
               }
             ]
           }
+        },
+        {
+          "name": "randomness",
+          "docs": [
+            "`vrf::randomness_address` in the handler the same way `draw` does.",
+            "Only read on the Drawing branch, where an unfulfilled (or absent)",
+            "account is the normal case."
+          ]
         }
       ],
       "args": []
@@ -2103,6 +2111,14 @@
               }
             ]
           }
+        },
+        {
+          "name": "randomness",
+          "docs": [
+            "`vrf::randomness_address` in the handler the same way `settle_round`",
+            "does. It need not exist: an unfulfilled request is the normal case",
+            "here."
+          ]
         }
       ],
       "args": []
@@ -2655,6 +2671,31 @@
       "code": 6040,
       "name": "InvalidAdminTokenAccount",
       "msg": "destination is not the admin's associated token account"
+    },
+    {
+      "code": 6041,
+      "name": "RandomnessAlreadyFulfilled",
+      "msg": "randomness for this request has already been fulfilled"
+    },
+    {
+      "code": 6042,
+      "name": "RegistrationWindowOpen",
+      "msg": "the registration window has not closed yet"
+    },
+    {
+      "code": 6043,
+      "name": "HouseCannotPlay",
+      "msg": "the House cannot buy a position"
+    },
+    {
+      "code": 6044,
+      "name": "UnsupportedMint",
+      "msg": "the accepted mint is not owned by the SPL Token program"
+    },
+    {
+      "code": 6045,
+      "name": "PayoutTimeoutNotElapsed",
+      "msg": "the payout timeout has not elapsed"
     }
   ],
   "types": [
@@ -2750,6 +2791,14 @@
           {
             "name": "min_jackpot",
             "type": "u64"
+          },
+          {
+            "name": "registration_window",
+            "type": "i64"
+          },
+          {
+            "name": "payout_timeout",
+            "type": "i64"
           }
         ]
       }
@@ -2847,6 +2896,14 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "drawn_at",
+            "docs": [
+              "When `draw` landed. 0 until then. `rollover_epoch` measures",
+              "`Pool.payout_timeout` from here."
+            ],
+            "type": "i64"
           }
         ]
       }
@@ -3335,6 +3392,23 @@
               "`close_registration` rolls over instead of paying out dust."
             ],
             "type": "u64"
+          },
+          {
+            "name": "registration_window",
+            "docs": [
+              "Seconds after an epoch's `ends_at` during which `close_registration`",
+              "is refused, so the operator cannot draw before everyone who earned",
+              "weight in that epoch has been registered. `0 <= this < epoch_seconds`."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "payout_timeout",
+            "docs": [
+              "Seconds after `Epoch.drawn_at` before a Drawn epoch may be rolled",
+              "over unpaid. The escape hatch for a winner nobody can pay."
+            ],
+            "type": "i64"
           }
         ]
       }
@@ -3712,6 +3786,18 @@
             "name": "min_jackpot",
             "type": {
               "option": "u64"
+            }
+          },
+          {
+            "name": "registration_window",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "payout_timeout",
+            "type": {
+              "option": "i64"
             }
           }
         ]

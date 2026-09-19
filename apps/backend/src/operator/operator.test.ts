@@ -94,6 +94,10 @@ const pool = (over: Partial<PoolState> = {}): PoolState => ({
   roundSeconds: 60n,
   closeBuffer: 0n,
   vrfTimeout: 120n,
+  // No wait by default, so every test that is not about the window keeps the
+  // timing it had before the window existed.
+  registrationWindow: 0n,
+  payoutTimeout: 86_400n,
   paused: false,
   currentEpochId: 2n,
   nextRoundId: 4n,
@@ -112,8 +116,21 @@ const epoch = (over: Partial<EpochState> = {}): EpochState => ({
   vrfSeed: new Uint8Array(32).fill(3),
   requestedAt: 0n,
   target: 0n,
+  drawnAt: 0n,
   ...over,
 });
+
+/** The epoch that has ended and is taking registrations, which is what
+ *  `previousEpoch` holds for steps 4 and 5. Its `endsAt` is behind `now`:
+ *  `begin_epoch` is what moves an epoch into this status, and it will not
+ *  run before the epoch has ended. */
+const registering = (over: Partial<EpochState> = {}): EpochState =>
+  epoch({
+    epochId: 1n,
+    status: EPOCH_STATUS.REGISTERING,
+    endsAt: NOW - 100n,
+    ...over,
+  });
 
 const round = (over: Partial<RoundState> = {}): RoundState => ({
   roundId: 3n,
@@ -127,10 +144,12 @@ const round = (over: Partial<RoundState> = {}): RoundState => ({
 interface Recorder {
   ctx: TickContext;
   sent: TransactionInstruction[][];
+  warned: string[];
 }
 
 function context(over: Partial<TickContext> = {}): Recorder {
   const sent: TransactionInstruction[][] = [];
+  const warned: string[] = [];
   const ctx: TickContext = {
     now: NOW,
     pool: pool(),
@@ -158,9 +177,10 @@ function context(over: Partial<TickContext> = {}): Recorder {
       sent.push(ixs);
       return "signature";
     },
+    warn: (message) => warned.push(message),
     ...over,
   };
-  return { ctx, sent };
+  return { ctx, sent, warned };
 }
 
 /** Runs one tick and returns the labels of the single transaction it sent. */
@@ -381,7 +401,7 @@ describe("runTick", () => {
       pool: pool({ openRoundId: 0n }),
       currentEpoch: epoch({ endsAt: NOW }),
       openRound: null,
-      previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.REGISTERING }),
+      previousEpoch: registering(),
       playersToRegister: async () => [owner],
     });
     expect(result.action).not.toBe("begin_epoch");
@@ -397,11 +417,7 @@ describe("runTick", () => {
       Keypair.generate().publicKey.toBase58(),
     );
     const { ctx, sent } = context({
-      previousEpoch: epoch({
-        epochId: 1n,
-        status: EPOCH_STATUS.REGISTERING,
-        registeredCount: 2,
-      }),
+      previousEpoch: registering({ registeredCount: 2 }),
       playersToRegister: async () => owners,
     });
     const outcome = await runTick(ctx);
@@ -417,7 +433,7 @@ describe("runTick", () => {
 
   it("4. waits for a second empty tick before closing registration", async () => {
     const { ctx, sent } = context({
-      previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.REGISTERING }),
+      previousEpoch: registering(),
     });
     const outcome = await runTick(ctx);
     expect(sent).toHaveLength(0);
@@ -427,7 +443,7 @@ describe("runTick", () => {
 
   it("4. closes registration on the second consecutive empty tick, without funding", async () => {
     const result = await tickLabels({
-      previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.REGISTERING }),
+      previousEpoch: registering(),
       lastRegisterCheck: { epochId: 1n, empty: true },
     });
     expect(result.labels).toEqual(["close_registration"]);
@@ -436,10 +452,7 @@ describe("runTick", () => {
 
   it("4. list empty, then non-empty, then empty: only the second empty tick closes", async () => {
     const owner = Keypair.generate().publicKey.toBase58();
-    const previousEpoch = epoch({
-      epochId: 1n,
-      status: EPOCH_STATUS.REGISTERING,
-    });
+    const previousEpoch = registering();
 
     // Tick 1: nobody left, for the first time. Waits.
     const tick1 = context({ previousEpoch, playersToRegister: async () => [] });
@@ -470,9 +483,36 @@ describe("runTick", () => {
     expect(outcome3.registerCheck).toEqual({ epochId: 1n, empty: true });
   });
 
+  it("4. waits out the registration window before closing", async () => {
+    // Paused with no Round, so the window is the nearest deadline.
+    const { ctx, sent } = context({
+      pool: pool({ registrationWindow: 50n, openRoundId: 0n, paused: true }),
+      openRound: null,
+      previousEpoch: registering({ endsAt: NOW - 10n }),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+    });
+    const outcome = await runTick(ctx);
+    expect(sent).toHaveLength(0);
+    expect(outcome.action).toBeNull();
+    // The flag survives, so the tick that finds the window shut closes right
+    // away instead of starting the two-empty-tick count again.
+    expect(outcome.registerCheck).toEqual({ epochId: 1n, empty: true });
+    // endsAt + registrationWindow, the instant the program starts accepting.
+    expect(outcome.nextWakeAt).toBe(NOW + 40n);
+  });
+
+  it("4. closes the moment the registration window has passed", async () => {
+    const result = await tickLabels({
+      pool: pool({ registrationWindow: 300n }),
+      previousEpoch: registering({ endsAt: NOW - 300n }),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+    });
+    expect(result.labels).toEqual(["close_registration"]);
+  });
+
   it("4. an empty-tick flag from a different epoch does not close registration", async () => {
     const { ctx, sent } = context({
-      previousEpoch: epoch({ epochId: 1n, status: EPOCH_STATUS.REGISTERING }),
+      previousEpoch: registering(),
       lastRegisterCheck: { epochId: 0n, empty: true },
     });
     const outcome = await runTick(ctx);
@@ -527,11 +567,81 @@ describe("runTick", () => {
         epochId: 1n,
         status: EPOCH_STATUS.DRAWN,
         target: 42n,
+        drawnAt: NOW - 10n,
       }),
       winner: async (epochId, target) =>
         epochId === 1n && target === 42n ? winner : null,
     });
     expect(result.labels).toEqual([CREATE_ATA_IDEMPOTENT, "payout"]);
+  });
+
+  it("6. logs the winner and retries when the payout will not land", async () => {
+    const winner = Keypair.generate().publicKey.toBase58();
+    const { ctx, sent, warned } = context({
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+        drawnAt: NOW - 60n,
+      }),
+      winner: async () => winner,
+      send: async (ixs) => {
+        if (ixs.some((ix) => label(ix) === "payout")) {
+          throw new Error("AccountFrozen");
+        }
+        sent.push(ixs);
+        return "signature";
+      },
+    });
+    const outcome = await runTick(ctx);
+
+    expect(outcome.action).toBeNull();
+    expect(sent).toHaveLength(0);
+    expect(warned).toEqual([
+      `payout of epoch 1 to ${winner} failed: AccountFrozen`,
+    ]);
+  });
+
+  it("6. wakes at the payout timeout of a drawn epoch", async () => {
+    // Paused with no Round, so nothing else contributes a nearer deadline.
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n, paused: true, payoutTimeout: 30n }),
+      openRound: null,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+        drawnAt: NOW - 10n,
+      }),
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.nextWakeAt).toBe(NOW + 20n);
+  });
+
+  it("6. rolls the drawn epoch over once the payout timeout has passed", async () => {
+    const winner = Keypair.generate().publicKey.toBase58();
+    const { ctx, sent, warned } = context({
+      pool: pool({ payoutTimeout: 30n }),
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+        drawnAt: NOW - 31n,
+      }),
+      winner: async () => winner,
+      send: async (ixs) => {
+        if (ixs.some((ix) => label(ix) === "payout")) {
+          throw new Error("AccountFrozen");
+        }
+        sent.push(ixs);
+        return "signature";
+      },
+    });
+    const outcome = await runTick(ctx);
+
+    expect(outcome.action).toBe("rollover_epoch");
+    expect((sent[0] ?? []).map(label)).toEqual(["rollover_epoch"]);
+    expect(warned).toHaveLength(1);
   });
 
   it("6. waits when no registered interval covers the target yet", async () => {
@@ -540,6 +650,7 @@ describe("runTick", () => {
         epochId: 1n,
         status: EPOCH_STATUS.DRAWN,
         target: 42n,
+        drawnAt: NOW - 10n,
       }),
       openRound: round({ endsAt: NOW + 1n }),
     });
@@ -690,6 +801,25 @@ describe("runTick", () => {
       lastRound: round({ status: ROUND_STATUS.VOIDED, endsAt: NOW }),
     });
     expect(result.labels).toEqual(["create_round"]);
+  });
+});
+
+describe("instruction builders", () => {
+  const keysOf = (ixs: readonly TransactionInstruction[]): string[] =>
+    (ixs[0]?.keys ?? []).map((key) => key.pubkey.toBase58());
+
+  it("hand void_round and rollover_epoch the request's randomness account", async () => {
+    // The program matches both against the seed on the Round or Epoch, so a
+    // builder that forgets the account cannot void or roll over at all.
+    const openRound = round({ status: ROUND_STATUS.REQUESTED });
+    expect(keysOf(await instructions.voidRound(pool(), openRound))).toContain(
+      instructions.randomnessFor(openRound.vrfSeed).toBase58(),
+    );
+
+    const drawing = epoch({ epochId: 1n, status: EPOCH_STATUS.DRAWING });
+    expect(keysOf(await instructions.rolloverEpoch(pool(), drawing))).toContain(
+      instructions.randomnessFor(drawing.vrfSeed).toBase58(),
+    );
   });
 });
 

@@ -8,6 +8,7 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
+use anchor_spl::token::spl_token;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::constants::{BPS_DENOMINATOR, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
@@ -36,6 +37,8 @@ pub struct CreatePoolParams {
     pub min_deposit: u64,
     pub house_cut_bps: u16,
     pub min_jackpot: u64,
+    pub registration_window: i64,
+    pub payout_timeout: i64,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
@@ -48,6 +51,8 @@ pub struct SetParamsArgs {
     pub min_deposit: Option<u64>,
     pub house_cut_bps: Option<u16>,
     pub min_jackpot: Option<u64>,
+    pub registration_window: Option<i64>,
+    pub payout_timeout: Option<i64>,
 }
 
 pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result<()> {
@@ -65,6 +70,20 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     require!(
         params.house_cut_bps <= BPS_DENOMINATOR,
         HexVaultError::InvalidParameter
+    );
+    require!(
+        params.registration_window >= 0 && params.registration_window < params.epoch_seconds,
+        HexVaultError::InvalidParameter
+    );
+    // Zero would let the operator roll a Drawn epoch over in the same block
+    // it was drawn in, which is the thing `payout_timeout` exists to stop.
+    require!(params.payout_timeout > 0, HexVaultError::InvalidParameter);
+    // Transfer-fee and other Token-2022 extensions would break the
+    // vault-balance arithmetic every payout depends on, so only the classic
+    // program's mints are accepted.
+    require!(
+        ctx.accounts.accepted_mint.to_account_info().owner == &spl_token::ID,
+        HexVaultError::UnsupportedMint
     );
 
     let now = utils::now()?;
@@ -88,6 +107,8 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.min_deposit = params.min_deposit;
     pool.house_cut_bps = params.house_cut_bps;
     pool.min_jackpot = params.min_jackpot;
+    pool.registration_window = params.registration_window;
+    pool.payout_timeout = params.payout_timeout;
     pool.pending_withdrawals = 0;
     pool.paused = false;
     pool.current_epoch_id = 0;
@@ -169,6 +190,20 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
     if let Some(v) = params.min_jackpot {
         pool.min_jackpot = v;
     }
+    if let Some(v) = params.registration_window {
+        pool.registration_window = v;
+    }
+    if let Some(v) = params.payout_timeout {
+        require!(v > 0, HexVaultError::InvalidParameter);
+        pool.payout_timeout = v;
+    }
+    // Checked on the result rather than in the branch above, so shortening
+    // `epoch_seconds` in the same call cannot leave a window that swallows a
+    // whole epoch, whichever of the two the caller passes.
+    require!(
+        pool.registration_window >= 0 && pool.registration_window < pool.epoch_seconds,
+        HexVaultError::InvalidParameter
+    );
 
     emit!(ParamsSet {
         pool: pool.key(),

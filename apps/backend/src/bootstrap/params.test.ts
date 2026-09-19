@@ -20,13 +20,39 @@ describe("parsePoolParams", () => {
   });
 
   it("overrides only the flags given", () => {
-    expect(parsePoolParams(["--epoch-seconds", "120"])).toEqual({
+    // Above the 600s default registration window, which create_pool requires
+    // to be shorter than the epoch.
+    expect(parsePoolParams(["--epoch-seconds", "1200"])).toEqual({
       ...DEFAULT_POOL_PARAMS,
-      epochSeconds: 120,
+      epochSeconds: 1200,
     });
     expect(
-      parsePoolParams(["--epoch-seconds=120", "--round-seconds=20"]),
-    ).toEqual({ ...DEFAULT_POOL_PARAMS, epochSeconds: 120, roundSeconds: 20 });
+      parsePoolParams(["--epoch-seconds=1200", "--round-seconds=20"]),
+    ).toEqual({ ...DEFAULT_POOL_PARAMS, epochSeconds: 1200, roundSeconds: 20 });
+  });
+
+  it("takes a registration window of zero and a positive payout timeout", () => {
+    expect(
+      parsePoolParams(["--registration-window", "0", "--payout-timeout", "60"]),
+    ).toEqual({
+      ...DEFAULT_POOL_PARAMS,
+      registrationWindow: 0,
+      payoutTimeout: 60,
+    });
+    expect(() => parsePoolParams(["--payout-timeout", "0"])).toThrow(
+      /positive/,
+    );
+    expect(() => parsePoolParams(["--registration-window=-1"])).toThrow(
+      /non-negative/,
+    );
+  });
+
+  it("rejects a registration window that swallows the epoch", () => {
+    // The 600s default window against a 120s epoch: create_pool would fail
+    // with InvalidParameter after the mint and vaults already exist.
+    expect(() => parsePoolParams(["--epoch-seconds", "120"])).toThrow(
+      /registration window/,
+    );
   });
 
   it("rejects values create_pool would reject", () => {

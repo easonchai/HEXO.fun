@@ -72,6 +72,8 @@ const pool = (over: Partial<PoolState> = {}): PoolState => ({
   roundSeconds: 60n,
   closeBuffer: 5n,
   vrfTimeout: 120n,
+  registrationWindow: 0n,
+  payoutTimeout: 86_400n,
   paused: false,
   currentEpochId: 2n,
   nextRoundId: 4n,

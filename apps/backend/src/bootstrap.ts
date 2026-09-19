@@ -217,6 +217,8 @@ async function createPool(
     minDeposit: new BN(params.minDeposit.toString()),
     houseCutBps: params.houseCutBps,
     minJackpot: new BN(params.minJackpot.toString()),
+    registrationWindow: new BN(params.registrationWindow),
+    payoutTimeout: new BN(params.payoutTimeout),
   })
     .accountsPartial({
       payer: payer.publicKey,

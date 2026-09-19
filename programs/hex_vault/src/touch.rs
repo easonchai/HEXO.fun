@@ -142,6 +142,8 @@ mod tests {
             jackpot_vault_bump: 0,
             pending_withdrawals: 0,
             min_jackpot: 1_000_000,
+            registration_window: 0,
+            payout_timeout: DAY,
         }
     }
 

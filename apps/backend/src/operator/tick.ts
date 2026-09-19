@@ -87,6 +87,9 @@ export interface TickContext {
   /** Owner of the Player whose registered interval contains `target`. */
   winner(epochId: bigint, target: bigint): Promise<string | null>;
   send(instructions: TransactionInstruction[]): Promise<string>;
+  /** Something an operator should read but that is not a failed tick: so far
+   *  only a payout that would not land, which step 6 retries. */
+  warn(message: string): void;
 }
 
 export interface TickOutcome {
@@ -136,8 +139,14 @@ function nextWakeAt(ctx: TickContext, acted: boolean): bigint {
     candidates.push(openRound.requestedAt + pool.vrfTimeout);
   }
   if (currentEpoch) candidates.push(currentEpoch.endsAt);
+  if (previousEpoch?.status === EPOCH_STATUS.REGISTERING) {
+    candidates.push(previousEpoch.endsAt + pool.registrationWindow);
+  }
   if (previousEpoch?.status === EPOCH_STATUS.DRAWING) {
     candidates.push(previousEpoch.requestedAt + pool.vrfTimeout);
+  }
+  if (previousEpoch?.status === EPOCH_STATUS.DRAWN) {
+    candidates.push(previousEpoch.drawnAt + pool.payoutTimeout);
   }
   if (
     pool.openRoundId === 0n &&
@@ -192,7 +201,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
         return { action: "settle_round" };
       }
       if (now > openRound.requestedAt + pool.vrfTimeout) {
-        await ctx.send(await ctx.ix.voidRound(pool, openRound.roundId));
+        await ctx.send(await ctx.ix.voidRound(pool, openRound));
         return { action: "void_round" };
       }
     }
@@ -266,6 +275,15 @@ async function decide(ctx: TickContext): Promise<Decision> {
       };
     }
 
+    // The program refuses to close before this instant, so that everyone who
+    // earned weight in the epoch has had the window to register.
+    if (now < previousEpoch.endsAt + pool.registrationWindow) {
+      return {
+        action: null,
+        registerCheck: { epochId: previousEpoch.epochId, empty: true },
+      };
+    }
+
     // The jackpot was funded at the start of the epoch (step 6b), so closing
     // snapshots whatever the vault holds now.
     await ctx.send(await ctx.ix.closeRegistration(pool, previousEpoch.epochId));
@@ -279,25 +297,42 @@ async function decide(ctx: TickContext): Promise<Decision> {
       return { action: "draw" };
     }
     if (now > previousEpoch.requestedAt + pool.vrfTimeout) {
-      await ctx.send(await ctx.ix.rolloverEpoch(pool, previousEpoch.epochId));
+      await ctx.send(await ctx.ix.rolloverEpoch(pool, previousEpoch));
       return { action: "rollover_epoch" };
     }
   }
 
-  // 6. Drawn: pay whoever owns the interval the target landed in.
+  // 6. Drawn: pay whoever owns the interval the target landed in. A winner
+  // whose token account is frozen or closed cannot be paid at all, so past
+  // `payout_timeout` the epoch rolls over instead and the prize stays in the
+  // vault for the next draw rather than stranding this epoch forever.
   if (previousEpoch?.status === EPOCH_STATUS.DRAWN) {
+    const timedOut = now > previousEpoch.drawnAt + pool.payoutTimeout;
     const winner = await ctx.winner(
       previousEpoch.epochId,
       previousEpoch.target,
     );
     if (winner) {
-      await ctx.send(
-        await ctx.ix.payout(pool, previousEpoch.epochId, new PublicKey(winner)),
-      );
-      return { action: "payout" };
+      try {
+        await ctx.send(
+          await ctx.ix.payout(pool, previousEpoch.epochId, new PublicKey(winner)),
+        );
+        return { action: "payout" };
+      } catch (cause) {
+        ctx.warn(
+          `payout of epoch ${previousEpoch.epochId} to ${winner} failed: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+        );
+      }
     }
-    // No row covers the target yet: the indexer has not caught up with the
-    // registrations. Retried next tick rather than treated as an error.
+    if (timedOut) {
+      await ctx.send(await ctx.ix.rolloverEpoch(pool, previousEpoch));
+      return { action: "rollover_epoch" };
+    }
+    // Retried next tick rather than treated as an error: either the payout
+    // will start landing, or no row covers the target yet because the
+    // indexer has not caught up with the registrations.
   }
 
   // 6b. Top the jackpot up to JACKPOT_AMOUNT for the epoch now running, once
@@ -359,6 +394,9 @@ export const EXPECTED_ERRORS: ReadonlySet<string> = new Set([
   "EpochNotEnded",
   "EpochNotRegistering",
   "NotPreviousEpoch",
+  // The oracle answered between the tick's read and its void/rollover
+  // landing, which is exactly the race the program guard exists for.
+  "RandomnessAlreadyFulfilled",
   "RandomnessNotFulfilled",
   "RoundAlreadyOpen",
   "RoundNotEnded",

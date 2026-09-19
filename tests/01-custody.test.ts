@@ -10,17 +10,23 @@ import { BN } from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   createAccount,
+  createMint,
   getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
   mintTo,
   transfer,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
   epochPda,
   findEvent,
+  jackpotVaultPda,
+  nextPoolId,
   onChainNowSeconds,
   playerPda,
+  poolPda,
+  principalVaultPda,
   program,
   retryUntilOk,
   roundPda,
@@ -532,6 +538,8 @@ const NO_PARAMS = {
   minDeposit: null,
   houseCutBps: null,
   minJackpot: null,
+  registrationWindow: null,
+  payoutTimeout: null,
 };
 
 /** A funded throwaway key. The `init` accounts on the operator-gated
@@ -599,7 +607,9 @@ function operatorGated(pool: PoolCtx, signer: PublicKey) {
       randomness: filler,
       house: pool.house,
     }),
-    voidRound: m.voidRound().accountsPartial({ operator: signer, pool: pool.pool, round }),
+    voidRound: m
+      .voidRound()
+      .accountsPartial({ operator: signer, pool: pool.pool, round, randomness: filler }),
     beginEpoch: m.beginEpoch().accountsPartial({
       operator: signer,
       pool: pool.pool,
@@ -633,7 +643,9 @@ function operatorGated(pool: PoolCtx, signer: PublicKey) {
       buybackReserve: pool.buybackReserve,
       tokenProgram: TOKEN_PROGRAM_ID,
     }),
-    rolloverEpoch: m.rolloverEpoch().accountsPartial({ operator: signer, pool: pool.pool, epoch }),
+    rolloverEpoch: m
+      .rolloverEpoch()
+      .accountsPartial({ operator: signer, pool: pool.pool, epoch, randomness: filler }),
   };
 }
 
@@ -826,6 +838,186 @@ describe("roles", () => {
         .accountsPartial({ admin: next.publicKey, pool: pool.pool })
         .signers([next])
         .rpc();
+    },
+    TIMEOUT,
+  );
+});
+
+// --- create_pool parameter guards (ticket 10). Both of these fail before
+// anything is written, but only after the vault accounts have been
+// initialised, so the transaction has to be rejected as a whole.
+
+describe("create_pool guards", () => {
+  /** Every account `create_pool` needs for a fresh pool paid for by `payer`. */
+  function createPoolAccounts(
+    payer: Keypair,
+    pool: PublicKey,
+    mint: PublicKey,
+    treasury: PublicKey,
+    buybackReserve: PublicKey,
+    tokenProgram: PublicKey,
+  ) {
+    return {
+      payer: payer.publicKey,
+      pool,
+      acceptedMint: mint,
+      principalVault: principalVaultPda(pool),
+      jackpotVault: jackpotVaultPda(pool),
+      house: playerPda(pool, payer.publicKey),
+      treasury,
+      buybackReserve,
+      tokenProgram,
+      systemProgram: SystemProgram.programId,
+    };
+  }
+
+  const params = (over: Record<string, BN | number | PublicKey> = {}) => ({
+    poolId: new BN(0),
+    admin: PublicKey.default,
+    operator: PublicKey.default,
+    vrfNetworkState: PublicKey.default,
+    epochSeconds: new BN(86_400),
+    epochAnchor: new BN(1_789_315_200),
+    roundSeconds: new BN(60),
+    closeBuffer: new BN(5),
+    vrfTimeout: new BN(120),
+    minDeposit: new BN(1_000_000),
+    houseCutBps: 600,
+    minJackpot: new BN(0),
+    registrationWindow: new BN(600),
+    payoutTimeout: new BN(86_400),
+    ...over,
+  });
+
+  it(
+    "rejects a mint owned by Token-2022",
+    async () => {
+      const payer = await fundedKey();
+      const connection = program.provider.connection;
+      // Token-2022 mints can carry a transfer fee, which would silently
+      // shrink every vault movement the payout arithmetic assumes is exact.
+      const mint = await createMint(
+        connection,
+        payer,
+        payer.publicKey,
+        null,
+        6,
+        Keypair.generate(),
+        undefined,
+        TOKEN_2022_PROGRAM_ID,
+      );
+      const token = (): Promise<PublicKey> =>
+        createAccount(
+          connection,
+          payer,
+          mint,
+          payer.publicKey,
+          Keypair.generate(),
+          undefined,
+          TOKEN_2022_PROGRAM_ID,
+        );
+      const poolId = nextPoolId();
+      const pool = poolPda(poolId);
+
+      await expect(
+        program.methods
+          .createPool(
+            params({ poolId: new BN(poolId.toString()), operator: payer.publicKey }),
+          )
+          .accountsPartial(
+            createPoolAccounts(
+              payer,
+              pool,
+              mint,
+              await token(),
+              await token(),
+              TOKEN_2022_PROGRAM_ID,
+            ),
+          )
+          .signers([payer])
+          .rpc(),
+      ).rejects.toThrow(/UnsupportedMint/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "rejects a registration window that is not shorter than the epoch",
+    async () => {
+      const payer = await fundedKey();
+      const connection = program.provider.connection;
+      const mint = await createMint(connection, payer, payer.publicKey, null, 6);
+      const token = (): Promise<PublicKey> =>
+        createAccount(connection, payer, mint, payer.publicKey, Keypair.generate());
+      const treasury = await token();
+      const buybackReserve = await token();
+      const attempt = (registrationWindow: number, payoutTimeout = 86_400) => {
+        const poolId = nextPoolId();
+        const pool = poolPda(poolId);
+        return program.methods
+          .createPool(
+            params({
+              poolId: new BN(poolId.toString()),
+              operator: payer.publicKey,
+              epochSeconds: new BN(600),
+              registrationWindow: new BN(registrationWindow),
+              payoutTimeout: new BN(payoutTimeout),
+            }),
+          )
+          .accountsPartial(
+            createPoolAccounts(
+              payer,
+              pool,
+              mint,
+              treasury,
+              buybackReserve,
+              TOKEN_PROGRAM_ID,
+            ),
+          )
+          .signers([payer])
+          .rpc();
+      };
+
+      await expect(attempt(600)).rejects.toThrow(/InvalidParameter/);
+      // Zero would let a Drawn epoch be rolled over in the block it was
+      // drawn in, which is what the timeout exists to stop.
+      await expect(attempt(0, 0)).rejects.toThrow(/InvalidParameter/);
+      await attempt(599);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "set_params rejects a window the epoch cannot hold, whichever field moves",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 600, registrationWindow: 0 });
+      const set = (over: { epochSeconds?: number; registrationWindow?: number }) =>
+        program.methods
+          .setParams({
+            ...NO_PARAMS,
+            epochSeconds:
+              over.epochSeconds === undefined ? null : new BN(over.epochSeconds),
+            registrationWindow:
+              over.registrationWindow === undefined
+                ? null
+                : new BN(over.registrationWindow),
+          })
+          .accountsPartial({ admin: pool.admin.publicKey, pool: pool.pool })
+          .signers([pool.admin])
+          .rpc();
+
+      await expect(set({ registrationWindow: 600 })).rejects.toThrow(
+        /InvalidParameter/,
+      );
+      await set({ registrationWindow: 300 });
+      expect(
+        (await program.account.pool.fetch(pool.pool)).registrationWindow.toString(),
+      ).toBe("300");
+
+      // Shortening the epoch under the window it already has is the same
+      // invariant seen from the other side.
+      await expect(set({ epochSeconds: 300 })).rejects.toThrow(/InvalidParameter/);
+      await set({ epochSeconds: 300, registrationWindow: 60 });
     },
     TIMEOUT,
   );

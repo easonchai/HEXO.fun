@@ -96,4 +96,16 @@ pub enum HexVaultError {
     BelowPendingWithdrawals,
     #[msg("destination is not the admin's associated token account")]
     InvalidAdminTokenAccount,
+
+    // Operator trust guards (ticket 10). Appended too.
+    #[msg("randomness for this request has already been fulfilled")]
+    RandomnessAlreadyFulfilled,
+    #[msg("the registration window has not closed yet")]
+    RegistrationWindowOpen,
+    #[msg("the House cannot buy a position")]
+    HouseCannotPlay,
+    #[msg("the accepted mint is not owned by the SPL Token program")]
+    UnsupportedMint,
+    #[msg("the payout timeout has not elapsed")]
+    PayoutTimeoutNotElapsed,
 }

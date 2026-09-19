@@ -277,6 +277,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       },
       winner: (epochId, target) => this.winner(epochId, target),
       send: (instructions) => this.chain.send(instructions),
+      warn: (message) => this.logger.warn(message),
     };
   }
 

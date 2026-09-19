@@ -193,13 +193,16 @@ export class OperatorInstructions {
     ];
   }
 
-  async rolloverEpoch(pool: PoolState, epochId: bigint): Promise<TransactionInstruction[]> {
+  /** Takes the Epoch rather than its id: the program checks the randomness
+   *  account against the epoch's own seed before it will roll over. */
+  async rolloverEpoch(pool: PoolState, epoch: EpochState): Promise<TransactionInstruction[]> {
     return [
       await this.method("rolloverEpoch")
         .accountsPartial({
           operator: this.operator,
           pool: pool.address,
-          epoch: this.epoch(pool, epochId),
+          epoch: this.epoch(pool, epoch.epochId),
+          randomness: this.randomnessFor(epoch.vrfSeed),
         })
         .instruction(),
     ];
@@ -270,13 +273,16 @@ export class OperatorInstructions {
     ];
   }
 
-  async voidRound(pool: PoolState, roundId: bigint): Promise<TransactionInstruction[]> {
+  /** Takes the Round rather than its id: the program checks the randomness
+   *  account against the round's own seed before it will void. */
+  async voidRound(pool: PoolState, round: RoundState): Promise<TransactionInstruction[]> {
     return [
       await this.method("voidRound")
         .accountsPartial({
           operator: this.operator,
           pool: pool.address,
-          round: this.round(pool, roundId),
+          round: this.round(pool, round.roundId),
+          randomness: this.randomnessFor(round.vrfSeed),
         })
         .instruction(),
     ];

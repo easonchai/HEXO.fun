@@ -22,6 +22,12 @@ export interface PoolParams {
   /** Atomic units. An epoch closing with less than this in the jackpot vault
    * rolls over instead of paying out dust. */
   readonly minJackpot: bigint;
+  /** Seconds past an epoch's end before `close_registration` is allowed, so
+   * late registrants are never drawn past. 0 <= this < epochSeconds. */
+  readonly registrationWindow: number;
+  /** Seconds a Drawn epoch waits for its payout before it may roll over
+   * unpaid. */
+  readonly payoutTimeout: number;
 }
 
 /**
@@ -51,10 +57,12 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
   minDeposit: 1_000_000n, // 1 hexUSDC at 6 decimals
   houseCutBps: 600, // 6%, the rate PRD-V2 §5.4 asks for
   minJackpot: 1_000_000n, // 1 hexUSDC at 6 decimals
+  registrationWindow: 600, // 10 minutes for the crank to register everyone
+  payoutTimeout: 86_400, // a day before an unpayable winner rolls over
 };
 
 export const USAGE =
-  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--admin PUBKEY] [--operator PUBKEY]";
+  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--admin PUBKEY] [--operator PUBKEY]";
 
 /** The accepted mint is 6 decimals on every cluster we run on (bootstrap.ts
  * rejects any other), so whole USDC scales by a constant. */
@@ -77,11 +85,14 @@ function pubkey(flag: string, raw: string): PublicKey {
   }
 }
 
-function seconds(flag: string, raw: string): number {
+/** `min` is 0 for the one flag create_pool lets be zero, the registration
+ *  window; every other duration has to be positive. */
+function seconds(flag: string, raw: string, min = 1): number {
   const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value <= 0) {
+  if (!Number.isSafeInteger(value) || value < min) {
+    const bound = min === 0 ? "non-negative" : "positive";
     throw new Error(
-      `--${flag} must be a positive whole number of seconds, got "${raw}"`,
+      `--${flag} must be a ${bound} whole number of seconds, got "${raw}"`,
     );
   }
   return value;
@@ -120,6 +131,8 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     "epoch-anchor"?: string;
     "house-cut-bps"?: string;
     "min-jackpot"?: string;
+    "registration-window"?: string;
+    "payout-timeout"?: string;
     admin?: string;
     operator?: string;
   };
@@ -132,6 +145,8 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
         "epoch-anchor": { type: "string" },
         "house-cut-bps": { type: "string" },
         "min-jackpot": { type: "string" },
+        "registration-window": { type: "string" },
+        "payout-timeout": { type: "string" },
         admin: { type: "string" },
         operator: { type: "string" },
       },
@@ -162,6 +177,18 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     ...(values["min-jackpot"] === undefined
       ? {}
       : { minJackpot: wholeUsdc("min-jackpot", values["min-jackpot"]) }),
+    ...(values["registration-window"] === undefined
+      ? {}
+      : {
+          registrationWindow: seconds(
+            "registration-window",
+            values["registration-window"],
+            0,
+          ),
+        }),
+    ...(values["payout-timeout"] === undefined
+      ? {}
+      : { payoutTimeout: seconds("payout-timeout", values["payout-timeout"]) }),
     ...(values.admin === undefined
       ? {}
       : { admin: pubkey("admin", values.admin) }),
@@ -176,6 +203,13 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
   if (params.closeBuffer >= params.roundSeconds) {
     throw new Error(
       `--round-seconds must be greater than the ${params.closeBuffer}s close buffer`,
+    );
+  }
+  // Same rule, same reason: create_pool requires registration_window <
+  // epoch_seconds, and failing here costs nothing.
+  if (params.registrationWindow >= params.epochSeconds) {
+    throw new Error(
+      `--epoch-seconds must be greater than the ${params.registrationWindow}s registration window`,
     );
   }
   return params;

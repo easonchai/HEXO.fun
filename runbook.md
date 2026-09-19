@@ -23,8 +23,8 @@
   ├────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
   │ Frontend   │ nothing, Vite hot-reloads                                                                                            │
   ├────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-  │ Program    │ anchor build, both sync-idls, solana program deploy --program-id target/deploy/hex_vault-keypair.json                │
-  │            │ target/deploy/hex_vault.so --url devnet, then up -d --build backend                                                  │
+  │ Program    │ anchor build, both sync-idls, sh scripts/check-deployable.sh, then solana program deploy --program-id                │
+  │            │ target/deploy/hex_vault-keypair.json target/deploy/hex_vault.so --url devnet, then up -d --build backend             │
   └────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
   Two gotchas worth remembering. Never build with --features test-vrf before a devnet deploy — that stubs the ORAO CPI and the operator
@@ -161,12 +161,13 @@
 
     1. Build without the test feature and deploy. tests/run-local.sh leaves a --features test-vrf
        build in target/, which stubs the ORAO CPI, so a plain rebuild has to follow any test run.
-       The grep is the check that matters: it prints 0 on a deployable artifact.
+       check-deployable.sh is the check that matters: it exits 1 on a test-vrf artifact, and on
+       a missing one. Run it before every deploy, on this cluster and on mainnet.
 
          anchor build
          pnpm --filter @hexvault/backend sync-idl
          pnpm --filter @hexvault/web sync-idl
-         strings target/deploy/hex_vault.so | grep -c test-vrf
+         sh scripts/check-deployable.sh
          solana program deploy --program-id target/deploy/hex_vault-keypair.json \
            target/deploy/hex_vault.so --url devnet
 

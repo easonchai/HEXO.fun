@@ -76,6 +76,13 @@ pub struct Pool {
     /// An epoch whose jackpot vault holds less than this at
     /// `close_registration` rolls over instead of paying out dust.
     pub min_jackpot: u64,
+    /// Seconds after an epoch's `ends_at` during which `close_registration`
+    /// is refused, so the operator cannot draw before everyone who earned
+    /// weight in that epoch has been registered. `0 <= this < epoch_seconds`.
+    pub registration_window: i64,
+    /// Seconds after `Epoch.drawn_at` before a Drawn epoch may be rolled
+    /// over unpaid. The escape hatch for a winner nobody can pay.
+    pub payout_timeout: i64,
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.
@@ -97,6 +104,9 @@ pub struct Epoch {
     pub target: u128,
     pub winner: Pubkey,
     pub bump: u8,
+    /// When `draw` landed. 0 until then. `rollover_epoch` measures
+    /// `Pool.payout_timeout` from here.
+    pub drawn_at: i64,
 }
 
 /// One 60 second game on the 36-tile hex board.

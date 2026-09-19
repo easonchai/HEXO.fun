@@ -34,6 +34,10 @@ export interface PoolState {
   readonly roundSeconds: bigint;
   readonly closeBuffer: bigint;
   readonly vrfTimeout: bigint;
+  /** Seconds past an epoch's `endsAt` before `close_registration` is allowed. */
+  readonly registrationWindow: bigint;
+  /** Seconds past an epoch's `drawnAt` before an unpaid Drawn epoch may roll over. */
+  readonly payoutTimeout: bigint;
   readonly paused: boolean;
   readonly currentEpochId: bigint;
   readonly nextRoundId: bigint;
@@ -51,6 +55,8 @@ export interface EpochState {
   readonly vrfSeed: Uint8Array;
   readonly requestedAt: bigint;
   readonly target: bigint;
+  /** When `draw` landed, 0 until then. */
+  readonly drawnAt: bigint;
 }
 
 export interface RoundState {
@@ -93,6 +99,8 @@ export function decodePool(
     roundSeconds: big(raw.roundSeconds),
     closeBuffer: big(raw.closeBuffer),
     vrfTimeout: big(raw.vrfTimeout),
+    registrationWindow: big(raw.registrationWindow),
+    payoutTimeout: big(raw.payoutTimeout),
     paused: raw.paused === true,
     currentEpochId: big(raw.currentEpochId),
     nextRoundId: big(raw.nextRoundId),
@@ -113,6 +121,7 @@ export function decodeEpoch(program: Program<Idl>, data: Buffer): EpochState {
     vrfSeed: Uint8Array.from(raw.vrfSeed as number[]),
     requestedAt: big(raw.requestedAt),
     target: big(raw.target),
+    drawnAt: big(raw.drawnAt),
   };
 }
 

@@ -212,7 +212,9 @@ async function airdrop(to: PublicKey, sol: number): Promise<void> {
 // `create_pool` failed on chain with the account already in use.
 const poolNonce = BigInt(process.pid % 1_000);
 let poolCounter = 0;
-function nextPoolId(): bigint {
+/** Exported for the few tests that call `create_pool` themselves instead of
+ *  going through `setupPool`. */
+export function nextPoolId(): bigint {
   poolCounter += 1;
   return BigInt(Date.now()) * 1_000_000n + poolNonce * 1_000n + BigInt(poolCounter);
 }
@@ -235,6 +237,13 @@ export interface PoolParamsOverrides {
    * Defaults to 0 (no floor) so a test that never funds the jackpot still
    * reaches the draw; the low-jackpot test sets it. */
   minJackpot?: number;
+  /** Seconds past `ends_at` before `close_registration` is accepted.
+   * Defaults to 0, so every suite keeps the timing it had before the window
+   * existed; the window test sets it. */
+  registrationWindow?: number;
+  /** Seconds a Drawn epoch waits for its payout before `rollover_epoch` will
+   * take it. Defaults to a day, well past any test's run. */
+  payoutTimeout?: number;
   /** Reuse an existing mint instead of creating a fresh one (e.g. to test
    * two pools sharing an accepted asset). The caller must not rely on this
    * pool's operator being the mint authority when a shared mint is passed. */
@@ -250,6 +259,8 @@ const DEFAULT_PARAMS = {
   minDeposit: 1_000_000, // 1 hexUSDC at 6 decimals
   houseCutBps: 600, // 6%, the bootstrap default
   minJackpot: 0,
+  registrationWindow: 0,
+  payoutTimeout: 86_400,
 };
 
 export interface PoolCtx {
@@ -328,6 +339,8 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       minDeposit: new BN(params.minDeposit),
       houseCutBps: params.houseCutBps,
       minJackpot: new BN(params.minJackpot),
+      registrationWindow: new BN(params.registrationWindow),
+      payoutTimeout: new BN(params.payoutTimeout),
     })
     .accountsPartial({
       payer: operator.publicKey,

@@ -200,13 +200,16 @@ async function settlePosition(
     .rpc();
 }
 
-async function voidRound(pool: PoolCtx, round: PublicKey) {
+/** `seed` is the Round's own `vrfSeed`: the program checks the randomness
+ *  account against it and refuses to void a request that was fulfilled. */
+async function voidRound(pool: PoolCtx, round: PublicKey, seed: Uint8Array) {
   return program.methods
     .voidRound()
     .accountsPartial({
       operator: pool.operator.publicKey,
       pool: pool.pool,
       round,
+      randomness: randomnessPda(seed),
     })
     .signers([pool.operator])
     .rpc();
@@ -720,7 +723,7 @@ describe("rounds", () => {
       const requested = await program.account.round.fetch(round);
 
       await waitUntil(Number(requested.requestedAt.toString()) + 2); // past vrf_timeout
-      await voidRound(pool, round);
+      await voidRound(pool, round, seed);
 
       const voided = await program.account.round.fetch(round);
       expect(voided.status).toBe(4); // Voided
@@ -751,6 +754,80 @@ describe("rounds", () => {
       expect(
         await provider.connection.getBalance(alice.keypair.publicKey),
       ).toBe(aliceBalBefore + aliceRentBefore);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "void_round is refused once the randomness has been fulfilled",
+    async () => {
+      const pool = await setupPool({
+        roundSeconds: 4,
+        closeBuffer: 1,
+        vrfTimeout: 2,
+      });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      // Round 1: the oracle answers, and only then does the timeout pass.
+      // Reading the tile and voiding the round is the move this blocks.
+      const first = await createRound(pool, 4);
+      await buyPosition(pool, alice, first.round, 1n << 0n, 1_000_000n);
+      await waitUntil(first.endsAt);
+      const firstSeed = Uint8Array.from(
+        (await program.account.round.fetch(first.round)).vrfSeed,
+      );
+      await requestRandomness(pool, first.round, firstSeed);
+      await fulfillRandomness(firstSeed, randomnessFor(1)); // alice loses
+      const requested = await program.account.round.fetch(first.round);
+      await waitUntil(Number(requested.requestedAt.toString()) + 2);
+
+      await expect(voidRound(pool, first.round, firstSeed)).rejects.toThrow(
+        /RandomnessAlreadyFulfilled/,
+      );
+      // The only way out of a fulfilled request is the settlement it drew.
+      await settleRound(pool, first.round, firstSeed);
+      expect((await program.account.round.fetch(first.round)).status).toBe(3); // Forfeited
+
+      // Round 2: nothing ever answers, so the same timeout still voids.
+      const second = await createRound(pool, 4);
+      await buyPosition(pool, alice, second.round, 1n << 0n, 1_000_000n);
+      await waitUntil(second.endsAt);
+      const secondSeed = Uint8Array.from(
+        (await program.account.round.fetch(second.round)).vrfSeed,
+      );
+      await requestRandomness(pool, second.round, secondSeed);
+      const secondRequested = await program.account.round.fetch(second.round);
+      await waitUntil(Number(secondRequested.requestedAt.toString()) + 2);
+      await voidRound(pool, second.round, secondSeed);
+      expect((await program.account.round.fetch(second.round)).status).toBe(4); // Voided
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the House cannot buy a position with the Entries it just won",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 6);
+      await buyPosition(pool, alice, round, 1n << 2n, 1_000_000n); // tile 2 only
+      await playToSettlement(pool, round, endsAt, 7); // nobody on tile 7
+      const house = await program.account.player.fetch(pool.house);
+      expect(house.entries.toString()).toBe("1000000");
+
+      const { round: next } = await createRound(pool, 6);
+      await expect(
+        buyPosition(
+          pool,
+          { keypair: pool.operator, tokenAccount: PublicKey.default },
+          next,
+          1n << 0n,
+          1_000n,
+        ),
+      ).rejects.toThrow(/HouseCannotPlay/);
     },
     TIMEOUT,
   );

@@ -89,6 +89,11 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
     let player = &mut ctx.accounts.player;
     touch(player, pool, now)?;
 
+    // The House is the counterparty, not a participant: it takes forfeited
+    // pots and the cut, so letting the operator stake those Entries back on
+    // tiles would be playing against the depositors with their own money.
+    require!(!player.is_house, HexVaultError::HouseCannotPlay);
+
     let round = &mut ctx.accounts.round;
     require!(round.status == round_status::OPEN, HexVaultError::RoundNotOpen);
     let close_at = round
@@ -335,6 +340,18 @@ pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
         round.status == round_status::REQUESTED,
         HexVaultError::RoundNotRequested
     );
+    // A fulfilled request has to go through `settle_round`. Without this the
+    // operator could read the drawn tile, dislike it, and sit out the
+    // timeout to void the round instead.
+    require_keys_eq!(
+        ctx.accounts.randomness.key(),
+        vrf::randomness_address(&round.vrf_seed),
+        HexVaultError::InvalidRandomnessAccount
+    );
+    require!(
+        !vrf::is_fulfilled(&ctx.accounts.randomness.to_account_info(), &round.vrf_seed),
+        HexVaultError::RandomnessAlreadyFulfilled
+    );
     let timeout_at = round
         .requested_at
         .checked_add(pool.vrf_timeout)
@@ -544,4 +561,10 @@ pub struct VoidRound<'info> {
         bump = round.bump,
     )]
     pub round: Account<'info, Round>,
+
+    /// CHECK: ORAO randomness account for this round's seed, matched against
+    /// `vrf::randomness_address` in the handler the same way `settle_round`
+    /// does. It need not exist: an unfulfilled request is the normal case
+    /// here.
+    pub randomness: UncheckedAccount<'info>,
 }
