@@ -1,7 +1,18 @@
 # Postgres + backend for the VPS. Traefik is already running on the host and is
 # not part of this file; it only needs the labels below and a shared network.
 # Every deployment-specific value comes from .env (see .env.example).
-name: hexvault
+#
+# Two stacks run from this one file on the same box. Devnet is the default and
+# needs no variables set. Mainnet passes its own env file, which carries
+# COMPOSE_PROJECT_NAME, STACK_NAME and ENV_FILE:
+#
+#   docker compose --env-file .env.mainnet up -d --build
+#
+# COMPOSE_PROJECT_NAME separates the project, containers and volumes, STACK_NAME
+# the Traefik router and service, ENV_FILE the backend's own environment.
+# Compose interpolates only from the shell and --env-file, never from env_file
+# below, so those three have to be in the file --env-file names.
+name: ${COMPOSE_PROJECT_NAME:-hexvault}
 
 networks:
   # The network Traefik already watches. Created outside this file.
@@ -39,9 +50,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # RPC_URL, PROGRAM_ID, POOL_ID, AUTHORITY_KEYPAIR, HEXUSDC_MINT, CORS_ORIGIN
+    # RPC_URL, PROGRAM_ID, POOL_ID, OPERATOR_KEYPAIR, ADMIN_ADDRESS, HEXUSDC_MINT,
+    # CORS_ORIGIN
     # and the tuning values all come from here.
-    env_file: .env
+    env_file: ${ENV_FILE:-.env}
     environment:
       # Overrides whatever .env holds: inside compose the database is a service name.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -50,10 +62,12 @@ services:
     networks:
       - default
       - traefik
+    # List form, not the mapping form: compose interpolates label values but not
+    # label keys, and ${STACK_NAME} sits in the key half of the router names.
     labels:
-      traefik.enable: "true"
-      traefik.docker.network: ${TRAEFIK_NETWORK}
-      traefik.http.routers.hexvault-api.rule: Host(`${API_HOST}`)
-      traefik.http.routers.hexvault-api.entrypoints: websecure
-      traefik.http.routers.hexvault-api.tls.certresolver: ${CERT_RESOLVER}
-      traefik.http.services.hexvault-api.loadbalancer.server.port: "8080"
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK}"
+      - "traefik.http.routers.${STACK_NAME:-hexvault}-api.rule=Host(`${API_HOST}`)"
+      - "traefik.http.routers.${STACK_NAME:-hexvault}-api.entrypoints=websecure"
+      - "traefik.http.routers.${STACK_NAME:-hexvault}-api.tls.certresolver=${CERT_RESOLVER}"
+      - "traefik.http.services.${STACK_NAME:-hexvault}-api.loadbalancer.server.port=8080"

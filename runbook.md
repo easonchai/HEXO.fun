@@ -299,3 +299,63 @@
 
     curl -s https://<deployed-host>/ | grep -oE '/assets/[^"]+\.js'
     curl -s https://<deployed-host><asset-path-from-above> | grep -E "api-key=|helius-rpc.com"
+
+  Mainnet stack
+
+  Mainnet runs as a second compose project on the same box, out of the same checkout and behind the same Traefik. The two stacks
+  share nothing but the host: separate project name, separate containers, separate postgres volume and database, separate Traefik
+  router, separate Helius key, separate Vercel project. docker-compose.yml is the same file for both, with three variables switching
+  it over: COMPOSE_PROJECT_NAME (project, containers, volume), STACK_NAME (Traefik router and service names) and ENV_FILE (the
+  environment handed to the backend container). Unset, they fall back to the devnet values, so every existing devnet command keeps
+  working unchanged.
+
+  All three live in .env.mainnet, and the command passes that file with --env-file. That flag is what makes them take effect:
+  compose interpolates ${...} only from the shell and from the file --env-file names, never from the file in env_file:. Exporting
+  the variables in the shell instead looks like it works and is a trap, because interpolation then falls back to .env for everything
+  else and API_HOST resolves to the devnet hostname, pointing the mainnet router at the devnet API's host rule.
+
+  1. On the box, in the existing checkout:
+
+       git pull
+
+     One checkout feeds both stacks, so a pull stages new code for devnet too. Recreate each one deliberately.
+
+  2. Write .env.mainnet next to .env. Copy .env.mainnet.example and fill it in. It is gitignored by the `.env.*` rule, same as
+     .env. The values that must differ from .env are POSTGRES_DB, RPC_URL (its own Helius key, on its own bill and rate limit),
+     API_HOST, CORS_ORIGIN, OPERATOR_KEYPAIR and ADMIN_ADDRESS. ACCEPTED_MINT is real USDC,
+     EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v, and POOL_ID starts again at 1 because mainnet is a different chain.
+     COMPOSE_PROJECT_NAME, STACK_NAME and ENV_FILE are already set in the example and should be left alone.
+
+  3. Bring it up. Every mainnet compose command takes the same flag:
+
+       docker compose --env-file .env.mainnet up -d --build
+       docker compose --env-file .env.mainnet logs -f backend
+       docker compose --env-file .env.mainnet exec postgres psql -U hexvault -d hexvault_mainnet
+
+     Without the flag you are talking to the devnet stack. Check which one you are about to hit with
+     `docker compose --env-file .env.mainnet config | head -1`: it prints `name: hexvault-mainnet`.
+
+  4. Traefik needs no configuration change. It picks the second router up from the container labels, which come out as
+     hexvault-mainnet-api against the devnet stack's hexvault-api. What it does need is a DNS A record for API_HOST pointing at the
+     box, in place before the container starts, or the certresolver fails the challenge and Traefik serves its default certificate.
+     Confirm with `curl -s https://<api-host>/status | jq '{rpcOk, poolId}'` once the stack is up.
+
+  5. Second Vercel project, pointed at the same repo and the same branch as the devnet one, with its own domain and its own
+     environment:
+
+       VITE_CLUSTER=mainnet-beta
+       VITE_API_URL=https://<api-host>
+       VITE_POOL_ID=1
+       VITE_PUBLIC_RPC_URL=https://api.mainnet-beta.solana.com
+       VITE_PROGRAM_ID=LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6
+
+     VITE_CLUSTER=mainnet-beta is what switches the signing chain to solana:mainnet, hides the faucet and changes the copy. The
+     devnet project keeps VITE_CLUSTER=devnet, or leaves it unset for the same result. VITE_PUBLIC_RPC_URL must stay a public
+     endpoint: Vite inlines it into the bundle, so the mainnet Helius key belongs in the backend's RPC_URL and nowhere near this
+     project. A Vercel variable only reaches the bundle on the next build, so redeploy after any change.
+
+  6. Run the leaked-key check from "Frontend RPC endpoint and checking for a leaked key" above against the mainnet host before
+     announcing it. Both greps must print nothing.
+
+  Rolling back is `docker compose --env-file .env.mainnet down` on its own. It leaves the devnet stack running, because the project
+  names differ, and leaves the mainnet volume in place unless you add -v.

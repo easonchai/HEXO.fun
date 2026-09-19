@@ -13,6 +13,10 @@ hex_vault = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6"
 [programs.devnet]
 hex_vault = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6"
 
+# Same id on mainnet-beta: one keypair, deployed to both clusters.
+[programs.mainnet]
+hex_vault = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6"
+
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"
