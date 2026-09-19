@@ -1,7 +1,7 @@
 //! Round lifecycle (spec §2.3 "Rounds").
 //!
-//! `create_round`, `settle_round` and `void_round` are authority-only via
-//! `has_one = authority` on the Pool account. `buy_position`,
+//! `create_round`, `settle_round` and `void_round` are operator-only via
+//! `has_one = operator` on the Pool account. `buy_position`,
 //! `request_round_randomness` and `settle_position` are permissionless.
 
 use anchor_lang::prelude::*;
@@ -362,13 +362,13 @@ pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
 #[derive(Accounts)]
 pub struct CreateRound<'info> {
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
+        has_one = operator,
     )]
     pub pool: Account<'info, Pool>,
 
@@ -380,7 +380,7 @@ pub struct CreateRound<'info> {
 
     #[account(
         init,
-        payer = authority,
+        payer = operator,
         seeds = [SEED_ROUND, pool.key().as_ref(), &pool.next_round_id.to_le_bytes()],
         bump,
         space = 8 + Round::INIT_SPACE,
@@ -464,13 +464,13 @@ pub struct RequestRoundRandomness<'info> {
 
 #[derive(Accounts)]
 pub struct SettleRound<'info> {
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
+        has_one = operator,
     )]
     pub pool: Account<'info, Pool>,
 
@@ -528,13 +528,13 @@ pub struct SettlePosition<'info> {
 
 #[derive(Accounts)]
 pub struct VoidRound<'info> {
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
+        has_one = operator,
     )]
     pub pool: Account<'info, Pool>,
 

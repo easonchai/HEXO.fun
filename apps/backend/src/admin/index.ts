@@ -70,9 +70,11 @@ async function readPool(chain: ChainService): Promise<PoolState> {
   return decodePool(chain.program, address, info.data);
 }
 
+// `set_pause` takes the admin or the operator when pausing and the admin
+// alone when unpausing, so the loaded key decides which direction works.
 async function setPause(chain: ChainService, paused: boolean): Promise<void> {
   const ix = await method(chain, "setPause", paused)
-    .accountsPartial({ authority: chain.keypair.publicKey, pool: chain.poolAddress() })
+    .accountsPartial({ signer: chain.keypair.publicKey, pool: chain.poolAddress() })
     .instruction();
   log(`signature ${await chain.send([ix])}`);
   log(`pool ${paused ? "paused" : "unpaused"}`);
@@ -92,7 +94,7 @@ async function setParams(chain: ChainService, params: SetParamsInput): Promise<v
     minDeposit: params.minDeposit === undefined ? null : new BN(params.minDeposit.toString()),
     houseCutBps: params.houseCutBps === undefined ? null : params.houseCutBps,
   })
-    .accountsPartial({ authority: chain.keypair.publicKey, pool: chain.poolAddress() })
+    .accountsPartial({ admin: chain.keypair.publicKey, pool: chain.poolAddress() })
     .instruction();
   log(`signature ${await chain.send([ix])}`);
   log("params updated (epoch/round changes apply to the next epoch/round, not the open one)");
@@ -148,7 +150,7 @@ async function main(): Promise<void> {
   // application, so ChainService's own constructor is the whole wiring.
   const chain = new ChainService(connection, new ConfigService<HexVaultEnv, true>(env));
   log(
-    `authority ${chain.keypair.publicKey.toBase58()} on ${connection.rpcEndpoint}, pool ${chain.poolAddress().toBase58()}`,
+    `signer ${chain.keypair.publicKey.toBase58()} on ${connection.rpcEndpoint}, pool ${chain.poolAddress().toBase58()}`,
   );
 
   await run(command, chain);

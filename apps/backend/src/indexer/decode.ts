@@ -119,7 +119,8 @@ const isUnset = (key: PublicKey): boolean => key.equals(PublicKey.default);
 // listed; the rest of each account is decoded and dropped.
 export interface DecodedPool {
   poolId: BN;
-  authority: PublicKey;
+  admin: PublicKey;
+  operator: PublicKey;
   acceptedMint: PublicKey;
   epochSeconds: BN;
   epochAnchor: BN;
@@ -189,7 +190,9 @@ export function poolRow(
   return {
     address: address.toBase58(),
     poolId: big(pool.poolId),
-    authority: pool.authority.toBase58(),
+    // The Prisma column is still called `authority` and carries the operator.
+    // Ticket 03 splits it into `admin` and `operator` alongside the migration.
+    authority: pool.operator.toBase58(),
     mint: pool.acceptedMint.toBase58(),
     epochSeconds: big(pool.epochSeconds),
     epochAnchor: big(pool.epochAnchor),

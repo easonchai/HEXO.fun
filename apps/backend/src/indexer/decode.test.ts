@@ -84,8 +84,23 @@ interface Case {
 const CASES: Case[] = [
   {
     name: "PoolCreated",
-    fields: [key(POOL), u64(7n), key(OWNER), key(MINT)],
-    data: { pool: POOL, poolId: "7", authority: OWNER, acceptedMint: MINT },
+    fields: [key(POOL), u64(7n), key(OWNER), key(MINT), key(MINT)],
+    data: { pool: POOL, poolId: "7", admin: OWNER, operator: MINT, acceptedMint: MINT },
+  },
+  {
+    name: "OperatorChanged",
+    fields: [key(POOL), key(OWNER), key(MINT)],
+    data: { pool: POOL, previous: OWNER, operator: MINT },
+  },
+  {
+    name: "AdminProposed",
+    fields: [key(POOL), key(OWNER)],
+    data: { pool: POOL, pendingAdmin: OWNER },
+  },
+  {
+    name: "AdminChanged",
+    fields: [key(POOL), key(OWNER), key(MINT)],
+    data: { pool: POOL, previous: OWNER, admin: MINT },
   },
   {
     name: "ParamsSet",
@@ -272,7 +287,8 @@ describe("poolRow", () => {
   it("carries the epoch grid timestamps", () => {
     const pool: DecodedPool = {
       poolId: new BN(7),
-      authority: new PublicKey(OWNER),
+      admin: new PublicKey(OWNER),
+      operator: new PublicKey(OWNER),
       acceptedMint: new PublicKey(MINT),
       epochSeconds: new BN(86_400),
       epochAnchor: new BN(1_789_315_200),

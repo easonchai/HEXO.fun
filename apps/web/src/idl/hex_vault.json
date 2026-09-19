@@ -8,6 +8,52 @@
   },
   "instructions": [
     {
+      "name": "accept_admin",
+      "discriminator": [
+        112,
+        42,
+        45,
+        90,
+        116,
+        181,
+        13,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "pending_admin",
+          "docs": [
+            "Checked in the handler against `pool.pending_admin`, so an unset",
+            "proposal fails with `NoPendingAdmin` instead of a constraint error."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "begin_epoch",
       "discriminator": [
         56,
@@ -21,7 +67,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "writable": true,
           "signer": true,
           "relations": [
@@ -245,7 +291,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "docs": [
             "Pays ORAO's request fee and the request account's rent, so it must be",
             "writable."
@@ -376,7 +422,10 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "payer",
+          "docs": [
+            "Pays rent only. The admin and operator come in through `params`."
+          ],
           "writable": true,
           "signer": true
         },
@@ -475,8 +524,8 @@
                 "path": "pool"
               },
               {
-                "kind": "account",
-                "path": "authority"
+                "kind": "arg",
+                "path": "params.operator"
               }
             ]
           }
@@ -520,7 +569,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "writable": true,
           "signer": true,
           "relations": [
@@ -729,7 +778,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "signer": true,
           "relations": [
             "pool"
@@ -884,7 +933,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "signer": true,
           "relations": [
             "pool"
@@ -1017,6 +1066,56 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "propose_admin",
+      "discriminator": [
+        121,
+        214,
+        199,
+        212,
+        87,
+        39,
+        117,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_admin",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "register",
@@ -1223,7 +1322,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "signer": true,
           "relations": [
             "pool"
@@ -1281,6 +1380,56 @@
       "args": []
     },
     {
+      "name": "set_operator",
+      "discriminator": [
+        238,
+        153,
+        101,
+        169,
+        243,
+        131,
+        36,
+        1
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_operator",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "set_params",
       "discriminator": [
         27,
@@ -1294,7 +1443,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "admin",
           "signer": true,
           "relations": [
             "pool"
@@ -1348,11 +1497,12 @@
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "signer",
+          "docs": [
+            "Admin or operator. Which one is allowed depends on the direction, so",
+            "the handler checks it rather than a `has_one` here."
+          ],
+          "signer": true
         },
         {
           "name": "pool",
@@ -1523,7 +1673,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "signer": true,
           "relations": [
             "pool"
@@ -1629,7 +1779,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "signer": true,
           "relations": [
             "pool"
@@ -1868,6 +2018,32 @@
   ],
   "events": [
     {
+      "name": "AdminChanged",
+      "discriminator": [
+        232,
+        34,
+        31,
+        226,
+        62,
+        18,
+        19,
+        114
+      ]
+    },
+    {
+      "name": "AdminProposed",
+      "discriminator": [
+        129,
+        249,
+        226,
+        227,
+        199,
+        82,
+        110,
+        243
+      ]
+    },
+    {
       "name": "Deposited",
       "discriminator": [
         111,
@@ -1943,6 +2119,19 @@
         247,
         26,
         76
+      ]
+    },
+    {
+      "name": "OperatorChanged",
+      "discriminator": [
+        231,
+        79,
+        62,
+        226,
+        190,
+        139,
+        176,
+        51
       ]
     },
     {
@@ -2246,9 +2435,55 @@
       "code": 6033,
       "name": "VrfTimeoutNotElapsed",
       "msg": "the randomness timeout has not elapsed"
+    },
+    {
+      "code": 6034,
+      "name": "Unauthorized",
+      "msg": "signer is not authorized for this instruction"
+    },
+    {
+      "code": 6035,
+      "name": "NoPendingAdmin",
+      "msg": "no admin handover is pending"
     }
   ],
   "types": [
+    {
+      "name": "AdminChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "previous",
+            "type": "pubkey"
+          },
+          {
+            "name": "admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
     {
       "name": "CreatePoolParams",
       "type": {
@@ -2257,6 +2492,18 @@
           {
             "name": "pool_id",
             "type": "u64"
+          },
+          {
+            "name": "admin",
+            "docs": [
+              "Role keys, not accounts: neither has to sign `create_pool`, and on",
+              "mainnet the admin is a multisig that cannot."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
           },
           {
             "name": "vrf_network_state",
@@ -2487,6 +2734,26 @@
       }
     },
     {
+      "name": "OperatorChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "previous",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "ParamsSet",
       "type": {
         "kind": "struct",
@@ -2638,9 +2905,25 @@
             "type": "u64"
           },
           {
-            "name": "authority",
+            "name": "admin",
             "docs": [
-              "Operator key. Also the House Player's owner and the mint authority."
+              "Changes parameters, unpauses, rotates the operator, and hands its own",
+              "role on. A multisig on mainnet."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "The hot key the operator service cranks with. Also the House Player's",
+              "owner and, on devnet, the mint authority."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "docs": [
+              "Proposed next admin. `Pubkey::default()` means no handover is open."
             ],
             "type": "pubkey"
           },
@@ -2659,14 +2942,14 @@
           {
             "name": "treasury",
             "docs": [
-              "Authority-owned token account: 20% of a jackpot the House wins."
+              "Token account that takes 20% of a jackpot the House wins."
             ],
             "type": "pubkey"
           },
           {
             "name": "buyback_reserve",
             "docs": [
-              "Authority-owned token account: 50% of a jackpot the House wins."
+              "Token account that takes 50% of a jackpot the House wins."
             ],
             "type": "pubkey"
           },
@@ -2824,7 +3107,11 @@
             "type": "u64"
           },
           {
-            "name": "authority",
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
             "type": "pubkey"
           },
           {

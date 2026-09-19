@@ -1,7 +1,7 @@
 //! Epoch lifecycle (spec §2.3 "Epochs").
 //!
 //! `begin_epoch`, `close_registration`, `draw`, `payout` and `rollover_epoch`
-//! are authority-only via `has_one = authority` on the Pool account.
+//! are operator-only via `has_one = operator` on the Pool account.
 //! `register` and `fund_jackpot` are permissionless.
 
 use anchor_lang::prelude::*;
@@ -238,7 +238,7 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
     epoch.vrf_seed = seed;
 
     vrf::request_randomness(
-        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.operator.to_account_info(),
         &ctx.accounts.vrf_network_state.to_account_info(),
         &ctx.accounts.vrf_treasury.to_account_info(),
         &ctx.accounts.randomness.to_account_info(),
@@ -388,13 +388,13 @@ pub fn rollover_epoch(ctx: Context<RolloverEpoch>) -> Result<()> {
 #[derive(Accounts)]
 pub struct BeginEpoch<'info> {
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
+        has_one = operator,
     )]
     pub pool: Account<'info, Pool>,
 
@@ -411,7 +411,7 @@ pub struct BeginEpoch<'info> {
 
     #[account(
         init,
-        payer = authority,
+        payer = operator,
         seeds = [SEED_EPOCH, pool.key().as_ref(), &(pool.current_epoch_id + 1).to_le_bytes()],
         bump,
         space = 8 + Epoch::INIT_SPACE,
@@ -470,9 +470,9 @@ pub struct CloseRegistration<'info> {
     /// Pays ORAO's request fee and the request account's rent, so it must be
     /// writable.
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
-    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = authority)]
+    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = operator)]
     pub pool: Account<'info, Pool>,
 
     #[account(
@@ -515,9 +515,9 @@ pub struct CloseRegistration<'info> {
 
 #[derive(Accounts)]
 pub struct Draw<'info> {
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
-    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = authority)]
+    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = operator)]
     pub pool: Account<'info, Pool>,
 
     #[account(
@@ -533,7 +533,7 @@ pub struct Draw<'info> {
 
 #[derive(Accounts)]
 pub struct Payout<'info> {
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
     // Boxed: unboxed, this struct's `try_accounts` overflows the BPF stack
     // frame (8 accounts including 5 token accounts).
@@ -541,7 +541,7 @@ pub struct Payout<'info> {
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
+        has_one = operator,
         has_one = treasury,
         has_one = buyback_reserve,
     )]
@@ -585,9 +585,9 @@ pub struct Payout<'info> {
 
 #[derive(Accounts)]
 pub struct RolloverEpoch<'info> {
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
-    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = authority)]
+    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = operator)]
     pub pool: Account<'info, Pool>,
 
     #[account(

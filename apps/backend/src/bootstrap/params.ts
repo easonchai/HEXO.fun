@@ -3,7 +3,13 @@
 // import it without the script's chain calls running on import.
 import { parseArgs } from "node:util";
 
+import { PublicKey } from "@solana/web3.js";
+
 export interface PoolParams {
+  /** Pool admin. Absent falls back to `ADMIN_ADDRESS`, then to the signer. */
+  readonly admin?: PublicKey;
+  /** Pool operator. Absent falls back to the signer. */
+  readonly operator?: PublicKey;
   readonly epochSeconds: number;
   /** Unix seconds. Fixes the phase of the `anchor + k * epochSeconds` grid. */
   readonly epochAnchor: number;
@@ -44,7 +50,15 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
 };
 
 export const USAGE =
-  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N]";
+  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--admin PUBKEY] [--operator PUBKEY]";
+
+function pubkey(flag: string, raw: string): PublicKey {
+  try {
+    return new PublicKey(raw);
+  } catch (cause) {
+    throw new Error(`--${flag} must be a base58 pubkey, got "${raw}"`, { cause });
+  }
+}
 
 function seconds(flag: string, raw: string): number {
   const value = Number(raw);
@@ -88,6 +102,8 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     "round-seconds"?: string;
     "epoch-anchor"?: string;
     "house-cut-bps"?: string;
+    admin?: string;
+    operator?: string;
   };
   try {
     ({ values } = parseArgs({
@@ -97,6 +113,8 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
         "round-seconds": { type: "string" },
         "epoch-anchor": { type: "string" },
         "house-cut-bps": { type: "string" },
+        admin: { type: "string" },
+        operator: { type: "string" },
       },
       allowPositionals: false,
     }));
@@ -122,6 +140,12 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     ...(houseCut === undefined
       ? {}
       : { houseCutBps: houseCutBps("house-cut-bps", houseCut) }),
+    ...(values.admin === undefined
+      ? {}
+      : { admin: pubkey("admin", values.admin) }),
+    ...(values.operator === undefined
+      ? {}
+      : { operator: pubkey("operator", values.operator) }),
   };
 
   // create_pool requires close_buffer < round_seconds, so a too-fast demo

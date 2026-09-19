@@ -62,12 +62,12 @@ solana --url "$rpc" airdrop 10 "$authority" --keypair "$wallet" >/dev/null
 echo "authority $authority"
 
 cd "$backend"
-AUTHORITY_KEYPAIR=$(node -e "
+OPERATOR_KEYPAIR=$(node -e "
 const bs58 = require('bs58');
 const secret = JSON.parse(require('node:fs').readFileSync('$work/authority.json', 'utf8'));
 process.stdout.write((bs58.default ?? bs58).encode(Uint8Array.from(secret)));
 ")
-export AUTHORITY_KEYPAIR
+export OPERATOR_KEYPAIR
 export RPC_URL="$rpc"
 export PROGRAM_ID="$program_id"
 export POOL_ID="${POOL_ID:-1}"

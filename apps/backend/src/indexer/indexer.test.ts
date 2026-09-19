@@ -39,7 +39,7 @@ beforeAll(async () => {
   await prisma.$connect();
   connection = new CountingConnection();
   const env: Partial<HexVaultEnv> = {
-    AUTHORITY_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
+    OPERATOR_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
     POOL_ID: POOL_ID.toString(),
     PROGRAM_ID: PROGRAM_ID.toBase58(),
     RPC_URL: "http://127.0.0.1:1",

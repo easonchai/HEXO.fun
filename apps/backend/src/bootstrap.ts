@@ -49,7 +49,8 @@ const HEXUSDC_DECIMALS = 6;
 
 /** Only the Pool fields this script reads back on a re-run. */
 interface PoolAccount {
-  authority: PublicKey;
+  admin: PublicKey;
+  operator: PublicKey;
   acceptedMint: PublicKey;
   treasury: PublicKey;
   buybackReserve: PublicKey;
@@ -185,7 +186,8 @@ async function ensureSeededTokenAccount(
 
 async function createPool(
   program: Program<Idl>,
-  authority: Keypair,
+  payer: Keypair,
+  roles: { admin: PublicKey; operator: PublicKey },
   poolId: bigint,
   pool: PublicKey,
   mint: PublicKey,
@@ -204,6 +206,8 @@ async function createPool(
 
   await createPoolMethod({
     poolId: new BN(poolId.toString()),
+    admin: roles.admin,
+    operator: roles.operator,
     vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
     epochSeconds: new BN(params.epochSeconds),
     epochAnchor: new BN(params.epochAnchor),
@@ -214,18 +218,18 @@ async function createPool(
     houseCutBps: params.houseCutBps,
   })
     .accountsPartial({
-      authority: authority.publicKey,
+      payer: payer.publicKey,
       pool,
       acceptedMint: mint,
       principalVault: principalVaultAddress(program.programId, pool),
       jackpotVault: jackpotVaultAddress(program.programId, pool),
-      house: playerAddress(program.programId, pool, authority.publicKey),
+      house: playerAddress(program.programId, pool, roles.operator),
       treasury,
       buybackReserve,
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
-    .signers([authority])
+    .signers([payer])
     .rpc();
   log(
     `created pool ${pool.toBase58()} (epoch ${params.epochSeconds}s, round ${params.roundSeconds}s)`,
@@ -252,12 +256,26 @@ async function main(): Promise<void> {
   const params = parsePoolParams(process.argv.slice(2));
   const connection = new Connection(requireEnv("RPC_URL"), "confirmed");
   const authority = Keypair.fromSecretKey(
-    bs58.decode(requireEnv("AUTHORITY_KEYPAIR")),
+    bs58.decode(requireEnv("OPERATOR_KEYPAIR")),
   );
+  // The loaded key pays, mints and owns the token accounts. It is the
+  // operator unless --operator says otherwise, and the admin only when
+  // neither --admin nor ADMIN_ADDRESS names someone else.
+  const roles = {
+    admin:
+      params.admin ??
+      (process.env.ADMIN_ADDRESS
+        ? new PublicKey(process.env.ADMIN_ADDRESS)
+        : authority.publicKey),
+    operator: params.operator ?? authority.publicKey,
+  };
   const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
   const poolId = BigInt(process.env.POOL_ID ?? "1");
   log(
-    `authority ${authority.publicKey.toBase58()} on ${connection.rpcEndpoint}`,
+    `signer ${authority.publicKey.toBase58()} on ${connection.rpcEndpoint}`,
+  );
+  log(
+    `admin ${roles.admin.toBase58()}, operator ${roles.operator.toBase58()}`,
   );
 
   // The env-resolved program id wins over the checked-in IDL snapshot's
@@ -279,9 +297,9 @@ async function main(): Promise<void> {
       ? program.coder.accounts.decode<PoolAccount>("pool", info.data)
       : null;
   });
-  if (existing && !existing.authority.equals(authority.publicKey)) {
+  if (existing && !existing.operator.equals(roles.operator)) {
     throw new Error(
-      `pool ${pool.toBase58()} belongs to ${existing.authority.toBase58()}, not to AUTHORITY_KEYPAIR`,
+      `pool ${pool.toBase58()} is cranked by ${existing.operator.toBase58()}, not by ${roles.operator.toBase58()}`,
     );
   }
 
@@ -346,6 +364,7 @@ async function main(): Promise<void> {
       createPool(
         program,
         authority,
+        roles,
         poolId,
         pool,
         mint,

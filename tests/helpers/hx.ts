@@ -174,12 +174,15 @@ async function airdrop(to: PublicKey, sol: number): Promise<void> {
   await connection.confirmTransaction(sig, "confirmed");
 }
 
-// Unique per process, not per wall-clock second, so a test file that calls
-// setupPool() several times never collides on the same PDA.
+// Unique per call and per process. Vitest gives each test file its own
+// worker, and two workers reaching setupPool() in the same millisecond used
+// to derive the same pool PDA: preflight passed for both, then the second
+// `create_pool` failed on chain with the account already in use.
+const poolNonce = BigInt(process.pid % 1_000);
 let poolCounter = 0;
 function nextPoolId(): bigint {
   poolCounter += 1;
-  return BigInt(Date.now()) * 1_000n + BigInt(poolCounter);
+  return BigInt(Date.now()) * 1_000_000n + poolNonce * 1_000n + BigInt(poolCounter);
 }
 
 export interface PoolParamsOverrides {
@@ -198,7 +201,7 @@ export interface PoolParamsOverrides {
   houseCutBps?: number;
   /** Reuse an existing mint instead of creating a fresh one (e.g. to test
    * two pools sharing an accepted asset). The caller must not rely on this
-   * pool's authority being the mint authority when a shared mint is passed. */
+   * pool's operator being the mint authority when a shared mint is passed. */
   mint?: PublicKey;
 }
 
@@ -218,7 +221,10 @@ export interface PoolCtx {
   mint: PublicKey;
   epochSeconds: number;
   epochAnchor: number;
-  authority: Keypair;
+  /** Signs set_params, unpause, set_operator and propose_admin. */
+  admin: Keypair;
+  /** Signs every crank, owns the House, funds the wallets, mints the asset. */
+  operator: Keypair;
   treasury: PublicKey;
   buybackReserve: PublicKey;
   principalVault: PublicKey;
@@ -232,46 +238,50 @@ export interface PoolCtx {
 
 /**
  * Airdrops, mints a fresh hexUSDC mint, wires up treasury/buyback token
- * accounts, and calls `create_pool`. The authority is its own fresh keypair
- * (not the test wallet), so authority-only instructions can be tested for
- * rejection from an unrelated signer too.
+ * accounts, and calls `create_pool`. Admin and operator are two distinct
+ * fresh keypairs (neither is the test wallet), so every role-gated
+ * instruction can be tested with the right key and with the wrong one.
  */
 export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<PoolCtx> {
   const params = { ...DEFAULT_PARAMS, ...overrides };
   const poolId = nextPoolId();
 
-  const authority = Keypair.generate();
-  await airdrop(authority.publicKey, 10);
+  const admin = Keypair.generate();
+  const operator = Keypair.generate();
+  await airdrop(admin.publicKey, 10);
+  await airdrop(operator.publicKey, 10);
 
-  const mint = overrides.mint ?? (await createMint(connection, authority, authority.publicKey, null, 6));
-  // Two independent token accounts, both owned by authority. They must be
+  const mint = overrides.mint ?? (await createMint(connection, operator, operator.publicKey, null, 6));
+  // Two independent token accounts, both owned by the operator. They must be
   // plain accounts with their own keypairs: `createAccount` without one
   // derives the ATA, and treasury and buyback_reserve share (mint, owner),
   // so the second call would land on the address the first already took.
   const treasury = await createAccount(
     connection,
-    authority,
+    operator,
     mint,
-    authority.publicKey,
+    operator.publicKey,
     Keypair.generate(),
   );
   const buybackReserve = await createAccount(
     connection,
-    authority,
+    operator,
     mint,
-    authority.publicKey,
+    operator.publicKey,
     Keypair.generate(),
   );
 
   const pool = poolPda(poolId);
   const principalVault = principalVaultPda(pool);
   const jackpotVault = jackpotVaultPda(pool);
-  const house = playerPda(pool, authority.publicKey);
+  const house = playerPda(pool, operator.publicKey);
   const epochAnchor = overrides.epochAnchor ?? (await onChainNowSeconds());
 
   await program.methods
     .createPool({
       poolId: new BN(poolId.toString()),
+      admin: admin.publicKey,
+      operator: operator.publicKey,
       vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
       epochSeconds: new BN(params.epochSeconds),
       epochAnchor: new BN(epochAnchor),
@@ -282,7 +292,7 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       houseCutBps: params.houseCutBps,
     })
     .accountsPartial({
-      authority: authority.publicKey,
+      payer: operator.publicKey,
       pool,
       acceptedMint: mint,
       principalVault,
@@ -293,15 +303,15 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
-    .signers([authority])
+    .signers([operator])
     .rpc();
 
   async function fundedWallet(amount: bigint) {
     const keypair = Keypair.generate();
     await airdrop(keypair.publicKey, 5);
-    const ata = await getOrCreateAssociatedTokenAccount(connection, authority, mint, keypair.publicKey);
+    const ata = await getOrCreateAssociatedTokenAccount(connection, operator, mint, keypair.publicKey);
     if (amount > 0n) {
-      await mintTo(connection, authority, mint, ata.address, authority, amount);
+      await mintTo(connection, operator, mint, ata.address, operator, amount);
     }
     return { keypair, tokenAccount: ata.address };
   }
@@ -312,7 +322,8 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
     mint,
     epochSeconds: params.epochSeconds,
     epochAnchor,
-    authority,
+    admin,
+    operator,
     treasury,
     buybackReserve,
     principalVault,

@@ -49,6 +49,18 @@ pub mod hex_vault {
         custody::set_pause(ctx, paused)
     }
 
+    pub fn set_operator(ctx: Context<SetOperator>, new_operator: Pubkey) -> Result<()> {
+        custody::set_operator(ctx, new_operator)
+    }
+
+    pub fn propose_admin(ctx: Context<ProposeAdmin>, new_admin: Pubkey) -> Result<()> {
+        custody::propose_admin(ctx, new_admin)
+    }
+
+    pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
+        custody::accept_admin(ctx)
+    }
+
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         custody::deposit(ctx, amount)
     }

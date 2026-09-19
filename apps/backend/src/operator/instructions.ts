@@ -44,7 +44,7 @@ export class OperatorInstructions {
   constructor(
     private readonly program: Program<Idl>,
     private readonly programId: PublicKey,
-    private readonly authority: PublicKey,
+    private readonly operator: PublicKey,
     /**
      * True when the deployed program is a `test-vrf` build, which puts the
      * randomness account at a PDA of this program instead of ORAO's. Read off
@@ -91,7 +91,7 @@ export class OperatorInstructions {
     return [
       await this.method("beginEpoch")
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           currentEpoch: this.epoch(pool, pool.currentEpochId),
           newEpoch: this.epoch(pool, pool.currentEpochId + 1n),
@@ -120,7 +120,7 @@ export class OperatorInstructions {
   }
 
   /**
-   * Step 6b: top the authority's own hexUSDC up when it is short (it is the
+   * Step 6b: top the operator's own hexUSDC up when it is short (it is the
    * mint authority) and move `amount` into the jackpot vault, in one
    * transaction so a mint can never land without its funding.
    */
@@ -129,14 +129,14 @@ export class OperatorInstructions {
     amount: bigint,
     shortfall: bigint,
   ): Promise<TransactionInstruction[]> {
-    const source = getAssociatedTokenAddressSync(pool.acceptedMint, this.authority);
+    const source = getAssociatedTokenAddressSync(pool.acceptedMint, this.operator);
     const mintTo =
       shortfall > 0n
         ? [
             createMintToInstruction(
               pool.acceptedMint,
               source,
-              this.authority,
+              this.operator,
               shortfall,
             ),
           ]
@@ -144,7 +144,7 @@ export class OperatorInstructions {
 
     const fund = await this.method("fundJackpot", bn(amount))
       .accountsPartial({
-        sourceAuthority: this.authority,
+        sourceAuthority: this.operator,
         pool: pool.address,
         acceptedMint: pool.acceptedMint,
         source,
@@ -163,7 +163,7 @@ export class OperatorInstructions {
   ): Promise<TransactionInstruction[]> {
     const close = await this.method("closeRegistration")
       .accountsPartial({
-        authority: this.authority,
+        operator: this.operator,
         pool: pool.address,
         epoch: this.epoch(pool, epochId),
         jackpotVault: jackpotVaultAddress(this.programId, pool.address),
@@ -184,7 +184,7 @@ export class OperatorInstructions {
     return [
       await this.method("draw")
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           epoch: this.epoch(pool, epoch.epochId),
           randomness: this.randomnessFor(epoch.vrfSeed),
@@ -197,7 +197,7 @@ export class OperatorInstructions {
     return [
       await this.method("rolloverEpoch")
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           epoch: this.epoch(pool, epochId),
         })
@@ -214,14 +214,14 @@ export class OperatorInstructions {
     const winnerToken = getAssociatedTokenAddressSync(pool.acceptedMint, winner);
     return [
       createAssociatedTokenAccountIdempotentInstruction(
-        this.authority,
+        this.operator,
         winnerToken,
         winner,
         pool.acceptedMint,
       ),
       await this.method("payout")
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           acceptedMint: pool.acceptedMint,
           epoch: this.epoch(pool, epochId),
@@ -243,7 +243,7 @@ export class OperatorInstructions {
     return [
       await this.method("requestRoundRandomness")
         .accountsPartial({
-          payer: this.authority,
+          payer: this.operator,
           pool: pool.address,
           round: this.round(pool, round.roundId),
           randomness: this.randomnessFor(round.vrfSeed),
@@ -260,7 +260,7 @@ export class OperatorInstructions {
     return [
       await this.method("settleRound")
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           round: this.round(pool, round.roundId),
           randomness: this.randomnessFor(round.vrfSeed),
@@ -274,7 +274,7 @@ export class OperatorInstructions {
     return [
       await this.method("voidRound")
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           round: this.round(pool, roundId),
         })
@@ -306,7 +306,7 @@ export class OperatorInstructions {
 
   /**
    * Permissionless, and the only builder here whose signer is not the
-   * authority: the Sparring player buys for itself, so the owner is passed in
+   * operator: the Sparring player buys for itself, so the owner is passed in
    * and `ChainService.send` gets its keypair.
    */
   async buyPosition(
@@ -339,7 +339,7 @@ export class OperatorInstructions {
     return [
       await this.method("createRound", bn(startsAt), bn(endsAt))
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           currentEpoch: this.epoch(pool, pool.currentEpochId),
           round: this.round(pool, pool.nextRoundId),

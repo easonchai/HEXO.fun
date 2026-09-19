@@ -61,7 +61,8 @@ const NOW = 1_800_000_000n;
 
 const pool = (over: Partial<PoolState> = {}): PoolState => ({
   address: POOL,
-  authority: AUTHORITY,
+  admin: AUTHORITY,
+  operator: AUTHORITY,
   acceptedMint: Keypair.generate().publicKey,
   treasury: Keypair.generate().publicKey,
   buybackReserve: Keypair.generate().publicKey,

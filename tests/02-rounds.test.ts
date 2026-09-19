@@ -70,16 +70,16 @@ async function setHouseCutBps(pool: PoolCtx, houseCutBps: number) {
       minDeposit: null,
       houseCutBps,
     })
-    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
-    .signers([pool.authority])
+    .accountsPartial({ admin: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
     .rpc();
 }
 
 async function setPause(pool: PoolCtx, paused: boolean) {
   return program.methods
     .setPause(paused)
-    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
-    .signers([pool.authority])
+    .accountsPartial({ signer: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
     .rpc();
 }
 
@@ -116,13 +116,13 @@ async function createRound(
   await program.methods
     .createRound(new BN(startsAt), new BN(endsAt))
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       currentEpoch,
       round,
       systemProgram: SystemProgram.programId,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 
   return { roundId, round, startsAt, endsAt };
@@ -173,13 +173,13 @@ async function settleRound(pool: PoolCtx, round: PublicKey, seed: Uint8Array) {
   return program.methods
     .settleRound()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       round,
       randomness: randomnessPda(seed),
       house: pool.house,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -204,11 +204,11 @@ async function voidRound(pool: PoolCtx, round: PublicKey) {
   return program.methods
     .voidRound()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       round,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -794,13 +794,13 @@ describe("rounds", () => {
         program.methods
           .settleRound()
           .accountsPartial({
-            authority: pool.authority.publicKey,
+            operator: pool.operator.publicKey,
             pool: pool.pool,
             round,
             randomness: randomnessPda(seed),
             house: playerPda(pool.pool, impostor.keypair.publicKey),
           })
-          .signers([pool.authority])
+          .signers([pool.operator])
           .rpc(),
       ).rejects.toThrow();
 
@@ -819,13 +819,13 @@ describe("rounds", () => {
         await program.methods
           .beginEpoch()
           .accountsPartial({
-            authority: pool.authority.publicKey,
+            operator: pool.operator.publicKey,
             pool: pool.pool,
             currentEpoch: epochPda(pool.pool, 0n),
             newEpoch: epochPda(pool.pool, 1n),
             systemProgram: SystemProgram.programId,
           })
-          .signers([pool.authority])
+          .signers([pool.operator])
           .rpc();
       } catch (err) {
         // `begin_epoch` (ticket 04) is being implemented concurrently and is
@@ -847,7 +847,7 @@ describe("rounds", () => {
         program.methods
           .createRound(startsAt, endsAt)
           .accountsPartial({
-            authority: pool.authority.publicKey,
+            operator: pool.operator.publicKey,
             pool: pool.pool,
             currentEpoch: epochPda(
               pool.pool,
@@ -859,7 +859,7 @@ describe("rounds", () => {
             ),
             systemProgram: SystemProgram.programId,
           })
-          .signers([pool.authority])
+          .signers([pool.operator])
           .rpc(),
       ).rejects.toThrow();
     },

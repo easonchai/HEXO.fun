@@ -23,7 +23,8 @@ export const ROUND_STATUS = {
 
 export interface PoolState {
   readonly address: PublicKey;
-  readonly authority: PublicKey;
+  readonly admin: PublicKey;
+  readonly operator: PublicKey;
   readonly acceptedMint: PublicKey;
   readonly treasury: PublicKey;
   readonly buybackReserve: PublicKey;
@@ -81,7 +82,8 @@ export function decodePool(
   const raw = program.coder.accounts.decode<Decoded>("pool", data);
   return {
     address,
-    authority: raw.authority as PublicKey,
+    admin: raw.admin as PublicKey,
+    operator: raw.operator as PublicKey,
     acceptedMint: raw.acceptedMint as PublicKey,
     treasury: raw.treasury as PublicKey,
     buybackReserve: raw.buybackReserve as PublicKey,

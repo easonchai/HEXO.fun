@@ -57,7 +57,7 @@ describe("ChainService.send", () => {
 
   function chainWith(connection: CountingConnection): ChainService {
     const env: Partial<HexVaultEnv> = {
-      AUTHORITY_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
+      OPERATOR_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
       POOL_ID: "1",
       PROGRAM_ID: DEFAULT_PROGRAM_ID,
     };

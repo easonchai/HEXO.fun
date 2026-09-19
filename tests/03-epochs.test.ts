@@ -123,13 +123,13 @@ async function beginEpoch(pool: PoolCtx, currentEpochId: bigint) {
   return program.methods
     .beginEpoch()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       currentEpoch: epochPda(pool.pool, currentEpochId),
       newEpoch: epochPda(pool.pool, currentEpochId + 1n),
       systemProgram: SystemProgram.programId,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -144,8 +144,8 @@ async function setParams(pool: PoolCtx, epochSeconds: number) {
       minDeposit: null,
       houseCutBps: null,
     })
-    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
-    .signers([pool.authority])
+    .accountsPartial({ admin: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
     .rpc();
 }
 
@@ -179,7 +179,7 @@ async function closeRegistration(pool: PoolCtx, epochId: bigint) {
   return program.methods
     .closeRegistration()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       epoch: epochPda(pool.pool, epochId),
       jackpotVault: pool.jackpotVault,
@@ -192,7 +192,7 @@ async function closeRegistration(pool: PoolCtx, epochId: bigint) {
       vrfProgram: ORAO_VRF_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -200,12 +200,12 @@ async function draw(pool: PoolCtx, epochId: bigint, randomness: PublicKey) {
   return program.methods
     .draw()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       epoch: epochPda(pool.pool, epochId),
       randomness,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -213,7 +213,7 @@ async function payout(pool: PoolCtx, epochId: bigint, winner: PublicKey, winnerT
   return program.methods
     .payout()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       acceptedMint: pool.mint,
       epoch: epochPda(pool.pool, epochId),
@@ -224,7 +224,7 @@ async function payout(pool: PoolCtx, epochId: bigint, winner: PublicKey, winnerT
       buybackReserve: pool.buybackReserve,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -232,11 +232,11 @@ async function rolloverEpoch(pool: PoolCtx, epochId: bigint) {
   return program.methods
     .rolloverEpoch()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       epoch: epochPda(pool.pool, epochId),
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -247,13 +247,13 @@ async function createRound(pool: PoolCtx, currentEpochId: bigint, roundId: bigin
   return program.methods
     .createRound(new BN(startsAt), new BN(endsAt))
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       currentEpoch: epochPda(pool.pool, currentEpochId),
       round: roundPda(pool.pool, roundId),
       systemProgram: SystemProgram.programId,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -279,7 +279,7 @@ async function requestRoundRandomness(pool: PoolCtx, roundId: bigint, seed: Uint
   return program.methods
     .requestRoundRandomness()
     .accountsPartial({
-      payer: pool.authority.publicKey,
+      payer: pool.operator.publicKey,
       pool: pool.pool,
       round: roundPda(pool.pool, roundId),
       randomness: randomnessPda(Uint8Array.from(seed)),
@@ -288,7 +288,7 @@ async function requestRoundRandomness(pool: PoolCtx, roundId: bigint, seed: Uint
       vrfProgram: ORAO_VRF_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -296,13 +296,13 @@ async function settleRound(pool: PoolCtx, roundId: bigint, randomness: PublicKey
   return program.methods
     .settleRound()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       round: roundPda(pool.pool, roundId),
       randomness,
       house: pool.house,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -323,11 +323,11 @@ async function voidRound(pool: PoolCtx, roundId: bigint) {
   return program.methods
     .voidRound()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       round: roundPda(pool.pool, roundId),
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -597,7 +597,7 @@ describe("epochs", () => {
       // House's, so both should still add up to total_principal exactly.
       const poolAfterForfeit = await program.account.pool.fetch(pool.pool);
       const playerA = await fetchPlayer(pool, a.keypair.publicKey);
-      const house = await fetchPlayer(pool, pool.authority.publicKey);
+      const house = await fetchPlayer(pool, pool.operator.publicKey);
       const principalVaultBalance = await program.provider.connection.getTokenAccountBalance(pool.principalVault);
 
       expect(playerA.principal.toString()).toBe(poolAfterForfeit.totalPrincipal.toString());
@@ -613,7 +613,7 @@ describe("epochs", () => {
       // --- Register only the House for this epoch (A is deliberately never
       // registered), fund + draw + pay out, and check the split.
       await retryUntilOk(() => beginEpoch(pool, 1n));
-      await register(pool, 1n, pool.authority.publicKey);
+      await register(pool, 1n, pool.operator.publicKey);
 
       const funder = await pool.fundedWallet(10_000_000n);
       await fundJackpot(pool, funder, 1_000_000n);
@@ -632,14 +632,14 @@ describe("epochs", () => {
       // winner_token is unused by the handler for a House win (the split
       // goes to buyback_reserve/treasury instead), but the Accounts struct
       // still requires one satisfying `token::authority = winner.owner`, so
-      // it must actually belong to the authority (the House's owner).
-      const authorityToken = await getOrCreateAssociatedTokenAccount(
+      // it must actually belong to the operator (the House's owner).
+      const operatorToken = await getOrCreateAssociatedTokenAccount(
         program.provider.connection,
-        pool.authority,
+        pool.operator,
         pool.mint,
-        pool.authority.publicKey,
+        pool.operator.publicKey,
       );
-      await payout(pool, 1n, pool.authority.publicKey, authorityToken.address);
+      await payout(pool, 1n, pool.operator.publicKey, operatorToken.address);
 
       const buybackAfter = await program.provider.connection.getTokenAccountBalance(pool.buybackReserve);
       const treasuryAfter = await program.provider.connection.getTokenAccountBalance(pool.treasury);
@@ -652,7 +652,7 @@ describe("epochs", () => {
 
       const paid = await fetchEpoch(pool, 1n);
       expect(paid.status).toBe(epoch_status.PAID);
-      expect(paid.winner.toString()).toBe(pool.authority.publicKey.toString());
+      expect(paid.winner.toString()).toBe(pool.operator.publicKey.toString());
     },
     TIMEOUT,
   );
@@ -908,7 +908,7 @@ describe("epochs", () => {
       // rolled over, so it evaporated with the rest of the pot instead of
       // reaching the House.
       expect(settled.houseCut.toString()).toBe("120000"); // 6% of 2M
-      expect((await fetchPlayer(pool, pool.authority.publicKey)).entries.toString()).toBe("0");
+      expect((await fetchPlayer(pool, pool.operator.publicKey)).entries.toString()).toBe("0");
 
       const alicePositionPda = positionPda(roundPda(pool.pool, 1n), alice.keypair.publicKey);
       const bobPositionPda = positionPda(roundPda(pool.pool, 1n), bob.keypair.publicKey);
@@ -927,7 +927,7 @@ describe("epochs", () => {
 
       const playerA = await fetchPlayer(pool, alice.keypair.publicKey);
       const playerB = await fetchPlayer(pool, bob.keypair.publicKey);
-      const house = await fetchPlayer(pool, pool.authority.publicKey);
+      const house = await fetchPlayer(pool, pool.operator.publicKey);
       const poolAfter = await program.account.pool.fetch(pool.pool);
 
       const entriesSum =
@@ -964,7 +964,7 @@ describe("epochs", () => {
       await sleepUntilOnChain(endsAt);
       await retryUntilOk(() => beginEpoch(pool, 1n));
 
-      const houseBefore = await fetchPlayer(pool, pool.authority.publicKey);
+      const houseBefore = await fetchPlayer(pool, pool.operator.publicKey);
 
       const round = await program.account.round.fetch(roundPda(pool.pool, 1n));
       await retryUntilOk(() => requestRoundRandomness(pool, 1n, round.vrfSeed));
@@ -974,7 +974,7 @@ describe("epochs", () => {
       const settled = await program.account.round.fetch(roundPda(pool.pool, 1n));
       expect(settled.status).toBe(round_status.FORFEITED);
 
-      const houseAfter = await fetchPlayer(pool, pool.authority.publicKey);
+      const houseAfter = await fetchPlayer(pool, pool.operator.publicKey);
       expect(houseAfter.entries.toString()).toBe(houseBefore.entries.toString());
     },
     TIMEOUT,

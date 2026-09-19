@@ -60,7 +60,8 @@ const noopSparring = { wake: () => {} } as unknown as SparringService;
 
 const pool = (overrides: object = {}) => ({
   poolId: bn(1),
-  authority: Keypair.generate().publicKey,
+  admin: Keypair.generate().publicKey,
+  operator: Keypair.generate().publicKey,
   acceptedMint: Keypair.generate().publicKey,
   principalVault: Keypair.generate().publicKey,
   jackpotVault: Keypair.generate().publicKey,

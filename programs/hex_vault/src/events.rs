@@ -7,8 +7,29 @@ use anchor_lang::prelude::*;
 pub struct PoolCreated {
     pub pool: Pubkey,
     pub pool_id: u64,
-    pub authority: Pubkey,
+    pub admin: Pubkey,
+    pub operator: Pubkey,
     pub accepted_mint: Pubkey,
+}
+
+#[event]
+pub struct OperatorChanged {
+    pub pool: Pubkey,
+    pub previous: Pubkey,
+    pub operator: Pubkey,
+}
+
+#[event]
+pub struct AdminProposed {
+    pub pool: Pubkey,
+    pub pending_admin: Pubkey,
+}
+
+#[event]
+pub struct AdminChanged {
+    pub pool: Pubkey,
+    pub previous: Pubkey,
+    pub admin: Pubkey,
 }
 
 #[event]

@@ -146,7 +146,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         RPC_URL: RPC_URL ?? "",
         PROGRAM_ID: programId,
         POOL_ID: poolId.toString(),
-        AUTHORITY_KEYPAIR: bs58.encode(authority.secretKey),
+        OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
         HEXUSDC_MINT: mint.toBase58(),
         APR_BPS: "500",
         FAUCET_AMOUNT: "0",

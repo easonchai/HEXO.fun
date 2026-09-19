@@ -4,7 +4,7 @@
 const REQUIRED_KEYS = [
   "DATABASE_URL",
   "RPC_URL",
-  "AUTHORITY_KEYPAIR",
+  "OPERATOR_KEYPAIR",
   "HEXUSDC_MINT",
   "CORS_ORIGIN",
 ] as const;
@@ -19,7 +19,11 @@ export interface HexVaultEnv {
   RPC_URL: string;
   PROGRAM_ID: string;
   POOL_ID: string;
-  AUTHORITY_KEYPAIR: string;
+  /** The hot crank key. The admin's key is never in this env. */
+  OPERATOR_KEYPAIR: string;
+  /** Pool admin, base58 pubkey. Read for CLI targeting only; absent means
+   * the locally loaded keypair is treated as the admin too. */
+  ADMIN_ADDRESS?: string;
   HEXUSDC_MINT: string;
   APR_BPS: string;
   FAUCET_AMOUNT: string;
@@ -41,7 +45,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     RPC_URL: String(env.RPC_URL),
     PROGRAM_ID: String(env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID),
     POOL_ID: String(env.POOL_ID ?? "1"),
-    AUTHORITY_KEYPAIR: String(env.AUTHORITY_KEYPAIR),
+    OPERATOR_KEYPAIR: String(env.OPERATOR_KEYPAIR),
     HEXUSDC_MINT: String(env.HEXUSDC_MINT),
     APR_BPS: String(env.APR_BPS ?? "500"),
     FAUCET_AMOUNT: String(env.FAUCET_AMOUNT ?? "1000000000"),
@@ -50,6 +54,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     PORT: String(env.PORT ?? "8080"),
     // Spread rather than assigned: under `exactOptionalPropertyTypes` an
     // optional key cannot be set to `undefined`, and "absent" is the switch.
+    ...(env.ADMIN_ADDRESS ? { ADMIN_ADDRESS: String(env.ADMIN_ADDRESS) } : {}),
     ...(env.SPARRING_KEYPAIR
       ? { SPARRING_KEYPAIR: String(env.SPARRING_KEYPAIR) }
       : {}),

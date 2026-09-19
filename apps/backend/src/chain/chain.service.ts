@@ -43,7 +43,7 @@ export const SOLANA_CONNECTION = Symbol("SOLANA_CONNECTION");
 export const CONFIRM_TIMEOUT_MS = 30_000;
 
 /**
- * Connection, Program, authority keypair, PDA helpers and a signed-send
+ * Connection, Program, operator keypair, PDA helpers and a signed-send
  * helper. No business logic (deposit/withdraw/etc calls) — that lands with
  * the operator and API tickets.
  */
@@ -70,7 +70,7 @@ export class ChainService {
   ) {
     this.connection = connection;
     this.keypair = Keypair.fromSecretKey(
-      bs58.decode(config.get("AUTHORITY_KEYPAIR", { infer: true })),
+      bs58.decode(config.get("OPERATOR_KEYPAIR", { infer: true })),
     );
     this.poolId = BigInt(config.get("POOL_ID", { infer: true }));
     this.programId = new PublicKey(config.get("PROGRAM_ID", { infer: true }));
@@ -143,7 +143,7 @@ export class ChainService {
   }
 
   /**
-   * Signs with `signer` (the authority unless told otherwise, as for the
+   * Signs with `signer` (the operator unless told otherwise, as for the
    * Sparring player), sends, confirms at "confirmed". The signer pays the fee.
    *
    * The blockhash is fetched at "finalized" on purpose. The RPC is a

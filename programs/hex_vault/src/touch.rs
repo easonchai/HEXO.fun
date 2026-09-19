@@ -110,7 +110,9 @@ mod tests {
     fn pool_at(id: u64, start: i64) -> Pool {
         Pool {
             pool_id: 1,
-            authority: Pubkey::default(),
+            admin: Pubkey::default(),
+            operator: Pubkey::default(),
+            pending_admin: Pubkey::default(),
             accepted_mint: Pubkey::default(),
             principal_vault: Pubkey::default(),
             jackpot_vault: Pubkey::default(),

@@ -1,14 +1,19 @@
 //! Pool lifecycle and Principal custody (spec §2.3 "Custody").
 //!
-//! `deposit` and `withdraw` are permissionless; every other instruction here
-//! is authority-only via `has_one = authority` on the Pool account.
+//! `deposit` and `withdraw` are permissionless. `set_params`, `set_operator`,
+//! `propose_admin` and unpausing are admin-only via `has_one = admin` on the
+//! Pool account; pausing takes the admin or the operator, so `SetPause` names
+//! its signer `signer` and the handler decides.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::constants::{BPS_DENOMINATOR, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
 use crate::errors::HexVaultError;
-use crate::events::{Deposited, ParamsSet, Paused, PoolCreated, Withdrawn};
+use crate::events::{
+    AdminChanged, AdminProposed, Deposited, OperatorChanged, ParamsSet, Paused, PoolCreated,
+    Withdrawn,
+};
 use crate::state::{Player, Pool};
 use crate::touch::touch;
 use crate::utils;
@@ -16,6 +21,10 @@ use crate::utils;
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct CreatePoolParams {
     pub pool_id: u64,
+    /// Role keys, not accounts: neither has to sign `create_pool`, and on
+    /// mainnet the admin is a multisig that cannot.
+    pub admin: Pubkey,
+    pub operator: Pubkey,
     pub vrf_network_state: Pubkey,
     pub epoch_seconds: i64,
     pub epoch_anchor: i64,
@@ -57,7 +66,9 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
     pool.pool_id = params.pool_id;
-    pool.authority = ctx.accounts.authority.key();
+    pool.admin = params.admin;
+    pool.operator = params.operator;
+    pool.pending_admin = Pubkey::default();
     pool.accepted_mint = ctx.accounts.accepted_mint.key();
     pool.principal_vault = ctx.accounts.principal_vault.key();
     pool.jackpot_vault = ctx.accounts.jackpot_vault.key();
@@ -90,7 +101,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     // itself; `touch` brings it into epoch 1 the first time anything reads
     // or changes it, same as any other Player.
     let house = &mut ctx.accounts.house;
-    house.owner = ctx.accounts.authority.key();
+    house.owner = params.operator;
     house.principal = 0;
     house.entries = 0;
     house.weight_acc = 0;
@@ -107,7 +118,8 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     emit!(PoolCreated {
         pool: pool.key(),
         pool_id: pool.pool_id,
-        authority: pool.authority,
+        admin: pool.admin,
+        operator: pool.operator,
         accepted_mint: pool.accepted_mint,
     });
     Ok(())
@@ -162,10 +174,66 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
 
 pub fn set_pause(ctx: Context<SetPause>, paused: bool) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
+    let signer = ctx.accounts.signer.key();
+    // Pausing is the emergency stop, so the hot operator key reaches it too.
+    // Coming back out is an admin decision, which is why this cannot be a
+    // plain `has_one` on the account struct.
+    let allowed = signer == pool.admin || (paused && signer == pool.operator);
+    require!(allowed, HexVaultError::Unauthorized);
+
     pool.paused = paused;
     emit!(Paused {
         pool: pool.key(),
         paused,
+    });
+    Ok(())
+}
+
+pub fn set_operator(ctx: Context<SetOperator>, new_operator: Pubkey) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    let previous = pool.operator;
+    pool.operator = new_operator;
+    emit!(OperatorChanged {
+        pool: pool.key(),
+        previous,
+        operator: new_operator,
+    });
+    Ok(())
+}
+
+/// Half a handover. Calling it again replaces the pending proposal, and
+/// proposing `Pubkey::default()` cancels one.
+pub fn propose_admin(ctx: Context<ProposeAdmin>, new_admin: Pubkey) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    pool.pending_admin = new_admin;
+    emit!(AdminProposed {
+        pool: pool.key(),
+        pending_admin: new_admin,
+    });
+    Ok(())
+}
+
+/// The other half, signed by the proposed key, so a typo in `propose_admin`
+/// leaves the pool with the admin it already had.
+pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    require!(
+        pool.pending_admin != Pubkey::default(),
+        HexVaultError::NoPendingAdmin
+    );
+    require_keys_eq!(
+        ctx.accounts.pending_admin.key(),
+        pool.pending_admin,
+        HexVaultError::Unauthorized
+    );
+
+    let previous = pool.admin;
+    pool.admin = pool.pending_admin;
+    pool.pending_admin = Pubkey::default();
+    emit!(AdminChanged {
+        pool: pool.key(),
+        previous,
+        admin: pool.admin,
     });
     Ok(())
 }
@@ -183,7 +251,10 @@ pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
 
     require!(!player.is_house, HexVaultError::HouseCannotDeposit);
     require!(!pool.paused, HexVaultError::PoolPaused);
-    require!(amount >= pool.min_deposit, HexVaultError::BelowMinimumDeposit);
+    require!(
+        amount >= pool.min_deposit,
+        HexVaultError::BelowMinimumDeposit
+    );
 
     token_interface::transfer_checked(
         CpiContext::new(
@@ -229,7 +300,10 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
 
     // Invariant 3: withdraw is never blocked by `paused`.
     require!(amount > 0, HexVaultError::ZeroAmount);
-    require!(player.principal >= amount, HexVaultError::InsufficientPrincipal);
+    require!(
+        player.principal >= amount,
+        HexVaultError::InsufficientPrincipal
+    );
     require!(player.entries >= amount, HexVaultError::InsufficientEntries);
 
     player.principal = player
@@ -276,12 +350,13 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
 #[derive(Accounts)]
 #[instruction(params: CreatePoolParams)]
 pub struct CreatePool<'info> {
+    /// Pays rent only. The admin and operator come in through `params`.
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub payer: Signer<'info>,
 
     #[account(
         init,
-        payer = authority,
+        payer = payer,
         seeds = [SEED_POOL, &params.pool_id.to_le_bytes()],
         bump,
         space = 8 + Pool::INIT_SPACE,
@@ -292,7 +367,7 @@ pub struct CreatePool<'info> {
 
     #[account(
         init,
-        payer = authority,
+        payer = payer,
         seeds = [SEED_PRINCIPAL, pool.key().as_ref()],
         bump,
         token::mint = accepted_mint,
@@ -303,7 +378,7 @@ pub struct CreatePool<'info> {
 
     #[account(
         init,
-        payer = authority,
+        payer = payer,
         seeds = [crate::constants::SEED_JACKPOT, pool.key().as_ref()],
         bump,
         token::mint = accepted_mint,
@@ -314,23 +389,19 @@ pub struct CreatePool<'info> {
 
     #[account(
         init,
-        payer = authority,
-        seeds = [SEED_PLAYER, pool.key().as_ref(), authority.key().as_ref()],
+        payer = payer,
+        seeds = [SEED_PLAYER, pool.key().as_ref(), params.operator.as_ref()],
         bump,
         space = 8 + Player::INIT_SPACE,
     )]
     pub house: Box<Account<'info, Player>>,
 
-    #[account(
-        constraint = treasury.mint == accepted_mint.key() @ HexVaultError::MintMismatch,
-        constraint = treasury.owner == authority.key() @ HexVaultError::NotAuthorityOwned,
-    )]
+    // Only the mint is checked. On mainnet these are the multisig's own
+    // accounts, which nothing in this instruction signs for.
+    #[account(constraint = treasury.mint == accepted_mint.key() @ HexVaultError::MintMismatch)]
     pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    #[account(
-        constraint = buyback_reserve.mint == accepted_mint.key() @ HexVaultError::MintMismatch,
-        constraint = buyback_reserve.owner == authority.key() @ HexVaultError::NotAuthorityOwned,
-    )]
+    #[account(constraint = buyback_reserve.mint == accepted_mint.key() @ HexVaultError::MintMismatch)]
     pub buyback_reserve: Box<InterfaceAccount<'info, TokenAccount>>,
 
     pub token_program: Interface<'info, TokenInterface>,
@@ -339,26 +410,67 @@ pub struct CreatePool<'info> {
 
 #[derive(Accounts)]
 pub struct SetParams<'info> {
-    pub authority: Signer<'info>,
+    pub admin: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
+        has_one = admin,
     )]
     pub pool: Account<'info, Pool>,
 }
 
 #[derive(Accounts)]
 pub struct SetPause<'info> {
-    pub authority: Signer<'info>,
+    /// Admin or operator. Which one is allowed depends on the direction, so
+    /// the handler checks it rather than a `has_one` here.
+    pub signer: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
+    )]
+    pub pool: Account<'info, Pool>,
+}
+
+#[derive(Accounts)]
+pub struct SetOperator<'info> {
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+        has_one = admin,
+    )]
+    pub pool: Account<'info, Pool>,
+}
+
+#[derive(Accounts)]
+pub struct ProposeAdmin<'info> {
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+        has_one = admin,
+    )]
+    pub pool: Account<'info, Pool>,
+}
+
+#[derive(Accounts)]
+pub struct AcceptAdmin<'info> {
+    /// Checked in the handler against `pool.pending_admin`, so an unset
+    /// proposal fails with `NoPendingAdmin` instead of a constraint error.
+    pub pending_admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
     )]
     pub pool: Account<'info, Pool>,
 }

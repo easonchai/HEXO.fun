@@ -12,14 +12,20 @@ use crate::errors::HexVaultError;
 #[derive(InitSpace)]
 pub struct Pool {
     pub pool_id: u64,
-    /// Operator key. Also the House Player's owner and the mint authority.
-    pub authority: Pubkey,
+    /// Changes parameters, unpauses, rotates the operator, and hands its own
+    /// role on. A multisig on mainnet.
+    pub admin: Pubkey,
+    /// The hot key the operator service cranks with. Also the House Player's
+    /// owner and, on devnet, the mint authority.
+    pub operator: Pubkey,
+    /// Proposed next admin. `Pubkey::default()` means no handover is open.
+    pub pending_admin: Pubkey,
     pub accepted_mint: Pubkey,
     pub principal_vault: Pubkey,
     pub jackpot_vault: Pubkey,
-    /// Authority-owned token account: 20% of a jackpot the House wins.
+    /// Token account that takes 20% of a jackpot the House wins.
     pub treasury: Pubkey,
-    /// Authority-owned token account: 50% of a jackpot the House wins.
+    /// Token account that takes 50% of a jackpot the House wins.
     pub buyback_reserve: Pubkey,
     /// The House `Player` PDA, created in `create_pool`.
     pub house: Pubkey,

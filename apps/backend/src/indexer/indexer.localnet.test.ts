@@ -140,7 +140,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     connection = new Connection(rpcUrl, "confirmed");
 
     const env: Partial<HexVaultEnv> = {
-      AUTHORITY_KEYPAIR: bs58.encode(authority.secretKey),
+      OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
       POOL_ID: poolId.toString(),
       // The address baked into the IDL snapshot is the one run-local.sh
       // deploys, so the two cannot drift apart within a run.

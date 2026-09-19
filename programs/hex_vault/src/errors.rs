@@ -78,4 +78,10 @@ pub enum HexVaultError {
     RandomnessRejection,
     #[msg("the randomness timeout has not elapsed")]
     VrfTimeoutNotElapsed,
+
+    // Roles. Appended, never inserted: every variant above keeps its code.
+    #[msg("signer is not authorized for this instruction")]
+    Unauthorized,
+    #[msg("no admin handover is pending")]
+    NoPendingAdmin,
 }

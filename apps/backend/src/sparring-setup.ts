@@ -63,7 +63,7 @@ async function main(): Promise<void> {
 
   const connection = new Connection(requireEnv("RPC_URL"), "confirmed");
   const authority = Keypair.fromSecretKey(
-    bs58.decode(requireEnv("AUTHORITY_KEYPAIR")),
+    bs58.decode(requireEnv("OPERATOR_KEYPAIR")),
   );
   const mint = new PublicKey(requireEnv("HEXUSDC_MINT"));
   const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
