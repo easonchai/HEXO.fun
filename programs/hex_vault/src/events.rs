@@ -46,6 +46,7 @@ pub struct ParamsSet {
     pub registration_window: i64,
     pub payout_timeout: i64,
     pub base_rate_bps: u16,
+    pub tickets_per_usdc: u16,
 }
 
 #[event]
@@ -195,4 +196,12 @@ pub struct YieldCredited {
     pub owner: Pubkey,
     pub amount: u64,
     pub shortfall: u64,
+}
+
+#[event]
+pub struct TicketsBought {
+    pub owner: Pubkey,
+    pub epoch_id: u64,
+    pub usdc: u64,
+    pub tickets: u64,
 }

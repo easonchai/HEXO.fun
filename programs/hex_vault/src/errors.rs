@@ -108,4 +108,10 @@ pub enum HexVaultError {
     UnsupportedMint,
     #[msg("the payout timeout has not elapsed")]
     PayoutTimeoutNotElapsed,
+
+    // Bought tickets (hexo-referrals ticket 03). Appended too.
+    #[msg("the House cannot buy tickets")]
+    HouseCannotBuyTickets,
+    #[msg("this purchase would exceed today's cap of principal")]
+    DailyBuyCapExceeded,
 }

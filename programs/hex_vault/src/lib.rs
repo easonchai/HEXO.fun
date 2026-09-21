@@ -78,6 +78,10 @@ pub mod hex_vault {
         custody::admin_withdraw(ctx, amount)
     }
 
+    pub fn buy_tickets(ctx: Context<BuyTickets>, amount: u64) -> Result<()> {
+        custody::buy_tickets(ctx, amount)
+    }
+
     // Rounds (spec §2.3 "Rounds") - stubs, ticket 03 implements these.
 
     pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> Result<()> {

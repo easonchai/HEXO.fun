@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { BN } from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { getOrCreateAssociatedTokenAccount, mintTo, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   DEVNET_VRF_NETWORK_STATE,
   DEVNET_VRF_TREASURY,
@@ -103,6 +103,14 @@ async function processWithdraw(pool: PoolCtx, owner: Wallet) {
     .rpc();
 }
 
+async function setPause(pool: PoolCtx, paused: boolean) {
+  return program.methods
+    .setPause(paused)
+    .accountsPartial({ signer: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
+    .rpc();
+}
+
 /** `currentEpochId` is `pool.currentEpochId` *before* this call. */
 async function beginEpoch(pool: PoolCtx, currentEpochId: bigint) {
   return program.methods
@@ -132,6 +140,7 @@ async function setParams(pool: PoolCtx, epochSeconds: number) {
       registrationWindow: null,
       payoutTimeout: null,
       baseRateBps: null,
+      ticketsPerUsdc: null,
     })
     .accountsPartial({ admin: pool.admin.publicKey, pool: pool.pool })
     .signers([pool.admin])
@@ -176,6 +185,22 @@ async function fundJackpot(pool: PoolCtx, source: Wallet, amount: bigint) {
       tokenProgram: TOKEN_PROGRAM_ID,
     })
     .signers([source.keypair])
+    .rpc();
+}
+
+async function buyTickets(pool: PoolCtx, owner: Wallet, amount: bigint) {
+  return program.methods
+    .buyTickets(new BN(amount.toString()))
+    .accountsPartial({
+      owner: owner.keypair.publicKey,
+      pool: pool.pool,
+      player: playerPda(pool.pool, owner.keypair.publicKey),
+      acceptedMint: pool.mint,
+      ownerToken: owner.tokenAccount,
+      jackpotVault: pool.jackpotVault,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .signers([owner.keypair])
     .rpc();
 }
 
@@ -1517,6 +1542,201 @@ describe("epochs", () => {
       expect(registeredWeight).toBe(ps);
 
       expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  // --- Bought tickets (hexo-referrals ticket 03). `buy_tickets` spends real
+  // USDC into the jackpot vault and credits `amount * tickets_per_usdc`
+  // ordinary Entries, capped per Player per epoch at Principal.
+
+  it(
+    "credits tickets at the pool rate, moves real USDC to the jackpot vault, and emits TicketsBought",
+    async () => {
+      const pool = await setupPool({ ticketsPerUsdc: 10 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+
+      const jackpotBefore = BigInt(
+        (await program.provider.connection.getTokenAccountBalance(pool.jackpotVault)).value.amount,
+      );
+      const walletBefore = BigInt(
+        (await program.provider.connection.getTokenAccountBalance(owner.tokenAccount)).value.amount,
+      );
+
+      const sig = await buyTickets(pool, owner, 1_000_000n);
+
+      const jackpotAfter = BigInt(
+        (await program.provider.connection.getTokenAccountBalance(pool.jackpotVault)).value.amount,
+      );
+      const walletAfter = BigInt(
+        (await program.provider.connection.getTokenAccountBalance(owner.tokenAccount)).value.amount,
+      );
+      expect(jackpotAfter - jackpotBefore).toBe(1_000_000n);
+      expect(walletBefore - walletAfter).toBe(1_000_000n);
+
+      const player = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(player.principal.toString()).toBe("4000000"); // unaffected: only entries move
+      expect(player.entries.toString()).toBe("14000000"); // 4_000_000 + 1_000_000 * 10
+      expect(player.boughtAmount.toString()).toBe("1000000");
+      expect(player.boughtEpoch.toString()).toBe("0");
+
+      const event = await findEvent<{ owner: PublicKey; epochId: BN; usdc: BN; tickets: BN }>(
+        sig,
+        "ticketsBought",
+      );
+      expect(event?.owner.toString()).toBe(owner.keypair.publicKey.toString());
+      expect(event?.epochId.toString()).toBe("0");
+      expect(event?.usdc.toString()).toBe("1000000");
+      expect(event?.tickets.toString()).toBe("10000000");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the cap is exactly Principal: reaching it exactly succeeds, one more fails, and a new epoch resets it",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 5 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await deposit(pool, owner, 3_000_000n);
+
+      await buyTickets(pool, owner, 2_000_000n);
+      await buyTickets(pool, owner, 1_000_000n); // lands exactly on the cap
+      expect(
+        (await fetchPlayer(pool, owner.keypair.publicKey)).boughtAmount.toString(),
+      ).toBe("3000000");
+
+      await expect(buyTickets(pool, owner, 1n)).rejects.toThrow(/DailyBuyCapExceeded/);
+
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch 2 open
+      await buyTickets(pool, owner, 3_000_000n); // fresh cap, same Principal
+
+      const afterReset = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(afterReset.boughtAmount.toString()).toBe("3000000");
+      expect(afterReset.boughtEpoch.toString()).toBe("2");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the House cannot buy tickets, and a paused pool refuses everyone",
+    async () => {
+      const pool = await setupPool();
+      const operatorAta = await getOrCreateAssociatedTokenAccount(
+        program.provider.connection,
+        pool.operator,
+        pool.mint,
+        pool.operator.publicKey,
+      );
+      await mintTo(
+        program.provider.connection,
+        pool.operator,
+        pool.mint,
+        operatorAta.address,
+        pool.operator,
+        5_000_000n,
+      );
+
+      await expect(
+        program.methods
+          .buyTickets(new BN(1_000_000))
+          .accountsPartial({
+            owner: pool.operator.publicKey,
+            pool: pool.pool,
+            player: pool.house,
+            acceptedMint: pool.mint,
+            ownerToken: operatorAta.address,
+            jackpotVault: pool.jackpotVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([pool.operator])
+          .rpc(),
+      ).rejects.toThrow(/HouseCannotBuyTickets/);
+
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+      await setPause(pool, true);
+      await expect(buyTickets(pool, owner, 1_000_000n)).rejects.toThrow(/PoolPaused/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a request_withdraw before buying only tightens the same-epoch cap, never bypasses it",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 5_000_000n);
+
+      // Principal drops from 5M to 2M; bought_amount is still 0, so nothing
+      // carried over gives back the room this just took away.
+      await requestWithdraw(pool, owner, 3_000_000n);
+      expect(
+        (await fetchPlayer(pool, owner.keypair.publicKey)).principal.toString(),
+      ).toBe("2000000");
+
+      await expect(buyTickets(pool, owner, 2_000_001n)).rejects.toThrow(/DailyBuyCapExceeded/);
+      await buyTickets(pool, owner, 2_000_000n); // exactly what's left, not the original 5M
+      await expect(buyTickets(pool, owner, 1n)).rejects.toThrow(/DailyBuyCapExceeded/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "buying during the registration window spends against the new epoch's cap, not the one still registering",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 10, registrationWindow: 4 });
+      const owner = await pool.fundedWallet(20_000_000n);
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await deposit(pool, owner, 4_000_000n);
+      await buyTickets(pool, owner, 4_000_000n); // caps epoch 1's spend
+
+      // Epoch 1 moves to Registering with a 4s window still open; the pool's
+      // current epoch is already 2 the instant this lands.
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+
+      const sig = await buyTickets(pool, owner, 4_000_000n);
+      const event = await findEvent<{ epochId: BN }>(sig, "ticketsBought");
+      expect(event?.epochId.toString()).toBe("2");
+
+      const player = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(player.boughtEpoch.toString()).toBe("2");
+      expect(player.boughtAmount.toString()).toBe("4000000");
+
+      // Epoch 1's registration is untouched by any of this.
+      const regSig = await register(pool, 1n, owner.keypair.publicKey);
+      expect(await findEvent(regSig, "registered")).toBeDefined();
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "bought tickets stake with buy_position, and request_withdraw still deducts min(entries, x)",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 60, roundSeconds: 30, closeBuffer: 2 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await deposit(pool, owner, 1_000_000n);
+      await buyTickets(pool, owner, 500_000n); // +5_000_000 entries at the default rate
+
+      const beforeStake = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(beforeStake.entries.toString()).toBe("6000000");
+
+      const startsAt = await onChainNowSeconds();
+      await createRound(pool, 1n, 1n, startsAt, startsAt + 30);
+      // Stakes more than bare Principal (1_000_000) would cover; only clears
+      // because the bought Tickets are ordinary Entries.
+      await buyPosition(pool, owner, 1n, 0b11n, 2_500_000n);
+
+      const afterStake = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(afterStake.entries.toString()).toBe("1000000"); // 6_000_000 - 5_000_000 staked
+
+      // Unaffected by where the entries came from: still min(entries, x).
+      await requestWithdraw(pool, owner, 1_000_000n);
+      const afterWithdraw = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(afterWithdraw.entries.toString()).toBe("0");
+      expect(afterWithdraw.principal.toString()).toBe("0");
     },
     TIMEOUT,
   );

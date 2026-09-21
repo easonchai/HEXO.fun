@@ -11,11 +11,11 @@ use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
-use crate::constants::{BPS_DENOMINATOR, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
+use crate::constants::{BPS_DENOMINATOR, SEED_JACKPOT, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
 use crate::errors::HexVaultError;
 use crate::events::{
     AdminChanged, AdminProposed, Deposited, OperatorChanged, ParamsSet, Paused, PoolCreated,
-    PrincipalDeployed, WithdrawRequested, Withdrawn,
+    PrincipalDeployed, TicketsBought, WithdrawRequested, Withdrawn,
 };
 use crate::state::{Player, Pool};
 use crate::touch::touch;
@@ -41,6 +41,8 @@ pub struct CreatePoolParams {
     pub payout_timeout: i64,
     /// Base yield's APR in basis points, capped at `BPS_DENOMINATOR`.
     pub base_rate_bps: u16,
+    /// Tickets credited per USDC spent in `buy_tickets`. Must be > 0.
+    pub tickets_per_usdc: u16,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
@@ -56,6 +58,7 @@ pub struct SetParamsArgs {
     pub registration_window: Option<i64>,
     pub payout_timeout: Option<i64>,
     pub base_rate_bps: Option<u16>,
+    pub tickets_per_usdc: Option<u16>,
 }
 
 pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result<()> {
@@ -82,6 +85,10 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     );
     require!(
         params.base_rate_bps <= BPS_DENOMINATOR,
+        HexVaultError::InvalidParameter
+    );
+    require!(
+        params.tickets_per_usdc > 0,
         HexVaultError::InvalidParameter
     );
     require!(
@@ -126,6 +133,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.jackpot_reserved = 0;
     pool.base_rate_bps = params.base_rate_bps;
     pool.yield_budget = 0;
+    pool.tickets_per_usdc = params.tickets_per_usdc;
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
@@ -218,6 +226,10 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         require!(v <= BPS_DENOMINATOR, HexVaultError::InvalidParameter);
         pool.base_rate_bps = v;
     }
+    if let Some(v) = params.tickets_per_usdc {
+        require!(v > 0, HexVaultError::InvalidParameter);
+        pool.tickets_per_usdc = v;
+    }
     // Checked on the result rather than in the branch above, so shortening
     // `epoch_seconds` in the same call cannot leave a window that swallows a
     // whole epoch, whichever of the two the caller passes.
@@ -239,6 +251,7 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         registration_window: pool.registration_window,
         payout_timeout: pool.payout_timeout,
         base_rate_bps: pool.base_rate_bps,
+        tickets_per_usdc: pool.tickets_per_usdc,
     });
     Ok(())
 }
@@ -530,6 +543,101 @@ pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
     Ok(())
 }
 
+/// Resets `bought_amount` to 0 when `bought_epoch` is not `current_epoch_id`,
+/// adds `amount`, and checks the result against `principal`. Returns the new
+/// `bought_amount`; the caller still owns stamping `bought_epoch`.
+fn bought_amount_after(
+    bought_epoch: u64,
+    bought_amount: u64,
+    current_epoch_id: u64,
+    principal: u64,
+    amount: u64,
+) -> Result<u64> {
+    let base = if bought_epoch == current_epoch_id {
+        bought_amount
+    } else {
+        0
+    };
+    let total = base
+        .checked_add(amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    // Also covers "principal > 0": with amount > 0 already required by the
+    // caller, a zero Principal fails this the same way an already-spent cap
+    // would.
+    require!(total <= principal, HexVaultError::DailyBuyCapExceeded);
+    Ok(total)
+}
+
+/// Spends real USDC on extra Tickets at a fixed price (spec "Bought
+/// tickets"). The USDC goes to the jackpot vault and is never returned; the
+/// Tickets are ordinary Entries from the moment they land.
+///
+/// Capped per Player per epoch at `principal`, checked against the live
+/// balance at call time rather than a start-of-day snapshot. `principal` only
+/// falls when a withdrawal is requested, so a `request_withdraw` before a
+/// `buy_tickets` can only tighten this player's remaining allowance for the
+/// epoch, never raise it, and `bought_amount` is never reset by anything but
+/// an epoch change, so re-depositing withdrawn principal cannot reopen room
+/// the player already spent. `pool.current_epoch_id` is well-defined for the
+/// whole registration window too (it already points at the new epoch by
+/// then), so buying during that window is just an ordinary purchase against
+/// the new day's cap, not a way to buy twice against the epoch that just
+/// closed.
+pub fn buy_tickets(ctx: Context<BuyTickets>, amount: u64) -> Result<()> {
+    let now = utils::now()?;
+    let pool = &ctx.accounts.pool;
+    let player = &mut ctx.accounts.player;
+    // Touches on the pre-purchase balance before entries change below, the
+    // same rule credit_yield and payout's compounding follow: otherwise a
+    // later idle-epoch span could read the post-purchase entries for time
+    // that predates the purchase (ticket 02's Comments).
+    touch(player, pool, now)?;
+
+    require!(!pool.paused, HexVaultError::PoolPaused);
+    require!(amount > 0, HexVaultError::ZeroAmount);
+    require!(!player.is_house, HexVaultError::HouseCannotBuyTickets);
+
+    let bought_amount = bought_amount_after(
+        player.bought_epoch,
+        player.bought_amount,
+        pool.current_epoch_id,
+        player.principal,
+        amount,
+    )?;
+    player.bought_epoch = pool.current_epoch_id;
+
+    token_interface::transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.owner_token.to_account_info(),
+                mint: ctx.accounts.accepted_mint.to_account_info(),
+                to: ctx.accounts.jackpot_vault.to_account_info(),
+                authority: ctx.accounts.owner.to_account_info(),
+            },
+        ),
+        amount,
+        ctx.accounts.accepted_mint.decimals,
+    )?;
+
+    let tickets = amount
+        .checked_mul(u64::from(pool.tickets_per_usdc))
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    player.bought_amount = bought_amount;
+    player.entries = player
+        .entries
+        .checked_add(tickets)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+    emit!(TicketsBought {
+        owner: player.owner,
+        epoch_id: pool.current_epoch_id,
+        usdc: amount,
+        tickets,
+    });
+    Ok(())
+}
+
 #[derive(Accounts)]
 #[instruction(params: CreatePoolParams)]
 pub struct CreatePool<'info> {
@@ -804,4 +912,96 @@ pub struct AdminWithdraw<'info> {
     pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct BuyTickets<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    /// Must already exist: a Player only has a cap to buy against once it
+    /// holds Principal.
+    #[account(
+        mut,
+        seeds = [SEED_PLAYER, pool.key().as_ref(), owner.key().as_ref()],
+        bump = player.bump,
+    )]
+    pub player: Account<'info, Player>,
+
+    #[account(address = pool.accepted_mint @ HexVaultError::MintMismatch)]
+    pub accepted_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(
+        mut,
+        token::mint = accepted_mint,
+        token::authority = owner,
+        token::token_program = token_program,
+    )]
+    pub owner_token: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [SEED_JACKPOT, pool.key().as_ref()],
+        bump = pool.jackpot_vault_bump,
+        token::mint = accepted_mint,
+        token::authority = pool,
+        token::token_program = token_program,
+    )]
+    pub jackpot_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_purchase_landing_exactly_on_the_cap_succeeds() {
+        let bought = bought_amount_after(1, 700, 1, 1_000, 300).expect("at cap");
+        assert_eq!(bought, 1_000);
+    }
+
+    #[test]
+    fn one_more_than_the_cap_fails() {
+        assert!(bought_amount_after(1, 700, 1, 1_000, 301)
+            .unwrap_err()
+            .to_string()
+            .contains("exceed today's cap"));
+    }
+
+    #[test]
+    fn a_new_epoch_resets_the_counter_instead_of_carrying_it_over() {
+        // Spent the whole cap in epoch 1; epoch 2 starts fresh even though
+        // `bought_amount` on the Player still reads 1_000 from yesterday.
+        let bought = bought_amount_after(1, 1_000, 2, 1_000, 1_000).expect("fresh epoch");
+        assert_eq!(bought, 1_000);
+    }
+
+    #[test]
+    fn zero_principal_fails_like_an_exhausted_cap() {
+        // The House, or any Player who has never deposited: `principal > 0`
+        // is folded into the same check rather than a separate require.
+        assert!(bought_amount_after(0, 0, 1, 0, 1)
+            .unwrap_err()
+            .to_string()
+            .contains("exceed today's cap"));
+    }
+
+    #[test]
+    fn a_request_withdraw_between_two_buys_only_tightens_the_remaining_room() {
+        // Same epoch throughout: 1_000 principal, 400 already bought. A
+        // request_withdraw drops principal to 500 before the next buy is
+        // checked, so at most 100 more clears -- never more than the
+        // original 1_000 cap, whichever order the two instructions land in.
+        let after_withdraw = bought_amount_after(1, 400, 1, 500, 100).expect("still room");
+        assert_eq!(after_withdraw, 500);
+        assert!(bought_amount_after(1, 400, 1, 500, 101)
+            .unwrap_err()
+            .to_string()
+            .contains("exceed today's cap"));
+    }
 }

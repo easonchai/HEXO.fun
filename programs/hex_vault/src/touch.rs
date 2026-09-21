@@ -156,6 +156,7 @@ mod tests {
             jackpot_reserved: 0,
             base_rate_bps: 0,
             yield_budget: 0,
+            tickets_per_usdc: 10,
         }
     }
 
@@ -180,6 +181,8 @@ mod tests {
             principal_acc: 0,
             frozen_principal_acc: 0,
             yield_epoch: 0,
+            bought_epoch: 0,
+            bought_amount: 0,
         }
     }
 

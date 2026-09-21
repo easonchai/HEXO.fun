@@ -96,6 +96,9 @@ pub struct Pool {
     /// yet credited to anyone. `fund_yield` raises it; `register` draws it
     /// down and never credits past what it holds.
     pub yield_budget: u64,
+    /// Tickets credited per USDC spent in `buy_tickets`. An admin parameter,
+    /// always greater than zero.
+    pub tickets_per_usdc: u16,
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.
@@ -195,6 +198,13 @@ pub struct Player {
     /// crediting the same epoch twice, independent of `reg_epoch` (which a
     /// zero-weight registration never sets).
     pub yield_epoch: u64,
+    /// The epoch `bought_amount` is counted against. `buy_tickets` resets
+    /// `bought_amount` to 0 when this no longer matches the pool's current
+    /// epoch.
+    pub bought_epoch: u64,
+    /// USDC spent in `buy_tickets` so far in `bought_epoch`, capped at
+    /// `principal`.
+    pub bought_amount: u64,
 }
 
 /// A Player's single immutable placement in one round.
