@@ -114,4 +114,12 @@ pub enum HexVaultError {
     HouseCannotBuyTickets,
     #[msg("this purchase would exceed today's cap of principal")]
     DailyBuyCapExceeded,
+
+    // Granted tickets (hexo-referrals ticket 04). Appended too.
+    #[msg("the House cannot receive an operator grant")]
+    HouseCannotBeGranted,
+    #[msg("this grant would exceed the player's daily cap of principal")]
+    DailyPlayerGrantCapExceeded,
+    #[msg("this grant would exceed the pool's daily bonus cap")]
+    DailyPoolGrantCapExceeded,
 }

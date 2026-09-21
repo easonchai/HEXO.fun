@@ -15,7 +15,7 @@ use crate::constants::{BPS_DENOMINATOR, SEED_JACKPOT, SEED_PLAYER, SEED_POOL, SE
 use crate::errors::HexVaultError;
 use crate::events::{
     AdminChanged, AdminProposed, Deposited, OperatorChanged, ParamsSet, Paused, PoolCreated,
-    PrincipalDeployed, TicketsBought, WithdrawRequested, Withdrawn,
+    PrincipalDeployed, TicketsBought, TicketsGranted, WithdrawRequested, Withdrawn,
 };
 use crate::state::{Player, Pool};
 use crate::touch::touch;
@@ -43,6 +43,10 @@ pub struct CreatePoolParams {
     pub base_rate_bps: u16,
     /// Tickets credited per USDC spent in `buy_tickets`. Must be > 0.
     pub tickets_per_usdc: u16,
+    /// Share of `total_principal`, in basis points, an operator
+    /// `grant_tickets` call may credit pool-wide per epoch. Capped at
+    /// `BPS_DENOMINATOR`.
+    pub bonus_cap_bps: u16,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
@@ -59,6 +63,7 @@ pub struct SetParamsArgs {
     pub payout_timeout: Option<i64>,
     pub base_rate_bps: Option<u16>,
     pub tickets_per_usdc: Option<u16>,
+    pub bonus_cap_bps: Option<u16>,
 }
 
 pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result<()> {
@@ -89,6 +94,10 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     );
     require!(
         params.tickets_per_usdc > 0,
+        HexVaultError::InvalidParameter
+    );
+    require!(
+        params.bonus_cap_bps <= BPS_DENOMINATOR,
         HexVaultError::InvalidParameter
     );
     require!(
@@ -134,6 +143,9 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.base_rate_bps = params.base_rate_bps;
     pool.yield_budget = 0;
     pool.tickets_per_usdc = params.tickets_per_usdc;
+    pool.bonus_cap_bps = params.bonus_cap_bps;
+    pool.bonus_epoch = 0;
+    pool.bonus_granted = 0;
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
@@ -230,6 +242,10 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         require!(v > 0, HexVaultError::InvalidParameter);
         pool.tickets_per_usdc = v;
     }
+    if let Some(v) = params.bonus_cap_bps {
+        require!(v <= BPS_DENOMINATOR, HexVaultError::InvalidParameter);
+        pool.bonus_cap_bps = v;
+    }
     // Checked on the result rather than in the branch above, so shortening
     // `epoch_seconds` in the same call cannot leave a window that swallows a
     // whole epoch, whichever of the two the caller passes.
@@ -252,6 +268,7 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         payout_timeout: pool.payout_timeout,
         base_rate_bps: pool.base_rate_bps,
         tickets_per_usdc: pool.tickets_per_usdc,
+        bonus_cap_bps: pool.bonus_cap_bps,
     });
     Ok(())
 }
@@ -638,6 +655,114 @@ pub fn buy_tickets(ctx: Context<BuyTickets>, amount: u64) -> Result<()> {
     Ok(())
 }
 
+/// Resets a bonus counter to 0 when its stored epoch is not
+/// `current_epoch_id`, adds `amount`, and checks the result against `cap`.
+/// Same reset-add-check shape as `bought_amount_after`, shared by
+/// `grant_tickets`' per-Player and pool-wide operator caps, which differ only
+/// in which counter and cap they check.
+fn bonus_after(
+    bonus_epoch: u64,
+    bonus_granted: u64,
+    current_epoch_id: u64,
+    cap: u64,
+    amount: u64,
+    err: HexVaultError,
+) -> Result<u64> {
+    let base = if bonus_epoch == current_epoch_id {
+        bonus_granted
+    } else {
+        0
+    };
+    let total = base
+        .checked_add(amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    if total > cap {
+        return Err(err.into());
+    }
+    Ok(total)
+}
+
+/// `total_principal * bonus_cap_bps / 10_000`, the pool-wide operator grant
+/// cap for the current epoch. Widens to u128 first, like `yield_for`, since
+/// `total_principal * bonus_cap_bps` can overflow u64.
+fn pool_bonus_cap(total_principal: u64, bonus_cap_bps: u16) -> Result<u64> {
+    let scaled = u128::from(total_principal)
+        .checked_mul(u128::from(bonus_cap_bps))
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    let capped = scaled
+        .checked_div(u128::from(BPS_DENOMINATOR))
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    u64::try_from(capped).map_err(|_| HexVaultError::ArithmeticOverflow.into())
+}
+
+/// Credits playable Tickets to a Player by hand (spec "Granted tickets"),
+/// signed by `pool.operator` or `pool.admin`.
+///
+/// The operator path is capped per Player per epoch at `principal` and
+/// pool-wide per epoch at `total_principal * bonus_cap_bps / 10_000`, tracked
+/// by their own `bonus_epoch`/`bonus_granted` counters (separate from
+/// `bought_epoch`/`bought_amount` so a grant and a purchase don't share a
+/// cap), and refuses the House. The admin path is uncapped, allows the
+/// House, and leaves both counters untouched, for the rare manual fix.
+pub fn grant_tickets(ctx: Context<GrantTickets>, amount: u64) -> Result<()> {
+    let now = utils::now()?;
+    let signer = ctx.accounts.signer.key();
+    let pool = &mut ctx.accounts.pool;
+    let player = &mut ctx.accounts.player;
+
+    let by_admin = signer == pool.admin;
+    require!(
+        by_admin || signer == pool.operator,
+        HexVaultError::Unauthorized
+    );
+
+    // Touches on the pre-grant balance before entries change below, the same
+    // rule buy_tickets, credit_yield and payout's compounding follow (ticket
+    // 02's Comments).
+    touch(player, pool, now)?;
+    require!(amount > 0, HexVaultError::ZeroAmount);
+
+    if !by_admin {
+        require!(!player.is_house, HexVaultError::HouseCannotBeGranted);
+
+        let player_bonus = bonus_after(
+            player.bonus_epoch,
+            player.bonus_granted,
+            pool.current_epoch_id,
+            player.principal,
+            amount,
+            HexVaultError::DailyPlayerGrantCapExceeded,
+        )?;
+        let pool_cap = pool_bonus_cap(pool.total_principal, pool.bonus_cap_bps)?;
+        let pool_bonus = bonus_after(
+            pool.bonus_epoch,
+            pool.bonus_granted,
+            pool.current_epoch_id,
+            pool_cap,
+            amount,
+            HexVaultError::DailyPoolGrantCapExceeded,
+        )?;
+
+        player.bonus_epoch = pool.current_epoch_id;
+        player.bonus_granted = player_bonus;
+        pool.bonus_epoch = pool.current_epoch_id;
+        pool.bonus_granted = pool_bonus;
+    }
+
+    player.entries = player
+        .entries
+        .checked_add(amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+    emit!(TicketsGranted {
+        owner: player.owner,
+        epoch_id: pool.current_epoch_id,
+        amount,
+        by_admin,
+    });
+    Ok(())
+}
+
 #[derive(Accounts)]
 #[instruction(params: CreatePoolParams)]
 pub struct CreatePool<'info> {
@@ -955,6 +1080,26 @@ pub struct BuyTickets<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+/// The signer names neither role directly: it may be either `pool.admin` or
+/// `pool.operator`, and the handler decides which, same reasoning as
+/// `SetPause`.
+#[derive(Accounts)]
+pub struct GrantTickets<'info> {
+    pub signer: Signer<'info>,
+
+    #[account(mut, seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    /// Must already exist, like `BuyTickets`': a Player only has a Principal
+    /// cap to grant against once it holds one.
+    #[account(
+        mut,
+        seeds = [SEED_PLAYER, pool.key().as_ref(), player.owner.as_ref()],
+        bump = player.bump,
+    )]
+    pub player: Account<'info, Player>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1003,5 +1148,63 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("exceed today's cap"));
+    }
+
+    // --- `bonus_after` / `pool_bonus_cap` (grant_tickets, hexo-referrals
+    // ticket 04): same reset-add-check shape as `bought_amount_after`, shared
+    // by the per-Player and pool-wide operator caps.
+
+    #[test]
+    fn a_grant_landing_exactly_on_the_cap_succeeds() {
+        let granted = bonus_after(1, 700, 1, 1_000, 300, HexVaultError::DailyPlayerGrantCapExceeded)
+            .expect("at cap");
+        assert_eq!(granted, 1_000);
+    }
+
+    #[test]
+    fn one_more_than_the_cap_fails_with_the_caller_supplied_error() {
+        assert!(
+            bonus_after(1, 700, 1, 1_000, 301, HexVaultError::DailyPlayerGrantCapExceeded)
+                .unwrap_err()
+                .to_string()
+                .contains("exceed the player's daily cap")
+        );
+        assert!(
+            bonus_after(1, 700, 1, 1_000, 301, HexVaultError::DailyPoolGrantCapExceeded)
+                .unwrap_err()
+                .to_string()
+                .contains("exceed the pool's daily bonus cap")
+        );
+    }
+
+    #[test]
+    fn a_new_epoch_resets_the_bonus_counter_instead_of_carrying_it_over() {
+        let granted = bonus_after(1, 1_000, 2, 1_000, 1_000, HexVaultError::DailyPlayerGrantCapExceeded)
+            .expect("fresh epoch");
+        assert_eq!(granted, 1_000);
+    }
+
+    #[test]
+    fn zero_principal_refuses_an_operator_grant_like_an_exhausted_cap() {
+        assert!(
+            bonus_after(0, 0, 1, 0, 1, HexVaultError::DailyPlayerGrantCapExceeded)
+                .unwrap_err()
+                .to_string()
+                .contains("exceed the player's daily cap")
+        );
+    }
+
+    #[test]
+    fn pool_bonus_cap_is_the_default_five_percent_of_total_principal() {
+        assert_eq!(pool_bonus_cap(1_000_000, 500).expect("cap"), 50_000);
+    }
+
+    #[test]
+    fn pool_bonus_cap_floors_and_never_overflows_u64() {
+        // 3 / 10_000 of u64::MAX floors rather than rounding up, and the
+        // u128 widening keeps `total_principal * bonus_cap_bps` from
+        // overflowing u64 the way a native multiply would at this scale.
+        let cap = pool_bonus_cap(u64::MAX, 3).expect("cap");
+        assert_eq!(cap, (u128::from(u64::MAX) * 3 / 10_000) as u64);
     }
 }

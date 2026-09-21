@@ -514,23 +514,26 @@ pub struct SettleRound<'info> {
     pub house: Box<Account<'info, Player>>,
 }
 
+// Boxed: Pool and Player's growth in hexo-referrals ticket 04 (bonus_*
+// fields) tipped this struct's `try_accounts` over the BPF stack frame, the
+// same issue `SettleRound` above already works around.
 #[derive(Accounts)]
 pub struct SettlePosition<'info> {
     #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
-    pub pool: Account<'info, Pool>,
+    pub pool: Box<Account<'info, Pool>>,
 
     #[account(
         seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
         bump = round.bump,
     )]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
 
     #[account(
         mut,
         seeds = [SEED_PLAYER, pool.key().as_ref(), player.owner.as_ref()],
         bump = player.bump,
     )]
-    pub player: Account<'info, Player>,
+    pub player: Box<Account<'info, Player>>,
 
     /// CHECK: rent destination for the closed Position; must be its owner.
     #[account(mut, address = position.owner)]

@@ -251,6 +251,10 @@ export interface PoolParamsOverrides {
   /** Tickets credited per USDC spent in `buy_tickets`. Defaults to the
    * bootstrap rate. */
   ticketsPerUsdc?: number;
+  /** Share of `total_principal`, in basis points, an operator `grant_tickets`
+   * call may credit pool-wide per epoch. Defaults to the bootstrap rate
+   * (5%). */
+  bonusCapBps?: number;
   /** Reuse an existing mint instead of creating a fresh one (e.g. to test
    * two pools sharing an accepted asset). The caller must not rely on this
    * pool's operator being the mint authority when a shared mint is passed. */
@@ -270,6 +274,7 @@ const DEFAULT_PARAMS = {
   payoutTimeout: 86_400,
   baseRateBps: 488, // spec §7: ~5% APY with daily compounding
   ticketsPerUsdc: 10,
+  bonusCapBps: 500, // spec: default 5%
 };
 
 export interface PoolCtx {
@@ -291,6 +296,7 @@ export interface PoolCtx {
   houseCutBps: number;
   baseRateBps: number;
   ticketsPerUsdc: number;
+  bonusCapBps: number;
   /** A fresh funded keypair with `amount` hexUSDC already in its ATA. */
   fundedWallet(amount: bigint): Promise<{ keypair: Keypair; tokenAccount: PublicKey }>;
 }
@@ -354,6 +360,7 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       payoutTimeout: new BN(params.payoutTimeout),
       baseRateBps: params.baseRateBps,
       ticketsPerUsdc: params.ticketsPerUsdc,
+      bonusCapBps: params.bonusCapBps,
     })
     .accountsPartial({
       payer: operator.publicKey,
@@ -397,6 +404,7 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
     houseCutBps: params.houseCutBps,
     baseRateBps: params.baseRateBps,
     ticketsPerUsdc: params.ticketsPerUsdc,
+    bonusCapBps: params.bonusCapBps,
     fundedWallet,
   };
 }

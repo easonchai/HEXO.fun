@@ -141,6 +141,7 @@ async function setParams(pool: PoolCtx, epochSeconds: number) {
       payoutTimeout: null,
       baseRateBps: null,
       ticketsPerUsdc: null,
+      bonusCapBps: null,
     })
     .accountsPartial({ admin: pool.admin.publicKey, pool: pool.pool })
     .signers([pool.admin])
@@ -201,6 +202,23 @@ async function buyTickets(pool: PoolCtx, owner: Wallet, amount: bigint) {
       tokenProgram: TOKEN_PROGRAM_ID,
     })
     .signers([owner.keypair])
+    .rpc();
+}
+
+async function grantTickets(
+  pool: PoolCtx,
+  signer: Keypair,
+  owner: PublicKey,
+  amount: bigint,
+) {
+  return program.methods
+    .grantTickets(new BN(amount.toString()))
+    .accountsPartial({
+      signer: signer.publicKey,
+      pool: pool.pool,
+      player: playerPda(pool.pool, owner),
+    })
+    .signers([signer])
     .rpc();
 }
 
@@ -1737,6 +1755,232 @@ describe("epochs", () => {
       const afterWithdraw = await fetchPlayer(pool, owner.keypair.publicKey);
       expect(afterWithdraw.entries.toString()).toBe("0");
       expect(afterWithdraw.principal.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  // --- Granted tickets (hexo-referrals ticket 04). `grant_tickets` credits
+  // ordinary Entries by hand: capped per Player and pool-wide on the
+  // operator path, uncapped on the admin path.
+
+  it(
+    "an operator grant credits entries up to the player's own cap, one more fails, and it emits TicketsGranted",
+    async () => {
+      // bonusCapBps: 10_000 (100%) so the pool-wide cap, which a
+      // single-depositor pool would otherwise hit first (it is a share of
+      // this same Principal), does not shadow the Player cap under test.
+      const pool = await setupPool({ bonusCapBps: 10_000 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 1_000_000n);
+
+      const sig = await grantTickets(pool, pool.operator, owner.keypair.publicKey, 1_000_000n);
+
+      const player = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(player.principal.toString()).toBe("1000000"); // unaffected: only entries move
+      expect(player.entries.toString()).toBe("2000000"); // deposit + grant
+      expect(player.bonusGranted.toString()).toBe("1000000");
+      expect(player.bonusEpoch.toString()).toBe("0");
+
+      const event = await findEvent<{
+        owner: PublicKey;
+        epochId: BN;
+        amount: BN;
+        byAdmin: boolean;
+      }>(sig, "ticketsGranted");
+      expect(event?.owner.toString()).toBe(owner.keypair.publicKey.toString());
+      expect(event?.epochId.toString()).toBe("0");
+      expect(event?.amount.toString()).toBe("1000000");
+      expect(event?.byAdmin).toBe(false);
+
+      await expect(
+        grantTickets(pool, pool.operator, owner.keypair.publicKey, 1n),
+      ).rejects.toThrow(/DailyPlayerGrantCapExceeded/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the pool-wide cap binds even when a large player's own cap has plenty of headroom",
+    async () => {
+      const pool = await setupPool(); // default bonusCapBps: 500 (5%)
+      const owner = await pool.fundedWallet(20_000_000n);
+      await deposit(pool, owner, 10_000_000n);
+
+      // Player cap is 10_000_000; the pool cap (5% of total_principal) is
+      // 500_000, far tighter, so hitting it here cannot be the player cap.
+      await grantTickets(pool, pool.operator, owner.keypair.publicKey, 500_000n);
+      await expect(
+        grantTickets(pool, pool.operator, owner.keypair.publicKey, 1n),
+      ).rejects.toThrow(/DailyPoolGrantCapExceeded/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a small player's own cap binds independently of a generous pool-wide cap",
+    async () => {
+      const pool = await setupPool({ minDeposit: 1 });
+      const small = await pool.fundedWallet(1_000_000n);
+      const big = await pool.fundedWallet(20_000_000n);
+      await deposit(pool, small, 100_000n);
+      await deposit(pool, big, 10_000_000n);
+
+      // Pool cap is 5% of 10_100_000 = 505_000, well above small's own
+      // 100_000 cap.
+      await grantTickets(pool, pool.operator, small.keypair.publicKey, 100_000n);
+      await expect(
+        grantTickets(pool, pool.operator, small.keypair.publicKey, 1n),
+      ).rejects.toThrow(/DailyPlayerGrantCapExceeded/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a Player with zero Principal cannot receive an operator grant",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, pool.minDeposit);
+      await requestWithdraw(pool, owner, pool.minDeposit); // back to zero Principal
+
+      await expect(
+        grantTickets(pool, pool.operator, owner.keypair.publicKey, 1n),
+      ).rejects.toThrow(/DailyPlayerGrantCapExceeded/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the House cannot receive an operator grant",
+    async () => {
+      const pool = await setupPool();
+      await expect(
+        grantTickets(pool, pool.operator, pool.operator.publicKey, 1_000_000n),
+      ).rejects.toThrow(/HouseCannotBeGranted/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "an unrelated signer is refused",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 1_000_000n);
+      const stranger = await pool.fundedWallet(0n);
+
+      await expect(
+        grantTickets(pool, stranger.keypair, owner.keypair.publicKey, 1_000n),
+      ).rejects.toThrow(/Unauthorized/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the admin path is uncapped, leaves the operator counters untouched, and allows the House",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 1_000_000n); // a cap of only 1_000_000 on the operator path
+
+      // Well past both the player and the (still-tiny) pool-wide cap.
+      const sig = await grantTickets(pool, pool.admin, owner.keypair.publicKey, 5_000_000n);
+
+      const player = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(player.entries.toString()).toBe("6000000");
+      expect(player.bonusGranted.toString()).toBe("0");
+      expect(player.bonusEpoch.toString()).toBe("0");
+      expect((await program.account.pool.fetch(pool.pool)).bonusGranted.toString()).toBe("0");
+
+      const event = await findEvent<{ byAdmin: boolean }>(sig, "ticketsGranted");
+      expect(event?.byAdmin).toBe(true);
+
+      // The House is refused on the operator path but not here.
+      await grantTickets(pool, pool.admin, pool.operator.publicKey, 1_000n);
+      expect((await fetchPlayer(pool, pool.operator.publicKey)).entries.toString()).toBe("1000");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "both counters reset at the epoch boundary",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 5, bonusCapBps: 10_000 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await deposit(pool, owner, 1_000_000n);
+
+      await grantTickets(pool, pool.operator, owner.keypair.publicKey, 1_000_000n); // caps epoch 1
+      expect((await fetchPlayer(pool, owner.keypair.publicKey)).bonusGranted.toString()).toBe(
+        "1000000",
+      );
+      expect((await program.account.pool.fetch(pool.pool)).bonusGranted.toString()).toBe(
+        "1000000",
+      );
+
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch 2 open
+      await grantTickets(pool, pool.operator, owner.keypair.publicKey, 1_000_000n); // fresh cap
+
+      const player = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(player.bonusGranted.toString()).toBe("1000000");
+      expect(player.bonusEpoch.toString()).toBe("2");
+      const poolAfter = await program.account.pool.fetch(pool.pool);
+      expect(poolAfter.bonusGranted.toString()).toBe("1000000");
+      expect(poolAfter.bonusEpoch.toString()).toBe("2");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "granted tickets are ordinary entries, stakeable with buy_position",
+    async () => {
+      const pool = await setupPool({
+        epochSeconds: 60,
+        roundSeconds: 30,
+        closeBuffer: 2,
+        bonusCapBps: 10_000,
+      });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await deposit(pool, owner, 1_000_000n);
+      await grantTickets(pool, pool.operator, owner.keypair.publicKey, 500_000n);
+
+      const beforeStake = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(beforeStake.entries.toString()).toBe("1500000");
+
+      const startsAt = await onChainNowSeconds();
+      await createRound(pool, 1n, 1n, startsAt, startsAt + 30);
+      // One tile at the full 1_500_000 stake: more than bare Principal
+      // (1_000_000) would cover; only clears because the granted Tickets
+      // are ordinary Entries.
+      await buyPosition(pool, owner, 1n, 0b1n, 1_500_000n);
+
+      const afterStake = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(afterStake.entries.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "granted tickets reset to Principal at the next epoch boundary, like any other entries",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 5, bonusCapBps: 10_000 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await deposit(pool, owner, 1_000_000n);
+      await grantTickets(pool, pool.operator, owner.keypair.publicKey, 500_000n);
+      expect((await fetchPlayer(pool, owner.keypair.publicKey)).entries.toString()).toBe(
+        "1500000",
+      );
+
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch 2 open
+      // Any touch (here a further deposit) resets Entries to Principal
+      // first, discarding the grant like any other Entries at the
+      // boundary, then adds the new deposit on top of that reset base.
+      await deposit(pool, owner, 1_000_000n);
+      const after = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(after.entries.toString()).toBe(after.principal.toString());
+      expect(after.principal.toString()).toBe("2000000");
     },
     TIMEOUT,
   );

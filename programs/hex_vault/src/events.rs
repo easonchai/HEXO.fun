@@ -47,6 +47,7 @@ pub struct ParamsSet {
     pub payout_timeout: i64,
     pub base_rate_bps: u16,
     pub tickets_per_usdc: u16,
+    pub bonus_cap_bps: u16,
 }
 
 #[event]
@@ -204,4 +205,13 @@ pub struct TicketsBought {
     pub epoch_id: u64,
     pub usdc: u64,
     pub tickets: u64,
+}
+
+#[event]
+pub struct TicketsGranted {
+    pub owner: Pubkey,
+    pub epoch_id: u64,
+    pub amount: u64,
+    /// True for the uncapped admin path; false for the capped operator path.
+    pub by_admin: bool,
 }

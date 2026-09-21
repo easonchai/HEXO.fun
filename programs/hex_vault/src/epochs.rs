@@ -974,6 +974,9 @@ mod tests {
             base_rate_bps,
             yield_budget,
             tickets_per_usdc: 10,
+            bonus_cap_bps: 500,
+            bonus_epoch: 0,
+            bonus_granted: 0,
         }
     }
 
@@ -1019,6 +1022,8 @@ mod tests {
             yield_epoch: 0,
             bought_epoch: 0,
             bought_amount: 0,
+            bonus_epoch: 0,
+            bonus_granted: 0,
         }
     }
 

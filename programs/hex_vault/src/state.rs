@@ -99,6 +99,17 @@ pub struct Pool {
     /// Tickets credited per USDC spent in `buy_tickets`. An admin parameter,
     /// always greater than zero.
     pub tickets_per_usdc: u16,
+    /// Share of `total_principal`, in basis points, an operator
+    /// `grant_tickets` call may credit pool-wide per epoch. An admin
+    /// parameter, capped at `BPS_DENOMINATOR`.
+    pub bonus_cap_bps: u16,
+    /// The epoch `bonus_granted` is counted against, reset the same way as
+    /// `Player.bought_epoch`/`bought_amount`.
+    pub bonus_epoch: u64,
+    /// Tickets an operator `grant_tickets` call has credited pool-wide so far
+    /// in `bonus_epoch`, capped at `total_principal * bonus_cap_bps /
+    /// 10_000`. An admin grant does not count against it.
+    pub bonus_granted: u64,
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.
@@ -205,6 +216,14 @@ pub struct Player {
     /// USDC spent in `buy_tickets` so far in `bought_epoch`, capped at
     /// `principal`.
     pub bought_amount: u64,
+    /// The epoch `bonus_granted` is counted against. Separate from
+    /// `bought_epoch` so an operator grant and a bought-tickets purchase
+    /// don't share a cap.
+    pub bonus_epoch: u64,
+    /// Tickets an operator `grant_tickets` call has credited this Player so
+    /// far in `bonus_epoch`, capped at `principal`. An admin grant does not
+    /// count against it.
+    pub bonus_granted: u64,
 }
 
 /// A Player's single immutable placement in one round.

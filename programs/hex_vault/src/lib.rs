@@ -82,6 +82,10 @@ pub mod hex_vault {
         custody::buy_tickets(ctx, amount)
     }
 
+    pub fn grant_tickets(ctx: Context<GrantTickets>, amount: u64) -> Result<()> {
+        custody::grant_tickets(ctx, amount)
+    }
+
     // Rounds (spec §2.3 "Rounds") - stubs, ticket 03 implements these.
 
     pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> Result<()> {
