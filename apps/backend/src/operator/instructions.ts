@@ -120,6 +120,30 @@ export class OperatorInstructions {
   }
 
   /**
+   * Step 3b (docs/plan/hexo-referrals ticket 08): one `grant_tickets` per
+   * referrer, batched into one transaction the way `register` batches
+   * owners. Signed by the operator, so every grant is capped on chain per
+   * Player per day at their own Principal and pool-wide at `bonus_cap_bps`
+   * of `total_principal` (`grant_tickets`' operator path).
+   */
+  async grantTickets(
+    pool: PoolState,
+    grants: readonly { referrer: string; amount: bigint }[],
+  ): Promise<TransactionInstruction[]> {
+    return Promise.all(
+      grants.map((grant) =>
+        this.method("grantTickets", bn(grant.amount))
+          .accountsPartial({
+            signer: this.operator,
+            pool: pool.address,
+            player: this.player(pool, new PublicKey(grant.referrer)),
+          })
+          .instruction(),
+      ),
+    );
+  }
+
+  /**
    * Step 6b: pay one batch of due withdrawal requests. `process_withdraw`
    * takes no signer, so the operator is here only as the fee payer and as
    * the payer of the owner token accounts it creates. Each payout is

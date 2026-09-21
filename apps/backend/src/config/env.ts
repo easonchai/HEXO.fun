@@ -3,6 +3,8 @@
 // time, so a fresh checkout tells you everything it needs in one error.
 import { Logger } from "@nestjs/common";
 
+import { DEFAULT_REFERRAL_QUALIFY_SECONDS } from "../api/referral";
+
 const REQUIRED_KEYS = [
   "DATABASE_URL",
   "RPC_URL",
@@ -38,6 +40,10 @@ export interface HexVaultEnv {
   OPERATOR_SOL_WARN: number;
   FAUCET_AMOUNT: string;
   FAUCET_INTERVAL_SECONDS: string;
+  /** Seconds a referral's Principal must stay above the qualify threshold
+   *  before the daily bonus job (ticket 08) pays it. Shortened on devnet to
+   *  see a referral qualify sooner. */
+  REFERRAL_QUALIFY_SECONDS: number;
   CORS_ORIGIN: string;
   PORT: string;
   /** Sparring player secret, base58. Absent switches the Sparring player off. */
@@ -58,6 +64,23 @@ function solWarn(raw: unknown): number {
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(
       `OPERATOR_SOL_WARN must be a non-negative number of SOL, got "${String(raw)}"`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Same shape as `solWarn`: unset or empty takes referral.ts's own default,
+ * anything else must be a non-negative whole number of seconds.
+ */
+function referralQualifySeconds(raw: unknown): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_REFERRAL_QUALIFY_SECONDS;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `REFERRAL_QUALIFY_SECONDS must be a non-negative whole number of seconds, got "${String(raw)}"`,
     );
   }
   return value;
@@ -85,6 +108,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     OPERATOR_SOL_WARN: solWarn(env.OPERATOR_SOL_WARN),
     FAUCET_AMOUNT: String(env.FAUCET_AMOUNT ?? "1000000000"),
     FAUCET_INTERVAL_SECONDS: String(env.FAUCET_INTERVAL_SECONDS ?? "3600"),
+    REFERRAL_QUALIFY_SECONDS: referralQualifySeconds(env.REFERRAL_QUALIFY_SECONDS),
     CORS_ORIGIN: String(env.CORS_ORIGIN),
     PORT: String(env.PORT ?? "8080"),
     // Spread rather than assigned: under `exactOptionalPropertyTypes` an

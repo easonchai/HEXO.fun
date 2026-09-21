@@ -4,6 +4,7 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { EventParser } from "@anchor-lang/core";
 import type { Epoch, Player, Prisma, Round } from "@prisma/client";
 import { PublicKey, type ConfirmedSignatureInfo } from "@solana/web3.js";
@@ -12,10 +13,13 @@ import bs58 from "bs58";
 import { generateInviteCode, INVITE_DEFAULT_USES } from "../api/invite-code";
 import {
   applyReferralEvent,
+  isQualified,
   type ReferralPrincipalEvent,
   type ReferralQualificationState,
 } from "../api/referral";
+import { computeBonuses, type ReferrerBonusInput } from "../api/referral-bonus";
 import { ChainService } from "../chain/chain.service";
+import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   decodeEventLogs,
@@ -228,12 +232,17 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * the entry is dropped once a sweep has caught up past it.
    */
   private freshWrites = new Map<string, bigint>();
+  /** Ticket 08's qualify hold period, read once at construction like every
+   *  other env-derived constant this service uses. */
+  private readonly referralQualifySeconds: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly chain: ChainService,
+    config: ConfigService<HexVaultEnv, true>,
   ) {
     this.parser = new EventParser(this.chain.programId, this.chain.program.coder);
+    this.referralQualifySeconds = config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
   }
 
   onModuleInit(): void {
@@ -297,6 +306,81 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.position.findMany({
       where: { roundId: { in: terminalRounds.map((round) => round.id) } },
       select: { address: true, owner: true, roundId: true },
+    });
+  }
+
+  /**
+   * Ticket 08's daily bonus job. Every wallet that refers at least one other
+   * wallet is a candidate; one it computes and records once for `epochId`
+   * (via `createMany({ skipDuplicates: true })`, so a referrer newly
+   * discovered on a later tick still gets a row, but an already-recorded one
+   * keeps its original amount rather than drifting as the day goes on), then
+   * hands back whatever is still unsent and not already granted on chain.
+   */
+  async referralGrantsDue(epochId: bigint): Promise<{ referrer: string; amount: bigint }[]> {
+    const pool = await this.prisma.pool.findFirst();
+    if (!pool) return [];
+
+    const referrals = await this.prisma.referral.findMany({
+      select: { referrer: true, principal: true, aboveSince: true },
+    });
+    if (referrals.length === 0) return [];
+    const byReferrer = new Map<string, { principal: bigint; aboveSince: bigint | null }[]>();
+    for (const row of referrals) {
+      const list = byReferrer.get(row.referrer) ?? [];
+      list.push({ principal: row.principal, aboveSince: row.aboveSince });
+      byReferrer.set(row.referrer, list);
+    }
+
+    const referrerPlayers = await this.prisma.player.findMany({
+      where: { owner: { in: [...byReferrer.keys()] } },
+      select: { owner: true, principal: true, bonusEpoch: true },
+    });
+    const playerByOwner = new Map(referrerPlayers.map((player) => [player.owner, player]));
+    const now = nowSeconds();
+
+    // Skip referrers with no Player or a Principal of 0: the operator cap on
+    // grant_tickets would refuse them anyway (docs/plan/hexo-referrals
+    // ticket 08's own instruction).
+    const inputs: ReferrerBonusInput[] = [...byReferrer].map(([referrer, refs]) => ({
+      referrer,
+      principal: playerByOwner.get(referrer)?.principal ?? 0n,
+      qualifiedReferralPrincipals: refs
+        .filter((ref) => isQualified(ref.aboveSince, now, this.referralQualifySeconds))
+        .map((ref) => ref.principal),
+    }));
+
+    const bonuses = computeBonuses(inputs, pool.totalPrincipal, pool.bonusCapBps);
+    if (bonuses.length > 0) {
+      await this.prisma.referralGrant.createMany({
+        data: bonuses.map((bonus) => ({
+          epochId,
+          referrer: bonus.referrer,
+          amount: bonus.amount,
+          qualifiedCount: bonus.qualifiedCount,
+          rateBps: bonus.rateBps,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    const pending = await this.prisma.referralGrant.findMany({
+      where: { epochId, txSig: null },
+      select: { referrer: true, amount: true },
+    });
+    return pending.filter(
+      (grant) => playerByOwner.get(grant.referrer)?.bonusEpoch !== epochId,
+    );
+  }
+
+  async markReferralGrantsSent(
+    epochId: bigint,
+    referrers: readonly string[],
+    txSig: string,
+  ): Promise<void> {
+    await this.prisma.referralGrant.updateMany({
+      where: { epochId, referrer: { in: [...referrers] } },
+      data: { txSig },
     });
   }
 

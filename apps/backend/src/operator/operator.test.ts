@@ -143,11 +143,13 @@ interface Recorder {
   ctx: TickContext;
   sent: TransactionInstruction[][];
   warned: string[];
+  markedSent: { epochId: bigint; referrers: string[]; txSig: string }[];
 }
 
 function context(over: Partial<TickContext> = {}): Recorder {
   const sent: TransactionInstruction[][] = [];
   const warned: string[] = [];
+  const markedSent: { epochId: bigint; referrers: string[]; txSig: string }[] = [];
   const ctx: TickContext = {
     now: NOW,
     pool: pool(),
@@ -169,6 +171,11 @@ function context(over: Partial<TickContext> = {}): Recorder {
     unsettledPositions: async () => [],
     forgetPositions: async () => {},
     winner: async () => null,
+    // Empty by default so step 3b stays quiet in every test that is not about it.
+    referralGrantsDue: async () => [],
+    markReferralGrantsSent: async (epochId, referrers, txSig) => {
+      markedSent.push({ epochId, referrers: [...referrers], txSig });
+    },
     send: async (ixs) => {
       sent.push(ixs);
       return "signature";
@@ -176,7 +183,7 @@ function context(over: Partial<TickContext> = {}): Recorder {
     warn: (message) => warned.push(message),
     ...over,
   };
-  return { ctx, sent, warned };
+  return { ctx, sent, warned, markedSent };
 }
 
 /** Runs one tick and returns the labels of the single transaction it sent. */
@@ -404,6 +411,63 @@ describe("runTick", () => {
     });
     expect(result.action).not.toBe("begin_epoch");
     expect(result.labels).toEqual(["register"]);
+  });
+
+  // --- 3b. Referral bonuses (docs/plan/hexo-referrals ticket 08): grants
+  // due for the epoch that just began, batched like registration.
+
+  it("3b. grants up to eight referral bonuses per transaction and records the signature", async () => {
+    const referrers = Array.from({ length: 10 }, () =>
+      Keypair.generate().publicKey.toBase58(),
+    );
+    const { ctx, sent, markedSent } = context({
+      referralGrantsDue: async (epochId) => {
+        expect(epochId).toBe(2n); // currentEpoch's id, not previousEpoch's
+        return referrers.map((referrer) => ({ referrer, amount: 1_000_000n }));
+      },
+    });
+    const outcome = await runTick(ctx);
+
+    expect(outcome.action).toBe("grant_tickets");
+    expect(sent).toHaveLength(1);
+    expect((sent[0] ?? []).map(label)).toEqual(Array(8).fill("grant_tickets"));
+    expect(markedSent).toEqual([
+      { epochId: 2n, referrers: referrers.slice(0, 8), txSig: "signature" },
+    ]);
+  });
+
+  it("3b. does nothing once every referral bonus for the epoch is granted", async () => {
+    const result = await tickLabels({ referralGrantsDue: async () => [] });
+    expect(result.action).toBeNull();
+  });
+
+  it("3b. does nothing before the first epoch has begun", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+      referralGrantsDue: () => {
+        throw new Error("must not be asked before an epoch exists");
+      },
+    });
+    expect(result.labels).toEqual(["begin_epoch"]);
+  });
+
+  it("3b. logs a warning and falls through instead of throwing when the on-chain cap is exceeded", async () => {
+    const referrer = Keypair.generate().publicKey.toBase58();
+    const { ctx, sent, warned } = context({
+      referralGrantsDue: async () => [{ referrer, amount: 1_000_000n }],
+      send: async () => {
+        throw new Error("custom program error: DailyPoolGrantCapExceeded");
+      },
+    });
+    const outcome = await runTick(ctx);
+
+    expect(outcome.action).toBeNull();
+    expect(sent).toHaveLength(0);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatch(/DailyPoolGrantCapExceeded/);
   });
 
   // --- 4. Register / close registration. Closing waits for two consecutive

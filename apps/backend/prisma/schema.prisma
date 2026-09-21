@@ -190,6 +190,23 @@ model Referral {
   @@index([referrer])
 }
 
+// One referrer's computed daily bonus for one epoch (docs/plan/hexo-referrals
+// ticket 08), written before the operator sends grant_tickets. No @id: the
+// unique index is the natural key, and createMany({ skipDuplicates: true })
+// uses it to make writing a referrer's row for an epoch idempotent across
+// restarts. txSig fills in once the batch it was sent in confirms; a null
+// txSig on a row this epoch is a grant still owed.
+model ReferralGrant {
+  epochId        BigInt
+  referrer       String
+  amount         BigInt
+  qualifiedCount Int
+  rateBps        Int
+  txSig          String?
+
+  @@unique([epochId, referrer])
+}
+
 // Single row (id = 1): what the operator last did, for GET /status.
 model OperatorState {
   id               Int     @id

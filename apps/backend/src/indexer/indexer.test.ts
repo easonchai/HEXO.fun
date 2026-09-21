@@ -43,15 +43,17 @@ beforeAll(async () => {
     POOL_ID: POOL_ID.toString(),
     PROGRAM_ID: PROGRAM_ID.toBase58(),
     RPC_URL: "http://127.0.0.1:1",
+    REFERRAL_QUALIFY_SECONDS: 604_800,
   };
-  // SAFETY: ChainService only reads the four keys above through `get`.
+  // SAFETY: ChainService reads the first four keys above through `get`;
+  // IndexerService reads REFERRAL_QUALIFY_SECONDS the same way.
   const config = {
     get: (key: keyof HexVaultEnv) => env[key],
   } as unknown as ConfigService<HexVaultEnv, true>;
   // SAFETY: the fake stands in for the RPC calls the indexer makes; this
   // suite drives no code path that reaches any other Connection method.
   chain = new ChainService(connection as unknown as Connection, config);
-  indexer = new IndexerService(prisma, chain);
+  indexer = new IndexerService(prisma, chain, config);
 });
 
 afterAll(async () => {
@@ -84,6 +86,7 @@ async function wipe(): Promise<void> {
     prisma.epoch.deleteMany(),
     prisma.pool.deleteMany(),
     prisma.referral.deleteMany(),
+    prisma.referralGrant.deleteMany(),
   ]);
 }
 
@@ -886,5 +889,171 @@ describe("referral qualification", () => {
     const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
     expect(row.principal).toBe(40_000_000n);
     expect(row.aboveSince).toBeNull();
+  });
+});
+
+// docs/plan/hexo-referrals ticket 08: computeBonuses' inputs and the
+// ReferralGrant bookkeeping around it, against a real Postgres.
+describe("referral bonus job (ticket 08)", () => {
+  const EPOCH_ID = 9n;
+  const REFERRER = Keypair.generate().publicKey.toBase58();
+  const WELL_PAST = 0n; // 1970: far more than REFERRAL_QUALIFY_SECONDS ago.
+
+  const poolRow = (overrides: object = {}) => ({
+    address: chain.poolAddress().toBase58(),
+    poolId: 1n,
+    admin: OWNER.toBase58(),
+    operator: OWNER.toBase58(),
+    pendingAdmin: null,
+    mint: STRANGER.toBase58(),
+    epochSeconds: 86_400n,
+    epochAnchor: 0n,
+    roundSeconds: 60n,
+    closeBuffer: 5n,
+    minDeposit: 1_000_000n,
+    paused: false,
+    currentEpochId: EPOCH_ID,
+    currentEpochEndsAt: 0n,
+    previousEpochEndsAt: 0n,
+    totalPrincipal: 100_000_000_000n, // 100,000 USDC: ample, no pool cap bind
+    pendingWithdrawals: 0n,
+    minJackpot: 1_000_000n,
+    carryPot: 0n,
+    houseCutBps: 600,
+    baseRateBps: 0,
+    yieldBudget: 0n,
+    ticketsPerUsdc: 10,
+    bonusCapBps: 10_000, // 100%: no pool cap bind unless a test overrides it
+    bonusEpoch: 0n,
+    bonusGranted: 0n,
+    updatedSlot: 1n,
+    ...overrides,
+  });
+
+  const referrerPlayer = (owner: string, overrides: object = {}) => ({
+    owner,
+    principal: 1_000_000_000_000n, // ample, so the referrer's own 1x cap never binds
+    entries: 0n,
+    weightAcc: "0",
+    lastUpdate: 0n,
+    epochId: 0n,
+    frozenWeight: "0",
+    frozenEpoch: 0n,
+    regEpoch: 0n,
+    regStart: "0",
+    regEnd: "0",
+    isHouse: false,
+    pendingWithdraw: 0n,
+    pendingEpoch: 0n,
+    principalAcc: "0",
+    frozenPrincipalAcc: "0",
+    yieldEpoch: 0n,
+    boughtEpoch: 0n,
+    boughtAmount: 0n,
+    bonusEpoch: 0n,
+    bonusGranted: 0n,
+    ...overrides,
+  });
+
+  async function seedQualifiedReferral(overrides: object = {}): Promise<void> {
+    await prisma.referral.create({
+      data: {
+        referee: Keypair.generate().publicKey.toBase58(),
+        referrer: REFERRER,
+        code: "ABCD9999",
+        boundAt: 0n,
+        aboveSince: WELL_PAST,
+        principal: 100_000_000n, // 100 USDC
+        ...overrides,
+      },
+    });
+  }
+
+  beforeEach(async () => {
+    await prisma.pool.create({ data: poolRow() });
+  });
+
+  it("computes a qualifying referrer's bonus, records it, and hands it back unsent", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER) });
+    await seedQualifiedReferral();
+
+    const due = await indexer.referralGrantsDue(EPOCH_ID);
+    expect(due).toEqual([{ referrer: REFERRER, amount: 2_000_000n }]); // 100 USDC * 2%
+
+    const row = await prisma.referralGrant.findUniqueOrThrow({
+      where: { epochId_referrer: { epochId: EPOCH_ID, referrer: REFERRER } },
+    });
+    expect(row).toMatchObject({ amount: 2_000_000n, qualifiedCount: 1, rateBps: 200, txSig: null });
+  });
+
+  it("a referral not yet qualified earns its referrer nothing", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER) });
+    await seedQualifiedReferral({ aboveSince: null });
+
+    expect(await indexer.referralGrantsDue(EPOCH_ID)).toEqual([]);
+    expect(await prisma.referralGrant.count()).toBe(0);
+  });
+
+  it("a referrer with no Player earns nothing", async () => {
+    await seedQualifiedReferral();
+    expect(await indexer.referralGrantsDue(EPOCH_ID)).toEqual([]);
+  });
+
+  it("is idempotent: the recorded amount does not change on a second call even if Principal moves", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER) });
+    await seedQualifiedReferral();
+
+    const first = await indexer.referralGrantsDue(EPOCH_ID);
+    await prisma.referral.updateMany({
+      where: { referrer: REFERRER },
+      data: { principal: 900_000_000n }, // would compute a different bonus if reapplied
+    });
+    const second = await indexer.referralGrantsDue(EPOCH_ID);
+
+    expect(second).toEqual(first);
+    expect(await prisma.referralGrant.count()).toBe(1);
+  });
+
+  it("skips a referrer whose on-chain bonus_epoch already covers this epoch (a crash between send and markReferralGrantsSent)", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER) });
+    await seedQualifiedReferral();
+    await indexer.referralGrantsDue(EPOCH_ID); // records the row, txSig still null
+
+    await prisma.player.update({
+      where: { owner: REFERRER },
+      data: { bonusEpoch: EPOCH_ID }, // the grant already landed on chain
+    });
+
+    expect(await indexer.referralGrantsDue(EPOCH_ID)).toEqual([]);
+  });
+
+  it("markReferralGrantsSent fills in the signature for exactly the referrers given", async () => {
+    const other = Keypair.generate().publicKey.toBase58();
+    await prisma.player.createMany({
+      data: [referrerPlayer(REFERRER), referrerPlayer(other)],
+    });
+    await seedQualifiedReferral();
+    await prisma.referral.create({
+      data: {
+        referee: Keypair.generate().publicKey.toBase58(),
+        referrer: other,
+        code: "ABCD8888",
+        boundAt: 0n,
+        aboveSince: WELL_PAST,
+        principal: 100_000_000n,
+      },
+    });
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    await indexer.markReferralGrantsSent(EPOCH_ID, [REFERRER], "sig-1");
+
+    const sent = await prisma.referralGrant.findUniqueOrThrow({
+      where: { epochId_referrer: { epochId: EPOCH_ID, referrer: REFERRER } },
+    });
+    const unsent = await prisma.referralGrant.findUniqueOrThrow({
+      where: { epochId_referrer: { epochId: EPOCH_ID, referrer: other } },
+    });
+    expect(sent.txSig).toBe("sig-1");
+    expect(unsent.txSig).toBeNull();
   });
 });

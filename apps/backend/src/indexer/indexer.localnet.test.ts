@@ -293,7 +293,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await prisma.$connect();
     await wipe(prisma);
 
-    indexer = new IndexerService(prisma, chain);
+    indexer = new IndexerService(prisma, chain, config);
     // The real boot path: the boot sweep, the confirmed-log sync trigger and
     // the finalized log subscription.
     indexer.onModuleInit();

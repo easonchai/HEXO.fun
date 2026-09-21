@@ -176,6 +176,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         OPERATOR_SOL_WARN: 0.3,
         FAUCET_AMOUNT: "0",
         FAUCET_INTERVAL_SECONDS: "0",
+        REFERRAL_QUALIFY_SECONDS: 604_800,
         CORS_ORIGIN: "http://localhost",
         PORT: "0",
       });
@@ -283,6 +284,10 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
               roundId: terminal.get(position.round.toBase58()) as bigint,
             }));
         },
+        // No referral binding in this fixture, so ticket 08's step has
+        // nothing to do; it still has to be callable.
+        referralGrantsDue: async () => [],
+        markReferralGrantsSent: async () => {},
       };
 
       // SAFETY: the Operator only ever calls `wake()` on the Sparring player,

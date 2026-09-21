@@ -84,6 +84,15 @@
   fund_yield is permissionless like fund_jackpot. When the budget runs short, register() credits whatever it can and reports
   the shortfall; GET /status's yieldShortfall is what the last ended epoch could not cover.
 
+  Daily referral bonus (docs/plan/hexo-referrals ticket 08)
+
+  Fully automatic, no manual step: the operator's own crank grants it, right after begin_epoch opens each new epoch, off
+  the qualified referrals in Postgres. GET /status's bonusGrantedToday and bonusCap (ticket 05) show the pool-wide total
+  against bonus_cap_bps; a grant stuck against the cap logs a warning on the operator and retries next tick rather than
+  failing it, so a quiet crank with bonusGrantedToday sitting under bonusCap most of the day is expected, not a bug.
+  REFERRAL_QUALIFY_SECONDS (default 604800, 7 days) is how long a referral's Principal has to stay above 50 USDC before it
+  counts; shorten it on devnet in .env to see a referral qualify sooner without waiting a week.
+
     set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --epoch-seconds 86400 --round-seconds 30 --close-buffer 12
 
   Round length: 90s (2026-09-14)

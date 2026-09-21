@@ -71,6 +71,20 @@ const cannotPayWinner = (cause: unknown): boolean => {
 };
 
 /**
+ * `grant_tickets`' operator-path cap errors (ticket 04). `computeBonuses`'
+ * pool-wide scale-down is a best effort, not a guarantee: other grant
+ * activity already counted against the epoch (an admin grant, an earlier
+ * batch this same tick loop sent) can leave less headroom than it assumed
+ * when a referrer's row was written.
+ */
+const GRANT_CAP_EXCEEDED = ["DailyPlayerGrantCapExceeded", "DailyPoolGrantCapExceeded"];
+
+const capExceeded = (cause: unknown): boolean => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return GRANT_CAP_EXCEEDED.some((marker) => message.includes(marker));
+};
+
+/**
  * What step 4 remembers about the last tick's `playersToRegister` check, so
  * it can tell "empty again" from "empty for the first time". The service
  * persists this across ticks; the pure function only reads and returns it.
@@ -108,6 +122,20 @@ export interface TickContext {
     currentEpochId: bigint,
   ): Promise<{ owner: string; amount: bigint }[]>;
   playersToRegister(epochId: bigint): Promise<string[]>;
+  /**
+   * Every qualifying referrer's daily bonus for `epochId` not yet sent
+   * (docs/plan/hexo-referrals ticket 08), computed and recorded before it is
+   * ever handed back, so a crash or restart resumes instead of double
+   * granting. Empty once every grant for the epoch is sent or already
+   * granted on chain.
+   */
+  referralGrantsDue(epochId: bigint): Promise<{ referrer: string; amount: bigint }[]>;
+  /** Records the signature of a batch of grants just sent. */
+  markReferralGrantsSent(
+    epochId: bigint,
+    referrers: readonly string[],
+    txSig: string,
+  ): Promise<void>;
   /**
    * Positions still on chain whose Round has reached a terminal status
    * (Settled, Forfeited, Voided), across every such Round, not just the
@@ -293,6 +321,39 @@ async function decide(ctx: TickContext): Promise<Decision> {
   if (epochEnded && pool.openRoundId === 0n && previousDone) {
     await ctx.send(await ctx.ix.beginEpoch(pool));
     return { action: "begin_epoch" };
+  }
+
+  // 3b. Referral bonuses (ticket 08): once per epoch, right after
+  // begin_epoch, credit each qualifying referrer's daily bonus for the
+  // epoch that just began, so it counts for the full day. referralGrantsDue
+  // computes and records the whole epoch's bonuses the first time it is
+  // asked (the ReferralGrant table's own uniqueness makes that idempotent
+  // across restarts), then hands back whatever is still unsent; batched the
+  // same way step 4 batches registrations.
+  if (currentEpoch) {
+    const grants = await ctx.referralGrantsDue(currentEpoch.epochId);
+    if (grants.length > 0) {
+      const batch = grants.slice(0, BATCH_SIZE);
+      try {
+        const signature = await ctx.send(await ctx.ix.grantTickets(pool, batch));
+        await ctx.markReferralGrantsSent(
+          currentEpoch.epochId,
+          batch.map((grant) => grant.referrer),
+          signature,
+        );
+        return { action: "grant_tickets" };
+      } catch (cause) {
+        if (!capExceeded(cause)) throw cause;
+        // ponytail: the whole batch is one atomic transaction, so one
+        // referrer over the cap blocks every referrer batched alongside
+        // them; split a batch on a repeated failure if that ever bites.
+        ctx.warn(
+          `referral bonus grant for epoch ${currentEpoch.epochId} exceeded the on-chain cap: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+        );
+      }
+    }
   }
 
   // 4. The ended epoch is taking registrations: crank them, then fund the

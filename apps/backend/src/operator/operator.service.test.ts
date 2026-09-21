@@ -132,6 +132,8 @@ describe("OperatorService end-of-tick timestamp", () => {
     const indexer: IndexerQueries = {
       playersToRegister: async () => [],
       unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
     };
     const operator = new OperatorService(
       fakeChain as unknown as ChainService,
@@ -230,7 +232,12 @@ describe("OperatorService.duePendingWithdrawals", () => {
         connection: new CountingConnection(new Map()),
       } as unknown as ChainService,
       prisma,
-      { playersToRegister: async () => [], unsettledPositions: async () => [] },
+      {
+        playersToRegister: async () => [],
+        unsettledPositions: async () => [],
+        referralGrantsDue: async () => [],
+        markReferralGrantsSent: async () => {},
+      },
       noopSparring,
     );
 
@@ -310,6 +317,8 @@ describe("OperatorService read budget", () => {
     const indexer: IndexerQueries = {
       playersToRegister: async () => [],
       unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
     };
     const operator = new OperatorService(
       fakeChain as unknown as ChainService,
@@ -407,7 +416,12 @@ describe("OperatorService randomness subscription", () => {
         throw new Error("this fixture's tick should never need to send anything");
       },
     };
-    const indexer: IndexerQueries = { playersToRegister: async () => [], unsettledPositions: async () => [] };
+    const indexer: IndexerQueries = {
+      playersToRegister: async () => [],
+      unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
+    };
     const operator = new OperatorService(
       fakeChain as unknown as ChainService,
       prisma,

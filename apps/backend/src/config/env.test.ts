@@ -4,6 +4,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_REFERRAL_QUALIFY_SECONDS } from "../api/referral";
 import { DEFAULT_OPERATOR_SOL_WARN, validateEnv } from "./env";
 
 const MINT = Keypair.generate().publicKey.toBase58();
@@ -62,5 +63,31 @@ describe("validateEnv", () => {
     expect(() =>
       validateEnv({ ...base, ACCEPTED_MINT: MINT, OPERATOR_SOL_WARN: "-1" }),
     ).toThrow(/OPERATOR_SOL_WARN/);
+  });
+
+  it("defaults the referral qualify hold period", () => {
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT }).REFERRAL_QUALIFY_SECONDS,
+    ).toBe(DEFAULT_REFERRAL_QUALIFY_SECONDS);
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, REFERRAL_QUALIFY_SECONDS: "60" })
+        .REFERRAL_QUALIFY_SECONDS,
+    ).toBe(60);
+  });
+
+  it("takes a blank referral qualify hold period as unset", () => {
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, REFERRAL_QUALIFY_SECONDS: "  " })
+        .REFERRAL_QUALIFY_SECONDS,
+    ).toBe(DEFAULT_REFERRAL_QUALIFY_SECONDS);
+  });
+
+  it("fails the boot on a referral qualify hold period that is not a whole number", () => {
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, REFERRAL_QUALIFY_SECONDS: "-1" }),
+    ).toThrow(/REFERRAL_QUALIFY_SECONDS/);
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, REFERRAL_QUALIFY_SECONDS: "1.5" }),
+    ).toThrow(/REFERRAL_QUALIFY_SECONDS/);
   });
 });

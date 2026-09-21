@@ -246,6 +246,9 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       duePendingWithdrawals: (currentEpochId) =>
         this.duePendingWithdrawals(currentEpochId),
       playersToRegister: (epochId) => this.indexer.playersToRegister(epochId),
+      referralGrantsDue: (epochId) => this.indexer.referralGrantsDue(epochId),
+      markReferralGrantsSent: (epochId, referrers, txSig) =>
+        this.indexer.markReferralGrantsSent(epochId, referrers, txSig),
       unsettledPositions: async () =>
         (await this.indexer.unsettledPositions()).filter(
           (position) => !this.settled.has(position.address),
