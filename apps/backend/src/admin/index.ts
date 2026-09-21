@@ -1,20 +1,25 @@
 // One-off admin CLI: set-params, pause, unpause, fund-jackpot,
-// withdraw-principal, set-operator, propose-admin, accept-admin. Same shape
-// as ../bootstrap.ts (plain tsx script, no command framework, argument
-// parsing split into its own file for a chain-free unit test) but this pool
-// already exists, so unlike bootstrap this reuses ChainService and the same
-// full .env the backend itself runs on, instead of re-deriving connections
-// and PDAs by hand.
+// withdraw-principal, set-operator, propose-admin, accept-admin,
+// create-invite. Same shape as ../bootstrap.ts (plain tsx script, no command
+// framework, argument parsing split into its own file for a chain-free unit
+// test) but this pool already exists, so unlike bootstrap this reuses
+// ChainService and the same full .env the backend itself runs on, instead of
+// re-deriving connections and PDAs by hand.
 //
 // In local mode stdout carries nothing; every line (including the tx
 // signature) goes to stderr, matching bootstrap.ts's stdout/stderr split. In
 // multisig mode stdout carries exactly one line, the base58 transaction, so
-// `admin ... | pbcopy` hands Squads something it can import.
+// `admin ... | pbcopy` hands Squads something it can import. create-invite
+// touches no chain at all, so it never reaches `run()`; its own lines
+// (each code, one per line) go to stdout instead, for the same reason:
+// `admin create-invite ... | pbcopy` or a script should get codes and
+// nothing else.
 import "reflect-metadata"; // ChainService's @Injectable()/@Inject() decorators need this; NestFactory normally pulls it in, but there is no Nest app here.
 import { existsSync } from "node:fs";
 
 import { BN } from "@anchor-lang/core";
 import { ConfigService } from "@nestjs/config";
+import { PrismaClient } from "@prisma/client";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddressSync,
@@ -27,6 +32,7 @@ import {
   type TransactionInstruction,
 } from "@solana/web3.js";
 
+import { generateInviteCode } from "../api/invite-code";
 import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { validateEnv } from "../config/env";
@@ -241,11 +247,53 @@ async function withdrawPrincipal(
   );
 }
 
+/** The slice of PrismaClient `createInvite` needs, so `admin.test.ts` can
+ *  drive it with an in-memory fake instead of a real Postgres. */
+export interface InviteCodeStore {
+  inviteCode: {
+    create(args: {
+      data: {
+        code: string;
+        ownerWallet: string | null;
+        maxUses: number;
+        uses: number;
+        createdAt: bigint;
+      };
+    }): Promise<unknown>;
+  };
+}
+
+/**
+ * Writes `command.count` fresh codes to Postgres and prints each one, one per
+ * line, to stdout. Never touches the chain, so `main()` calls this instead of
+ * `run()` and skips building a ChainService for it altogether.
+ */
+export async function createInvite(
+  store: InviteCodeStore,
+  command: Extract<AdminCommand, { kind: "create-invite" }>,
+): Promise<void> {
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  for (let i = 0; i < command.count; i++) {
+    const code = generateInviteCode();
+    await store.inviteCode.create({
+      data: {
+        code,
+        ownerWallet: command.owner?.toBase58() ?? null,
+        maxUses: command.maxUses,
+        uses: 0,
+        createdAt: now,
+      },
+    });
+    process.stdout.write(`${code}\n`);
+  }
+}
+
 /**
  * The command dispatch, exported so `admin.test.ts` can drive it with a
  * fabricated ChainService and watch what lands on stdout against stderr.
  * `main.ts` is the entry point that actually invokes it, so importing this
- * file never touches an env or a network.
+ * file never touches an env or a network. `create-invite` never reaches
+ * here; `main()` handles it before this is called.
  */
 export async function run(
   command: AdminCommand,
@@ -300,6 +348,17 @@ export async function main(): Promise<void> {
   const command = parseAdminCommand(process.argv.slice(2));
 
   const env = validateEnv(process.env);
+
+  if (command.kind === "create-invite") {
+    const prisma = new PrismaClient({ datasourceUrl: env.DATABASE_URL });
+    try {
+      await createInvite(prisma, command);
+    } finally {
+      await prisma.$disconnect();
+    }
+    return;
+  }
+
   const connection = new Connection(env.RPC_URL, "confirmed");
   // Built directly, not through Nest DI: this script never boots a Nest
   // application, so ChainService's own constructor is the whole wiring.

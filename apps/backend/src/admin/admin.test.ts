@@ -34,7 +34,7 @@ import {
   poolAddress,
   principalVaultAddress,
 } from "../chain/pda";
-import { run } from "./index";
+import { createInvite, run, type InviteCodeStore } from "./index";
 import type { AdminMode } from "./squads";
 
 const PROGRAM_ID = new PublicKey("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
@@ -255,5 +255,59 @@ describe("admin run", () => {
     expect(stderr.join("\n")).toContain("12500000 atomic");
     // No part of the human-readable summary leaked into the paste.
     expect(stdout[0]).not.toContain(" ");
+  });
+});
+
+interface CreatedInvite {
+  code: string;
+  ownerWallet: string | null;
+  maxUses: number;
+  uses: number;
+  createdAt: bigint;
+}
+
+/** An in-memory stand-in for the one Prisma call `createInvite` makes, so
+ *  this exercises the real dispatch logic without a database. */
+function fakeInviteStore(): { store: InviteCodeStore; created: CreatedInvite[] } {
+  const created: CreatedInvite[] = [];
+  return {
+    store: {
+      inviteCode: {
+        create: async ({ data }) => {
+          created.push(data);
+          return data;
+        },
+      },
+    },
+    created,
+  };
+}
+
+describe("createInvite", () => {
+  it("writes one code per --count to the store and prints each on stdout", async () => {
+    const { store, created } = fakeInviteStore();
+    const owner = Keypair.generate().publicKey;
+
+    const { stdout, stderr } = await capture(() =>
+      createInvite(store, { kind: "create-invite", maxUses: 5, count: 3, owner }),
+    );
+
+    expect(created).toHaveLength(3);
+    expect(new Set(created.map((row) => row.code)).size).toBe(3);
+    for (const row of created) {
+      expect(row.code).toHaveLength(8);
+      expect(row.ownerWallet).toBe(owner.toBase58());
+      expect(row.maxUses).toBe(5);
+      expect(row.uses).toBe(0);
+    }
+    expect(stdout).toHaveLength(3);
+    expect(stderr).toEqual([]);
+  });
+
+  it("stores no owner when --owner is not given", async () => {
+    const { store, created } = fakeInviteStore();
+    await createInvite(store, { kind: "create-invite", maxUses: 1, count: 1 });
+    expect(created).toHaveLength(1);
+    expect(created[0]?.ownerWallet).toBeNull();
   });
 });

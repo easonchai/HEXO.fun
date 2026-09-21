@@ -32,7 +32,15 @@ export type AdminCommand =
   | { readonly kind: "withdraw-principal"; readonly amount: string }
   | { readonly kind: "set-operator"; readonly key: PublicKey }
   | { readonly kind: "propose-admin"; readonly key: PublicKey }
-  | { readonly kind: "accept-admin" };
+  | { readonly kind: "accept-admin" }
+  /** Never touches the chain: `create-invite` writes straight to Postgres,
+   *  so `main()` handles it before a ChainService is even built. */
+  | {
+      readonly kind: "create-invite";
+      readonly maxUses: number;
+      readonly owner?: PublicKey;
+      readonly count: number;
+    };
 
 export const USAGE = [
   "usage: admin <command> [flags]",
@@ -44,6 +52,7 @@ export const USAGE = [
   "  set-operator --key PUBKEY",
   "  propose-admin --key PUBKEY",
   "  accept-admin",
+  "  create-invite --max-uses N [--owner PUBKEY] [--count K]",
 ].join("\n");
 
 function positiveInt(flag: string, raw: string): number {
@@ -266,6 +275,33 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
         checkRegistrationWindow(params.registrationWindow, params.epochSeconds);
       }
       return { kind: "set-params", params };
+    }
+
+    case "create-invite": {
+      let values: { "max-uses"?: string; owner?: string; count?: string };
+      try {
+        ({ values } = parseArgs({
+          args: [...rest],
+          options: {
+            "max-uses": { type: "string" },
+            owner: { type: "string" },
+            count: { type: "string" },
+          },
+          allowPositionals: false,
+        }));
+      } catch (cause) {
+        throw new Error(USAGE, { cause });
+      }
+      const maxUsesRaw = values["max-uses"];
+      if (typeof maxUsesRaw !== "string") {
+        throw new Error(`create-invite needs --max-uses\n${USAGE}`);
+      }
+      return {
+        kind: "create-invite",
+        maxUses: positiveInt("max-uses", maxUsesRaw),
+        count: values.count !== undefined ? positiveInt("count", values.count) : 1,
+        ...(values.owner !== undefined ? { owner: pubkey("owner", values.owner) } : {}),
+      };
     }
 
     default:

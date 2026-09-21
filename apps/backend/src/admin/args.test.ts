@@ -166,6 +166,41 @@ describe("parseAdminCommand", () => {
     );
   });
 
+  it("parses create-invite, owner and count optional", () => {
+    expect(parseAdminCommand(["create-invite", "--max-uses", "5"])).toEqual({
+      kind: "create-invite",
+      maxUses: 5,
+      count: 1,
+    });
+    const owner = Keypair.generate().publicKey;
+    expect(
+      parseAdminCommand([
+        "create-invite",
+        "--max-uses",
+        "1",
+        "--owner",
+        owner.toBase58(),
+        "--count",
+        "3",
+      ]),
+    ).toEqual({
+      kind: "create-invite",
+      maxUses: 1,
+      count: 3,
+      owner,
+    });
+  });
+
+  it("rejects create-invite with no --max-uses, or a bad one", () => {
+    expect(() => parseAdminCommand(["create-invite"])).toThrow(/needs --max-uses/);
+    expect(() => parseAdminCommand(["create-invite", "--max-uses", "0"])).toThrow(
+      /positive whole number/,
+    );
+    expect(() =>
+      parseAdminCommand(["create-invite", "--max-uses", "5", "--owner", "nope"]),
+    ).toThrow(/base58 pubkey/);
+  });
+
   it("scales a USDC amount by the mint's decimals", () => {
     expect(atomicUsdc("250", 6)).toBe(250_000_000n);
     expect(atomicUsdc("12.5", 6)).toBe(12_500_000n);

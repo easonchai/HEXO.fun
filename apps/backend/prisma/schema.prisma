@@ -119,6 +119,27 @@ model FaucetClaim {
   lastClaimAt BigInt
 }
 
+// Invite codes gate the private beta (docs/plan/hexo-referrals ticket 06).
+// ownerWallet is indexed, not unique: the admin CLI may hand one wallet
+// several codes, and the indexer only checks "does this wallet have one yet".
+model InviteCode {
+  code        String  @id
+  ownerWallet String?
+  maxUses     Int
+  uses        Int     @default(0)
+  createdAt   BigInt
+
+  @@index([ownerWallet])
+}
+
+// No relation to InviteCode (or, later, Referral.code): deleting a code is
+// how one gets revoked, and that must leave redemptions already made intact.
+model InviteRedemption {
+  wallet     String @id
+  code       String
+  redeemedAt BigInt
+}
+
 // Single row (id = 1): what the operator last did, for GET /status.
 model OperatorState {
   id               Int     @id

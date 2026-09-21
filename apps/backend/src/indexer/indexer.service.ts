@@ -9,6 +9,7 @@ import type { Epoch, Player, Prisma, Round } from "@prisma/client";
 import { PublicKey, type ConfirmedSignatureInfo } from "@solana/web3.js";
 import bs58 from "bs58";
 
+import { generateInviteCode, INVITE_DEFAULT_USES } from "../api/invite-code";
 import { ChainService } from "../chain/chain.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -748,11 +749,35 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const closed = events
       .map((event) => settledPosition(event))
       .filter((position): position is { owner: string; roundId: bigint } => position !== null);
+    // ticket 06: every owner this batch saw deposit, deduplicated so two
+    // Deposited events for the same wallet in one batch check only once.
+    const depositors = [
+      ...new Set(
+        events
+          .filter((event) => event.name === "Deposited")
+          .map((event) => eventField(event, "owner"))
+          .filter((owner): owner is string => owner !== undefined),
+      ),
+    ];
 
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.event.createMany({ data: rows, skipDuplicates: true });
       for (const { owner, roundId } of closed) {
         await tx.position.deleteMany({ where: { owner, roundId } });
+      }
+      for (const owner of depositors) {
+        const owned = await tx.inviteCode.findFirst({ where: { ownerWallet: owner } });
+        if (owned === null) {
+          await tx.inviteCode.create({
+            data: {
+              code: generateInviteCode(),
+              ownerWallet: owner,
+              maxUses: INVITE_DEFAULT_USES,
+              uses: 0,
+              createdAt: nowSeconds(),
+            },
+          });
+        }
       }
       const cursor = await tx.cursor.findUnique({ where: { id: CURSOR_ID } });
       // The live socket and the catch-up poll both write; only the poll walks
