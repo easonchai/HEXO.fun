@@ -100,6 +100,12 @@ export class AccessController {
    * at `maxUses` and updates zero rows. The wallet's own uniqueness is the
    * `InviteRedemption` primary key: a losing race there surfaces as a
    * Postgres unique-violation (P2002), caught below.
+   *
+   * When the code has an owner, the owner is not the redeemer (no
+   * self-referral) and the redeemer has no Player yet (binding only before a
+   * first deposit), this also writes the `Referral` (ticket 07). It is never
+   * updated after that: a wallet redeems at most once, so this branch runs
+   * at most once per referee.
    */
   @Post("redeem")
   async redeem(@Body() body: unknown) {
@@ -131,6 +137,14 @@ export class AccessController {
         await tx.inviteRedemption.create({
           data: { wallet: address, code, redeemedAt: nowSeconds() },
         });
+        if (invite.ownerWallet !== null && invite.ownerWallet !== address) {
+          const player = await tx.player.findUnique({ where: { owner: address } });
+          if (player === null) {
+            await tx.referral.create({
+              data: { referee: address, referrer: invite.ownerWallet, code, boundAt: nowSeconds() },
+            });
+          }
+        }
       });
     } catch (cause) {
       if (isUniqueConstraintViolation(cause)) {

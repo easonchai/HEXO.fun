@@ -162,12 +162,32 @@ model InviteCode {
   @@index([ownerWallet])
 }
 
-// No relation to InviteCode (or, later, Referral.code): deleting a code is
-// how one gets revoked, and that must leave redemptions already made intact.
+// No relation to InviteCode (or Referral.code): deleting a code is how one
+// gets revoked, and that must leave redemptions already made intact.
 model InviteRedemption {
   wallet     String @id
   code       String
   redeemedAt BigInt
+}
+
+// Referral binding and qualification (docs/plan/hexo-referrals ticket 07).
+// Written once, in the same transaction as the redeem that creates it
+// (access.controller.ts); referrer, code and boundAt are never touched again.
+model Referral {
+  referee  String @id
+  referrer String
+  code     String
+  boundAt  BigInt
+  /// Unix seconds Principal last crossed up through 50 USDC; null while
+  /// below it (or never having been above). Driven by the indexer off
+  /// Deposited, WithdrawRequested, YieldCredited and compounded JackpotPaid.
+  aboveSince BigInt?
+  /// The referee's Principal as of the last Principal-changing event the
+  /// indexer applied here. Not the live Player.principal: see referral.ts's
+  /// ReferralQualificationState for why this is tracked independently.
+  principal  BigInt  @default(0)
+
+  @@index([referrer])
 }
 
 // Single row (id = 1): what the operator last did, for GET /status.

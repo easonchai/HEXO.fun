@@ -40,7 +40,7 @@ function sign(keypair: Keypair, message: string): string {
 }
 
 async function truncate(prisma: PrismaService): Promise<void> {
-  await prisma.$executeRawUnsafe('TRUNCATE "InviteCode", "InviteRedemption", "Player"');
+  await prisma.$executeRawUnsafe('TRUNCATE "InviteCode", "InviteRedemption", "Player", "Referral"');
 }
 
 const emptyPlayer = (owner: string): Player => ({
@@ -99,6 +99,7 @@ describe("access routes", () => {
   beforeEach(async () => {
     await prisma.inviteCode.deleteMany();
     await prisma.inviteRedemption.deleteMany();
+    await prisma.referral.deleteMany();
   });
 
   describe("GET /access/:wallet", () => {
@@ -234,6 +235,116 @@ describe("access routes", () => {
 
       const code = await prisma.inviteCode.findUnique({ where: { code: "LASTONE1" } });
       expect(code?.uses).toBe(1);
+    });
+  });
+
+  describe("referral binding (ticket 07)", () => {
+    it("binds the code owner as referrer, unqualified until Principal holds", async () => {
+      const owner = Keypair.generate();
+      const referee = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: {
+          code: "OWNR2345",
+          maxUses: 5,
+          uses: 0,
+          createdAt: 0n,
+          ownerWallet: owner.publicKey.toBase58(),
+        },
+      });
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: referee.publicKey.toBase58(),
+          code: "OWNR2345",
+          signature: sign(referee, accessMessage(referee.publicKey.toBase58(), "OWNR2345")),
+        })
+        .expect(201);
+
+      const referral = await prisma.referral.findUnique({
+        where: { referee: referee.publicKey.toBase58() },
+      });
+      expect(referral?.referrer).toBe(owner.publicKey.toBase58());
+      expect(referral?.code).toBe("OWNR2345");
+      expect(referral?.aboveSince).toBeNull();
+      expect(referral?.principal).toBe(0n);
+    });
+
+    it("does not bind a referral for a code with no owner", async () => {
+      const wallet = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: { code: "NOOWN123", maxUses: 5, uses: 0, createdAt: 0n, ownerWallet: null },
+      });
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: wallet.publicKey.toBase58(),
+          code: "NOOWN123",
+          signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "NOOWN123")),
+        })
+        .expect(201);
+      const referral = await prisma.referral.findUnique({
+        where: { referee: wallet.publicKey.toBase58() },
+      });
+      expect(referral).toBeNull();
+    });
+
+    it("does not bind a self-redeemed code", async () => {
+      const owner = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: {
+          code: "SELF2345",
+          maxUses: 5,
+          uses: 0,
+          createdAt: 0n,
+          ownerWallet: owner.publicKey.toBase58(),
+        },
+      });
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: owner.publicKey.toBase58(),
+          code: "SELF2345",
+          signature: sign(owner, accessMessage(owner.publicKey.toBase58(), "SELF2345")),
+        })
+        .expect(201);
+      const referral = await prisma.referral.findUnique({
+        where: { referee: owner.publicKey.toBase58() },
+      });
+      expect(referral).toBeNull();
+    });
+
+    it("does not bind a referral for a wallet that already has a Player", async () => {
+      const owner = Keypair.generate();
+      const existingDepositor = Keypair.generate();
+      await prisma.player.create({ data: emptyPlayer(existingDepositor.publicKey.toBase58()) });
+      await prisma.inviteCode.create({
+        data: {
+          code: "PLYR2345",
+          maxUses: 5,
+          uses: 0,
+          createdAt: 0n,
+          ownerWallet: owner.publicKey.toBase58(),
+        },
+      });
+      try {
+        await http
+          .post("/access/redeem")
+          .send({
+            wallet: existingDepositor.publicKey.toBase58(),
+            code: "PLYR2345",
+            signature: sign(
+              existingDepositor,
+              accessMessage(existingDepositor.publicKey.toBase58(), "PLYR2345"),
+            ),
+          })
+          .expect(201);
+        const referral = await prisma.referral.findUnique({
+          where: { referee: existingDepositor.publicKey.toBase58() },
+        });
+        expect(referral).toBeNull();
+      } finally {
+        await prisma.player.delete({ where: { owner: existingDepositor.publicKey.toBase58() } });
+      }
     });
   });
 });

@@ -83,6 +83,7 @@ async function wipe(): Promise<void> {
     prisma.round.deleteMany(),
     prisma.epoch.deleteMany(),
     prisma.pool.deleteMany(),
+    prisma.referral.deleteMany(),
   ]);
 }
 
@@ -469,6 +470,27 @@ const positionSettled = dataLine("PositionSettled", {
   reward: bn(0),
 });
 
+// Parameterized, not fixed consts like `deposited`: ticket 07's tests build a
+// different event sequence (cross up, dip, restore) per case.
+const depositedFor = (owner: PublicKey, amount: number, principal: number, entries: number) =>
+  dataLine("Deposited", { owner, amount: bn(amount), principal: bn(principal), entries: bn(entries) });
+const withdrawRequestedFor = (owner: PublicKey, amount: number, pending: number, pendingEpoch = 1) =>
+  dataLine("WithdrawRequested", {
+    owner,
+    amount: bn(amount),
+    pending: bn(pending),
+    pendingEpoch: bn(pendingEpoch),
+  });
+const yieldCreditedFor = (owner: PublicKey, amount: number, epochId = 1, shortfall = 0) =>
+  dataLine("YieldCredited", { epochId: bn(epochId), owner, amount: bn(amount), shortfall: bn(shortfall) });
+const jackpotPaidFor = (
+  winner: PublicKey,
+  amount: number,
+  compounded: boolean,
+  epochId = 1,
+  isHouse = false,
+) => dataLine("JackpotPaid", { epochId: bn(epochId), winner, amount: bn(amount), isHouse, compounded });
+
 describe("event ingest", () => {
   it("deletes the Position row when PositionSettled lands, without a sweep", async () => {
     await prisma.position.create({
@@ -766,5 +788,103 @@ describe("operator queries", () => {
     expect(await indexer.getEpoch(5n)).toMatchObject({ id: 5n, status: 1 });
     expect(await indexer.getEpoch(6n)).toBeNull();
     expect((await indexer.getPlayers()).length).toBe(4);
+  });
+});
+
+// docs/plan/hexo-referrals ticket 07: aboveSince tracks off the events
+// themselves, not the live Player mirror, so events out of real-time order
+// (a dip and a restore inside one batch) still cross the threshold twice.
+describe("referral qualification", () => {
+  const referee = OWNER.toBase58();
+
+  async function seedReferral(overrides: object = {}): Promise<void> {
+    await prisma.referral.create({
+      data: {
+        referee,
+        referrer: STRANGER.toBase58(),
+        code: "ABCD2345",
+        boundAt: 0n,
+        aboveSince: null,
+        principal: 0n,
+        ...overrides,
+      },
+    });
+  }
+
+  it("ignores a Principal-changing event for a wallet with no Referral row", async () => {
+    expect(await indexer.ingestLogs(batch("sig-noref", 1n, [depositedFor(OWNER, 60_000_000, 60_000_000, 60_000_000)]))).toBe(1);
+    expect(await prisma.referral.count()).toBe(0);
+  });
+
+  it("crosses up through 50 USDC on a deposit and stamps aboveSince", async () => {
+    await seedReferral();
+    await indexer.ingestLogs(
+      batch("sig-cross", 1n, [depositedFor(OWNER, 60_000_000, 60_000_000, 60_000_000)]),
+    );
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(60_000_000n);
+    expect(row.aboveSince).toBe(1_700_000_000n); // batch()'s fixed block time
+  });
+
+  it("a pending withdrawal dropping Principal below 50 USDC clears aboveSince", async () => {
+    await seedReferral({ principal: 60_000_000n, aboveSince: 1_600_000_000n });
+    await indexer.ingestLogs(
+      batch("sig-withdraw", 1n, [withdrawRequestedFor(OWNER, 20_000_000, 20_000_000)]),
+    );
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(40_000_000n);
+    expect(row.aboveSince).toBeNull();
+  });
+
+  it("yield pushing Principal over the line sets aboveSince", async () => {
+    await seedReferral({ principal: 49_999_999n });
+    await indexer.ingestLogs(batch("sig-yield", 1n, [yieldCreditedFor(OWNER, 1)]));
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(50_000_000n);
+    expect(row.aboveSince).toBe(1_700_000_000n);
+  });
+
+  it("a compounded JackpotPaid adds to Principal; an uncompounded one is ignored", async () => {
+    await seedReferral({ principal: 40_000_000n });
+    await indexer.ingestLogs(
+      batch("sig-jackpot-un", 1n, [jackpotPaidFor(OWNER, 20_000_000, false)]),
+    );
+    expect((await prisma.referral.findUniqueOrThrow({ where: { referee } })).principal).toBe(
+      40_000_000n,
+    );
+
+    await indexer.ingestLogs(batch("sig-jackpot-comp", 2n, [jackpotPaidFor(OWNER, 20_000_000, true)]));
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(60_000_000n);
+    expect(row.aboveSince).toBe(1_700_000_000n);
+  });
+
+  it("a dip then a restore in the same batch crosses twice, in order", async () => {
+    await seedReferral({ principal: 60_000_000n, aboveSince: 1_600_000_000n });
+    // One transaction's logs carry both events (e.g. a withdrawal request
+    // immediately followed, in the same batch, by a deposit): the reducer
+    // must apply them in emission order, not net them into one delta.
+    await indexer.ingestLogs(
+      batch("sig-diprestore", 1n, [
+        withdrawRequestedFor(OWNER, 15_000_000, 15_000_000),
+        depositedFor(OWNER, 25_000_000, 55_000_000, 55_000_000),
+      ]),
+    );
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(55_000_000n);
+    // The restore is what set it, at this batch's block time; a naive
+    // net-delta computation (60m -> 55m, still above) would have left the
+    // original aboveSince untouched instead of restarting the clock.
+    expect(row.aboveSince).toBe(1_700_000_000n);
+  });
+
+  it("replaying an already-ingested batch is a no-op (idempotent on the cursor)", async () => {
+    await seedReferral({ principal: 60_000_000n, aboveSince: 1_600_000_000n });
+    const withdraw = batch("sig-replay", 1n, [withdrawRequestedFor(OWNER, 20_000_000, 20_000_000)]);
+    await indexer.ingestLogs(withdraw);
+    expect(await indexer.ingestLogs(withdraw)).toBe(0);
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(40_000_000n);
+    expect(row.aboveSince).toBeNull();
   });
 });

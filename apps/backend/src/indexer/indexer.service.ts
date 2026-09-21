@@ -10,6 +10,11 @@ import { PublicKey, type ConfirmedSignatureInfo } from "@solana/web3.js";
 import bs58 from "bs58";
 
 import { generateInviteCode, INVITE_DEFAULT_USES } from "../api/invite-code";
+import {
+  applyReferralEvent,
+  type ReferralPrincipalEvent,
+  type ReferralQualificationState,
+} from "../api/referral";
 import { ChainService } from "../chain/chain.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -46,6 +51,56 @@ function eventField(event: DecodedEvent, key: string): string | undefined {
   if (typeof data !== "object" || data === null || Array.isArray(data)) return undefined;
   const value = data[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/** True boolean fields only; `eventField` is string-only and `compounded`
+ *  jsonifies as a real boolean, not a string. */
+function eventBool(event: DecodedEvent, key: string): boolean | undefined {
+  const { data } = event;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return undefined;
+  const value = data[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * The Principal-changing events ticket 07's `Referral.aboveSince` tracker
+ * needs, paired with their owner, in the batch's own emission order (a dip
+ * and a restore in one batch must be applied as two separate crossings, not
+ * collapsed into one net delta). JackpotPaid only counts when `compounded`:
+ * a House win never compounds, and an uncompounded win pays a token account
+ * instead of moving Principal.
+ */
+function referralPrincipalEvents(
+  events: readonly DecodedEvent[],
+): { owner: string; event: ReferralPrincipalEvent }[] {
+  const result: { owner: string; event: ReferralPrincipalEvent }[] = [];
+  for (const event of events) {
+    const amount = eventField(event, "amount");
+    if (event.name === "Deposited") {
+      const owner = eventField(event, "owner");
+      const principal = eventField(event, "principal");
+      if (owner !== undefined && principal !== undefined) {
+        result.push({ owner, event: { kind: "Deposited", principal: BigInt(principal) } });
+      }
+    } else if (event.name === "WithdrawRequested") {
+      const owner = eventField(event, "owner");
+      if (owner !== undefined && amount !== undefined) {
+        result.push({ owner, event: { kind: "WithdrawRequested", amount: BigInt(amount) } });
+      }
+    } else if (event.name === "YieldCredited") {
+      const owner = eventField(event, "owner");
+      if (owner !== undefined && amount !== undefined) {
+        result.push({ owner, event: { kind: "YieldCredited", amount: BigInt(amount) } });
+      }
+    } else if (event.name === "JackpotPaid" && eventBool(event, "compounded") === true) {
+      // JackpotPaid names its player `winner`, not `owner` (see refreshFromLogs).
+      const owner = eventField(event, "winner");
+      if (owner !== undefined && amount !== undefined) {
+        result.push({ owner, event: { kind: "JackpotPaid", amount: BigInt(amount) } });
+      }
+    }
+  }
+  return result;
 }
 
 /**
@@ -759,6 +814,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           .filter((owner): owner is string => owner !== undefined),
       ),
     ];
+    // ticket 07: this batch's Deposited/WithdrawRequested/YieldCredited/
+    // compounded-JackpotPaid events, in order, for whichever owners turn out
+    // to have a Referral row.
+    const referralEvents = referralPrincipalEvents(events);
 
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.event.createMany({ data: rows, skipDuplicates: true });
@@ -776,6 +835,36 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
               uses: 0,
               createdAt: nowSeconds(),
             },
+          });
+        }
+      }
+      if (referralEvents.length > 0 && created.count > 0) {
+        // `created.count === 0` means every row in this batch already
+        // existed (a replayed signature: a websocket reconnect or a
+        // catch-up overlap, see "stores each event once" above). Unlike the
+        // position-delete and invite-code create above, applying a delta
+        // twice is not naturally idempotent, so a replay must skip this
+        // block entirely rather than double-count the same Principal change.
+        //
+        // Seeded once from the DB and replayed in memory for the rest of
+        // this batch, so a referee with two Principal-changing events in one
+        // batch (a dip and a restore) chains off the first event's own
+        // result instead of the row `findMany` read before either applied.
+        const referees = [...new Set(referralEvents.map(({ owner }) => owner))];
+        const existing = await tx.referral.findMany({ where: { referee: { in: referees } } });
+        const state = new Map<string, ReferralQualificationState>(
+          existing.map((row) => [row.referee, { principal: row.principal, aboveSince: row.aboveSince }]),
+        );
+        const blockTime = batch.blockTime ?? nowSeconds();
+        for (const { owner, event } of referralEvents) {
+          const current = state.get(owner);
+          if (current === undefined) continue; // not a referee
+          state.set(owner, applyReferralEvent(current, event, blockTime));
+        }
+        for (const [referee, next] of state) {
+          await tx.referral.update({
+            where: { referee },
+            data: { principal: next.principal, aboveSince: next.aboveSince },
           });
         }
       }
