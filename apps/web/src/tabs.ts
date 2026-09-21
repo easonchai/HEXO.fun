@@ -5,6 +5,7 @@ export type Tab =
   | "VAULT"
   | "DAILY DRAW"
   | "LEADERBOARD"
+  | "REFERRALS"
   | "ABOUT";
 
 /**
@@ -30,6 +31,7 @@ const HASH_TABS: Record<string, Tab> = {
   deposit: "VAULT",
   draw: "DAILY DRAW",
   ranks: "LEADERBOARD",
+  referrals: "REFERRALS",
   about: "ABOUT",
 };
 

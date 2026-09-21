@@ -12,6 +12,7 @@ import { About } from "./screens/About.js";
 import { Dashboard } from "./screens/Dashboard.js";
 import { Home } from "./screens/Home.js";
 import { Leaderboard } from "./screens/Leaderboard.js";
+import { Referrals } from "./screens/Referrals.js";
 import { Vault, type VaultMode } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
 import { buyPosition, settlePosition } from "./actions.js";
@@ -625,6 +626,9 @@ export function App() {
         ) : null}
         {tab === "LEADERBOARD" ? (
           <Leaderboard owner={publicKey ?? undefined} />
+        ) : null}
+        {tab === "REFERRALS" ? (
+          <Referrals owner={publicKey ?? null} onConnect={() => signer.connect()} />
         ) : null}
         {tab === "ABOUT" ? <About /> : null}
       </main>

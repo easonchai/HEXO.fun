@@ -385,6 +385,43 @@ export async function redeemAccess(
   }
 }
 
+/** One owned InviteCode, reduced to what the share-link list needs. */
+export interface OwnedCodeDto {
+  code: string;
+  usesLeft: number;
+}
+
+/** One Referral row, wallet already masked server-side. */
+export interface ReferralRowDto {
+  wallet: string;
+  qualified: boolean;
+  /** Whole days left before qualifying; null while Principal has never
+   *  crossed the $50 threshold (nothing counting down yet). */
+  daysToQualify: number | null;
+}
+
+/** `GET /referrals/:wallet` (ticket 11). */
+export interface ReferralsDto {
+  ownedCodes: OwnedCodeDto[];
+  referrals: ReferralRowDto[];
+  qualifiedCount: number;
+  /** Current band's rate, in basis points; 0 below the first tier. */
+  rateBps: number;
+  /** Qualified referrals still needed to reach the next band; null at the
+   *  top band (11+). */
+  countToNextBand: number | null;
+  /** The next band's rate, in basis points; null alongside countToNextBand. */
+  nextRateBps: number | null;
+  bonusToday: string;
+  bonusYesterday: string;
+}
+
+export const fetchReferrals = (
+  baseUrl: string,
+  wallet: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<ReferralsDto>> => get<ReferralsDto>(baseUrl, `/referrals/${wallet}`, signal);
+
 export interface FaucetGrant {
   owner: string;
   tokenAccount: string;
