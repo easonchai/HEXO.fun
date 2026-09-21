@@ -368,6 +368,118 @@
       ]
     },
     {
+      "name": "buy_tickets",
+      "discriminator": [
+        48,
+        16,
+        122,
+        137,
+        24,
+        214,
+        198,
+        58
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "docs": [
+            "Must already exist: a Player only has a cap to buy against once it",
+            "holds Principal."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "owner_token",
+          "writable": true
+        },
+        {
+          "name": "jackpot_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  97,
+                  99,
+                  107,
+                  112,
+                  111,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "close_registration",
       "discriminator": [
         44,
@@ -1011,6 +1123,169 @@
       ]
     },
     {
+      "name": "fund_yield",
+      "discriminator": [
+        114,
+        176,
+        26,
+        168,
+        64,
+        230,
+        10,
+        223
+      ],
+      "accounts": [
+        {
+          "name": "source_authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "source",
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "grant_tickets",
+      "discriminator": [
+        134,
+        102,
+        146,
+        11,
+        63,
+        173,
+        148,
+        116
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "docs": [
+            "Must already exist, like `BuyTickets`': a Player only has a Principal",
+            "cap to grant against once it holds one."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "payout",
       "discriminator": [
         149,
@@ -1128,8 +1403,30 @@
           }
         },
         {
-          "name": "winner_token",
-          "writable": true
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
         },
         {
           "name": "treasury",
@@ -1322,6 +1619,7 @@
       "accounts": [
         {
           "name": "pool",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -2435,6 +2733,32 @@
       ]
     },
     {
+      "name": "TicketsBought",
+      "discriminator": [
+        204,
+        103,
+        221,
+        60,
+        70,
+        142,
+        88,
+        233
+      ]
+    },
+    {
+      "name": "TicketsGranted",
+      "discriminator": [
+        240,
+        242,
+        30,
+        236,
+        182,
+        73,
+        155,
+        215
+      ]
+    },
+    {
       "name": "WithdrawRequested",
       "discriminator": [
         114,
@@ -2458,6 +2782,32 @@
         124,
         219,
         13
+      ]
+    },
+    {
+      "name": "YieldCredited",
+      "discriminator": [
+        169,
+        232,
+        146,
+        128,
+        99,
+        163,
+        114,
+        110
+      ]
+    },
+    {
+      "name": "YieldFunded",
+      "discriminator": [
+        6,
+        69,
+        199,
+        236,
+        23,
+        178,
+        100,
+        64
       ]
     }
   ],
@@ -2691,6 +3041,31 @@
       "code": 6045,
       "name": "PayoutTimeoutNotElapsed",
       "msg": "the payout timeout has not elapsed"
+    },
+    {
+      "code": 6046,
+      "name": "HouseCannotBuyTickets",
+      "msg": "the House cannot buy tickets"
+    },
+    {
+      "code": 6047,
+      "name": "DailyBuyCapExceeded",
+      "msg": "this purchase would exceed today's cap of principal"
+    },
+    {
+      "code": 6048,
+      "name": "HouseCannotBeGranted",
+      "msg": "the House cannot receive an operator grant"
+    },
+    {
+      "code": 6049,
+      "name": "DailyPlayerGrantCapExceeded",
+      "msg": "this grant would exceed the player's daily cap of principal"
+    },
+    {
+      "code": 6050,
+      "name": "DailyPoolGrantCapExceeded",
+      "msg": "this grant would exceed the pool's daily bonus cap"
     }
   ],
   "types": [
@@ -2794,6 +3169,29 @@
           {
             "name": "payout_timeout",
             "type": "i64"
+          },
+          {
+            "name": "base_rate_bps",
+            "docs": [
+              "Base yield's APR in basis points, capped at `BPS_DENOMINATOR`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "tickets_per_usdc",
+            "docs": [
+              "Tickets credited per USDC spent in `buy_tickets`. Must be > 0."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bonus_cap_bps",
+            "docs": [
+              "Share of `total_principal`, in basis points, an operator",
+              "`grant_tickets` call may credit pool-wide per epoch. Capped at",
+              "`BPS_DENOMINATOR`."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -3006,6 +3404,15 @@
           {
             "name": "is_house",
             "type": "bool"
+          },
+          {
+            "name": "compounded",
+            "docs": [
+              "True for a non-House winner: the prize was moved into the principal",
+              "vault and added to the winner's Principal instead of paid to a token",
+              "account. Always false for a House win, which keeps its 50/30/20 split."
+            ],
+            "type": "bool"
           }
         ]
       }
@@ -3078,6 +3485,18 @@
           {
             "name": "payout_timeout",
             "type": "i64"
+          },
+          {
+            "name": "base_rate_bps",
+            "type": "u16"
+          },
+          {
+            "name": "tickets_per_usdc",
+            "type": "u16"
+          },
+          {
+            "name": "bonus_cap_bps",
+            "type": "u16"
           }
         ]
       }
@@ -3201,6 +3620,66 @@
               "cannot freeze a depositor's money."
             ],
             "type": "i64"
+          },
+          {
+            "name": "principal_acc",
+            "docs": [
+              "Σ principal × seconds within `epoch_id`. Mirrors `weight_acc` with",
+              "Principal in place of Entries."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "frozen_principal_acc",
+            "docs": [
+              "Final principal-seconds for `frozen_epoch`, set by",
+              "[`crate::touch::touch`] alongside `frozen_weight`."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "yield_epoch",
+            "docs": [
+              "The epoch Base yield was last credited for. Guards `register` against",
+              "crediting the same epoch twice, independent of `reg_epoch` (which a",
+              "zero-weight registration never sets)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bought_epoch",
+            "docs": [
+              "The epoch `bought_amount` is counted against. `buy_tickets` resets",
+              "`bought_amount` to 0 when this no longer matches the pool's current",
+              "epoch."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bought_amount",
+            "docs": [
+              "USDC spent in `buy_tickets` so far in `bought_epoch`, capped at",
+              "`principal`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bonus_epoch",
+            "docs": [
+              "The epoch `bonus_granted` is counted against. Separate from",
+              "`bought_epoch` so an operator grant and a bought-tickets purchase",
+              "don't share a cap."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bonus_granted",
+            "docs": [
+              "Tickets an operator `grant_tickets` call has credited this Player so",
+              "far in `bonus_epoch`, capped at `principal`. An admin grant does not",
+              "count against it."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3444,6 +3923,58 @@
               "not paid yet. `close_registration` snapshots the vault minus this, so",
               "the next epoch cannot take a prize the previous one still owes.",
               "Released on `payout` and on either branch of `rollover_epoch`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "base_rate_bps",
+            "docs": [
+              "Base yield's APR on time-weighted Principal, in basis points, capped",
+              "at `BPS_DENOMINATOR`. An admin parameter, so it can change without a",
+              "program upgrade."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "yield_budget",
+            "docs": [
+              "USDC already in the principal vault, earmarked for Base yield and not",
+              "yet credited to anyone. `fund_yield` raises it; `register` draws it",
+              "down and never credits past what it holds."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "tickets_per_usdc",
+            "docs": [
+              "Tickets credited per USDC spent in `buy_tickets`. An admin parameter,",
+              "always greater than zero."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bonus_cap_bps",
+            "docs": [
+              "Share of `total_principal`, in basis points, an operator",
+              "`grant_tickets` call may credit pool-wide per epoch. An admin",
+              "parameter, capped at `BPS_DENOMINATOR`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bonus_epoch",
+            "docs": [
+              "The epoch `bonus_granted` is counted against, reset the same way as",
+              "`Player.bought_epoch`/`bought_amount`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bonus_granted",
+            "docs": [
+              "Tickets an operator `grant_tickets` call has credited pool-wide so far",
+              "in `bonus_epoch`, capped at `total_principal * bonus_cap_bps /",
+              "10_000`. An admin grant does not count against it."
             ],
             "type": "u64"
           }
@@ -3840,6 +4371,75 @@
             "type": {
               "option": "i64"
             }
+          },
+          {
+            "name": "base_rate_bps",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "tickets_per_usdc",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "bonus_cap_bps",
+            "type": {
+              "option": "u16"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TicketsBought",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "usdc",
+            "type": "u64"
+          },
+          {
+            "name": "tickets",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TicketsGranted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "by_admin",
+            "docs": [
+              "True for the uncapped admin path; false for the capped operator path."
+            ],
+            "type": "bool"
           }
         ]
       }
@@ -3896,6 +4496,50 @@
           },
           {
             "name": "entries",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldCredited",
+      "docs": [
+        "`shortfall` is what `base_rate_bps` would have credited beyond what",
+        "`yield_budget` could cover, 0 when the budget paid in full."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "shortfall",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldFunded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "budget",
             "type": "u64"
           }
         ]
