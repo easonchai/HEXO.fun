@@ -17,6 +17,7 @@ use crate::events::{
     YieldFunded,
 };
 use crate::state::{Epoch, Player, Pool};
+use crate::touch::touch;
 use crate::utils;
 use crate::vrf;
 
@@ -48,6 +49,97 @@ fn yield_for(principal_seconds: u128, base_rate_bps: u16) -> Result<u64> {
         .checked_div(denominator)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
     u64::try_from(whole).map_err(|_| HexVaultError::ArithmeticOverflow.into())
+}
+
+/// Weight and principal-seconds an ended epoch owes this player, the three
+/// cases from spec §2.3. Read-only: registering never advances the player (a
+/// later deposit/withdraw/touch/credit still owns that).
+fn weight_and_principal_seconds(epoch: &Epoch, player: &Player) -> Result<(u128, u128)> {
+    if player.epoch_id == epoch.epoch_id {
+        // Not touched since the epoch ended: finish both accumulators with
+        // the same math `touch` would use at the boundary, without mutating
+        // the player (this player has not been touched since the epoch
+        // ended).
+        let tail = elapsed(player.last_update, epoch.ends_at);
+        let w = player
+            .weight_acc
+            .checked_add(weight_of(player.entries, tail)?)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        let ps = player
+            .principal_acc
+            .checked_add(weight_of(player.principal, tail)?)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        Ok((w, ps))
+    } else if player.epoch_id > epoch.epoch_id {
+        // Touched again in a later epoch before registering for this one:
+        // only the immediately-previous epoch's weight survives a touch, so
+        // this only works if that was this exact epoch.
+        require!(
+            player.frozen_epoch == epoch.epoch_id,
+            HexVaultError::FrozenEpochMismatch
+        );
+        Ok((player.frozen_weight, player.frozen_principal_acc))
+    } else {
+        // Idle through all of this epoch (and whatever came before it):
+        // Entries equalled Principal for its entire length, so weight and
+        // principal-seconds are the same figure.
+        let idle = weight_of(player.principal, elapsed(epoch.starts_at, epoch.ends_at))?;
+        Ok((idle, idle))
+    }
+}
+
+/// Credits an ended epoch's Base yield into `player.principal`, `entries`
+/// and `pool.total_principal`, clamped at `pool.yield_budget`. Returns
+/// `(credited, shortfall)`.
+///
+/// When `credited > 0`, touches the player first, on the pre-credit balance,
+/// so the credit only earns further weight and yield from the instant it
+/// lands (`now`). Without this, a later idle-epoch calculation --
+/// `register`'s own Branch A tail or Branch C idle span, or `touch`'s
+/// boundary freeze -- would read the post-credit `principal` for a span that
+/// started before the credit actually landed, over-crediting weight and
+/// yield alike. This is the same hazard `payout`'s compounding has to close
+/// by touching the winner before adding the prize.
+fn credit_yield(pool: &mut Pool, player: &mut Player, ps: u128, now: i64) -> Result<(u64, u64)> {
+    let desired = yield_for(ps, pool.base_rate_bps)?;
+    let credited = desired.min(pool.yield_budget);
+    let shortfall = desired
+        .checked_sub(credited)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+    // The House holds no Principal, so its principal-seconds (and thus its
+    // credit) is always zero; asserted rather than special-cased.
+    debug_assert!(
+        !player.is_house || credited == 0,
+        "the House cannot earn yield"
+    );
+
+    // Only touch when a credit is actually about to change `principal`: an
+    // empty budget (or the House's always-zero `ps`) mutates nothing, so
+    // there is nothing to backdate and `register` keeps its promise that a
+    // call crediting no yield never advances the player either.
+    if credited > 0 {
+        touch(player, pool, now)?;
+    }
+
+    player.principal = player
+        .principal
+        .checked_add(credited)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    player.entries = player
+        .entries
+        .checked_add(credited)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    pool.total_principal = pool
+        .total_principal
+        .checked_add(credited)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    pool.yield_budget = pool
+        .yield_budget
+        .checked_sub(credited)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+    Ok((credited, shortfall))
 }
 
 /// Most recent point of the `anchor + k * period` grid at or before `t`.
@@ -161,42 +253,11 @@ pub fn register(ctx: Context<Register>) -> Result<()> {
         HexVaultError::AlreadyRegistered
     );
 
-    // Weight and principal-seconds cases from spec §2.3, computed together
-    // since they share the same three branches. This deliberately never
-    // calls `touch`: registering only reads what the player's state
-    // implies, it does not advance it (a later deposit/withdraw/touch still
-    // owns that).
-    let (w, ps) = if player.epoch_id == epoch.epoch_id {
-        // Not touched since the epoch ended: finish both accumulators with
-        // the same math `touch` would use at the boundary, without mutating
-        // the player (this player has not been touched since the epoch
-        // ended).
-        let tail = elapsed(player.last_update, epoch.ends_at);
-        let w = player
-            .weight_acc
-            .checked_add(weight_of(player.entries, tail)?)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
-        let ps = player
-            .principal_acc
-            .checked_add(weight_of(player.principal, tail)?)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
-        (w, ps)
-    } else if player.epoch_id > epoch.epoch_id {
-        // Touched again in a later epoch before registering for this one:
-        // only the immediately-previous epoch's weight survives a touch, so
-        // this only works if that was this exact epoch.
-        require!(
-            player.frozen_epoch == epoch.epoch_id,
-            HexVaultError::FrozenEpochMismatch
-        );
-        (player.frozen_weight, player.frozen_principal_acc)
-    } else {
-        // Idle through all of this epoch (and whatever came before it):
-        // Entries equalled Principal for its entire length, so weight and
-        // principal-seconds are the same figure.
-        let idle = weight_of(player.principal, elapsed(epoch.starts_at, epoch.ends_at))?;
-        (idle, idle)
-    };
+    // Weight and principal-seconds cases from spec §2.3. This deliberately
+    // never calls `touch`: registering only reads what the player's state
+    // implies, it does not advance it (a later deposit/withdraw/touch/credit
+    // still owns that).
+    let (w, ps) = weight_and_principal_seconds(epoch, player)?;
 
     // Base yield, credited once per Player per ended epoch regardless of
     // `w`: a Player who lost every Entry in a game still owns Principal and
@@ -205,52 +266,7 @@ pub fn register(ctx: Context<Register>) -> Result<()> {
     // `register` call on such a Player would credit it twice.
     if player.yield_epoch != epoch.epoch_id {
         let now = utils::now()?;
-
-        // A Player already touched into the still-open current epoch has a
-        // live weight_acc/principal_acc mid-accrual against entries/
-        // principal. Close both out to now with the pre-credit balances
-        // first, or a later touch would apply the post-credit balances to
-        // time before the credit actually landed.
-        if player.epoch_id == pool.current_epoch_id {
-            let accrue_until = now.min(pool.current_epoch_ends_at);
-            let tail = elapsed(player.last_update, accrue_until);
-            player.weight_acc = player
-                .weight_acc
-                .checked_add(weight_of(player.entries, tail)?)
-                .ok_or(HexVaultError::ArithmeticOverflow)?;
-            player.principal_acc = player
-                .principal_acc
-                .checked_add(weight_of(player.principal, tail)?)
-                .ok_or(HexVaultError::ArithmeticOverflow)?;
-            player.last_update = now;
-        }
-
-        let desired = yield_for(ps, pool.base_rate_bps)?;
-        let credited = desired.min(pool.yield_budget);
-        let shortfall = desired
-            .checked_sub(credited)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
-
-        // The House holds no Principal, so its principal-seconds (and thus
-        // its credit) is always zero; asserted rather than special-cased.
-        debug_assert!(!player.is_house || credited == 0, "the House cannot earn yield");
-
-        player.principal = player
-            .principal
-            .checked_add(credited)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
-        player.entries = player
-            .entries
-            .checked_add(credited)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
-        pool.total_principal = pool
-            .total_principal
-            .checked_add(credited)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
-        pool.yield_budget = pool
-            .yield_budget
-            .checked_sub(credited)
-            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        let (credited, shortfall) = credit_yield(pool, player, ps, now)?;
         player.yield_epoch = epoch.epoch_id;
 
         emit!(YieldCredited {
@@ -830,7 +846,7 @@ pub struct RolloverEpoch<'info> {
 
 #[cfg(test)]
 mod tests {
-    use super::grid_floor;
+    use super::*;
 
     const HOUR: i64 = 3_600;
     const DAY: i64 = 86_400;
@@ -883,5 +899,189 @@ mod tests {
             assert_eq!(point.rem_euclid(WEEK), 316_800, "hour {hour} left Sunday");
             assert!(point <= t && t - point < WEEK, "hour {hour} is not the floor");
         }
+    }
+
+    // --- `weight_and_principal_seconds` / `credit_yield` (hexo-referrals
+    // ticket 02): ticket 01 only closed the retroactive-attribution gap for
+    // a player already touched into the pool's current epoch. These check
+    // the idle-player path ticket 01 left open.
+
+    fn pool_at(id: u64, start: i64, base_rate_bps: u16, yield_budget: u64) -> Pool {
+        Pool {
+            pool_id: 1,
+            admin: Pubkey::default(),
+            operator: Pubkey::default(),
+            pending_admin: Pubkey::default(),
+            accepted_mint: Pubkey::default(),
+            principal_vault: Pubkey::default(),
+            jackpot_vault: Pubkey::default(),
+            treasury: Pubkey::default(),
+            buyback_reserve: Pubkey::default(),
+            house: Pubkey::default(),
+            vrf_network_state: Pubkey::default(),
+            epoch_seconds: DAY,
+            epoch_anchor: 1,
+            round_seconds: 60,
+            close_buffer: 5,
+            vrf_timeout: 120,
+            min_deposit: 1,
+            house_cut_bps: 0,
+            paused: false,
+            current_epoch_id: id,
+            current_epoch_start: start,
+            current_epoch_ends_at: start + DAY,
+            previous_epoch_start: start - DAY,
+            previous_epoch_ends_at: start,
+            next_round_id: 1,
+            open_round_id: 0,
+            carry_pot: 0,
+            total_principal: 0,
+            bump: 0,
+            principal_vault_bump: 0,
+            jackpot_vault_bump: 0,
+            pending_withdrawals: 0,
+            min_jackpot: 1_000_000,
+            registration_window: 0,
+            payout_timeout: DAY,
+            jackpot_reserved: 0,
+            base_rate_bps,
+            yield_budget,
+        }
+    }
+
+    fn epoch_at(epoch_id: u64, starts_at: i64, ends_at: i64) -> Epoch {
+        Epoch {
+            epoch_id,
+            starts_at,
+            ends_at,
+            status: epoch_status::REGISTERING,
+            registered_weight: 0,
+            registered_count: 0,
+            jackpot_amount: 0,
+            vrf_seed: [0u8; 32],
+            requested_at: 0,
+            target: 0,
+            winner: Pubkey::default(),
+            bump: 0,
+            drawn_at: 0,
+            registration_opened_at: 0,
+        }
+    }
+
+    fn player(principal: u64, entries: u64, epoch_id: u64, last_update: i64) -> Player {
+        Player {
+            owner: Pubkey::new_unique(),
+            principal,
+            entries,
+            weight_acc: 0,
+            last_update,
+            epoch_id,
+            frozen_weight: 0,
+            frozen_epoch: 0,
+            reg_epoch: 0,
+            reg_start: 0,
+            reg_end: 0,
+            is_house: false,
+            bump: 0,
+            pending_withdraw: 0,
+            pending_epoch: 0,
+            requested_at: 0,
+            principal_acc: 0,
+            frozen_principal_acc: 0,
+            yield_epoch: 0,
+        }
+    }
+
+    #[test]
+    fn credit_yield_touches_before_crediting_so_a_later_idle_span_does_not_backdate_it() {
+        // A player idle since before epoch 1 is credited by `register(1)` a
+        // little late (100s into epoch 2, as a delayed operator crank would
+        // run it), then never touched before `register(2)` reads epoch 2's
+        // idle span. Without touching the player at credit time (ticket 01
+        // only did this when the player was already touched into the pool's
+        // current epoch), that idle span treats the epoch-1 credit as if it
+        // had sat in `principal` since epoch 2's own start, over-counting
+        // principal-seconds -- and therefore weight and yield -- by
+        // `credited * 100`.
+        let principal: u64 = 1_000_000_000;
+        let epoch1 = epoch_at(1, 0, DAY);
+        let mut p = player(principal, principal, 0, 0);
+
+        let (_, ps1) = weight_and_principal_seconds(&epoch1, &p).expect("epoch 1 ps");
+        assert_eq!(
+            ps1,
+            u128::from(principal) * DAY as u128,
+            "idle for all of epoch 1"
+        );
+
+        let mut pool = pool_at(2, DAY, 488, u64::MAX);
+        let credit_at = DAY + 100; // 100s into epoch 2: the crank ran late
+        let (credited1, shortfall1) =
+            credit_yield(&mut pool, &mut p, ps1, credit_at).expect("credit 1");
+        assert_eq!(shortfall1, 0);
+        assert!(
+            credited1 > 0,
+            "the rate and span must actually earn something"
+        );
+        assert_eq!(
+            p.epoch_id, 2,
+            "touch rolled the player into the pool's current epoch"
+        );
+        assert_eq!(p.last_update, credit_at);
+
+        // Epoch 2 is later registered once it, too, has ended.
+        let epoch2 = epoch_at(2, DAY, 2 * DAY);
+        let (_, ps2) = weight_and_principal_seconds(&epoch2, &p).expect("epoch 2 ps");
+
+        let post_credit_principal = u128::from(principal) + u128::from(credited1);
+        let correct = u128::from(principal) * 100 + post_credit_principal * (DAY as u128 - 100);
+        let backdated = post_credit_principal * DAY as u128; // the over-count this test guards against
+
+        assert_eq!(
+            ps2, correct,
+            "only the time after the credit landed may use the larger, post-credit balance"
+        );
+        assert!(
+            ps2 < backdated,
+            "must not attribute the epoch-1 credit to time before it landed in epoch 2"
+        );
+    }
+
+    #[test]
+    fn credit_yield_never_credits_the_house() {
+        let epoch1 = epoch_at(1, 0, DAY);
+        let mut house = player(0, 0, 0, 0);
+        house.is_house = true;
+
+        let (_, ps) = weight_and_principal_seconds(&epoch1, &house).expect("epoch 1 ps");
+        assert_eq!(ps, 0, "the House holds no Principal");
+
+        let mut pool = pool_at(2, DAY, 488, u64::MAX);
+        let (credited, shortfall) =
+            credit_yield(&mut pool, &mut house, ps, DAY + 1).expect("credit");
+        assert_eq!(credited, 0);
+        assert_eq!(shortfall, 0);
+        assert_eq!(house.principal, 0);
+    }
+
+    #[test]
+    fn credit_yield_does_not_touch_when_the_budget_credits_nothing() {
+        // register() must stay read-only for a Player whose credit is 0 (an
+        // empty budget): a later natural touch (deposit/withdraw) still owns
+        // rolling epoch_id/weight_acc forward, exactly as it does for a
+        // Player earning no yield at all.
+        let principal: u64 = 1_000_000_000;
+        let epoch1 = epoch_at(1, 0, DAY);
+        let mut p = player(principal, principal, 0, 0);
+
+        let (_, ps1) = weight_and_principal_seconds(&epoch1, &p).expect("epoch 1 ps");
+        let mut pool = pool_at(2, DAY, 488, 0); // empty budget
+        let (credited, shortfall) =
+            credit_yield(&mut pool, &mut p, ps1, DAY + 100).expect("credit");
+
+        assert_eq!(credited, 0);
+        assert!(shortfall > 0);
+        assert_eq!(p.epoch_id, 0, "untouched: nothing was actually credited");
+        assert_eq!(p.last_update, 0);
     }
 }
