@@ -7,10 +7,14 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
-use crate::constants::{epoch_status, SEED_EPOCH, SEED_JACKPOT, SEED_PLAYER, SEED_POOL};
+use crate::constants::{
+    epoch_status, BPS_DENOMINATOR, SECONDS_PER_YEAR, SEED_EPOCH, SEED_JACKPOT, SEED_PLAYER,
+    SEED_POOL, SEED_PRINCIPAL,
+};
 use crate::errors::HexVaultError;
 use crate::events::{
-    EpochBegan, EpochDrawn, EpochRolledOver, JackpotFunded, JackpotPaid, Registered,
+    EpochBegan, EpochDrawn, EpochRolledOver, JackpotFunded, JackpotPaid, Registered, YieldCredited,
+    YieldFunded,
 };
 use crate::state::{Epoch, Player, Pool};
 use crate::utils;
@@ -27,6 +31,23 @@ fn weight_of(entries: u64, seconds: u128) -> Result<u128> {
     u128::from(entries)
         .checked_mul(seconds)
         .ok_or_else(|| HexVaultError::ArithmeticOverflow.into())
+}
+
+/// `principal_seconds × base_rate_bps / (10_000 × seconds_per_year)`, the
+/// Base yield an ended epoch's principal-seconds earns before the budget
+/// clamp. Floors like any integer division, so a span too short to earn a
+/// whole atomic unit earns zero rather than rounding up.
+fn yield_for(principal_seconds: u128, base_rate_bps: u16) -> Result<u64> {
+    let numerator = principal_seconds
+        .checked_mul(u128::from(base_rate_bps))
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    let denominator = u128::from(BPS_DENOMINATOR)
+        .checked_mul(SECONDS_PER_YEAR)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    let whole = numerator
+        .checked_div(denominator)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    u64::try_from(whole).map_err(|_| HexVaultError::ArithmeticOverflow.into())
 }
 
 /// Most recent point of the `anchor + k * period` grid at or before `t`.
@@ -123,7 +144,7 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
 }
 
 pub fn register(ctx: Context<Register>) -> Result<()> {
-    let pool = &ctx.accounts.pool;
+    let pool = &mut ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
     let player = &mut ctx.accounts.player;
 
@@ -140,20 +161,26 @@ pub fn register(ctx: Context<Register>) -> Result<()> {
         HexVaultError::AlreadyRegistered
     );
 
-    // Weight cases from spec §2.3. This deliberately never calls `touch`:
-    // registering only reads what the player's state implies, it does not
-    // advance it (a later deposit/withdraw/touch still owns that).
-    let w = if player.epoch_id == epoch.epoch_id {
-        // Not touched since the epoch ended: finish its accumulator with the
-        // same math `touch` would use at the boundary, without mutating the
-        // player (this player has not been touched since the epoch ended).
-        player
+    // Weight and principal-seconds cases from spec §2.3, computed together
+    // since they share the same three branches. This deliberately never
+    // calls `touch`: registering only reads what the player's state
+    // implies, it does not advance it (a later deposit/withdraw/touch still
+    // owns that).
+    let (w, ps) = if player.epoch_id == epoch.epoch_id {
+        // Not touched since the epoch ended: finish both accumulators with
+        // the same math `touch` would use at the boundary, without mutating
+        // the player (this player has not been touched since the epoch
+        // ended).
+        let tail = elapsed(player.last_update, epoch.ends_at);
+        let w = player
             .weight_acc
-            .checked_add(weight_of(
-                player.entries,
-                elapsed(player.last_update, epoch.ends_at),
-            )?)
-            .ok_or(HexVaultError::ArithmeticOverflow)?
+            .checked_add(weight_of(player.entries, tail)?)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        let ps = player
+            .principal_acc
+            .checked_add(weight_of(player.principal, tail)?)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        (w, ps)
     } else if player.epoch_id > epoch.epoch_id {
         // Touched again in a later epoch before registering for this one:
         // only the immediately-previous epoch's weight survives a touch, so
@@ -162,12 +189,77 @@ pub fn register(ctx: Context<Register>) -> Result<()> {
             player.frozen_epoch == epoch.epoch_id,
             HexVaultError::FrozenEpochMismatch
         );
-        player.frozen_weight
+        (player.frozen_weight, player.frozen_principal_acc)
     } else {
         // Idle through all of this epoch (and whatever came before it):
-        // Entries equalled Principal for its entire length.
-        weight_of(player.principal, elapsed(epoch.starts_at, epoch.ends_at))?
+        // Entries equalled Principal for its entire length, so weight and
+        // principal-seconds are the same figure.
+        let idle = weight_of(player.principal, elapsed(epoch.starts_at, epoch.ends_at))?;
+        (idle, idle)
     };
+
+    // Base yield, credited once per Player per ended epoch regardless of
+    // `w`: a Player who lost every Entry in a game still owns Principal and
+    // still earns yield on it. Guarded separately from `reg_epoch`, which a
+    // zero-weight registration below never sets, or a second permissionless
+    // `register` call on such a Player would credit it twice.
+    if player.yield_epoch != epoch.epoch_id {
+        let now = utils::now()?;
+
+        // A Player already touched into the still-open current epoch has a
+        // live weight_acc/principal_acc mid-accrual against entries/
+        // principal. Close both out to now with the pre-credit balances
+        // first, or a later touch would apply the post-credit balances to
+        // time before the credit actually landed.
+        if player.epoch_id == pool.current_epoch_id {
+            let accrue_until = now.min(pool.current_epoch_ends_at);
+            let tail = elapsed(player.last_update, accrue_until);
+            player.weight_acc = player
+                .weight_acc
+                .checked_add(weight_of(player.entries, tail)?)
+                .ok_or(HexVaultError::ArithmeticOverflow)?;
+            player.principal_acc = player
+                .principal_acc
+                .checked_add(weight_of(player.principal, tail)?)
+                .ok_or(HexVaultError::ArithmeticOverflow)?;
+            player.last_update = now;
+        }
+
+        let desired = yield_for(ps, pool.base_rate_bps)?;
+        let credited = desired.min(pool.yield_budget);
+        let shortfall = desired
+            .checked_sub(credited)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+        // The House holds no Principal, so its principal-seconds (and thus
+        // its credit) is always zero; asserted rather than special-cased.
+        debug_assert!(!player.is_house || credited == 0, "the House cannot earn yield");
+
+        player.principal = player
+            .principal
+            .checked_add(credited)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        player.entries = player
+            .entries
+            .checked_add(credited)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        pool.total_principal = pool
+            .total_principal
+            .checked_add(credited)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        pool.yield_budget = pool
+            .yield_budget
+            .checked_sub(credited)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        player.yield_epoch = epoch.epoch_id;
+
+        emit!(YieldCredited {
+            epoch_id: epoch.epoch_id,
+            owner: player.owner,
+            amount: credited,
+            shortfall,
+        });
+    }
 
     if w == 0 {
         return Ok(());
@@ -215,6 +307,37 @@ pub fn fund_jackpot(ctx: Context<FundJackpot>, amount: u64) -> Result<()> {
     emit!(JackpotFunded {
         source: ctx.accounts.source.key(),
         amount,
+    });
+    Ok(())
+}
+
+/// Raises `yield_budget` by moving real USDC into the principal vault.
+/// Permissionless like `fund_jackpot`: anyone can top up what Base yield
+/// draws down.
+pub fn fund_yield(ctx: Context<FundYield>, amount: u64) -> Result<()> {
+    token_interface::transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.source.to_account_info(),
+                mint: ctx.accounts.accepted_mint.to_account_info(),
+                to: ctx.accounts.principal_vault.to_account_info(),
+                authority: ctx.accounts.source_authority.to_account_info(),
+            },
+        ),
+        amount,
+        ctx.accounts.accepted_mint.decimals,
+    )?;
+
+    let pool = &mut ctx.accounts.pool;
+    pool.yield_budget = pool
+        .yield_budget
+        .checked_add(amount)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+    emit!(YieldFunded {
+        amount,
+        budget: pool.yield_budget,
     });
     Ok(())
 }
@@ -489,7 +612,7 @@ pub struct BeginEpoch<'info> {
 
 #[derive(Accounts)]
 pub struct Register<'info> {
-    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
     pub pool: Account<'info, Pool>,
 
     #[account(
@@ -527,6 +650,30 @@ pub struct FundJackpot<'info> {
         bump = pool.jackpot_vault_bump,
     )]
     pub jackpot_vault: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct FundYield<'info> {
+    #[account(mut)]
+    pub source_authority: Signer<'info>,
+
+    #[account(mut, seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    #[account(address = pool.accepted_mint @ HexVaultError::MintMismatch)]
+    pub accepted_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(mut, token::mint = pool.accepted_mint, token::authority = source_authority)]
+    pub source: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [SEED_PRINCIPAL, pool.key().as_ref()],
+        bump = pool.principal_vault_bump,
+    )]
+    pub principal_vault: InterfaceAccount<'info, TokenAccount>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }

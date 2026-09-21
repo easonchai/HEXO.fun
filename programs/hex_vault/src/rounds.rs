@@ -479,6 +479,9 @@ pub struct RequestRoundRandomness<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// Boxed: unboxed, this struct's `try_accounts` overflows the BPF stack frame
+// (Pool, Round's 36-tile array and Player combined), the same issue
+// `Payout` in `epochs.rs` already works around.
 #[derive(Accounts)]
 pub struct SettleRound<'info> {
     pub operator: Signer<'info>,
@@ -489,14 +492,14 @@ pub struct SettleRound<'info> {
         bump = pool.bump,
         has_one = operator,
     )]
-    pub pool: Account<'info, Pool>,
+    pub pool: Box<Account<'info, Pool>>,
 
     #[account(
         mut,
         seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
         bump = round.bump,
     )]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
 
     /// CHECK: ORAO randomness account for this round's seed, verified
     /// against `vrf::randomness_address` (via `vrf::read_fulfilled`).
@@ -508,7 +511,7 @@ pub struct SettleRound<'info> {
         bump = house.bump,
         constraint = house.key() == pool.house @ HexVaultError::InvalidParameter,
     )]
-    pub house: Account<'info, Player>,
+    pub house: Box<Account<'info, Player>>,
 }
 
 #[derive(Accounts)]

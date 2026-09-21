@@ -45,6 +45,7 @@ pub struct ParamsSet {
     pub min_jackpot: u64,
     pub registration_window: i64,
     pub payout_timeout: i64,
+    pub base_rate_bps: u16,
 }
 
 #[event]
@@ -174,4 +175,20 @@ pub struct JackpotPaid {
 pub struct EpochRolledOver {
     pub epoch_id: u64,
     pub jackpot_amount: u64,
+}
+
+#[event]
+pub struct YieldFunded {
+    pub amount: u64,
+    pub budget: u64,
+}
+
+/// `shortfall` is what `base_rate_bps` would have credited beyond what
+/// `yield_budget` could cover, 0 when the budget paid in full.
+#[event]
+pub struct YieldCredited {
+    pub epoch_id: u64,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub shortfall: u64,
 }

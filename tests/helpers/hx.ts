@@ -244,6 +244,10 @@ export interface PoolParamsOverrides {
   /** Seconds a Drawn epoch waits for its payout before `rollover_epoch` will
    * take it. Defaults to a day, well past any test's run. */
   payoutTimeout?: number;
+  /** Base yield's APR in basis points. Defaults to the bootstrap rate
+   * (~5% APY with daily compounding); `yield_budget` starts at 0 regardless,
+   * so no test is credited yield unless it also calls `fund_yield`. */
+  baseRateBps?: number;
   /** Reuse an existing mint instead of creating a fresh one (e.g. to test
    * two pools sharing an accepted asset). The caller must not rely on this
    * pool's operator being the mint authority when a shared mint is passed. */
@@ -261,6 +265,7 @@ const DEFAULT_PARAMS = {
   minJackpot: 0,
   registrationWindow: 0,
   payoutTimeout: 86_400,
+  baseRateBps: 488, // spec §7: ~5% APY with daily compounding
 };
 
 export interface PoolCtx {
@@ -280,6 +285,7 @@ export interface PoolCtx {
   house: PublicKey;
   minDeposit: bigint;
   houseCutBps: number;
+  baseRateBps: number;
   /** A fresh funded keypair with `amount` hexUSDC already in its ATA. */
   fundedWallet(amount: bigint): Promise<{ keypair: Keypair; tokenAccount: PublicKey }>;
 }
@@ -341,6 +347,7 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       minJackpot: new BN(params.minJackpot),
       registrationWindow: new BN(params.registrationWindow),
       payoutTimeout: new BN(params.payoutTimeout),
+      baseRateBps: params.baseRateBps,
     })
     .accountsPartial({
       payer: operator.publicKey,
@@ -382,6 +389,7 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
     house,
     minDeposit: BigInt(params.minDeposit),
     houseCutBps: params.houseCutBps,
+    baseRateBps: params.baseRateBps,
     fundedWallet,
   };
 }

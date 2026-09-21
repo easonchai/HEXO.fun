@@ -39,6 +39,8 @@ pub struct CreatePoolParams {
     pub min_jackpot: u64,
     pub registration_window: i64,
     pub payout_timeout: i64,
+    /// Base yield's APR in basis points, capped at `BPS_DENOMINATOR`.
+    pub base_rate_bps: u16,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
@@ -53,6 +55,7 @@ pub struct SetParamsArgs {
     pub min_jackpot: Option<u64>,
     pub registration_window: Option<i64>,
     pub payout_timeout: Option<i64>,
+    pub base_rate_bps: Option<u16>,
 }
 
 pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result<()> {
@@ -75,6 +78,10 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     );
     require!(
         params.house_cut_bps <= BPS_DENOMINATOR,
+        HexVaultError::InvalidParameter
+    );
+    require!(
+        params.base_rate_bps <= BPS_DENOMINATOR,
         HexVaultError::InvalidParameter
     );
     require!(
@@ -117,6 +124,8 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.payout_timeout = params.payout_timeout;
     pool.pending_withdrawals = 0;
     pool.jackpot_reserved = 0;
+    pool.base_rate_bps = params.base_rate_bps;
+    pool.yield_budget = 0;
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
@@ -205,6 +214,10 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         require!(v > 0, HexVaultError::InvalidParameter);
         pool.payout_timeout = v;
     }
+    if let Some(v) = params.base_rate_bps {
+        require!(v <= BPS_DENOMINATOR, HexVaultError::InvalidParameter);
+        pool.base_rate_bps = v;
+    }
     // Checked on the result rather than in the branch above, so shortening
     // `epoch_seconds` in the same call cannot leave a window that swallows a
     // whole epoch, whichever of the two the caller passes.
@@ -225,6 +238,7 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         min_jackpot: pool.min_jackpot,
         registration_window: pool.registration_window,
         payout_timeout: pool.payout_timeout,
+        base_rate_bps: pool.base_rate_bps,
     });
     Ok(())
 }

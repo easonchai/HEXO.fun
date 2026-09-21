@@ -131,9 +131,25 @@ async function setParams(pool: PoolCtx, epochSeconds: number) {
       minJackpot: null,
       registrationWindow: null,
       payoutTimeout: null,
+      baseRateBps: null,
     })
     .accountsPartial({ admin: pool.admin.publicKey, pool: pool.pool })
     .signers([pool.admin])
+    .rpc();
+}
+
+async function fundYield(pool: PoolCtx, source: Wallet, amount: bigint) {
+  return program.methods
+    .fundYield(new BN(amount.toString()))
+    .accountsPartial({
+      sourceAuthority: source.keypair.publicKey,
+      pool: pool.pool,
+      acceptedMint: pool.mint,
+      source: source.tokenAccount,
+      principalVault: pool.principalVault,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .signers([source.keypair])
     .rpc();
 }
 
@@ -1326,6 +1342,147 @@ describe("epochs", () => {
 
       const event = await findEvent<{ carryPot: BN }>(sig, "roundVoided");
       expect(event?.carryPot.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  // --- Base yield (hexo-referrals ticket 01, ADR 0011). `register` credits
+  // `min(principal_seconds * base_rate_bps / (10_000 * year), yield_budget)`
+  // once per Player per ended epoch, guarded by `yield_epoch` independent of
+  // `reg_epoch` (a zero-weight registration never sets that one).
+
+  it(
+    "the House earns no yield despite a funded budget, and a second register on the same zero-weight Player emits no further credit",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 5, baseRateBps: 488 });
+      const funder = await pool.fundedWallet(10_000_000n);
+      await fundYield(pool, funder, 10_000_000n);
+
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch1 -> Registering, epoch 2 open
+
+      // The House never held Principal (no round ran either, so it never
+      // held Entries from a forfeit), so this is the idle branch at
+      // principal 0: w == ps == 0, deterministically, no round timing needed.
+      const sig1 = await register(pool, 1n, pool.operator.publicKey);
+      const event1 = await findEvent<{
+        epochId: BN;
+        owner: PublicKey;
+        amount: BN;
+        shortfall: BN;
+      }>(sig1, "yieldCredited");
+      expect(event1?.epochId.toString()).toBe("1");
+      expect(event1?.owner.toString()).toBe(pool.operator.publicKey.toString());
+      expect(event1?.amount.toString()).toBe("0");
+      expect(event1?.shortfall.toString()).toBe("0");
+
+      const houseAfterFirst = await fetchPlayer(pool, pool.operator.publicKey);
+      expect(houseAfterFirst.yieldEpoch.toString()).toBe("1");
+      expect(houseAfterFirst.principal.toString()).toBe("0");
+
+      // w == 0 means `register` never set `reg_epoch`, so a second call is
+      // still permitted; `yield_epoch` alone must stop a second credit.
+      const sig2 = await register(pool, 1n, pool.operator.publicKey);
+      const event2 = await findEvent(sig2, "yieldCredited");
+      expect(event2, "the yield_epoch guard skips the block entirely").toBeUndefined();
+
+      const houseAfterSecond = await fetchPlayer(pool, pool.operator.publicKey);
+      expect(houseAfterSecond.principal.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "register credits Base yield on time-weighted Principal for an idle depositor, funded by a non-admin fund_yield",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 6, baseRateBps: 488 });
+      const a = await pool.fundedWallet(20_000_000_000n);
+      const funder = await pool.fundedWallet(10_000_000_000n); // not pool.admin
+
+      await deposit(pool, a, 10_000_000_000n);
+
+      const fundSig = await fundYield(pool, funder, 5_000_000_000n);
+      const fundEvent = await findEvent<{ amount: BN; budget: BN }>(fundSig, "yieldFunded");
+      expect(fundEvent?.amount.toString()).toBe("5000000000");
+      expect(fundEvent?.budget.toString()).toBe("5000000000");
+      const vaultAfterFund = await program.provider.connection.getTokenAccountBalance(
+        pool.principalVault,
+      );
+      expect(vaultAfterFund.value.amount).toBe("15000000000"); // the deposit plus the fund
+
+      await beginEpoch(pool, 0n); // epoch 1 open, a idle throughout (deposited before it opened)
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch1 -> Registering, epoch 2 open
+
+      const epoch1 = await fetchEpoch(pool, 1n);
+      const epochLen = BigInt(epoch1.endsAt.toString()) - BigInt(epoch1.startsAt.toString());
+      const ps = 10_000_000_000n * epochLen;
+      const expectedCredit = (ps * 488n) / (10_000n * 31_536_000n);
+      expect(expectedCredit > 0n).toBe(true);
+
+      const poolBefore = await program.account.pool.fetch(pool.pool);
+
+      const sig = await register(pool, 1n, a.keypair.publicKey);
+      const event = await findEvent<{
+        epochId: BN;
+        owner: PublicKey;
+        amount: BN;
+        shortfall: BN;
+      }>(sig, "yieldCredited");
+      expect(event?.amount.toString()).toBe(expectedCredit.toString());
+      expect(event?.shortfall.toString()).toBe("0");
+
+      const playerAfter = await fetchPlayer(pool, a.keypair.publicKey);
+      expect(BigInt(playerAfter.principal.toString())).toBe(10_000_000_000n + expectedCredit);
+      expect(BigInt(playerAfter.entries.toString())).toBe(10_000_000_000n + expectedCredit);
+      expect(playerAfter.yieldEpoch.toString()).toBe("1");
+
+      const poolAfter = await program.account.pool.fetch(pool.pool);
+      expect(BigInt(poolAfter.totalPrincipal.toString())).toBe(
+        BigInt(poolBefore.totalPrincipal.toString()) + expectedCredit,
+      );
+      expect(BigInt(poolAfter.yieldBudget.toString())).toBe(5_000_000_000n - expectedCredit);
+
+      // The registered weight itself used the pre-credit Principal: the
+      // credit lands after `w`/`ps` are read, so it cannot inflate the
+      // lottery weight this same epoch already committed.
+      const registeredWeight =
+        BigInt(playerAfter.regEnd.toString()) - BigInt(playerAfter.regStart.toString());
+      expect(registeredWeight).toBe(ps);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "an empty yield budget credits 0 and reports the full shortfall, without blocking registration",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 6, baseRateBps: 488 });
+      const a = await pool.fundedWallet(20_000_000_000n);
+      await deposit(pool, a, 10_000_000_000n); // before epoch 1 opens: idle branch
+
+      await beginEpoch(pool, 0n);
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+
+      const epoch1 = await fetchEpoch(pool, 1n);
+      const epochLen = BigInt(epoch1.endsAt.toString()) - BigInt(epoch1.startsAt.toString());
+      const ps = 10_000_000_000n * epochLen;
+      const expectedDesired = (ps * 488n) / (10_000n * 31_536_000n);
+      expect(expectedDesired > 0n).toBe(true);
+
+      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
+
+      const sig = await register(pool, 1n, a.keypair.publicKey);
+      const event = await findEvent<{ amount: BN; shortfall: BN }>(sig, "yieldCredited");
+      expect(event?.amount.toString()).toBe("0");
+      expect(event?.shortfall.toString()).toBe(expectedDesired.toString());
+
+      const playerAfter = await fetchPlayer(pool, a.keypair.publicKey);
+      expect(playerAfter.principal.toString()).toBe("10000000000");
+      expect(playerAfter.regEpoch.toString()).toBe("1");
+      const registeredWeight =
+        BigInt(playerAfter.regEnd.toString()) - BigInt(playerAfter.regStart.toString());
+      expect(registeredWeight).toBe(ps);
+
+      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
     },
     TIMEOUT,
   );

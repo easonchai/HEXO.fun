@@ -568,6 +568,7 @@ const NO_PARAMS = {
   minJackpot: null,
   registrationWindow: null,
   payoutTimeout: null,
+  baseRateBps: null,
 };
 
 /** A funded throwaway key. The `init` accounts on the operator-gated
@@ -905,6 +906,7 @@ describe("create_pool guards", () => {
     minJackpot: new BN(0),
     registrationWindow: new BN(600),
     payoutTimeout: new BN(86_400),
+    baseRateBps: 488,
     ...over,
   });
 

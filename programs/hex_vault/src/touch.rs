@@ -48,12 +48,14 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
         } else {
             now.min(pool.current_epoch_ends_at)
         };
+        let tail = elapsed(player.last_update, accrue_until);
         player.weight_acc = player
             .weight_acc
-            .checked_add(weight_of(
-                player.entries,
-                elapsed(player.last_update, accrue_until),
-            )?)
+            .checked_add(weight_of(player.entries, tail)?)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        player.principal_acc = player
+            .principal_acc
+            .checked_add(weight_of(player.principal, tail)?)
             .ok_or(HexVaultError::ArithmeticOverflow)?;
         player.last_update = now;
         return Ok(());
@@ -65,24 +67,29 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
     // leaves one nobody accrues in.
     let previous_ends_at = pool.previous_epoch_ends_at;
 
-    player.frozen_weight = if player.epoch_id == previous_epoch_id {
-        // Acted during the previous epoch: finish its accumulator at the
+    if player.epoch_id == previous_epoch_id {
+        // Acted during the previous epoch: finish both accumulators at the
         // instant the epoch ended.
-        player
+        let tail = elapsed(player.last_update, previous_ends_at);
+        player.frozen_weight = player
             .weight_acc
-            .checked_add(weight_of(
-                player.entries,
-                elapsed(player.last_update, previous_ends_at),
-            )?)
-            .ok_or(HexVaultError::ArithmeticOverflow)?
+            .checked_add(weight_of(player.entries, tail)?)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        player.frozen_principal_acc = player
+            .principal_acc
+            .checked_add(weight_of(player.principal, tail)?)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
     } else {
         // Idle through the whole previous epoch, so Entries equalled
-        // Principal for every second of it.
-        weight_of(
+        // Principal for every second of it: weight and principal-seconds
+        // are the same figure.
+        let idle = weight_of(
             player.principal,
             elapsed(pool.previous_epoch_start, previous_ends_at),
-        )?
-    };
+        )?;
+        player.frozen_weight = idle;
+        player.frozen_principal_acc = idle;
+    }
     player.frozen_epoch = previous_epoch_id;
 
     player.entries = player.principal;
@@ -90,10 +97,12 @@ pub fn touch(player: &mut Player, pool: &Pool, now: i64) -> Result<()> {
     // epoch's `ends_at`: a late `begin_epoch` must not let this
     // initialisation credit more than the new epoch's own length either.
     let new_ends_at = pool.current_epoch_ends_at;
-    player.weight_acc = weight_of(
+    let head = weight_of(
         player.principal,
         elapsed(pool.current_epoch_start, now.min(new_ends_at)),
     )?;
+    player.weight_acc = head;
+    player.principal_acc = head;
     player.last_update = now;
     player.epoch_id = pool.current_epoch_id;
     Ok(())
@@ -145,6 +154,8 @@ mod tests {
             registration_window: 0,
             payout_timeout: DAY,
             jackpot_reserved: 0,
+            base_rate_bps: 0,
+            yield_budget: 0,
         }
     }
 
@@ -166,6 +177,9 @@ mod tests {
             pending_withdraw: 0,
             pending_epoch: 0,
             requested_at: 0,
+            principal_acc: 0,
+            frozen_principal_acc: 0,
+            yield_epoch: 0,
         }
     }
 
@@ -176,13 +190,49 @@ mod tests {
 
         touch(&mut p, &pool, 1_060).expect("touch");
         assert_eq!(p.weight_acc, 100 * 60);
+        assert_eq!(p.principal_acc, 100 * 60);
         assert_eq!(p.last_update, 1_060);
 
         // Accrual is incremental, not recomputed from the epoch start.
         touch(&mut p, &pool, 1_100).expect("touch");
         assert_eq!(p.weight_acc, 100 * 100);
+        assert_eq!(p.principal_acc, 100 * 100);
         assert_eq!(p.epoch_id, 3);
         assert_eq!(p.frozen_weight, 0, "no boundary crossed, nothing frozen");
+    }
+
+    #[test]
+    fn principal_acc_tracks_a_mid_epoch_deposit_like_weight_acc_tracks_entries() {
+        // Mirrors what `deposit` does: touch first (accruing at the old
+        // balance), then the caller adds to principal and entries. The next
+        // touch must only credit the larger balance from that point on.
+        let pool = pool_at(3, 1_000);
+        let mut p = player(100, 100, 3, 1_000);
+
+        touch(&mut p, &pool, 1_060).expect("touch");
+        p.principal += 50;
+        p.entries += 50;
+
+        touch(&mut p, &pool, 1_100).expect("touch");
+        assert_eq!(p.principal_acc, 100 * 60 + 150 * 40);
+        assert_eq!(p.weight_acc, 100 * 60 + 150 * 40);
+    }
+
+    #[test]
+    fn principal_acc_tracks_a_mid_epoch_withdraw_request() {
+        // Mirrors what `request_withdraw` does: touch first, then principal
+        // (and here entries too) drop. principal_acc must credit the smaller
+        // balance only from the moment of the withdrawal onward.
+        let pool = pool_at(3, 1_000);
+        let mut p = player(100, 100, 3, 1_000);
+
+        touch(&mut p, &pool, 1_060).expect("touch");
+        p.principal -= 40;
+        p.entries -= 40;
+
+        touch(&mut p, &pool, 1_100).expect("touch");
+        assert_eq!(p.principal_acc, 100 * 60 + 60 * 40);
+        assert_eq!(p.weight_acc, 100 * 60 + 60 * 40);
     }
 
     #[test]
@@ -198,6 +248,7 @@ mod tests {
         touch(&mut p, &pool, 1_000 + DAY + 500).expect("touch");
 
         assert_eq!(p.weight_acc, 100 * DAY as u128, "accrual stops at ends_at");
+        assert_eq!(p.principal_acc, 100 * DAY as u128, "principal_acc clamps too");
         assert_eq!(p.last_update, 1_000 + DAY + 500, "the clock itself still advances");
         assert_eq!(p.epoch_id, 3, "pool hasn't rolled over yet");
 
@@ -205,6 +256,7 @@ mod tests {
         // last_update already past ends_at clamps at zero.
         touch(&mut p, &pool, 1_000 + DAY + 900).expect("touch");
         assert_eq!(p.weight_acc, 100 * DAY as u128);
+        assert_eq!(p.principal_acc, 100 * DAY as u128);
     }
 
     #[test]
@@ -215,13 +267,21 @@ mod tests {
         let pool = pool_at(4, 1_000 + DAY);
         let mut p = player(100, 300, 3, 1_060);
         p.weight_acc = 100 * 60;
+        // Principal never moved when the game win bumped Entries to 300.
+        p.principal_acc = 100 * 60;
 
         touch(&mut p, &pool, 1_000 + DAY + 10).expect("touch");
 
         assert_eq!(p.frozen_weight, 100 * 60 + 300 * (DAY as u128 - 60));
+        assert_eq!(
+            p.frozen_principal_acc,
+            100 * DAY as u128,
+            "principal_acc doesn't see the game win entries did"
+        );
         assert_eq!(p.frozen_epoch, 3);
         assert_eq!(p.entries, 100, "entries reset to principal");
         assert_eq!(p.weight_acc, 100 * 10, "new epoch accrues from its start");
+        assert_eq!(p.principal_acc, 100 * 10);
         assert_eq!(p.epoch_id, 4);
     }
 
@@ -243,6 +303,7 @@ mod tests {
             250 * DAY as u128,
             "credited at most the new epoch's own length"
         );
+        assert_eq!(p.principal_acc, 250 * DAY as u128);
     }
 
     #[test]
@@ -260,11 +321,14 @@ mod tests {
         touch(&mut active, &pool_at(3, 1_000), 1_000 + 2 * DAY).expect("touch");
         touch(&mut active, &pool, 1_000 + 3 * DAY + 10).expect("touch");
         assert_eq!(active.frozen_weight, 100 * DAY as u128);
+        assert_eq!(active.frozen_principal_acc, 100 * DAY as u128);
         assert_eq!(active.weight_acc, 100 * 10);
+        assert_eq!(active.principal_acc, 100 * 10);
 
         let mut idle = player(250, 250, 1, 0);
         touch(&mut idle, &pool, 1_000 + 3 * DAY).expect("touch");
         assert_eq!(idle.frozen_weight, 250 * DAY as u128);
+        assert_eq!(idle.frozen_principal_acc, 250 * DAY as u128);
         assert_eq!(idle.frozen_epoch, 3);
     }
 
@@ -280,8 +344,10 @@ mod tests {
         touch(&mut p, &pool, 1_000 + DAY).expect("touch");
 
         assert_eq!(p.frozen_weight, 250 * DAY as u128);
+        assert_eq!(p.frozen_principal_acc, 250 * DAY as u128);
         assert_eq!(p.frozen_epoch, 3);
         assert_eq!(p.weight_acc, 0);
+        assert_eq!(p.principal_acc, 0);
     }
 
     #[test]
@@ -295,6 +361,7 @@ mod tests {
 
         touch(&mut p, &pool, 5_600).expect("touch");
         assert_eq!(p.weight_acc, 0);
+        assert_eq!(p.principal_acc, 0);
         assert_eq!(p.frozen_weight, 0);
     }
 
@@ -307,12 +374,15 @@ mod tests {
 
         touch(&mut p, &pool, 1_000 + DAY).expect("touch");
         let frozen_before_deposit = p.frozen_weight;
+        let frozen_principal_before_deposit = p.frozen_principal_acc;
 
         p.principal += 1_000_000;
         p.entries += 1_000_000;
 
         assert_eq!(frozen_before_deposit, 10 * DAY as u128);
+        assert_eq!(frozen_principal_before_deposit, 10 * DAY as u128);
         assert_eq!(p.frozen_weight, frozen_before_deposit);
+        assert_eq!(p.frozen_principal_acc, frozen_principal_before_deposit);
     }
 
     #[test]
@@ -327,6 +397,7 @@ mod tests {
 
         assert_eq!(p.entries, 0);
         assert_eq!(p.frozen_weight, 5_000 * DAY as u128);
+        assert_eq!(p.frozen_principal_acc, 0, "the House holds no Principal");
     }
 
     #[test]
@@ -342,6 +413,7 @@ mod tests {
         touch(&mut p, &pool, 1_000 + DAY + 10).expect("touch");
 
         assert_eq!(p.frozen_weight, 100 * DAY as u128);
+        assert_eq!(p.frozen_principal_acc, 100 * DAY as u128);
         assert_eq!(p.frozen_epoch, 3);
     }
 
@@ -353,6 +425,7 @@ mod tests {
         touch(&mut p, &pool, 1_500).expect("touch");
 
         assert_eq!(p.weight_acc, 0);
+        assert_eq!(p.principal_acc, 0);
         assert_eq!(p.last_update, 1_500);
     }
 }

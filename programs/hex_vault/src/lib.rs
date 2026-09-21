@@ -118,6 +118,10 @@ pub mod hex_vault {
         epochs::fund_jackpot(ctx, amount)
     }
 
+    pub fn fund_yield(ctx: Context<FundYield>, amount: u64) -> Result<()> {
+        epochs::fund_yield(ctx, amount)
+    }
+
     pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
         epochs::close_registration(ctx)
     }

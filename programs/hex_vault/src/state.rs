@@ -88,6 +88,14 @@ pub struct Pool {
     /// the next epoch cannot take a prize the previous one still owes.
     /// Released on `payout` and on either branch of `rollover_epoch`.
     pub jackpot_reserved: u64,
+    /// Base yield's APR on time-weighted Principal, in basis points, capped
+    /// at `BPS_DENOMINATOR`. An admin parameter, so it can change without a
+    /// program upgrade.
+    pub base_rate_bps: u16,
+    /// USDC already in the principal vault, earmarked for Base yield and not
+    /// yet credited to anyone. `fund_yield` raises it; `register` draws it
+    /// down and never credits past what it holds.
+    pub yield_budget: u64,
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.
@@ -177,6 +185,16 @@ pub struct Player {
     /// request matures, so a stalled operator who never calls `begin_epoch`
     /// cannot freeze a depositor's money.
     pub requested_at: i64,
+    /// Σ principal × seconds within `epoch_id`. Mirrors `weight_acc` with
+    /// Principal in place of Entries.
+    pub principal_acc: u128,
+    /// Final principal-seconds for `frozen_epoch`, set by
+    /// [`crate::touch::touch`] alongside `frozen_weight`.
+    pub frozen_principal_acc: u128,
+    /// The epoch Base yield was last credited for. Guards `register` against
+    /// crediting the same epoch twice, independent of `reg_epoch` (which a
+    /// zero-weight registration never sets).
+    pub yield_epoch: u64,
 }
 
 /// A Player's single immutable placement in one round.
