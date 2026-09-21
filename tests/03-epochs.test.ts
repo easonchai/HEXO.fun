@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { BN } from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
-import { getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   DEVNET_VRF_NETWORK_STATE,
   DEVNET_VRF_TREASURY,
@@ -215,8 +215,9 @@ async function draw(pool: PoolCtx, epochId: bigint, randomness: PublicKey) {
 
 /** Permissionless: no signer at all, so the test wallet (neither the pool's
  *  admin nor its operator) just pays the fee. The operator cannot veto a
- *  winner by sitting out `payout_timeout`. */
-async function payout(pool: PoolCtx, epochId: bigint, winner: PublicKey, winnerToken: PublicKey) {
+ *  winner by sitting out `payout_timeout`. A non-House winner needs no token
+ *  account of their own: the prize compounds into `principal_vault`. */
+async function payout(pool: PoolCtx, epochId: bigint, winner: PublicKey) {
   return program.methods
     .payout()
     .accountsPartial({
@@ -225,7 +226,7 @@ async function payout(pool: PoolCtx, epochId: bigint, winner: PublicKey, winnerT
       epoch: epochPda(pool.pool, epochId),
       winner: playerPda(pool.pool, winner),
       jackpotVault: pool.jackpotVault,
-      winnerToken,
+      principalVault: pool.principalVault,
       treasury: pool.treasury,
       buybackReserve: pool.buybackReserve,
       tokenProgram: TOKEN_PROGRAM_ID,
@@ -648,7 +649,7 @@ describe("epochs", () => {
   );
 
   it(
-    "draw and payout to a player: winner's balance rises by jackpot_amount, principal vault untouched",
+    "draw and payout to a player: the prize compounds into Principal, total_principal and the principal vault, and can be withdrawn",
     async () => {
       const pool = await setupPool({ epochSeconds: 6 });
       await beginEpoch(pool, 0n);
@@ -672,20 +673,53 @@ describe("epochs", () => {
       const drawn = await fetchEpoch(pool, 1n);
       expect(drawn.status).toBe(epoch_status.DRAWN);
 
-      const balanceBefore = await program.provider.connection.getTokenAccountBalance(a.tokenAccount);
-      const principalBefore = await program.provider.connection.getTokenAccountBalance(pool.principalVault);
+      const principalVaultBefore = await program.provider.connection.getTokenAccountBalance(
+        pool.principalVault,
+      );
+      const playerBefore = await fetchPlayer(pool, a.keypair.publicKey);
+      const poolBefore = await program.account.pool.fetch(pool.pool);
 
-      await payout(pool, 1n, a.keypair.publicKey, a.tokenAccount);
+      const sig = await payout(pool, 1n, a.keypair.publicKey);
 
-      const balanceAfter = await program.provider.connection.getTokenAccountBalance(a.tokenAccount);
-      const principalAfter = await program.provider.connection.getTokenAccountBalance(pool.principalVault);
+      const principalVaultAfter = await program.provider.connection.getTokenAccountBalance(
+        pool.principalVault,
+      );
+      const playerAfter = await fetchPlayer(pool, a.keypair.publicKey);
+      const poolAfter = await program.account.pool.fetch(pool.pool);
 
-      expect(BigInt(balanceAfter.value.amount) - BigInt(balanceBefore.value.amount)).toBe(2_000_000n);
-      expect(principalAfter.value.amount).toBe(principalBefore.value.amount);
+      expect(
+        BigInt(principalVaultAfter.value.amount) - BigInt(principalVaultBefore.value.amount),
+      ).toBe(2_000_000n);
+      expect(
+        BigInt(playerAfter.principal.toString()) - BigInt(playerBefore.principal.toString()),
+      ).toBe(2_000_000n);
+      expect(
+        BigInt(playerAfter.entries.toString()) - BigInt(playerBefore.entries.toString()),
+      ).toBe(2_000_000n);
+      expect(
+        BigInt(poolAfter.totalPrincipal.toString()) - BigInt(poolBefore.totalPrincipal.toString()),
+      ).toBe(2_000_000n);
+
+      const event = await findEvent<{ isHouse: boolean; compounded: boolean; amount: BN }>(
+        sig,
+        "jackpotPaid",
+      );
+      expect(event?.isHouse).toBe(false);
+      expect(event?.compounded).toBe(true);
+      expect(event?.amount.toString()).toBe("2000000");
 
       const paid = await fetchEpoch(pool, 1n);
       expect(paid.status).toBe(epoch_status.PAID);
       expect(paid.winner.toString()).toBe(a.keypair.publicKey.toString());
+
+      // The prize is ordinary Principal now: withdrawable through the
+      // normal locked flow, same as any other deposit.
+      const tokenBefore = await program.provider.connection.getTokenAccountBalance(a.tokenAccount);
+      await requestWithdraw(pool, a, 2_000_000n);
+      await retryUntilOk(() => beginEpoch(pool, 2n));
+      await processWithdraw(pool, a);
+      const tokenAfter = await program.provider.connection.getTokenAccountBalance(a.tokenAccount);
+      expect(BigInt(tokenAfter.value.amount) - BigInt(tokenBefore.value.amount)).toBe(2_000_000n);
     },
     TIMEOUT,
   );
@@ -755,17 +789,7 @@ describe("epochs", () => {
       const treasuryBefore = await program.provider.connection.getTokenAccountBalance(pool.treasury);
       const vaultBefore = await program.provider.connection.getTokenAccountBalance(pool.jackpotVault);
 
-      // winner_token is unused by the handler for a House win (the split
-      // goes to buyback_reserve/treasury instead), but the Accounts struct
-      // still requires one satisfying `token::authority = winner.owner`, so
-      // it must actually belong to the operator (the House's owner).
-      const operatorToken = await getOrCreateAssociatedTokenAccount(
-        program.provider.connection,
-        pool.operator,
-        pool.mint,
-        pool.operator.publicKey,
-      );
-      await payout(pool, 1n, pool.operator.publicKey, operatorToken.address);
+      const sig = await payout(pool, 1n, pool.operator.publicKey);
 
       const buybackAfter = await program.provider.connection.getTokenAccountBalance(pool.buybackReserve);
       const treasuryAfter = await program.provider.connection.getTokenAccountBalance(pool.treasury);
@@ -775,6 +799,10 @@ describe("epochs", () => {
       expect(BigInt(treasuryAfter.value.amount) - BigInt(treasuryBefore.value.amount)).toBe(200_000n); // 20%
       expect(BigInt(vaultBefore.value.amount) - BigInt(vaultAfter.value.amount)).toBe(700_000n); // 70% left
       expect(vaultAfter.value.amount).toBe("300000"); // 30% stays
+
+      const event = await findEvent<{ isHouse: boolean; compounded: boolean }>(sig, "jackpotPaid");
+      expect(event?.isHouse).toBe(true);
+      expect(event?.compounded).toBe(false);
 
       const paid = await fetchEpoch(pool, 1n);
       expect(paid.status).toBe(epoch_status.PAID);
@@ -859,15 +887,21 @@ describe("epochs", () => {
       expect(closed2.jackpotAmount.toString()).toBe("2000000");
       await draw(pool, 2n, await fulfillRandomness(Uint8Array.from(closed2.vrfSeed)));
 
-      const aBefore = await program.provider.connection.getTokenAccountBalance(a.tokenAccount);
-      await payout(pool, 1n, a.keypair.publicKey, a.tokenAccount);
-      const aAfter = await program.provider.connection.getTokenAccountBalance(a.tokenAccount);
-      expect(BigInt(aAfter.value.amount) - BigInt(aBefore.value.amount)).toBe(3_000_000n);
-
-      const bBefore = await program.provider.connection.getTokenAccountBalance(b.tokenAccount);
-      await payout(pool, 2n, b.keypair.publicKey, b.tokenAccount);
-      const bAfter = await program.provider.connection.getTokenAccountBalance(b.tokenAccount);
-      expect(BigInt(bAfter.value.amount) - BigInt(bBefore.value.amount)).toBe(2_000_000n);
+      // Both prizes compound into the principal vault now, not the winners'
+      // own token accounts.
+      const principalBefore = await program.provider.connection.getTokenAccountBalance(
+        pool.principalVault,
+      );
+      await payout(pool, 1n, a.keypair.publicKey);
+      await payout(pool, 2n, b.keypair.publicKey);
+      const principalAfter = await program.provider.connection.getTokenAccountBalance(
+        pool.principalVault,
+      );
+      expect(BigInt(principalAfter.value.amount) - BigInt(principalBefore.value.amount)).toBe(
+        5_000_000n,
+      );
+      expect((await fetchPlayer(pool, a.keypair.publicKey)).principal.toString()).toBe("6000000");
+      expect((await fetchPlayer(pool, b.keypair.publicKey)).principal.toString()).toBe("5000000");
 
       const drained = await program.provider.connection.getTokenAccountBalance(pool.jackpotVault);
       expect(drained.value.amount).toBe("0");
@@ -1108,7 +1142,7 @@ describe("epochs", () => {
 
       const randomness = await fulfillRandomness(Uint8Array.from(closed.vrfSeed));
       await draw(pool, 1n, randomness);
-      await payout(pool, 1n, a.keypair.publicKey, a.tokenAccount);
+      await payout(pool, 1n, a.keypair.publicKey);
 
       expect((await fetchEpoch(pool, 1n)).status).toBe(epoch_status.PAID);
     },

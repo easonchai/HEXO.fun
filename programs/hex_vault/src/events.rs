@@ -169,6 +169,10 @@ pub struct JackpotPaid {
     pub winner: Pubkey,
     pub amount: u64,
     pub is_house: bool,
+    /// True for a non-House winner: the prize was moved into the principal
+    /// vault and added to the winner's Principal instead of paid to a token
+    /// account. Always false for a House win, which keeps its 50/30/20 split.
+    pub compounded: bool,
 }
 
 #[event]

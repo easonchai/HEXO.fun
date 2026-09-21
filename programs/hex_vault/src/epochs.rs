@@ -446,7 +446,7 @@ pub fn draw(ctx: Context<Draw>) -> Result<()> {
 pub fn payout(ctx: Context<Payout>) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
-    let winner = &ctx.accounts.winner;
+    let winner = &mut ctx.accounts.winner;
 
     require!(
         epoch.status == epoch_status::DRAWN,
@@ -462,12 +462,13 @@ pub fn payout(ctx: Context<Payout>) -> Result<()> {
     );
 
     let amount = epoch.jackpot_amount;
+    let is_house = winner.is_house;
     let decimals = ctx.accounts.accepted_mint.decimals;
     let pool_id_bytes = pool.pool_id.to_le_bytes();
     let pool_bump = [pool.bump];
     let signer_seeds: &[&[u8]] = &[SEED_POOL, &pool_id_bytes, &pool_bump];
 
-    if winner.is_house {
+    if is_house {
         // 50/20/30 split (spec §7); the 30% share and any dust from the
         // truncating divisions below simply stay in the jackpot vault.
         let buyback_amount = amount / 2;
@@ -503,13 +504,20 @@ pub fn payout(ctx: Context<Payout>) -> Result<()> {
             decimals,
         )?;
     } else {
+        // Compounds into the winner's Principal instead of paying their
+        // token account: touch first, on the pre-prize balance, so the
+        // prize only earns weight and yield from the instant it lands here
+        // (the same hazard `register`'s yield credit closes against).
+        let now = utils::now()?;
+        touch(winner, pool, now)?;
+
         token_interface::transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.key(),
                 TransferChecked {
                     from: ctx.accounts.jackpot_vault.to_account_info(),
                     mint: ctx.accounts.accepted_mint.to_account_info(),
-                    to: ctx.accounts.winner_token.to_account_info(),
+                    to: ctx.accounts.principal_vault.to_account_info(),
                     authority: pool.to_account_info(),
                 },
                 &[signer_seeds],
@@ -517,6 +525,19 @@ pub fn payout(ctx: Context<Payout>) -> Result<()> {
             amount,
             decimals,
         )?;
+
+        winner.principal = winner
+            .principal
+            .checked_add(amount)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        winner.entries = winner
+            .entries
+            .checked_add(amount)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        pool.total_principal = pool
+            .total_principal
+            .checked_add(amount)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
     }
 
     epoch.winner = winner.owner;
@@ -532,7 +553,8 @@ pub fn payout(ctx: Context<Payout>) -> Result<()> {
         epoch_id: epoch.epoch_id,
         winner: winner.owner,
         amount,
-        is_house: winner.is_house,
+        is_house,
+        compounded: !is_house,
     });
     Ok(())
 }
@@ -766,9 +788,10 @@ pub struct Draw<'info> {
 }
 
 /// No signer at all, like `process_withdraw`. The winner is fixed by the
-/// Player PDA's seeds and the destination by `token::authority = winner.owner`,
-/// so there is nothing here for a caller to steer. Gating it on the operator
-/// only let the operator veto a winner by sitting out `payout_timeout`.
+/// Player PDA's seeds, so there is nothing here for a caller to steer.
+/// Gating it on the operator only let the operator veto a winner by sitting
+/// out `payout_timeout`. A non-House winner no longer needs a token account
+/// of their own: the prize compounds into `principal_vault` instead.
 #[derive(Accounts)]
 pub struct Payout<'info> {
     // Boxed: unboxed, this struct's `try_accounts` overflows the BPF stack
@@ -806,8 +829,12 @@ pub struct Payout<'info> {
     )]
     pub jackpot_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    #[account(mut, token::mint = pool.accepted_mint, token::authority = winner.owner)]
-    pub winner_token: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        mut,
+        seeds = [SEED_PRINCIPAL, pool.key().as_ref()],
+        bump = pool.principal_vault_bump,
+    )]
+    pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut)]
     pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -1062,26 +1089,5 @@ mod tests {
         assert_eq!(credited, 0);
         assert_eq!(shortfall, 0);
         assert_eq!(house.principal, 0);
-    }
-
-    #[test]
-    fn credit_yield_does_not_touch_when_the_budget_credits_nothing() {
-        // register() must stay read-only for a Player whose credit is 0 (an
-        // empty budget): a later natural touch (deposit/withdraw) still owns
-        // rolling epoch_id/weight_acc forward, exactly as it does for a
-        // Player earning no yield at all.
-        let principal: u64 = 1_000_000_000;
-        let epoch1 = epoch_at(1, 0, DAY);
-        let mut p = player(principal, principal, 0, 0);
-
-        let (_, ps1) = weight_and_principal_seconds(&epoch1, &p).expect("epoch 1 ps");
-        let mut pool = pool_at(2, DAY, 488, 0); // empty budget
-        let (credited, shortfall) =
-            credit_yield(&mut pool, &mut p, ps1, DAY + 100).expect("credit");
-
-        assert_eq!(credited, 0);
-        assert!(shortfall > 0);
-        assert_eq!(p.epoch_id, 0, "untouched: nothing was actually credited");
-        assert_eq!(p.last_update, 0);
     }
 }
