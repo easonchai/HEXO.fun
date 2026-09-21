@@ -23,15 +23,21 @@ const RATE_TIERS: readonly { min: number; rateBps: number }[] = [
 export const REFERRAL_BONUS_BASIS_CAP = 2_500_000_000n;
 
 /**
- * One referrer's inputs: their own Principal (their own 1x cap) and one
- * entry per qualified referral, that referral's own Principal (for the
- * basis sum). A referrer with no Player, or a Principal of 0, gets nothing
- * either way `principal` is passed as 0n: the per-Player on-chain cap would
- * refuse them regardless.
+ * One referrer's inputs: their own Principal, what the operator path has
+ * already granted them today (their remaining headroom is the difference),
+ * and one entry per qualified referral, that referral's own Principal (for
+ * the basis sum). A referrer with no Player, or a Principal of 0, gets
+ * nothing either way `principal` is passed as 0n: the per-Player on-chain
+ * cap would refuse them regardless.
  */
 export interface ReferrerBonusInput {
   readonly referrer: string;
   readonly principal: bigint;
+  /** `Player.bonusGranted` for this epoch, or 0 once the epoch counter has
+   *  rolled over (mirroring the program's own lazy reset): what the
+   *  operator path has already granted this referrer today, which eats
+   *  into their remaining headroom the same way a fresh grant would. */
+  readonly alreadyGrantedToday: bigint;
   readonly qualifiedReferralPrincipals: readonly bigint[];
 }
 
@@ -46,11 +52,26 @@ function rateBpsFor(qualifiedCount: number): number {
   return RATE_TIERS.find((tier) => qualifiedCount >= tier.min)?.rateBps ?? 0;
 }
 
+/**
+ * The most a referrer can still receive this epoch: their own Principal
+ * minus whatever the operator path has already granted them today, floored
+ * at 0. Mirrors `grant_tickets`' own operator-path check
+ * (`player.bonus_granted + amount <= player.principal`, i.e.
+ * `amount <= principal - bonus_granted`), so this same function both caps a
+ * fresh computation and re-clamps an already-recorded grant against a
+ * Principal that has moved since it was written.
+ */
+export function remainingGrantCap(principal: bigint, alreadyGrantedToday: bigint): bigint {
+  const headroom = principal - alreadyGrantedToday;
+  return headroom > 0n ? headroom : 0n;
+}
+
 /** One referrer's bonus before the pool-wide cap scales it down. */
 function preScaleBonus(input: ReferrerBonusInput): ReferrerBonus {
   const qualifiedCount = input.qualifiedReferralPrincipals.length;
   const rateBps = rateBpsFor(qualifiedCount);
-  if (rateBps === 0 || input.principal <= 0n) {
+  const cap = remainingGrantCap(input.principal, input.alreadyGrantedToday);
+  if (rateBps === 0 || cap <= 0n) {
     return { referrer: input.referrer, amount: 0n, qualifiedCount, rateBps };
   }
   const basis = input.qualifiedReferralPrincipals.reduce(
@@ -59,7 +80,7 @@ function preScaleBonus(input: ReferrerBonusInput): ReferrerBonus {
     0n,
   );
   const raw = (basis * BigInt(rateBps)) / 10_000n;
-  const amount = raw < input.principal ? raw : input.principal;
+  const amount = raw < cap ? raw : cap;
   return { referrer: input.referrer, amount, qualifiedCount, rateBps };
 }
 
@@ -85,4 +106,26 @@ export function computeBonuses(
   return preScaled
     .map((bonus) => ({ ...bonus, amount: (bonus.amount * cap) / sum }))
     .filter((bonus) => bonus.amount > 0n);
+}
+
+export interface ReferralBand {
+  readonly rateBps: number;
+  /** Qualified referrals still needed to reach the next, higher band; null
+   *  at the top band (11+), where there is no next band. */
+  readonly countToNextBand: number | null;
+}
+
+/**
+ * The rate tier `qualifiedCount` referrals sits in, and how many more are
+ * needed to reach the next one (docs/plan/hexo-referrals ticket 11: "current
+ * band, count to next band"). `rateBps` is 0 below the first tier (0
+ * qualified referrals), matching `computeBonuses`' own "nothing" case.
+ */
+export function bandForCount(qualifiedCount: number): ReferralBand {
+  const rateBps = rateBpsFor(qualifiedCount);
+  // RATE_TIERS is ordered highest-min-first; the next band up is the
+  // smallest min still greater than the current count, found by scanning
+  // from the low end.
+  const next = [...RATE_TIERS].reverse().find((tier) => tier.min > qualifiedCount);
+  return { rateBps, countToNextBand: next ? next.min - qualifiedCount : null };
 }

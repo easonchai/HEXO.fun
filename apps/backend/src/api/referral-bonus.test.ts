@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  bandForCount,
   computeBonuses,
   REFERRAL_BONUS_BASIS_CAP,
+  remainingGrantCap,
   type ReferrerBonusInput,
 } from "./referral-bonus";
 
 const USDC = 1_000_000n;
-/** Ample Principal so a referrer's own 1x cap never binds unless a test is
- *  specifically about it. */
+/** Ample Principal so a referrer's own remaining-headroom cap never binds
+ *  unless a test is specifically about it. */
 const BIG_PRINCIPAL = 1_000_000n * USDC;
 /** Wide enough that the pool-wide cap never binds unless a test is
  *  specifically about it. */
@@ -18,8 +20,9 @@ function referrer(
   referrer: string,
   qualifiedReferralPrincipals: bigint[],
   principal = BIG_PRINCIPAL,
+  alreadyGrantedToday = 0n,
 ): ReferrerBonusInput {
-  return { referrer, principal, qualifiedReferralPrincipals };
+  return { referrer, principal, alreadyGrantedToday, qualifiedReferralPrincipals };
 }
 
 describe("computeBonuses: rate tiers by qualified count", () => {
@@ -74,7 +77,7 @@ describe("computeBonuses: the $2,500 per-referral basis cap", () => {
   });
 });
 
-describe("computeBonuses: the referrer's own 1x Principal cap", () => {
+describe("computeBonuses: the referrer's own remaining-headroom cap", () => {
   it("caps the bonus at the referrer's own Principal", () => {
     // 11+ referrals at 2,500 USDC each rates 5%: basis far exceeds a small
     // referrer's own Principal, so the payout is capped at that Principal.
@@ -85,6 +88,58 @@ describe("computeBonuses: the referrer's own 1x Principal cap", () => {
       NO_POOL_CAP.capBps,
     );
     expect(bonus?.amount).toBe(10n * USDC);
+  });
+
+  it("the reported worked case: $10 Principal, 11 referrals at $2,500 caps at $10, never the raw $1,375", () => {
+    // 5% of Sigma min(2,500, 2,500) * 11 = 5% of 27,500 = 1,375 USDC raw;
+    // the referrer only holds 10 USDC, so that is the ceiling.
+    const referrals = Array.from({ length: 11 }, () => 2_500n * USDC);
+    const [bonus] = computeBonuses(
+      [referrer("r", referrals, 10n * USDC)],
+      NO_POOL_CAP.totalPrincipal,
+      NO_POOL_CAP.capBps,
+    );
+    expect(bonus?.amount).toBe(10n * USDC);
+    expect(bonus?.amount).not.toBe(1_375n * USDC);
+  });
+
+  it("shrinks the cap by what the operator path already granted them today", () => {
+    // Same referrer, 100 USDC Principal, but 90 already granted this epoch:
+    // only 10 USDC of headroom is left, well under the uncapped bonus.
+    const [bonus] = computeBonuses(
+      [referrer("r", [1_000n * USDC], 100n * USDC, 90n * USDC)],
+      NO_POOL_CAP.totalPrincipal,
+      NO_POOL_CAP.capBps,
+    );
+    expect(bonus?.amount).toBe(10n * USDC);
+  });
+
+  it("a referrer already granted their full Principal today earns nothing more", () => {
+    expect(
+      computeBonuses(
+        [referrer("r", [1_000n * USDC], 100n * USDC, 100n * USDC)],
+        NO_POOL_CAP.totalPrincipal,
+        NO_POOL_CAP.capBps,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("remainingGrantCap", () => {
+  it("is the Principal when nothing has been granted today", () => {
+    expect(remainingGrantCap(100n, 0n)).toBe(100n);
+  });
+
+  it("subtracts what has already been granted today", () => {
+    expect(remainingGrantCap(100n, 40n)).toBe(60n);
+  });
+
+  it("floors at 0 rather than going negative", () => {
+    expect(remainingGrantCap(100n, 150n)).toBe(0n);
+  });
+
+  it("is 0 exactly at the Principal", () => {
+    expect(remainingGrantCap(100n, 100n)).toBe(0n);
   });
 });
 
@@ -147,5 +202,24 @@ describe("computeBonuses: referrers who earn nothing", () => {
       NO_POOL_CAP.capBps,
     );
     expect(bonuses.map((bonus) => bonus.referrer)).toEqual(["earns"]);
+  });
+});
+
+describe("bandForCount", () => {
+  it.each([
+    [0, 0, 1],
+    [1, 200, 2],
+    [2, 200, 1],
+    [3, 300, 3],
+    [5, 300, 1],
+    [6, 400, 5],
+    [10, 400, 1],
+  ])("%d qualified referrals: %d bps, %d more to the next band", (count, rateBps, countToNextBand) => {
+    expect(bandForCount(count)).toEqual({ rateBps, countToNextBand });
+  });
+
+  it("the top band (11+) has no next band", () => {
+    expect(bandForCount(11)).toEqual({ rateBps: 500, countToNextBand: null });
+    expect(bandForCount(50)).toEqual({ rateBps: 500, countToNextBand: null });
   });
 });

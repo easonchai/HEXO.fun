@@ -1014,6 +1014,48 @@ describe("referral bonus job (ticket 08)", () => {
     expect(await prisma.referralGrant.count()).toBe(1);
   });
 
+  it("re-clamps an already-recorded amount, and persists the drop, when the referrer's own Principal falls before it is sent", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER, { principal: 1_000_000_000n }) }); // 1,000 USDC
+    for (let i = 0; i < 11; i++) {
+      await seedQualifiedReferral({ principal: 2_500_000_000n }); // $2,500 each, 11 qualified -> 5% tier
+    }
+
+    const first = await indexer.referralGrantsDue(EPOCH_ID);
+    // Raw would be 5% of 11 * $2,500 = $1,375; capped at the referrer's own
+    // $1,000 Principal, not the raw figure.
+    expect(first).toEqual([{ referrer: REFERRER, amount: 1_000_000_000n }]);
+
+    // The referrer withdraws before the operator actually gets to send it.
+    await prisma.player.update({
+      where: { owner: REFERRER },
+      data: { principal: 10_000_000n }, // 10 USDC
+    });
+
+    const second = await indexer.referralGrantsDue(EPOCH_ID);
+    expect(second).toEqual([{ referrer: REFERRER, amount: 10_000_000n }]);
+
+    const row = await prisma.referralGrant.findUniqueOrThrow({
+      where: { epochId_referrer: { epochId: EPOCH_ID, referrer: REFERRER } },
+    });
+    // The record itself reflects the re-clamp, not just what was returned:
+    // ticket 11 reads this row as "today's bonus".
+    expect(row.amount).toBe(10_000_000n);
+  });
+
+  it("clamping all the way to 0 drops the referrer from what is due and zeroes the recorded amount", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER, { principal: 100_000_000n }) });
+    await seedQualifiedReferral();
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    await prisma.player.update({ where: { owner: REFERRER }, data: { principal: 0n } });
+
+    expect(await indexer.referralGrantsDue(EPOCH_ID)).toEqual([]);
+    const row = await prisma.referralGrant.findUniqueOrThrow({
+      where: { epochId_referrer: { epochId: EPOCH_ID, referrer: REFERRER } },
+    });
+    expect(row.amount).toBe(0n);
+  });
+
   it("skips a referrer whose on-chain bonus_epoch already covers this epoch (a crash between send and markReferralGrantsSent)", async () => {
     await prisma.player.create({ data: referrerPlayer(REFERRER) });
     await seedQualifiedReferral();

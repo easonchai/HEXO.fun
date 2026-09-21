@@ -468,6 +468,9 @@ describe("runTick", () => {
     expect(sent).toHaveLength(0);
     expect(warned).toHaveLength(1);
     expect(warned[0]).toMatch(/DailyPoolGrantCapExceeded/);
+    // The error itself does not say which referrer in the batch tripped it,
+    // so every one of them (and the amount tried) is named in the log.
+    expect(warned[0]).toContain(`${referrer}:1000000`);
   });
 
   // --- 4. Register / close registration. Closing waits for two consecutive

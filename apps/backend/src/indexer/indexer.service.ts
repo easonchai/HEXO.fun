@@ -17,7 +17,11 @@ import {
   type ReferralPrincipalEvent,
   type ReferralQualificationState,
 } from "../api/referral";
-import { computeBonuses, type ReferrerBonusInput } from "../api/referral-bonus";
+import {
+  computeBonuses,
+  remainingGrantCap,
+  type ReferrerBonusInput,
+} from "../api/referral-bonus";
 import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
@@ -315,7 +319,8 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * (via `createMany({ skipDuplicates: true })`, so a referrer newly
    * discovered on a later tick still gets a row, but an already-recorded one
    * keeps its original amount rather than drifting as the day goes on), then
-   * hands back whatever is still unsent and not already granted on chain.
+   * hands back whatever is still unsent and not already granted on chain,
+   * re-clamped against the freshest Player data first (see the loop below).
    */
   async referralGrantsDue(epochId: bigint): Promise<{ referrer: string; amount: bigint }[]> {
     const pool = await this.prisma.pool.findFirst();
@@ -334,21 +339,28 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
 
     const referrerPlayers = await this.prisma.player.findMany({
       where: { owner: { in: [...byReferrer.keys()] } },
-      select: { owner: true, principal: true, bonusEpoch: true },
+      select: { owner: true, principal: true, bonusEpoch: true, bonusGranted: true },
     });
     const playerByOwner = new Map(referrerPlayers.map((player) => [player.owner, player]));
     const now = nowSeconds();
 
     // Skip referrers with no Player or a Principal of 0: the operator cap on
     // grant_tickets would refuse them anyway (docs/plan/hexo-referrals
-    // ticket 08's own instruction).
-    const inputs: ReferrerBonusInput[] = [...byReferrer].map(([referrer, refs]) => ({
-      referrer,
-      principal: playerByOwner.get(referrer)?.principal ?? 0n,
-      qualifiedReferralPrincipals: refs
-        .filter((ref) => isQualified(ref.aboveSince, now, this.referralQualifySeconds))
-        .map((ref) => ref.principal),
-    }));
+    // ticket 08's own instruction). alreadyGrantedToday mirrors the same
+    // lazy reset the program applies to bonus_granted: a stale bonusEpoch
+    // means today's counter has not actually been touched yet, so it reads
+    // as 0 rather than whatever a previous epoch left behind.
+    const inputs: ReferrerBonusInput[] = [...byReferrer].map(([referrer, refs]) => {
+      const player = playerByOwner.get(referrer);
+      return {
+        referrer,
+        principal: player?.principal ?? 0n,
+        alreadyGrantedToday: player?.bonusEpoch === epochId ? player.bonusGranted : 0n,
+        qualifiedReferralPrincipals: refs
+          .filter((ref) => isQualified(ref.aboveSince, now, this.referralQualifySeconds))
+          .map((ref) => ref.principal),
+      };
+    });
 
     const bonuses = computeBonuses(inputs, pool.totalPrincipal, pool.bonusCapBps);
     if (bonuses.length > 0) {
@@ -368,9 +380,40 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       where: { epochId, txSig: null },
       select: { referrer: true, amount: true },
     });
-    return pending.filter(
-      (grant) => playerByOwner.get(grant.referrer)?.bonusEpoch !== epochId,
-    );
+
+    // Re-clamp every already-recorded grant against the freshest Player
+    // data: a referrer's Principal can move (a withdrawal) in the ticks
+    // between when their row was written and when a batch actually sends
+    // it. A stale amount above their current headroom would fail on chain
+    // every tick forever, wedging every other referrer batched alongside
+    // them (the exact failure the atomic-batch ponytail note in tick.ts
+    // warns about), so the amount actually handed back, and the row
+    // recording it, always reflect the latest Principal.
+    const due: { referrer: string; amount: bigint }[] = [];
+    const changed: { referrer: string; amount: bigint }[] = [];
+    for (const grant of pending) {
+      const player = playerByOwner.get(grant.referrer);
+      if (player?.bonusEpoch === epochId) continue; // already granted on chain
+      const cap = remainingGrantCap(player?.principal ?? 0n, 0n);
+      const amount = grant.amount < cap ? grant.amount : cap;
+      // Persisted even when it clamps all the way to 0, so a referrer whose
+      // Principal has left entirely does not leave a stale positive amount
+      // sitting on the row (ticket 11 reads this as "today's bonus").
+      if (amount !== grant.amount) changed.push({ referrer: grant.referrer, amount });
+      if (amount <= 0n) continue;
+      due.push({ referrer: grant.referrer, amount });
+    }
+    if (changed.length > 0) {
+      await this.prisma.$transaction(
+        changed.map((grant) =>
+          this.prisma.referralGrant.update({
+            where: { epochId_referrer: { epochId, referrer: grant.referrer } },
+            data: { amount: grant.amount },
+          }),
+        ),
+      );
+    }
+    return due;
   }
 
   async markReferralGrantsSent(
