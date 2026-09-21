@@ -890,6 +890,63 @@ describe("referral qualification", () => {
     expect(row.principal).toBe(40_000_000n);
     expect(row.aboveSince).toBeNull();
   });
+
+  // ticket 13's security review: a finalized-catch-up sweep (after downtime)
+  // used to enqueue one signature at a time, so a live event for the same
+  // referee could be scheduled between two still-unprocessed backlog
+  // signatures, applying it before an older delta that chronologically
+  // precedes it. Principal-changing deltas are order-sensitive, unlike the
+  // idempotent position/invite-code side effects elsewhere in persist().
+  it("never applies a live event between two backlog signatures for the same referee", async () => {
+    await seedReferral();
+
+    // The backlog getSignaturesForAddress would answer with after downtime:
+    // newest first, per the real RPC's own ordering (catchUpEvents reverses
+    // it before replaying).
+    connection.signaturesForAddress = [
+      { signature: "sig-mid", slot: 20, err: null, blockTime: 1_100 },
+      { signature: "sig-old", slot: 10, err: null, blockTime: 1_000 },
+    ];
+    connection.setTransaction(
+      "sig-old",
+      batch("sig-old", 10n, [depositedFor(OWNER, 60_000_000, 60_000_000, 60_000_000)]).logs,
+    );
+    connection.setTransaction(
+      "sig-mid",
+      batch("sig-mid", 20n, [withdrawRequestedFor(OWNER, 15_000_000, 45_000_000)]).logs,
+    );
+    // Opens a window between sig-old settling and sig-mid being enqueued for
+    // the live event below to race into.
+    connection.getTransactionDelayMs = 20;
+    indexer["subscribeToLogs"]();
+    // The live path timestamps from the chain clock the indexer last
+    // observed, not from fireLogs' own arguments (see subscribeToLogs).
+    chain.recordChainTime(1_200n);
+
+    const catchUp = indexer["catchUpEvents"]();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    connection.fireLogs(
+      chain.poolAddress(),
+      "finalized",
+      {
+        err: null,
+        signature: "sig-live",
+        logs: batch("sig-live", 30n, [depositedFor(OWNER, 80_000_000, 80_000_000, 80_000_000)]).logs,
+      },
+      30,
+    );
+    await catchUp;
+    await indexer["queue"];
+
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    // Chronological order is old (cross up) -> mid (drops back below 50
+    // USDC, clearing aboveSince) -> live (crosses up again, restarting the
+    // clock at its own block time). A live event landing between the two
+    // backlog signatures would skip the dip and leave `aboveSince` at the
+    // old crossing instead.
+    expect(row.principal).toBe(80_000_000n);
+    expect(row.aboveSince).toBe(1_200n);
+  });
 });
 
 // docs/plan/hexo-referrals ticket 08: computeBonuses' inputs and the

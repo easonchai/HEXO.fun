@@ -131,10 +131,48 @@ export class CountingConnection {
     return Promise.resolve(data ? { data } : null);
   }
 
-  getSignaturesForAddress(address: PublicKey): Promise<never[]> {
+  /** Signatures `getSignaturesForAddress` answers with, newest first as the
+   *  real RPC orders them. Empty by default, matching the old unconditional
+   *  `[]` stub; a test drives the indexer's finalized catch-up path (ticket
+   *  13) by populating this and `setTransaction` below. */
+  signaturesForAddress: { signature: string; slot: number; err: unknown; blockTime?: number }[] =
+    [];
+  private readonly transactions = new Map<
+    string,
+    { meta: { logMessages: string[] } } | undefined
+  >();
+  /** `getTransaction` for a signature configured here resolves after this
+   *  many milliseconds instead of immediately, opening a window a test can
+   *  fire a live event into (the race `catchUpEvents`'s single-enqueue fix
+   *  closes, ticket 13). 0 by default: immediate, like every other fake here. */
+  getTransactionDelayMs = 0;
+
+  /** The finalized logs `getTransaction(signature)` answers with. */
+  setTransaction(signature: string, logMessages: string[]): void {
+    this.transactions.set(signature, { meta: { logMessages } });
+  }
+
+  getSignaturesForAddress(
+    address: PublicKey,
+    options?: { until?: string; limit?: number },
+  ): Promise<{ signature: string; slot: number; err: unknown; blockTime?: number }[]> {
     this.record("getSignaturesForAddress");
     this.watched = [...this.watched, address];
-    return Promise.resolve([]);
+    const untilIndex = options?.until
+      ? this.signaturesForAddress.findIndex((info) => info.signature === options.until)
+      : -1;
+    const page =
+      untilIndex === -1 ? this.signaturesForAddress : this.signaturesForAddress.slice(0, untilIndex);
+    return Promise.resolve(options?.limit ? page.slice(0, options.limit) : page);
+  }
+
+  getTransaction(
+    signature: string,
+  ): Promise<{ meta: { logMessages: string[] } } | null> {
+    this.record("getTransaction");
+    const tx = this.transactions.get(signature) ?? null;
+    if (this.getTransactionDelayMs <= 0) return Promise.resolve(tx);
+    return new Promise((resolve) => setTimeout(() => resolve(tx), this.getTransactionDelayMs));
   }
 
   /** The plain call the sweep falls back to when the RPC has no V2. Always

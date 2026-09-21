@@ -1027,11 +1027,23 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     );
 
     // Newest first from the RPC; replay oldest first so the cursor only moves
-    // forward.
-    for (const info of [...signatures].reverse()) {
-      const consumed = await this.enqueue(() => this.ingestSignature(info));
-      if (!consumed) return;
-    }
+    // forward. The whole backlog is one `enqueue` call, not one per
+    // signature: `enqueue` is a plain FIFO, so a live event arriving mid-page
+    // used to be able to schedule itself between two still-unprocessed
+    // backlog signatures (ticket 13's security review) once this signature's
+    // own `getTransaction` await returned control to the event loop. A
+    // referee whose Principal-changing events span both sides of that gap
+    // would then have them applied out of chronological order, which is not
+    // idempotent to reordering the way the position/invite-code side effects
+    // in `persist()` are (see `applyReferralEvent`). Wrapping the loop keeps
+    // this whole page as one queue slot, so nothing enqueued afterwards can
+    // land inside it.
+    await this.enqueue(async () => {
+      for (const info of [...signatures].reverse()) {
+        const consumed = await this.ingestSignature(info);
+        if (!consumed) return;
+      }
+    });
   }
 
   /**
