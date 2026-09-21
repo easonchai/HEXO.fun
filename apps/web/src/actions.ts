@@ -14,6 +14,7 @@ import {
   acceptedAta,
   bn,
   epochAddress,
+  jackpotVaultAddress,
   method,
   playerAddress,
   positionAddress,
@@ -88,6 +89,35 @@ export async function deposit(
         TOKEN_PROGRAM,
       ),
     ]);
+  return send(program, owner, builder);
+}
+
+/**
+ * Spends `amount` USDC into the jackpot vault for `amount × ticketsPerUsdc`
+ * Tickets (ticket 10). Per Player per day the program caps total spend at
+ * Principal, checked live: fails with `DailyBuyCapExceeded` over the cap,
+ * `HouseCannotBuyTickets` for the House Player.
+ */
+export async function buyTickets(
+  program: HexVaultProgram,
+  owner: TxSigner,
+  pool: PoolLike,
+  amount: bigint,
+): Promise<string> {
+  const o = owner.publicKey;
+  const builder = method(
+    program,
+    "buyTickets",
+  )(bn(amount))
+    .accounts({
+      owner: o,
+      pool: pool.address,
+      player: playerAddress(pool.address, o),
+      acceptedMint: pool.acceptedMint,
+      ownerToken: acceptedAta(pool.acceptedMint, o),
+      jackpotVault: jackpotVaultAddress(pool.address),
+      tokenProgram: TOKEN_PROGRAM,
+    });
   return send(program, owner, builder);
 }
 

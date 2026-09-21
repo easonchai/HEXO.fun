@@ -602,6 +602,7 @@ export function App() {
             walletBalance={walletBalance}
             paused={pool?.paused ?? false}
             currentEpoch={state?.currentEpoch ?? null}
+            now={now}
             pendingWithdraw={pendingWithdraw}
             pendingEpoch={pendingEpoch}
             initialMode={vaultMode}

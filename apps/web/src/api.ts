@@ -58,6 +58,10 @@ export interface PoolDto {
   minDeposit: string;
   /** Share of a settled round's pot credited to the House, in basis points. */
   houseCutBps: number;
+  /** Base yield's APR on time-weighted Principal, in basis points (ADR 0011). */
+  baseRateBps: number;
+  /** Tickets credited per USDC spent in `buy_tickets`. */
+  ticketsPerUsdc: number;
   paused: boolean;
   currentEpochId: string;
   currentEpochEndsAt: string;
@@ -127,6 +131,28 @@ export type LeaderboardRowDto = Pick<
   PlayerDto,
   "owner" | "principal" | "entries" | "isHouse" | "liveWeight" | "odds"
 >;
+
+/**
+ * `GET /players/:owner`: the Player row plus what `GET /state`'s embedded
+ * `player` does not carry (ticket 10). The backend also sends `boughtToday`
+ * and `grantedToday`; unmodeled here, since nothing in the web app reads them.
+ */
+export type PlayerExtrasDto = PlayerDto & {
+  /** What `register` credited this owner in the epoch it last credited. */
+  yieldLastEpoch: string;
+  /** Every Base yield credit this owner has ever received. */
+  yieldToDate: string;
+  /** USDC still spendable in `buy_tickets` today, capped at Principal. */
+  buyAllowanceLeft: string;
+};
+
+/** 404s with a human reason until the wallet has a Player (deposited once). */
+export const fetchPlayer = (
+  baseUrl: string,
+  owner: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<PlayerExtrasDto>> =>
+  get<PlayerExtrasDto>(baseUrl, `/players/${owner}`, signal);
 
 export interface EventDto {
   slot: string;

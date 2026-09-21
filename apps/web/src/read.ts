@@ -27,6 +27,12 @@ export interface PoolLike {
   /** Share of a settled round's pot credited to the House, in basis points. */
   houseCutBps: number;
   paused: boolean;
+  /** One epoch's length in seconds, for the buy-tickets draw-value preview. */
+  epochSeconds: bigint;
+  /** Base yield's APR on time-weighted Principal, in basis points (ADR 0011). */
+  baseRateBps: number;
+  /** Tickets credited per USDC spent in `buy_tickets`. */
+  ticketsPerUsdc: number;
 }
 
 /** Pure mapping from the API's decimal-string shape to the PublicKey/bigint one signing code needs. */
@@ -40,6 +46,9 @@ export function poolFromDto(
     minDeposit: BigInt(dto.minDeposit),
     houseCutBps: dto.houseCutBps,
     paused: dto.paused,
+    epochSeconds: BigInt(dto.epochSeconds),
+    baseRateBps: dto.baseRateBps,
+    ticketsPerUsdc: dto.ticketsPerUsdc,
   };
 }
 
