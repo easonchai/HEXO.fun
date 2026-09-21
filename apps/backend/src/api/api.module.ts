@@ -7,6 +7,7 @@ import { AccessController } from "./access.controller";
 import { ApiController } from "./api.controller";
 import { ApiService } from "./api.service";
 import { FaucetController } from "./faucet.controller";
+import { ReferralsController } from "./referrals.controller";
 import { SerializationInterceptor } from "./serialization.interceptor";
 
 /**
@@ -31,7 +32,7 @@ import { SerializationInterceptor } from "./serialization.interceptor";
       },
     ]),
   ],
-  controllers: [ApiController, FaucetController, AccessController],
+  controllers: [ApiController, FaucetController, AccessController, ReferralsController],
   providers: [
     ApiService,
     { provide: APP_INTERCEPTOR, useClass: SerializationInterceptor },
