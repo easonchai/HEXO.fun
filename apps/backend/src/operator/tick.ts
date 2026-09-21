@@ -49,13 +49,22 @@ const SHORT_VAULT = "InsufficientVaultLiquidity";
  * has to reach `runOnce()`, or an RPC blip would look like an unpayable
  * winner and retry silently with no `lastError` until the timeout.
  *
- * The first three are Anchor's own constraint names on `payout`'s
- * `winner_token`, which `ChainService.mapSendError` surfaces verbatim. SPL
- * Token's codes are in neither error table, so a frozen destination arrives
- * as the raw custom error code instead; both spellings are listed because a
- * test names the error and a validator names the code. Only SPL Token and
- * this program run in a payout transaction, and this program's codes start
- * at 0x1770, so 0x11 can only be SPL Token's.
+ * `payout`'s non-House branch no longer has a `winner_token` account at all
+ * (docs/plan/hexo-referrals ticket 02): the prize compounds into
+ * `principal_vault`, a pool-owned PDA, so a non-House winner has nothing left
+ * here that can independently be uninitialized, wrong-mint, wrong-owner or
+ * frozen the way an arbitrary external token account could. These markers
+ * now only have a real "unpayable winner" case on a House win, whose prize
+ * still lands in the externally-owned `treasury`/`buyback_reserve` accounts
+ * pinned at `create_pool` (see ADR 0010 and ticket 02's Comments). The
+ * strings themselves are unchanged: they are Anchor's and SPL Token's own
+ * generic account-constraint names, so they still match whichever account in
+ * the transaction actually failed, House-only or not. SPL Token's codes are
+ * in neither error table, so a frozen destination arrives as the raw custom
+ * error code instead; both spellings are listed because a test names the
+ * error and a validator names the code. Only SPL Token and this program run
+ * in a payout transaction, and this program's codes start at 0x1770, so 0x11
+ * can only be SPL Token's.
  */
 const UNPAYABLE_WINNER = [
   "AccountNotInitialized",
