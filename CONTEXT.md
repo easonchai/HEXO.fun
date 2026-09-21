@@ -1,6 +1,6 @@
 # HexVault
 
-A no-loss lottery on Solana: users deposit USDC into a pool, the pool's yield becomes the daily draw's prize, and each depositor's time-weighted Tickets decide their odds. Tickets can be risked in a MinePEA-style hex-tile game against other depositors to win more Tickets, but principal is never at stake.
+A no-loss lottery on Solana: users deposit USDC into a pool, earn a Base yield on it, the rest of the pool's yield becomes the daily draw's prize, and each depositor's time-weighted Tickets decide their odds. Tickets can be risked in a MinePEA-style hex-tile game against other depositors to win more Tickets, but principal is never at stake.
 
 Player-facing words differ from mechanism names in three places, on purpose: the screen says "day" where the code says epoch, "prize" or "hexpot" where the code says jackpot, and "tickets" where the code says entries. Code, API and program identifiers keep the mechanism names.
 
@@ -48,10 +48,31 @@ _Avoid_: Fee account, protocol revenue
 The USDC account that receives 50% of a prize the House wins, earmarked for a future token buyback. Its address is set at `create_pool` like the Treasury's.
 _Avoid_: Buyback wallet, HEX fund
 
+**Base yield**:
+The fixed rate every depositor earns on their time-weighted Principal, credited into Principal once per ended epoch. Paid only out of the Yield budget, so it stops rather than runs a debt when the budget is empty.
+_Avoid_: Interest, APY (as the mechanism name), staking reward
+
+**Yield budget**:
+USDC already sitting in the principal vault that is earmarked for Base yield and not yet credited to anyone. Anyone can top it up; each credit draws it down.
+_Avoid_: Reserve, yield pool
+
 ### Lottery
 
+**Bought tickets**:
+Tickets a depositor pays USDC for, at a pool-set number of Tickets per USDC, up to their Principal in USDC per epoch. The USDC goes to the jackpot vault and is never returned. Bought tickets are ordinary Tickets from the moment they land.
+_Avoid_: Purchased entries, deposit (a bought ticket is not Principal)
+
+**Granted tickets**:
+Tickets credited to a Player by the Operator key or the Admin rather than earned by depositing, buying or playing. Operator grants are capped per Player and per pool per epoch; Admin grants are not. Ordinary Tickets once credited.
+_Avoid_: Minted tickets, airdrop, free tickets (those are the daily reset)
+
+**Referral bonus**:
+The Granted tickets a Referrer receives at the start of each epoch: a rate set by their count of Qualified referrals, applied to those referrals' Principal.
+_Avoid_: Commission, referral reward pool
+
+
 **Tickets**:
-A depositor's current balance of lottery weight units. Created 1:1 with Principal on deposit, moved between players by the game, and reset to equal Principal at each new epoch. Non-transferable, non-redeemable, never USDC. Code, the API and the program call them entries (`Player.entries`); the screen and this glossary say Tickets.
+A depositor's current balance of lottery weight units. Created 1:1 with Principal on deposit, added by Bought tickets and Granted tickets, moved between players by the game, and reset to equal Principal at each new epoch. Non-transferable, non-redeemable, never USDC. Code, the API and the program call them entries (`Player.entries`); the screen and this glossary say Tickets.
 _Avoid_: Entries (on screen), ET, entry token, chances, chips
 
 **Weight**:
@@ -71,7 +92,7 @@ The player-facing name for one epoch's draw and payout. The screen says "daily d
 _Avoid_: Jackpot, lottery, raffle
 
 **Prize**:
-The yield the pool earned during an epoch, paid in full to the daily draw's single winner. The Admin harvests the yield and funds the jackpot vault by hand before the draw, through the permissionless `fund_jackpot`. Code and the API call this amount the jackpot (`jackpotAmount`, `fund_jackpot`).
+What the jackpot vault holds for an epoch at close, paid in full to the daily draw's single winner: yield the pool earned above Base yield, sponsor money, and Bought tickets' USDC. The Admin harvests the yield and funds the jackpot vault by hand before the draw, through the permissionless `fund_jackpot`. Code and the API call this amount the jackpot (`jackpotAmount`, `fund_jackpot`).
 _Avoid_: Jackpot (on screen), pot, reward (a game concept)
 
 **Hexpot**:
@@ -87,7 +108,7 @@ The verifiable random selection of one point in an epoch's total registered Weig
 _Avoid_: Snapshot, lottery, raffle
 
 **Payout**:
-The transfer of the Prize to the winner's USDC account. No claim step, and no signer: the operator cranks it, but anyone can, because the winner and the destination are both fixed on chain. If the House wins, the Prize splits 50% buyback reserve, 30% stays for the next epoch, 20% treasury.
+Moving the Prize from the jackpot vault into the principal vault and adding it to the winner's Principal, so it compounds and is withdrawn like any other Principal. No claim step, and no signer: the operator cranks it, but anyone can, because the winner is fixed on chain. If the House wins, the Prize splits 50% buyback reserve, 30% stays for the next epoch, 20% treasury.
 _Avoid_: Claim, redeem
 
 **Rollover**:
@@ -135,6 +156,20 @@ _Avoid_: Burn, rollover (a lottery concept)
 **Void**:
 A round whose randomness never arrived. Its pot carries into the next round's pot.
 _Avoid_: Cancel, refund
+
+### Growth
+
+**Invite code**:
+A code that lets a wallet past the beta gate. It may have an owner, and it has a use limit. The gate is in the app, not the program.
+_Avoid_: Access token, whitelist
+
+**Referrer**:
+The owner of the Invite code a wallet redeemed before its first deposit. Fixed for good once written.
+_Avoid_: Sponsor, upline, inviter
+
+**Qualified referral**:
+A wallet whose Referrer is set and whose Principal has stayed at or above 50 USDC for the last 7 days without a break. Dropping below ends it at once; it restarts the 7 days from zero.
+_Avoid_: Active referral, crew member
 
 ### Operations
 
