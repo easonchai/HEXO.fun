@@ -1090,4 +1090,25 @@ mod tests {
         assert_eq!(shortfall, 0);
         assert_eq!(house.principal, 0);
     }
+
+    #[test]
+    fn credit_yield_does_not_touch_when_the_budget_credits_nothing() {
+        // register() must stay read-only for a Player whose credit is 0 (an
+        // empty budget): a later natural touch (deposit/withdraw) still owns
+        // rolling epoch_id/weight_acc forward, exactly as it does for a
+        // Player earning no yield at all.
+        let principal: u64 = 1_000_000_000;
+        let epoch1 = epoch_at(1, 0, DAY);
+        let mut p = player(principal, principal, 0, 0);
+
+        let (_, ps1) = weight_and_principal_seconds(&epoch1, &p).expect("epoch 1 ps");
+        let mut pool = pool_at(2, DAY, 488, 0); // empty budget
+        let (credited, shortfall) =
+            credit_yield(&mut pool, &mut p, ps1, DAY + 100).expect("credit");
+
+        assert_eq!(credited, 0);
+        assert!(shortfall > 0);
+        assert_eq!(p.epoch_id, 0, "untouched: nothing was actually credited");
+        assert_eq!(p.last_update, 0);
+    }
 }
