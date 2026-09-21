@@ -190,6 +190,13 @@ describe("OperatorService.duePendingWithdrawals", () => {
     regStart: "0",
     regEnd: "0",
     isHouse: false,
+    principalAcc: "0",
+    frozenPrincipalAcc: "0",
+    yieldEpoch: 0n,
+    boughtEpoch: 0n,
+    boughtAmount: 0n,
+    bonusEpoch: 0n,
+    bonusGranted: 0n,
     ...over,
   });
 

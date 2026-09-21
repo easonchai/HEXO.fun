@@ -118,6 +118,9 @@ const CASES: Case[] = [
       u64(2_000_000n),
       i64(600n),
       i64(86_400n),
+      u16(488),
+      u16(10),
+      u16(500),
     ],
     data: {
       pool: POOL,
@@ -131,6 +134,9 @@ const CASES: Case[] = [
       minJackpot: "2000000",
       registrationWindow: "600",
       payoutTimeout: "86400",
+      baseRateBps: 488,
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
     },
   },
   {
@@ -224,13 +230,39 @@ const CASES: Case[] = [
   },
   {
     name: "JackpotPaid",
-    fields: [u64(2n), key(OWNER), u64(10_000_000n), bool(true)],
-    data: { epochId: "2", winner: OWNER, amount: "10000000", isHouse: true },
+    fields: [u64(2n), key(OWNER), u64(10_000_000n), bool(true), bool(false)],
+    data: {
+      epochId: "2",
+      winner: OWNER,
+      amount: "10000000",
+      isHouse: true,
+      compounded: false,
+    },
   },
   {
     name: "EpochRolledOver",
     fields: [u64(2n), u64(10_000_000n)],
     data: { epochId: "2", jackpotAmount: "10000000" },
+  },
+  {
+    name: "YieldFunded",
+    fields: [u64(5_000_000n), u64(12_000_000n)],
+    data: { amount: "5000000", budget: "12000000" },
+  },
+  {
+    name: "YieldCredited",
+    fields: [u64(2n), key(OWNER), u64(1_200n), u64(300n)],
+    data: { epochId: "2", owner: OWNER, amount: "1200", shortfall: "300" },
+  },
+  {
+    name: "TicketsBought",
+    fields: [key(OWNER), u64(2n), u64(500_000n), u64(5_000_000n)],
+    data: { owner: OWNER, epochId: "2", usdc: "500000", tickets: "5000000" },
+  },
+  {
+    name: "TicketsGranted",
+    fields: [key(OWNER), u64(2n), u64(750_000n), bool(false)],
+    data: { owner: OWNER, epochId: "2", amount: "750000", byAdmin: false },
   },
 ];
 
@@ -323,6 +355,12 @@ describe("poolRow", () => {
       previousEpochEndsAt: new BN(1_789_401_600),
       totalPrincipal: new BN(3_000_000),
       carryPot: new BN(0),
+      baseRateBps: 488,
+      yieldBudget: new BN(9_000_000),
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
+      bonusEpoch: new BN(3),
+      bonusGranted: new BN(40_000),
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       epochSeconds: 86_400n,
@@ -334,6 +372,45 @@ describe("poolRow", () => {
       // the decode rather than being dropped (ticket 07).
       closeBuffer: 12n,
       minDeposit: 1_000_000n,
+    });
+  });
+
+  // Ticket 05: base yield, bought tickets and granted tickets.
+  it("carries the base yield and ticket-economy fields", () => {
+    const pool: DecodedPool = {
+      poolId: new BN(7),
+      admin: new PublicKey(OWNER),
+      operator: new PublicKey(MINT),
+      pendingAdmin: PublicKey.default,
+      acceptedMint: new PublicKey(MINT),
+      pendingWithdrawals: new BN(0),
+      minJackpot: new BN(0),
+      epochSeconds: new BN(86_400),
+      epochAnchor: new BN(0),
+      roundSeconds: new BN(90),
+      closeBuffer: new BN(12),
+      minDeposit: new BN(0),
+      houseCutBps: 0,
+      paused: false,
+      currentEpochId: new BN(3),
+      currentEpochEndsAt: new BN(0),
+      previousEpochEndsAt: new BN(0),
+      totalPrincipal: new BN(0),
+      carryPot: new BN(0),
+      baseRateBps: 488,
+      yieldBudget: new BN(9_000_000),
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
+      bonusEpoch: new BN(3),
+      bonusGranted: new BN(40_000),
+    };
+    expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
+      baseRateBps: 488,
+      yieldBudget: 9_000_000n,
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
+      bonusEpoch: 3n,
+      bonusGranted: 40_000n,
     });
   });
 
@@ -360,6 +437,12 @@ describe("poolRow", () => {
       previousEpochEndsAt: new BN(1_789_401_600),
       totalPrincipal: new BN(3_000_000),
       carryPot: new BN(0),
+      baseRateBps: 488,
+      yieldBudget: new BN(0),
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
+      bonusEpoch: new BN(0),
+      bonusGranted: new BN(0),
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       admin: OWNER,
@@ -391,6 +474,12 @@ describe("poolRow", () => {
       previousEpochEndsAt: new BN(0),
       totalPrincipal: new BN(0),
       carryPot: new BN(0),
+      baseRateBps: 0,
+      yieldBudget: new BN(0),
+      ticketsPerUsdc: 10,
+      bonusCapBps: 0,
+      bonusEpoch: new BN(0),
+      bonusGranted: new BN(0),
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n).pendingAdmin).toBeNull();
   });
@@ -416,10 +505,57 @@ describe("playerRow", () => {
       isHouse: false,
       pendingWithdraw: new BN(750_000),
       pendingEpoch: new BN(4),
+      principalAcc: new BN(0),
+      frozenPrincipalAcc: new BN(0),
+      yieldEpoch: new BN(0),
+      boughtEpoch: new BN(0),
+      boughtAmount: new BN(0),
+      bonusEpoch: new BN(0),
+      bonusGranted: new BN(0),
     };
     expect(playerRow(player)).toMatchObject({
       pendingWithdraw: 750_000n,
       pendingEpoch: 4n,
+    });
+  });
+
+  // Ticket 05: base yield's principal-seconds accumulator and the bought/
+  // granted ticket counters.
+  it("carries the base yield and ticket-economy fields", () => {
+    const player: DecodedPlayer = {
+      owner: new PublicKey(OWNER),
+      principal: new BN(3_000_000),
+      entries: new BN(3_000_000),
+      weightAcc: new BN(0),
+      lastUpdate: new BN(1_700_000_000),
+      epochId: new BN(4),
+      frozenWeight: new BN(0),
+      frozenEpoch: new BN(0),
+      regEpoch: new BN(0),
+      regStart: new BN(0),
+      regEnd: new BN(0),
+      isHouse: false,
+      pendingWithdraw: new BN(0),
+      pendingEpoch: new BN(0),
+      // A u128 past 2^64, like `Registered`'s weight fixture: proves this
+      // takes the same BN -> Decimal(40,0) string path as weightAcc, not a
+      // truncating BN -> Number one.
+      principalAcc: new BN("18446744073709551617"),
+      frozenPrincipalAcc: new BN(500),
+      yieldEpoch: new BN(3),
+      boughtEpoch: new BN(4),
+      boughtAmount: new BN(200_000),
+      bonusEpoch: new BN(4),
+      bonusGranted: new BN(50_000),
+    };
+    expect(playerRow(player)).toMatchObject({
+      principalAcc: "18446744073709551617",
+      frozenPrincipalAcc: "500",
+      yieldEpoch: 3n,
+      boughtEpoch: 4n,
+      boughtAmount: 200_000n,
+      bonusEpoch: 4n,
+      bonusGranted: 50_000n,
     });
   });
 });

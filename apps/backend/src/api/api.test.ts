@@ -40,6 +40,9 @@ import {
   CHAIN_CLOCK_TTL_MS,
   JACKPOT_BALANCE_TTL_MS,
   oddsPercent,
+  oneDayYieldCost,
+  playerTicketExtras,
+  poolBonusCap,
   weightAt,
 } from "./api.service";
 
@@ -77,6 +80,18 @@ const POOL_MIN_DEPOSIT = 1_000_000n;
 const POOL_PENDING_WITHDRAWALS = 3_000_000n;
 const PRINCIPAL_VAULT_BALANCE = 9_000_000n;
 const OPERATOR_LAMPORTS = 2 * LAMPORTS_PER_SOL;
+
+/** Ticket 05's `/status`, `/pool` and `/players/:owner` figures: base yield,
+ *  bought tickets and granted tickets. */
+const POOL_BASE_RATE_BPS = 488;
+// Far under one day's yield cost at that rate against HUGE_U64's Principal,
+// so the low-budget warning is exercised by the default seed.
+const POOL_YIELD_BUDGET = 5_000_000n;
+const POOL_TICKETS_PER_USDC = 10;
+const POOL_BONUS_CAP_BPS = 500;
+const POOL_BONUS_GRANTED = 250_000n;
+const ALICE_BOUGHT_AMOUNT = 200_000n;
+const ALICE_BONUS_GRANTED = 50_000n;
 
 /** The operator key, which is also the authority of the mint the faucet
  *  mints from; the faucet resolves that at boot. */
@@ -215,6 +230,13 @@ const emptyPlayer = (owner: string): Player => ({
   isHouse: false,
   pendingWithdraw: 0n,
   pendingEpoch: 0n,
+  principalAcc: new Prisma.Decimal(0),
+  frozenPrincipalAcc: new Prisma.Decimal(0),
+  yieldEpoch: 0n,
+  boughtEpoch: 0n,
+  boughtAmount: 0n,
+  bonusEpoch: 0n,
+  bonusGranted: 0n,
 });
 
 const MAX_JSON_SAFE = 2 ** 53;
@@ -304,6 +326,74 @@ describe("oddsPercent", () => {
   });
 });
 
+describe("oneDayYieldCost", () => {
+  it("matches register's per-second rate over a full day", () => {
+    // 1,000 USDC at 500 bps (5%) for a year is 50 USDC; one 365th of that,
+    // atomic (6 decimals), is what one day costs the whole pool.
+    expect(oneDayYieldCost(1_000_000_000n, 500)).toBe(136_986n);
+  });
+
+  it("is zero at a zero rate or with no Principal", () => {
+    expect(oneDayYieldCost(1_000_000_000n, 0)).toBe(0n);
+    expect(oneDayYieldCost(0n, 500)).toBe(0n);
+  });
+});
+
+describe("poolBonusCap", () => {
+  it("mirrors the on-chain pool_bonus_cap", () => {
+    expect(poolBonusCap(1_000_000_000n, 500)).toBe(50_000_000n);
+  });
+
+  it("is zero at a zero cap", () => {
+    expect(poolBonusCap(1_000_000_000n, 0)).toBe(0n);
+  });
+});
+
+describe("playerTicketExtras", () => {
+  const ALICE_ADDRESS = Keypair.generate().publicKey.toBase58();
+  const player = (over: Partial<Player>): Player => ({
+    ...emptyPlayer(ALICE_ADDRESS),
+    principal: 1_000_000n,
+    ...over,
+  });
+
+  it("reads today's counters live when their epoch matches the current one", () => {
+    const extras = playerTicketExtras(
+      player({ boughtEpoch: 7n, boughtAmount: 300_000n, bonusEpoch: 7n, bonusGranted: 40_000n }),
+      7n,
+    );
+    expect(extras).toEqual({
+      boughtToday: 300_000n,
+      buyAllowanceLeft: 700_000n,
+      grantedToday: 40_000n,
+    });
+  });
+
+  it("reads a counter from a past epoch as already reset to 0", () => {
+    // The on-chain reset only happens the next time buy_tickets/grant_tickets
+    // actually runs for the new epoch, so a leftover epoch=6 value must not
+    // leak into epoch 7's figures.
+    const extras = playerTicketExtras(
+      player({ boughtEpoch: 6n, boughtAmount: 300_000n, bonusEpoch: 6n, bonusGranted: 40_000n }),
+      7n,
+    );
+    expect(extras).toEqual({ boughtToday: 0n, buyAllowanceLeft: 1_000_000n, grantedToday: 0n });
+  });
+
+  it("floors buyAllowanceLeft at zero once bought spend reaches or passes Principal", () => {
+    expect(
+      playerTicketExtras(player({ principal: 1_000n, boughtEpoch: 7n, boughtAmount: 1_000n }), 7n)
+        .buyAllowanceLeft,
+    ).toBe(0n);
+    // Reads 0, not negative, even if a drifted row somehow has more spent
+    // than the current Principal covers.
+    expect(
+      playerTicketExtras(player({ principal: 500n, boughtEpoch: 7n, boughtAmount: 1_000n }), 7n)
+        .buyAllowanceLeft,
+    ).toBe(0n);
+  });
+});
+
 describe("API routes", () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -349,6 +439,11 @@ describe("API routes", () => {
       epochAnchor: String(CURRENT_START),
       currentEpochEndsAt: String(CURRENT_START + EPOCH_LENGTH),
       previousEpochEndsAt: String(CURRENT_START),
+      // Ticket 05: the whole Pool row rides along, so these need no route
+      // change to show up.
+      baseRateBps: POOL_BASE_RATE_BPS,
+      ticketsPerUsdc: POOL_TICKETS_PER_USDC,
+      bonusCapBps: POOL_BONUS_CAP_BPS,
     });
     expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
     expect(body.openRound).toEqual({
@@ -421,6 +516,38 @@ describe("API routes", () => {
     const expectedLiveWeight = BigInt(HUGE_U128) + 1_000_000n * (CHAIN_NOW - CURRENT_START);
     expect(body.liveWeight).toBe(expectedLiveWeight.toString());
     assertNoLargeNumbers(body, "/players/:owner");
+  });
+
+  it("GET /players/:owner reports today's bought and granted tickets, and Base yield earned", async () => {
+    const { body } = await http.get(`/players/${ALICE}`).expect(200);
+    // bonusEpoch/boughtEpoch both equal the current epoch (7) in the seed,
+    // so both counters read live rather than reset to 0.
+    expect(body.boughtToday).toBe(ALICE_BOUGHT_AMOUNT.toString());
+    expect(body.buyAllowanceLeft).toBe((1_000_000n - ALICE_BOUGHT_AMOUNT).toString());
+    expect(body.grantedToday).toBe(ALICE_BONUS_GRANTED.toString());
+    // yieldEpoch is the previous epoch (6): only that epoch's YieldCredited
+    // row counts toward yieldLastEpoch, but every epoch's counts toward
+    // yieldToDate.
+    expect(body.yieldLastEpoch).toBe("12000");
+    expect(body.yieldToDate).toBe("20000");
+    assertNoLargeNumbers(body, "/players/:owner (yield/tickets)");
+  });
+
+  it("GET /players/:owner floors buyAllowanceLeft at zero once bought spend reaches Principal", async () => {
+    await prisma.player.update({
+      where: { owner: BOB },
+      data: { principal: 1_000n, boughtEpoch: CURRENT_EPOCH, boughtAmount: 1_000n },
+    });
+    try {
+      const { body } = await http.get(`/players/${BOB}`).expect(200);
+      expect(body.boughtToday).toBe("1000");
+      expect(body.buyAllowanceLeft).toBe("0");
+    } finally {
+      await prisma.player.update({
+        where: { owner: BOB },
+        data: { principal: 0n, boughtEpoch: 0n, boughtAmount: 0n },
+      });
+    }
   });
 
   it("GET /players/:owner gives zero odds to a player with no entries", async () => {
@@ -584,6 +711,24 @@ describe("API routes", () => {
     // SOL, not lamports, so the warning threshold reads in the same unit.
     expect(body.operatorSol).toBe(2);
     expect(body.operatorSolLow).toBe(false);
+  });
+
+  it("GET /status reports the yield budget, bonus grants and the low-budget warning", async () => {
+    const { body } = await http.get("/status").expect(200);
+    expect(body.yieldBudget).toBe(POOL_YIELD_BUDGET.toString());
+    // Only epoch 6's YieldCredited rows count (Alice 500 + Bob 300); epoch
+    // 5's 999 is a different epoch and must not be added in.
+    expect(body.yieldShortfall).toBe("800");
+    expect(body.bonusGrantedToday).toBe(POOL_BONUS_GRANTED.toString());
+    expect(body.bonusCap).toBe(
+      poolBonusCap(BigInt(HUGE_U64), POOL_BONUS_CAP_BPS).toString(),
+    );
+    // HUGE_U64's Principal makes one day of yield dwarf the seeded budget.
+    expect(
+      POOL_YIELD_BUDGET < oneDayYieldCost(BigInt(HUGE_U64), POOL_BASE_RATE_BPS),
+    ).toBe(true);
+    expect(body.yieldBudgetLow).toBe(true);
+    assertNoLargeNumbers(body, "/status (yield)");
   });
 
   describe("GET /state", () => {
@@ -919,6 +1064,12 @@ async function seed(prisma: PrismaService): Promise<void> {
       previousEpochEndsAt: CURRENT_START,
       totalPrincipal: BigInt(HUGE_U64),
       carryPot: 0n,
+      baseRateBps: POOL_BASE_RATE_BPS,
+      yieldBudget: POOL_YIELD_BUDGET,
+      ticketsPerUsdc: POOL_TICKETS_PER_USDC,
+      bonusCapBps: POOL_BONUS_CAP_BPS,
+      bonusEpoch: CURRENT_EPOCH,
+      bonusGranted: POOL_BONUS_GRANTED,
       updatedSlot: 15n,
     },
   });
@@ -989,6 +1140,11 @@ async function seed(prisma: PrismaService): Promise<void> {
         regEpoch: PREVIOUS_EPOCH,
         regStart: "0",
         regEnd: HUGE_U128,
+        yieldEpoch: PREVIOUS_EPOCH,
+        boughtEpoch: CURRENT_EPOCH,
+        boughtAmount: ALICE_BOUGHT_AMOUNT,
+        bonusEpoch: CURRENT_EPOCH,
+        bonusGranted: ALICE_BONUS_GRANTED,
       },
       // Withdrew everything, so no entries and no weight this epoch.
       emptyPlayer(BOB),
@@ -1029,6 +1185,13 @@ async function seed(prisma: PrismaService): Promise<void> {
       // Reward stored as a JSON number rather than a string, which the feed
       // filter has to accept just the same.
       { slot: 15n, signature: "sig15", index: 0, name: "PositionSettled", data: { owner: ALICE, reward: 7 }, blockTime: NOW - 50n },
+      // Ticket 05: yieldLastEpoch/yieldToDate (/players/:owner) sum these by
+      // owner; yieldShortfall (/status) sums the previous epoch's by epochId
+      // alone, across every owner. Epoch 5's row is outside that epoch and
+      // must not be counted.
+      { slot: 16n, signature: "sig16", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH - 1n), owner: ALICE, amount: "8000", shortfall: "999" }, blockTime: NOW - 45n },
+      { slot: 17n, signature: "sig17", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH), owner: ALICE, amount: "12000", shortfall: "500" }, blockTime: NOW - 40n },
+      { slot: 18n, signature: "sig18", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH), owner: BOB, amount: "700", shortfall: "300" }, blockTime: NOW - 35n },
     ],
   });
 

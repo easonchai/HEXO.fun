@@ -38,6 +38,20 @@ model Pool {
   minJackpot          BigInt
   carryPot            BigInt
   houseCutBps         Int
+  /// Base yield's APR on time-weighted Principal, in basis points.
+  baseRateBps         Int
+  /// USDC in the principal vault earmarked for Base yield, not yet credited.
+  yieldBudget         BigInt
+  /// Tickets credited per USDC spent in `buy_tickets`.
+  ticketsPerUsdc      Int
+  /// Share of totalPrincipal, in basis points, an operator grant_tickets
+  /// call may credit pool-wide per epoch.
+  bonusCapBps         Int
+  /// The epoch bonusGranted is counted against.
+  bonusEpoch          BigInt
+  /// Tickets an operator grant_tickets call has credited pool-wide so far
+  /// in bonusEpoch.
+  bonusGranted        BigInt
   updatedSlot         BigInt
 }
 
@@ -82,6 +96,22 @@ model Player {
   pendingWithdraw BigInt
   /// The epoch the request was made in. It pays once the pool has moved past it.
   pendingEpoch    BigInt
+  /// Σ principal × seconds within epochId. Mirrors weightAcc with Principal
+  /// in place of Entries.
+  principalAcc       Decimal @db.Decimal(40, 0)
+  /// Final principal-seconds for frozenEpoch, set alongside frozenWeight.
+  frozenPrincipalAcc Decimal @db.Decimal(40, 0)
+  /// The epoch Base yield was last credited for.
+  yieldEpoch         BigInt
+  /// The epoch boughtAmount is counted against.
+  boughtEpoch        BigInt
+  /// USDC spent in buy_tickets so far in boughtEpoch, capped at principal.
+  boughtAmount       BigInt
+  /// The epoch bonusGranted is counted against.
+  bonusEpoch         BigInt
+  /// Tickets an operator grant_tickets call has credited this Player so far
+  /// in bonusEpoch.
+  bonusGranted       BigInt
 }
 
 model Position {

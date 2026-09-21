@@ -102,6 +102,34 @@ export function weightAt(
   return 0n;
 }
 
+/**
+ * `bought_epoch`/`bought_amount`, `bonus_epoch`/`bonus_granted` and
+ * `yield_epoch` reset lazily on chain, the next time the matching
+ * instruction runs for a stale epoch, not the moment the epoch turns over.
+ * A read has to apply the same gate: a counter left over from a past epoch
+ * reads as though it were already reset to 0.
+ */
+function ifCurrentEpoch(counterEpoch: bigint, currentEpochId: bigint, value: bigint): bigint {
+  return counterEpoch === currentEpochId ? value : 0n;
+}
+
+/**
+ * Atomic USDC one day of Base yield would cost the whole pool at the
+ * current rate: `total_principal × base_rate_bps / (10_000 × 365)`. Same
+ * per-second rate `register` applies (`10_000 × 31_536_000` seconds in a
+ * year), and 31_536_000 / 86_400 is exactly 365, so a full epoch's cost
+ * scales by 365 rather than the longer seconds-per-year fraction.
+ */
+export function oneDayYieldCost(totalPrincipal: bigint, baseRateBps: number): bigint {
+  return (totalPrincipal * BigInt(baseRateBps)) / (10_000n * 365n);
+}
+
+/** Pool-wide `grant_tickets` cap for one epoch, mirroring the on-chain
+ *  `pool_bonus_cap`. */
+export function poolBonusCap(totalPrincipal: bigint, bonusCapBps: number): bigint {
+  return (totalPrincipal * BigInt(bonusCapBps)) / 10_000n;
+}
+
 /** Share of the total as a percentage with two decimals, e.g. "12.34". */
 export function oddsPercent(weight: bigint, total: bigint): string {
   if (total <= 0n || weight <= 0n) return "0.00";
@@ -301,7 +329,43 @@ export class ApiService {
         "No Player account for that wallet yet. Deposit to open one.",
       );
     }
-    return playerDto(mine, total);
+    const [pool, yieldStats] = await Promise.all([
+      this.requirePool(),
+      this.playerYieldStats(owner, mine.player.yieldEpoch),
+    ]);
+    return {
+      ...playerDto(mine, total),
+      ...playerTicketExtras(mine.player, pool.currentEpochId),
+      ...yieldStats,
+    };
+  }
+
+  /**
+   * `yieldLastEpoch` (what `register` credited this owner in
+   * `player.yieldEpoch`, the most recent epoch a credit landed) and
+   * `yieldToDate` (every credit ever), summed from the `YieldCredited`
+   * event log the same way `getPositionCounts` sums `PositionBought`.
+   */
+  private async playerYieldStats(
+    owner: string,
+    yieldEpoch: bigint,
+  ): Promise<{ yieldToDate: bigint; yieldLastEpoch: bigint }> {
+    const rows = await this.prisma.$queryRaw<
+      { yieldToDate: string; yieldLastEpoch: string }[]
+    >`
+      SELECT
+        COALESCE(SUM((data->>'amount')::numeric), 0)::text AS "yieldToDate",
+        COALESCE(SUM((data->>'amount')::numeric) FILTER (
+          WHERE (data->>'epochId')::bigint = ${yieldEpoch}
+        ), 0)::text AS "yieldLastEpoch"
+      FROM "Event"
+      WHERE name = 'YieldCredited' AND data->>'owner' = ${owner}
+    `;
+    const row = rows[0];
+    return {
+      yieldToDate: BigInt(row?.yieldToDate ?? "0"),
+      yieldLastEpoch: BigInt(row?.yieldLastEpoch ?? "0"),
+    };
   }
 
   /**
@@ -476,7 +540,59 @@ export class ApiService {
       this.rpcHealth(),
       this.chainBalances(),
     ]);
-    return statusFrom(operator, cursor, rpc, pool, balances, this.operatorSolWarn);
+    return {
+      ...statusFrom(operator, cursor, rpc, pool, balances, this.operatorSolWarn),
+      ...(await this.yieldStatus(pool)),
+    };
+  }
+
+  /**
+   * `yieldBudget`, `yieldShortfall` (the last ended epoch's uncredited Base
+   * yield), `bonusGrantedToday`, `bonusCap`, and `yieldBudgetLow` for
+   * GET /status (ticket 05). Null pool (not indexed yet) reads as every
+   * figure being 0/false rather than throwing, matching the rest of
+   * `getStatus`, which already tolerates a missing pool row.
+   */
+  private async yieldStatus(pool: Pool | null): Promise<{
+    yieldBudget: bigint;
+    yieldShortfall: bigint;
+    bonusGrantedToday: bigint;
+    bonusCap: bigint;
+    yieldBudgetLow: boolean;
+  }> {
+    if (pool === null) {
+      return {
+        yieldBudget: 0n,
+        yieldShortfall: 0n,
+        bonusGrantedToday: 0n,
+        bonusCap: 0n,
+        yieldBudgetLow: false,
+      };
+    }
+    return {
+      yieldBudget: pool.yieldBudget,
+      yieldShortfall: await this.lastEpochYieldShortfall(pool.currentEpochId),
+      bonusGrantedToday: ifCurrentEpoch(pool.bonusEpoch, pool.currentEpochId, pool.bonusGranted),
+      bonusCap: poolBonusCap(pool.totalPrincipal, pool.bonusCapBps),
+      yieldBudgetLow: pool.yieldBudget < oneDayYieldCost(pool.totalPrincipal, pool.baseRateBps),
+    };
+  }
+
+  /**
+   * Σ `YieldCredited.shortfall` for the epoch `register` last credited
+   * (`currentEpochId - 1`, "yesterday" in spec.md's words), from the event
+   * log the same way `getPositionCounts` sums `PositionBought`. 0 before the
+   * pool has completed a first epoch.
+   */
+  private async lastEpochYieldShortfall(currentEpochId: bigint): Promise<bigint> {
+    if (currentEpochId <= 0n) return 0n;
+    const lastEpoch = currentEpochId - 1n;
+    const rows = await this.prisma.$queryRaw<{ shortfall: string }[]>`
+      SELECT COALESCE(SUM((data->>'shortfall')::numeric), 0)::text AS shortfall
+      FROM "Event"
+      WHERE name = 'YieldCredited' AND (data->>'epochId')::bigint = ${lastEpoch}
+    `;
+    return BigInt(rows[0]?.shortfall ?? "0");
   }
 
   private async requirePool(): Promise<Pool> {
@@ -761,5 +877,20 @@ function playerDto(entry: LiveWeight, total: bigint) {
     ...entry.player,
     liveWeight: entry.liveWeight,
     odds: oddsPercent(entry.drawWeight, total),
+  };
+}
+
+/**
+ * `boughtToday`, `buyAllowanceLeft` and `grantedToday` for `/players/:owner`,
+ * from the epoch-gated counters `buy_tickets`/`grant_tickets` keep on the
+ * Player (see `ifCurrentEpoch`). `buyAllowanceLeft` mirrors the on-chain
+ * cap check in `bought_amount_after`: spend is capped at Principal per day.
+ */
+export function playerTicketExtras(player: Player, currentEpochId: bigint) {
+  const boughtToday = ifCurrentEpoch(player.boughtEpoch, currentEpochId, player.boughtAmount);
+  return {
+    boughtToday,
+    buyAllowanceLeft: player.principal > boughtToday ? player.principal - boughtToday : 0n,
+    grantedToday: ifCurrentEpoch(player.bonusEpoch, currentEpochId, player.bonusGranted),
   };
 }

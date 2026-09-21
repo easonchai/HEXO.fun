@@ -689,6 +689,13 @@ describe("operator queries", () => {
     isHouse: false,
     pendingWithdraw: 0n,
     pendingEpoch: 0n,
+    principalAcc: "0",
+    frozenPrincipalAcc: "0",
+    yieldEpoch: 0n,
+    boughtEpoch: 0n,
+    boughtAmount: 0n,
+    bonusEpoch: 0n,
+    bonusGranted: 0n,
     ...overrides,
   });
 

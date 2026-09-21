@@ -102,6 +102,13 @@ interface RawPlayer {
   isHouse: boolean;
   pendingWithdraw: BN;
   pendingEpoch: BN;
+  principalAcc: BN;
+  frozenPrincipalAcc: BN;
+  yieldEpoch: BN;
+  boughtEpoch: BN;
+  boughtAmount: BN;
+  bonusEpoch: BN;
+  bonusGranted: BN;
 }
 
 interface RawPosition {
@@ -515,6 +522,13 @@ async function mirrorPlayers(
       isHouse: player.isHouse,
       pendingWithdraw: BigInt(player.pendingWithdraw.toString()),
       pendingEpoch: BigInt(player.pendingEpoch.toString()),
+      principalAcc: player.principalAcc.toString(),
+      frozenPrincipalAcc: player.frozenPrincipalAcc.toString(),
+      yieldEpoch: BigInt(player.yieldEpoch.toString()),
+      boughtEpoch: BigInt(player.boughtEpoch.toString()),
+      boughtAmount: BigInt(player.boughtAmount.toString()),
+      bonusEpoch: BigInt(player.bonusEpoch.toString()),
+      bonusGranted: BigInt(player.bonusGranted.toString()),
     };
     if (!owners.includes(row.owner)) owners.push(row.owner);
     await prisma.player.upsert({ where: { owner: row.owner }, create: row, update: row });

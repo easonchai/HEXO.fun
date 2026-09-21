@@ -58,6 +58,13 @@ const emptyPlayer = (owner: string): Player => ({
   isHouse: false,
   pendingWithdraw: 0n,
   pendingEpoch: 0n,
+  principalAcc: new Prisma.Decimal(0),
+  frozenPrincipalAcc: new Prisma.Decimal(0),
+  yieldEpoch: 0n,
+  boughtEpoch: 0n,
+  boughtAmount: 0n,
+  bonusEpoch: 0n,
+  bonusGranted: 0n,
 });
 
 describe("access routes", () => {

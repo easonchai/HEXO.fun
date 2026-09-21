@@ -32,6 +32,49 @@ describe("parseAdminCommand", () => {
     );
   });
 
+  it("parses fund-yield's amount", () => {
+    expect(parseAdminCommand(["fund-yield", "--amount", "12000000"])).toEqual({
+      kind: "fund-yield",
+      amount: 12_000_000n,
+    });
+  });
+
+  it("rejects fund-yield without an amount, or a bad one", () => {
+    expect(() => parseAdminCommand(["fund-yield"])).toThrow(/needs --amount/);
+    expect(() => parseAdminCommand(["fund-yield", "--amount=-5"])).toThrow(
+      /positive whole number/,
+    );
+  });
+
+  it("parses grant-tickets' owner and amount", () => {
+    const owner = Keypair.generate().publicKey;
+    expect(
+      parseAdminCommand([
+        "grant-tickets",
+        "--owner",
+        owner.toBase58(),
+        "--amount",
+        "500",
+      ]),
+    ).toEqual({ kind: "grant-tickets", owner, amount: 500n });
+  });
+
+  it("rejects grant-tickets missing either flag, or a bad one", () => {
+    const owner = Keypair.generate().publicKey.toBase58();
+    expect(() => parseAdminCommand(["grant-tickets", "--amount", "1"])).toThrow(
+      /needs --owner/,
+    );
+    expect(() => parseAdminCommand(["grant-tickets", "--owner", owner])).toThrow(
+      /needs --amount/,
+    );
+    expect(() =>
+      parseAdminCommand(["grant-tickets", "--owner", "nope", "--amount", "1"]),
+    ).toThrow(/base58 pubkey/);
+    expect(() =>
+      parseAdminCommand(["grant-tickets", "--owner", owner, "--amount=-1"]),
+    ).toThrow(/positive whole number/);
+  });
+
   it("parses only the set-params flags given", () => {
     expect(parseAdminCommand(["set-params", "--epoch-seconds", "900"])).toEqual({
       kind: "set-params",
@@ -81,6 +124,41 @@ describe("parseAdminCommand", () => {
     expect(() =>
       parseAdminCommand(["set-params", "--house-cut-bps=-1"]),
     ).toThrow(/0 to 10000/);
+  });
+
+  it("parses the base yield, bought and granted tickets flags (ticket 05)", () => {
+    expect(
+      parseAdminCommand([
+        "set-params",
+        "--base-rate-bps",
+        "488",
+        "--tickets-per-usdc",
+        "10",
+        "--bonus-cap-bps",
+        "500",
+      ]),
+    ).toEqual({
+      kind: "set-params",
+      params: { baseRateBps: 488, ticketsPerUsdc: 10, bonusCapBps: 500 },
+    });
+  });
+
+  it("rejects a base yield or bonus cap rate outside 0..=10000", () => {
+    expect(() =>
+      parseAdminCommand(["set-params", "--base-rate-bps", "10001"]),
+    ).toThrow(/0 to 10000/);
+    expect(() =>
+      parseAdminCommand(["set-params", "--bonus-cap-bps=-1"]),
+    ).toThrow(/0 to 10000/);
+  });
+
+  it("rejects a tickets-per-usdc rate of zero or above a u16", () => {
+    expect(() =>
+      parseAdminCommand(["set-params", "--tickets-per-usdc", "0"]),
+    ).toThrow(/1 to 65535/);
+    expect(() =>
+      parseAdminCommand(["set-params", "--tickets-per-usdc", "65536"]),
+    ).toThrow(/1 to 65535/);
   });
 
   it("parses the three flags ticket 10 added to the program", () => {

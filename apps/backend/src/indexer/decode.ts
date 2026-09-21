@@ -137,6 +137,20 @@ export interface DecodedPool {
   previousEpochEndsAt: BN;
   totalPrincipal: BN;
   carryPot: BN;
+  /** Base yield's APR on time-weighted Principal, in basis points. */
+  baseRateBps: number;
+  /** USDC in the principal vault earmarked for Base yield, not yet credited. */
+  yieldBudget: BN;
+  /** Tickets credited per USDC spent in `buy_tickets`. */
+  ticketsPerUsdc: number;
+  /** Share of `total_principal`, in basis points, an operator `grant_tickets`
+   *  call may credit pool-wide per epoch. */
+  bonusCapBps: number;
+  /** The epoch `bonusGranted` is counted against. */
+  bonusEpoch: BN;
+  /** Tickets an operator `grant_tickets` call has credited pool-wide so far
+   *  in `bonusEpoch`. */
+  bonusGranted: BN;
 }
 
 export interface DecodedEpoch {
@@ -178,6 +192,22 @@ export interface DecodedPlayer {
   isHouse: boolean;
   pendingWithdraw: BN;
   pendingEpoch: BN;
+  /** Σ principal × seconds within `epochId`. Mirrors `weightAcc` with
+   *  Principal in place of Entries. */
+  principalAcc: BN;
+  /** Final principal-seconds for `frozenEpoch`, set alongside `frozenWeight`. */
+  frozenPrincipalAcc: BN;
+  /** The epoch Base yield was last credited for. */
+  yieldEpoch: BN;
+  /** The epoch `boughtAmount` is counted against. */
+  boughtEpoch: BN;
+  /** USDC spent in `buy_tickets` so far in `boughtEpoch`, capped at `principal`. */
+  boughtAmount: BN;
+  /** The epoch `bonusGranted` is counted against. */
+  bonusEpoch: BN;
+  /** Tickets an operator `grant_tickets` call has credited this Player so
+   *  far in `bonusEpoch`. */
+  bonusGranted: BN;
 }
 
 export interface DecodedPosition {
@@ -214,6 +244,12 @@ export function poolRow(
     previousEpochEndsAt: big(pool.previousEpochEndsAt),
     totalPrincipal: big(pool.totalPrincipal),
     carryPot: big(pool.carryPot),
+    baseRateBps: pool.baseRateBps,
+    yieldBudget: big(pool.yieldBudget),
+    ticketsPerUsdc: pool.ticketsPerUsdc,
+    bonusCapBps: pool.bonusCapBps,
+    bonusEpoch: big(pool.bonusEpoch),
+    bonusGranted: big(pool.bonusGranted),
     updatedSlot: slot,
   };
 }
@@ -264,6 +300,13 @@ export function playerRow(player: DecodedPlayer): Prisma.PlayerCreateInput {
     isHouse: player.isHouse,
     pendingWithdraw: big(player.pendingWithdraw),
     pendingEpoch: big(player.pendingEpoch),
+    principalAcc: player.principalAcc.toString(),
+    frozenPrincipalAcc: player.frozenPrincipalAcc.toString(),
+    yieldEpoch: big(player.yieldEpoch),
+    boughtEpoch: big(player.boughtEpoch),
+    boughtAmount: big(player.boughtAmount),
+    bonusEpoch: big(player.bonusEpoch),
+    bonusGranted: big(player.bonusGranted),
   };
 }
 

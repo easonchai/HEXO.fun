@@ -31,6 +31,7 @@ import type { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import {
   jackpotVaultAddress,
+  playerAddress,
   poolAddress,
   principalVaultAddress,
 } from "../chain/pda";
@@ -151,6 +152,7 @@ async function harness(): Promise<Harness> {
     poolAddress: () => POOL,
     principalVaultAddress: () => principalVaultAddress(PROGRAM_ID, POOL),
     jackpotVaultAddress: () => jackpotVaultAddress(PROGRAM_ID, POOL),
+    playerAddress: (owner: PublicKey) => playerAddress(PROGRAM_ID, POOL, owner),
     send: async (instructions: TransactionInstruction[]): Promise<string> => {
       sent.push(instructions);
       return "signature";
@@ -233,6 +235,71 @@ describe("admin run", () => {
       ),
     ).toBe(true);
     expect(stderr.length).toBeGreaterThan(0);
+  });
+
+  it("fund-yield in local mode signs and funds the principal vault, not the jackpot vault", async () => {
+    const { chain, sent } = await harness();
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    const { stdout, stderr } = await capture(() =>
+      run({ kind: "fund-yield", amount: 12_000_000n }, chain, mode),
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(stdout).toEqual([]);
+    expect(stderr[0]).toMatch(/^signature /);
+    expect(stderr.join("\n")).toContain("yield budget funded with 12000000 atomic units");
+  });
+
+  it("grant-tickets in local mode signs with the loaded key as the admin path", async () => {
+    const { chain, sent } = await harness();
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+    const owner = Keypair.generate().publicKey;
+
+    const { stdout, stderr } = await capture(() =>
+      run({ kind: "grant-tickets", owner, amount: 500n }, chain, mode),
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain(`grant 500 tickets to ${owner.toBase58()} (admin path, uncapped)`);
+  });
+
+  it("grant-tickets in multisig mode prints one base58 transaction signed by the multisig vault", async () => {
+    const { chain, sent } = await harness();
+    const multisigVault = Keypair.generate().publicKey;
+    const mode: AdminMode = { signer: multisigVault, multisig: true };
+    const owner = Keypair.generate().publicKey;
+
+    const { stdout } = await capture(() =>
+      run({ kind: "grant-tickets", owner, amount: 500n }, chain, mode),
+    );
+
+    expect(sent).toEqual([]);
+    expect(stdout).toHaveLength(1);
+    const tx = Transaction.from(bs58.decode(stdout[0] as string));
+    expect(tx.feePayer?.equals(multisigVault)).toBe(true);
+    expect(
+      tx.instructions[0]?.keys.some(
+        (key) => key.isSigner && key.pubkey.equals(multisigVault),
+      ),
+    ).toBe(true);
+  });
+
+  it("set-params in local mode carries the base yield and ticket-economy flags", async () => {
+    const { chain, sent } = await harness();
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    await run(
+      {
+        kind: "set-params",
+        params: { baseRateBps: 488, ticketsPerUsdc: 10, bonusCapBps: 500 },
+      },
+      chain,
+      mode,
+    );
+
+    expect(sent).toHaveLength(1);
   });
 
   it("withdraw-principal in multisig mode prints one line carrying both instructions", async () => {

@@ -575,7 +575,7 @@ describe("runTick", () => {
 
   // --- 6. Payout.
 
-  it("6. pays the winner, creating their token account in the same transaction", async () => {
+  it("6. pays the winner, compounding the prize into their principal", async () => {
     const winner = Keypair.generate().publicKey.toBase58();
     const result = await tickLabels({
       previousEpoch: epoch({
@@ -587,7 +587,9 @@ describe("runTick", () => {
       winner: async (epochId, target) =>
         epochId === 1n && target === 42n ? winner : null,
     });
-    expect(result.labels).toEqual([CREATE_ATA_IDEMPOTENT, "payout"]);
+    // No winner token account any more (ticket 02): the prize goes into
+    // principal_vault instead, so payout is the whole transaction.
+    expect(result.labels).toEqual(["payout"]);
   });
 
   it("6. logs the winner and retries when the payout will not land", async () => {

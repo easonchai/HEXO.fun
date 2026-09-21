@@ -20,12 +20,19 @@ export interface SetParamsInput {
   readonly minJackpot?: bigint;
   readonly registrationWindow?: number;
   readonly payoutTimeout?: number;
+  readonly baseRateBps?: number;
+  readonly ticketsPerUsdc?: number;
+  readonly bonusCapBps?: number;
 }
 
 export type AdminCommand =
   | { readonly kind: "pause" }
   | { readonly kind: "unpause" }
   | { readonly kind: "fund-jackpot"; readonly amount: bigint }
+  /** Raw atomic hexUSDC, same units as fund-jackpot. */
+  | { readonly kind: "fund-yield"; readonly amount: bigint }
+  /** Admin path only (uncapped); the operator path is the referral job. */
+  | { readonly kind: "grant-tickets"; readonly owner: PublicKey; readonly amount: bigint }
   | { readonly kind: "set-params"; readonly params: SetParamsInput }
   /** `amount` is USDC as typed, e.g. "250" or "12.5". Scaling to atomic
    *  units needs the mint's decimals, which only the chain knows. */
@@ -44,10 +51,12 @@ export type AdminCommand =
 
 export const USAGE = [
   "usage: admin <command> [flags]",
-  "  set-params [--epoch-seconds N] [--epoch-anchor ISO8601] [--round-seconds N] [--close-buffer N] [--vrf-timeout N] [--min-deposit N] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N]",
+  "  set-params [--epoch-seconds N] [--epoch-anchor ISO8601] [--round-seconds N] [--close-buffer N] [--vrf-timeout N] [--min-deposit N] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--base-rate-bps N] [--tickets-per-usdc N] [--bonus-cap-bps N]",
   "  pause",
   "  unpause",
   "  fund-jackpot --amount N   (N is raw atomic hexUSDC, 6 decimals)",
+  "  fund-yield --amount N   (N is raw atomic hexUSDC, 6 decimals)",
+  "  grant-tickets --owner PUBKEY --amount N   (admin path, uncapped; N is a whole number of tickets)",
   "  withdraw-principal --amount USDC   (whole USDC, up to 6 decimal places)",
   "  set-operator --key PUBKEY",
   "  propose-admin --key PUBKEY",
@@ -83,6 +92,16 @@ function nonNegativeBigInt(flag: string, raw: string): bigint {
     throw new Error(`--${flag} must be a non-negative whole number, got "${raw}"`);
   }
   return BigInt(raw);
+}
+
+/** `tickets_per_usdc` is a u16 and must be > 0 (a rate of zero would divide
+ *  by nothing when pricing a purchase). */
+function ticketsPerUsdc(flag: string, raw: string): number {
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0 || value > 65_535) {
+    throw new Error(`--${flag} must be a whole number from 1 to 65535, got "${raw}"`);
+  }
+  return value;
 }
 
 function pubkey(flag: string, raw: string): PublicKey {
@@ -180,6 +199,36 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
         amount: positiveBigInt("amount", oneFlag(command, "amount", rest)),
       };
 
+    case "fund-yield":
+      return {
+        kind: "fund-yield",
+        amount: positiveBigInt("amount", oneFlag(command, "amount", rest)),
+      };
+
+    case "grant-tickets": {
+      let values: { owner?: string; amount?: string };
+      try {
+        ({ values } = parseArgs({
+          args: [...rest],
+          options: { owner: { type: "string" }, amount: { type: "string" } },
+          allowPositionals: false,
+        }));
+      } catch (cause) {
+        throw new Error(USAGE, { cause });
+      }
+      if (typeof values.owner !== "string") {
+        throw new Error(`grant-tickets needs --owner\n${USAGE}`);
+      }
+      if (typeof values.amount !== "string") {
+        throw new Error(`grant-tickets needs --amount\n${USAGE}`);
+      }
+      return {
+        kind: "grant-tickets",
+        owner: pubkey("owner", values.owner),
+        amount: positiveBigInt("amount", values.amount),
+      };
+    }
+
     case "withdraw-principal":
       return {
         kind: "withdraw-principal",
@@ -208,6 +257,9 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
         "min-jackpot"?: string;
         "registration-window"?: string;
         "payout-timeout"?: string;
+        "base-rate-bps"?: string;
+        "tickets-per-usdc"?: string;
+        "bonus-cap-bps"?: string;
       };
       try {
         ({ values } = parseArgs({
@@ -223,6 +275,9 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
             "min-jackpot": { type: "string" },
             "registration-window": { type: "string" },
             "payout-timeout": { type: "string" },
+            "base-rate-bps": { type: "string" },
+            "tickets-per-usdc": { type: "string" },
+            "bonus-cap-bps": { type: "string" },
           },
           allowPositionals: false,
         }));
@@ -263,6 +318,15 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
         }),
         ...(values["payout-timeout"] !== undefined && {
           payoutTimeout: positiveInt("payout-timeout", values["payout-timeout"]),
+        }),
+        ...(values["base-rate-bps"] !== undefined && {
+          baseRateBps: houseCutBps("base-rate-bps", values["base-rate-bps"]),
+        }),
+        ...(values["tickets-per-usdc"] !== undefined && {
+          ticketsPerUsdc: ticketsPerUsdc("tickets-per-usdc", values["tickets-per-usdc"]),
+        }),
+        ...(values["bonus-cap-bps"] !== undefined && {
+          bonusCapBps: houseCutBps("bonus-cap-bps", values["bonus-cap-bps"]),
         }),
       };
       if (Object.keys(params).length === 0) {

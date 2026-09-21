@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_POOL_PARAMS,
+  envInt,
   isoSeconds,
   nextSundayAnchor,
   parsePoolParams,
@@ -133,6 +134,32 @@ describe("parsePoolParams", () => {
     expect(() => parsePoolParams(["--epoch-anchor", "next sunday"])).toThrow(
       /ISO 8601/,
     );
+  });
+});
+
+describe("envInt", () => {
+  it("takes the fallback when the value is unset or blank", () => {
+    expect(envInt("X", undefined, 488)).toBe(488);
+    expect(envInt("X", "  ", 488)).toBe(488);
+  });
+
+  it("parses a given value", () => {
+    expect(envInt("X", "250", 488)).toBe(250);
+    expect(envInt("X", "0", 488)).toBe(0);
+  });
+
+  it("rejects a negative or non-numeric value", () => {
+    expect(() => envInt("X", "-1", 488)).toThrow(/non-negative/);
+    expect(() => envInt("X", "abc", 488)).toThrow(/non-negative/);
+    expect(() => envInt("X", "1.5", 488)).toThrow(/non-negative/);
+  });
+});
+
+describe("DEFAULT_POOL_PARAMS", () => {
+  it("defaults the ticket-economy rates spec.md and ADR 0011 ask for", () => {
+    expect(DEFAULT_POOL_PARAMS.baseRateBps).toBe(488);
+    expect(DEFAULT_POOL_PARAMS.ticketsPerUsdc).toBe(10);
+    expect(DEFAULT_POOL_PARAMS.bonusCapBps).toBe(500);
   });
 });
 

@@ -28,6 +28,16 @@ export interface PoolParams {
   /** Seconds a Drawn epoch waits for its payout before it may roll over
    * unpaid. */
   readonly payoutTimeout: number;
+  /** Base yield's APR on time-weighted Principal, in basis points. Env
+   *  override BASE_RATE_BPS. */
+  readonly baseRateBps: number;
+  /** Tickets credited per USDC spent in `buy_tickets`. Env override
+   *  TICKETS_PER_USDC. */
+  readonly ticketsPerUsdc: number;
+  /** Share of `total_principal`, in basis points, an operator
+   * `grant_tickets` call may credit pool-wide per epoch. Env override
+   * BONUS_CAP_BPS. */
+  readonly bonusCapBps: number;
 }
 
 /**
@@ -47,6 +57,23 @@ export function nextSundayAnchor(now: Date): number {
   return Math.floor(anchor.getTime() / 1000);
 }
 
+/**
+ * A numeric env override with a fallback, shared by BASE_RATE_BPS,
+ * TICKETS_PER_USDC and BONUS_CAP_BPS (ADR 0011): a bad value fails bootstrap
+ * immediately instead of silently keeping whatever was typed. Unset or empty
+ * takes the fallback. Pure, like `env.ts`'s `solWarn`: the caller reads
+ * `process.env` and hands the raw value in, so this is testable without
+ * touching the environment.
+ */
+export function envInt(label: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative whole number, got "${raw}"`);
+  }
+  return value;
+}
+
 /** spec.md §7. */
 export const DEFAULT_POOL_PARAMS: PoolParams = {
   epochSeconds: 86_400,
@@ -59,6 +86,11 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
   minJackpot: 1_000_000n, // 1 hexUSDC at 6 decimals
   registrationWindow: 600, // 10 minutes for the crank to register everyone
   payoutTimeout: 86_400, // a day before an unpayable winner rolls over
+  // ~5% APY with daily compounding.
+  baseRateBps: envInt("BASE_RATE_BPS", process.env.BASE_RATE_BPS, 488),
+  ticketsPerUsdc: envInt("TICKETS_PER_USDC", process.env.TICKETS_PER_USDC, 10),
+  // 5% of total_principal per epoch.
+  bonusCapBps: envInt("BONUS_CAP_BPS", process.env.BONUS_CAP_BPS, 500),
 };
 
 export const USAGE =

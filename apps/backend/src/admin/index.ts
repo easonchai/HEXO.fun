@@ -1,6 +1,6 @@
-// One-off admin CLI: set-params, pause, unpause, fund-jackpot,
-// withdraw-principal, set-operator, propose-admin, accept-admin,
-// create-invite. Same shape as ../bootstrap.ts (plain tsx script, no command
+// One-off admin CLI: set-params, pause, unpause, fund-jackpot, fund-yield,
+// grant-tickets, withdraw-principal, set-operator, propose-admin,
+// accept-admin, create-invite. Same shape as ../bootstrap.ts (plain tsx script, no command
 // framework, argument parsing split into its own file for a chain-free unit
 // test) but this pool already exists, so unlike bootstrap this reuses
 // ChainService and the same full .env the backend itself runs on, instead of
@@ -164,6 +164,9 @@ async function setParams(
       params.minJackpot === undefined ? null : new BN(params.minJackpot.toString()),
     registrationWindow: bnOrNull(params.registrationWindow),
     payoutTimeout: bnOrNull(params.payoutTimeout),
+    baseRateBps: params.baseRateBps ?? null,
+    ticketsPerUsdc: params.ticketsPerUsdc ?? null,
+    bonusCapBps: params.bonusCapBps ?? null,
   })
     .accountsPartial({ admin: mode.signer, pool: chain.poolAddress() })
     .instruction();
@@ -196,6 +199,55 @@ async function fundJackpot(chain: ChainService, amount: bigint): Promise<void> {
     .instruction();
   log(`signature ${await chain.send([ix])}`);
   log(`jackpot funded with ${amount} atomic units from ${source.toBase58()}`);
+}
+
+/**
+ * Tops up `Pool.yield_budget` with real USDC, same shape as `fundJackpot`
+ * (permissionless, signs locally with whatever key is loaded) but into
+ * `principal_vault` instead of the jackpot vault.
+ */
+async function fundYield(chain: ChainService, amount: bigint): Promise<void> {
+  const pool = await readPool(chain);
+  const source = getAssociatedTokenAddressSync(pool.acceptedMint, chain.keypair.publicKey);
+  const ix = await method(chain, "fundYield", new BN(amount.toString()))
+    .accountsPartial({
+      sourceAuthority: chain.keypair.publicKey,
+      pool: pool.address,
+      acceptedMint: pool.acceptedMint,
+      source,
+      principalVault: chain.principalVaultAddress(pool.address),
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+  log(`signature ${await chain.send([ix])}`);
+  log(`yield budget funded with ${amount} atomic units from ${source.toBase58()}`);
+}
+
+/**
+ * The admin path of `grant_tickets`: uncapped, for the rare manual fix. The
+ * referral job (docs/plan/hexo-referrals ticket 08) is the only intended
+ * caller of the operator path, which signs with the operator key directly
+ * through `OperatorInstructions` rather than this CLI.
+ */
+async function grantTickets(
+  chain: ChainService,
+  mode: AdminMode,
+  owner: PublicKey,
+  amount: bigint,
+): Promise<void> {
+  const ix = await method(chain, "grantTickets", new BN(amount.toString()))
+    .accountsPartial({
+      signer: mode.signer,
+      pool: chain.poolAddress(),
+      player: chain.playerAddress(owner),
+    })
+    .instruction();
+  await submit(
+    chain,
+    mode,
+    [ix],
+    `grant ${amount} tickets to ${owner.toBase58()} (admin path, uncapped)`,
+  );
 }
 
 /**
@@ -309,6 +361,10 @@ export async function run(
       return setParams(chain, mode, command.params);
     case "fund-jackpot":
       return fundJackpot(chain, command.amount);
+    case "fund-yield":
+      return fundYield(chain, command.amount);
+    case "grant-tickets":
+      return grantTickets(chain, mode, command.owner, command.amount);
     case "withdraw-principal":
       return withdrawPrincipal(chain, mode, command.amount);
     case "set-operator": {

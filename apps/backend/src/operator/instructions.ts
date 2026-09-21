@@ -214,22 +214,17 @@ export class OperatorInstructions {
 
   /**
    * Permissionless: the instruction takes no signer, so the operator is here
-   * only as the fee payer and as the payer of the winner's token account,
-   * which may not exist yet and is created idempotently first.
+   * only as the fee payer. A non-House winner needs no token account of
+   * their own any more (docs/plan/hexo-referrals ticket 02): the prize
+   * compounds into `principal_vault` and the winner's Principal instead of
+   * being paid to a token account, so there is nothing to create first.
    */
   async payout(
     pool: PoolState,
     epochId: bigint,
     winner: PublicKey,
   ): Promise<TransactionInstruction[]> {
-    const winnerToken = getAssociatedTokenAddressSync(pool.acceptedMint, winner);
     return [
-      createAssociatedTokenAccountIdempotentInstruction(
-        this.operator,
-        winnerToken,
-        winner,
-        pool.acceptedMint,
-      ),
       await this.method("payout")
         .accountsPartial({
           pool: pool.address,
@@ -237,7 +232,7 @@ export class OperatorInstructions {
           epoch: this.epoch(pool, epochId),
           winner: this.player(pool, winner),
           jackpotVault: jackpotVaultAddress(this.programId, pool.address),
-          winnerToken,
+          principalVault: principalVaultAddress(this.programId, pool.address),
           treasury: pool.treasury,
           buybackReserve: pool.buybackReserve,
           tokenProgram: TOKEN_PROGRAM_ID,

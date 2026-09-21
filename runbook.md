@@ -72,6 +72,18 @@
   token prize: the vault keeps its balance and the next epoch draws for it. Set that floor with `admin set-params
   --min-jackpot`, or at bootstrap with `--min-jackpot`; the default is 1 USDC.
 
+  Fund the yield budget (docs/plan/hexo-referrals tickets 01/05)
+
+  Base yield only ever pays out of Pool.yield_budget, so it has to be topped up daily too, next to fund-jackpot, from any
+  wallet holding the accepted mint. Size the top-up as total_principal × rate / 365 (base_rate_bps over 10000 for rate),
+  the atomic USDC one day's credit costs the whole pool at the current base_rate_bps; GET /status's yieldBudget and
+  yieldBudgetLow track how much is left and whether it is under that one-day cost.
+
+    set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin fund-yield --amount 12000000000
+
+  fund_yield is permissionless like fund_jackpot. When the budget runs short, register() credits whatever it can and reports
+  the shortfall; GET /status's yieldShortfall is what the last ended epoch could not cover.
+
     set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --epoch-seconds 86400 --round-seconds 30 --close-buffer 12
 
   Round length: 90s (2026-09-14)
@@ -100,7 +112,8 @@
   set-params also carries --min-jackpot (whole USDC; an epoch closing under it rolls over instead of paying dust), --registration-window
   (seconds past an epoch's end before close_registration is allowed, 0 <= this < epoch_seconds) and --payout-timeout (seconds a drawn
   epoch waits for its payout before it may roll over unpaid, above 0), alongside --epoch-seconds, --epoch-anchor, --round-seconds,
-  --close-buffer, --vrf-timeout, --min-deposit and --house-cut-bps.
+  --close-buffer, --vrf-timeout, --min-deposit and --house-cut-bps. Ticket 05 added --base-rate-bps and --bonus-cap-bps (basis points,
+  0 to 10000) and --tickets-per-usdc (a positive whole number).
   Run it with the root .env exported first. The CLI reads process.env directly and loads no file of its own, so nothing reaches it
   except what the shell exports. DATABASE_URL is the catch: admin validates the backend's full env but neither .env nor .env.vps sets
   it (compose builds it from the POSTGRES_* keys), so a dummy value has to come along or the command dies on a missing key it never
@@ -386,10 +399,11 @@
   pays into that key's USDC associated token account. Keep the old operator's ATA open after every rotation; close it and a House
   win is unpayable until `payout_timeout` lets the epoch roll over.
 
-  The commands that print this way are set-params, unpause, withdraw-principal, set-operator, propose-admin and accept-admin.
-  pause and fund-jackpot always sign locally with the loaded key: the program lets either key pause, and funding the jackpot is
-  permissionless, so neither has to wait on the multisig. That matters in an incident, where pause is the one thing that has to be
-  instant.
+  The commands that print this way are set-params, unpause, withdraw-principal, set-operator, propose-admin, accept-admin and
+  grant-tickets (the admin path; the referral job's operator-signed grants never go through this CLI).
+  pause, fund-jackpot and fund-yield always sign locally with the loaded key: the program lets either key pause, and funding
+  the jackpot or the yield budget is permissionless, so none of the three has to wait on the multisig. That matters in an
+  incident, where pause is the one thing that has to be instant.
 
   Then, in the Squads app:
 
