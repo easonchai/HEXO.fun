@@ -302,6 +302,63 @@ export const fetchHealth = (
 ): Promise<ApiResult<{ ok: true }>> =>
   get<{ ok: true }>(baseUrl, "/healthz", signal);
 
+/** Ticket 09: the private-beta gate. `reason` is a short human sentence, not a code. */
+export interface AccessDto {
+  allowed: boolean;
+  reason: string;
+}
+
+export const fetchAccess = (
+  baseUrl: string,
+  wallet: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<AccessDto>> =>
+  get<AccessDto>(baseUrl, `/access/${wallet}`, signal);
+
+/**
+ * `POST /access/redeem`. "no uses left" and "wallet already redeemed" are
+ * both a 409, so telling them apart needs the backend's message text, not
+ * just the status: this returns its own result shape (carrying `status`)
+ * instead of the shared `ApiResult`, same as `FaucetResult` below.
+ */
+export type RedeemAccessResult =
+  | { ok: true; data: AccessDto }
+  | { ok: false; status: number | null; reason: string };
+
+export async function redeemAccess(
+  baseUrl: string,
+  wallet: string,
+  code: string,
+  signature: string,
+  signal?: AbortSignal,
+): Promise<RedeemAccessResult> {
+  try {
+    const response = await fetch(`${baseUrl}/access/redeem`, {
+      method: "POST",
+      signal: signal ?? null,
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ wallet, code, signature }),
+    });
+    const body = (await response.json().catch(() => null)) as
+      | (Partial<AccessDto> & { message?: string })
+      | null;
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        reason: body?.message ?? `HTTP ${response.status}`,
+      };
+    }
+    return { ok: true, data: { allowed: body?.allowed ?? true, reason: body?.reason ?? "" } };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      reason: error instanceof Error ? error.message : "indexer offline",
+    };
+  }
+}
+
 export interface FaucetGrant {
   owner: string;
   tokenAccount: string;

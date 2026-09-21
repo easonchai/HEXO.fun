@@ -8,6 +8,7 @@ import { PrivyProvider, useLogin, useLogout } from "@privy-io/react-auth";
 import {
   toSolanaWalletConnectors,
   useSignAndSendTransaction,
+  useSignMessage,
   useSignTransaction,
   useWallets,
 } from "@privy-io/react-auth/solana";
@@ -44,6 +45,12 @@ export interface GameSigner {
         transaction: T,
       ) => Promise<T>)
     | undefined;
+  /**
+   * Signs an arbitrary message, not a transaction. Ticket 09's invite gate is
+   * the one caller so far, signing `HEXO access: <wallet> <CODE>` for
+   * `POST /access/redeem`. Unset until a wallet is connected.
+   */
+  signMessage: ((message: Uint8Array) => Promise<Uint8Array>) | undefined;
   /**
    * Signs, sends and confirms in one step, returning the base58 signature.
    * Set only for the Privy embedded wallet, where Privy's own send path is
@@ -239,6 +246,7 @@ function usePrivySigner(): GameSigner {
   const { wallets, ready } = useWallets();
   const { signTransaction: privySign } = useSignTransaction();
   const { signAndSendTransaction: privySend } = useSignAndSendTransaction();
+  const { signMessage: privySignMessage } = useSignMessage();
   const wallet = wallets[0];
   // Privy's own wallet-standard implementation flags itself; Phantom and
   // friends connected through Privy do not, and keep paying their own fees.
@@ -295,6 +303,15 @@ function usePrivySigner(): GameSigner {
     [wallet, privySign],
   );
 
+  const signMessage = useCallback(
+    async (message: Uint8Array) => {
+      if (!wallet) throw new Error("no Privy Solana wallet connected");
+      const { signature } = await privySignMessage({ message, wallet });
+      return signature;
+    },
+    [wallet, privySignMessage],
+  );
+
   return {
     mode: "privy",
     publicKey: wallet ? safePubkey(wallet.address) : undefined,
@@ -308,6 +325,7 @@ function usePrivySigner(): GameSigner {
       void Promise.allSettled([wallet?.disconnect(), logout()]);
     },
     signTransaction,
+    signMessage,
     ...(embedded ? { sendTransaction } : {}),
   };
 }
@@ -321,6 +339,7 @@ function useStandardSigner(): GameSigner {
         signTransaction?: <T extends Transaction | VersionedTransaction>(
           tx: T,
         ) => Promise<T>;
+        signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
         disconnect?: () => Promise<void>;
       }
     | undefined;
@@ -335,6 +354,7 @@ function useStandardSigner(): GameSigner {
       select(null as never);
     },
     signTransaction: adapter?.signTransaction?.bind(wallet!.adapter),
+    signMessage: adapter?.signMessage?.bind(wallet!.adapter),
   };
 }
 

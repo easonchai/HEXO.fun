@@ -10,6 +10,7 @@ import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { AccessGate } from "./AccessGate.js";
 import { App } from "./App.js";
 import { RPC_URL } from "./chain.js";
 import { BurnerWalletAdapter, burnerEnabled } from "./dev-burner.js";
@@ -48,7 +49,9 @@ createRoot(document.getElementById("root")!).render(
           <WalletModalProvider>
             <WalletModeProvider mode={mode}>
               <GameSignerProvider>
-                <App />
+                <AccessGate>
+                  <App />
+                </AccessGate>
               </GameSignerProvider>
             </WalletModeProvider>
           </WalletModalProvider>
