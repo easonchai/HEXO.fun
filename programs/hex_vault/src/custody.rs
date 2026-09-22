@@ -658,12 +658,18 @@ pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
 }
 
 /// Admin-only, only valid once the pool is shut down (spec "sweep_house").
-/// Moves protocol money out of the pool to `pool.treasury`: the whole
-/// jackpot vault, and whatever of `yield_budget` the principal vault still
-/// holds above its real obligations. Principal is never swept: the House is
-/// a Player like any other and exits through `request_withdraw`;
-/// `emergency_withdraw` skips it on purpose. Callable more than once -- a
-/// later `fund_jackpot` can be swept again.
+/// Moves protocol money out of the pool to `pool.treasury`: the jackpot
+/// vault's surplus over `jackpot_reserved`, and whatever of `yield_budget`
+/// the principal vault still holds above its real obligations. Principal is
+/// never swept: the House is a Player like any other and exits through
+/// `request_withdraw`; `emergency_withdraw` skips it on purpose. Callable
+/// more than once -- a later `fund_jackpot` can be swept again.
+///
+/// `jackpot_reserved` is the amount already promised to a drawn-but-unpaid
+/// epoch (set in `close_registration`, released in `payout` or
+/// `rollover_epoch`). `payout` still runs after shutdown -- spec "an
+/// already-drawn epoch still pays" -- so sweeping that reserved amount would
+/// strand its winner, the same hazard this guards against for principal.
 ///
 /// Invariant this leans on: absent an `admin_withdraw` deployment, the
 /// principal vault holds exactly `total_principal + pending_withdrawals +
@@ -678,7 +684,11 @@ pub fn sweep_house(ctx: Context<SweepHouse>) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
     require!(pool.shutdown, HexVaultError::PoolNotShutDown);
 
-    let jackpot = ctx.accounts.jackpot_vault.amount;
+    let jackpot = ctx
+        .accounts
+        .jackpot_vault
+        .amount
+        .saturating_sub(pool.jackpot_reserved);
     let surplus = ctx
         .accounts
         .principal_vault

@@ -720,6 +720,52 @@ describe("sweep_house", () => {
     },
     TIMEOUT,
   );
+
+  it(
+    "never touches jackpot_reserved, so an already-drawn epoch can still pay after a sweep",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 6 });
+      await beginEpoch(pool, 0n);
+
+      const a = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, a, 4_000_000n);
+
+      const funder = await pool.fundedWallet(10_000_000n);
+      await fundJackpot(pool, funder, 2_000_000n); // becomes the reserved prize
+
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+      await register(pool, 1n, a.keypair.publicKey);
+      await closeRegistration(pool, 1n); // snapshots jackpot_amount = 2M, reserves it
+
+      const closed = await fetchEpoch(pool, 1n);
+      const randomness = await fulfillRandomness(Uint8Array.from(closed.vrfSeed));
+      await draw(pool, 1n, randomness); // Drawn, not yet paid: 2M stays reserved
+
+      await shutdown(pool);
+      // A surplus on top of the reserved prize: real House money this pool
+      // never promised to epoch 1's winner.
+      await fundJackpot(pool, funder, 500_000n);
+
+      const treasuryBefore = await vaultBalance(pool.treasury);
+      const sig = await sweepHouse(pool);
+
+      // Only the surplus moved; the reserved prize is still sitting in the
+      // jackpot vault for `payout` to pay out below.
+      expect(await vaultBalance(pool.jackpotVault)).toBe(2_000_000n);
+      expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore + 500_000n);
+      const event = await findEvent<{ jackpot: BN }>(sig, "houseSwept");
+      expect(event?.jackpot.toString()).toBe("500000");
+
+      const before = await fetchPlayer(pool, a.keypair.publicKey);
+      await payout(pool, 1n, a.keypair.publicKey); // must not fail InsufficientVault
+      const after = await fetchPlayer(pool, a.keypair.publicKey);
+      expect(BigInt(after.principal.toString()) - BigInt(before.principal.toString())).toBe(
+        2_000_000n,
+      );
+      expect(await vaultBalance(pool.jackpotVault)).toBe(0n);
+    },
+    TIMEOUT,
+  );
 });
 
 describe("close_round", () => {
