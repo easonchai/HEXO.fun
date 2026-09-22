@@ -92,6 +92,8 @@ const pool = (overrides: object = {}) => ({
   bump: 255,
   principalVaultBump: 254,
   jackpotVaultBump: 253,
+  version: 1,
+  shutdown: false,
   ...overrides,
 });
 
@@ -138,6 +140,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
       unsettledPositions: async () => [],
       referralGrantsDue: async () => [],
       markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
     };
     const operator = new OperatorService(
       fakeChain as unknown as ChainService,
@@ -241,6 +244,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService.duePendingWithdrawals", () => {
         unsettledPositions: async () => [],
         referralGrantsDue: async () => [],
         markReferralGrantsSent: async () => {},
+        roundsToClose: async () => [],
       },
       noopSparring,
     );
@@ -323,6 +327,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService read budget", () => {
       unsettledPositions: async () => [],
       referralGrantsDue: async () => [],
       markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
     };
     const operator = new OperatorService(
       fakeChain as unknown as ChainService,
@@ -425,6 +430,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService randomness subscription", () => 
       unsettledPositions: async () => [],
       referralGrantsDue: async () => [],
       markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
     };
     const operator = new OperatorService(
       fakeChain as unknown as ChainService,

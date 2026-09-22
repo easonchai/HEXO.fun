@@ -20,6 +20,12 @@ export interface IndexerQueries {
    */
   unsettledPositions(): Promise<{ address: string; owner: string; roundId: bigint }[]>;
   /**
+   * Terminal Rounds with no Position left on them and not yet marked closed
+   * (ops-and-envs ticket 08): what `close_round` may still reclaim rent
+   * from. Oldest id first.
+   */
+  roundsToClose(): Promise<bigint[]>;
+  /**
    * Every qualifying referrer's daily bonus for `epochId` not yet sent
    * (docs/plan/hexo-referrals ticket 08). Computes and records the whole
    * epoch's bonuses (via computeBonuses) the first time a referrer is seen

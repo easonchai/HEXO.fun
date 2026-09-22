@@ -43,6 +43,10 @@ export interface PoolState {
   readonly nextRoundId: bigint;
   readonly openRoundId: bigint;
   readonly totalPrincipal: bigint;
+  /** Admin-only and irreversible: stops every inflow, the game and the
+   *  draw, and lets withdrawals skip the epoch lock (ops-and-envs ticket
+   *  02). The operator reads this to stop the epoch and round loops. */
+  readonly shutdown: boolean;
 }
 
 export interface EpochState {
@@ -110,6 +114,7 @@ export function decodePool(
     nextRoundId: big(raw.nextRoundId),
     openRoundId: big(raw.openRoundId),
     totalPrincipal: big(raw.totalPrincipal),
+    shutdown: raw.shutdown === true,
   };
 }
 

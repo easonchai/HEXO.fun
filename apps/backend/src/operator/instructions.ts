@@ -363,6 +363,24 @@ export class OperatorInstructions {
     ];
   }
 
+  /**
+   * Permissionless (ops-and-envs ticket 08): reclaims a terminal Round's
+   * rent for the operator once nothing settled on it is still owed. The
+   * operator is both the fee payer and the rent destination, so it is
+   * passed once for both roles.
+   */
+  async closeRound(pool: PoolState, roundId: bigint): Promise<TransactionInstruction[]> {
+    return [
+      await this.method("closeRound")
+        .accountsPartial({
+          pool: pool.address,
+          operator: this.operator,
+          round: this.round(pool, roundId),
+        })
+        .instruction(),
+    ];
+  }
+
   async createRound(
     pool: PoolState,
     startsAt: bigint,

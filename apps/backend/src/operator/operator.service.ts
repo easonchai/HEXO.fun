@@ -73,6 +73,15 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    * address is always safe; the timestamp only bounds the map.
    */
   private settled = new Map<string, number>();
+  /** Same idea as `settled`, for Rounds `close_round` was just sent for
+   *  (ops-and-envs ticket 08): keeps an immediate next tick from resending
+   *  it before the indexer's `RoundClosed` mirror lands. */
+  private closingRounds = new Map<bigint, number>();
+  /** Logged once, the first tick that sees the pool shut down, so the
+   *  epoch and registration loops stopping is announced instead of just
+   *  going quiet (ops-and-envs ticket 08). Shutdown is irreversible, so
+   *  this never needs to reset. */
+  private shutdownAnnounced = false;
   /**
    * The Round randomness address currently watched via subscription, and its
    * websocket subscription id (ticket 04): kept in sync with `openRound` on
@@ -177,6 +186,13 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     let ctx: TickContext | undefined;
     try {
       ctx = await this.context();
+      if (ctx.pool.shutdown && !this.shutdownAnnounced) {
+        this.shutdownAnnounced = true;
+        this.logger.log(
+          "pool is shut down: the epoch and new-round loops have stopped; " +
+            "settling already-open rounds, paying an already-drawn epoch and processing withdrawals continue",
+        );
+      }
       const outcome = await runTick(ctx);
       this.syncRandomnessWatch(ctx.openRound);
       if (outcome.registerCheck) this.lastRegisterCheck = outcome.registerCheck;
@@ -259,6 +275,15 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
           if (now - at > SETTLED_MEMORY_MS) this.settled.delete(address);
         }
         for (const address of addresses) this.settled.set(address, now);
+      },
+      roundsToClose: async () =>
+        (await this.indexer.roundsToClose()).filter((id) => !this.closingRounds.has(id)),
+      forgetRound: (id) => {
+        const now = Date.now();
+        for (const [closedId, at] of this.closingRounds) {
+          if (now - at > SETTLED_MEMORY_MS) this.closingRounds.delete(closedId);
+        }
+        this.closingRounds.set(id, now);
       },
       winner: (epochId, target) => this.winner(epochId, target),
       send: (instructions) => this.chain.send(instructions),

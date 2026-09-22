@@ -100,6 +100,7 @@ const pool = (over: Partial<PoolState> = {}): PoolState => ({
   nextRoundId: 4n,
   openRoundId: 3n,
   totalPrincipal: 1_000_000_000n,
+  shutdown: false,
   ...over,
 });
 
@@ -170,6 +171,9 @@ function context(over: Partial<TickContext> = {}): Recorder {
     playersToRegister: async () => [],
     unsettledPositions: async () => [],
     forgetPositions: async () => {},
+    // Empty by default so step 2c stays quiet in every test that is not about it.
+    roundsToClose: async () => [],
+    forgetRound: () => {},
     winner: async () => null,
     // Empty by default so step 3b stays quiet in every test that is not about it.
     referralGrantsDue: async () => [],
@@ -377,6 +381,57 @@ describe("runTick", () => {
     expect(result.labels).toEqual(["settle_position"]);
   });
 
+  // --- 2c. Close a terminal Round once nothing settled on it is still owed
+  // (ops-and-envs ticket 08): reclaims its rent for the operator.
+
+  it("2c. closes a round once roundsToClose names one", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      roundsToClose: async () => [7n],
+    });
+    expect(result.labels).toEqual(["close_round"]);
+    expect(result.action).toBe("close_round");
+  });
+
+  it("2c. forgets the round it closed once the send confirms", async () => {
+    const forgotten: bigint[] = [];
+    await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      roundsToClose: async () => [7n],
+      forgetRound: (id) => forgotten.push(id),
+    });
+    expect(forgotten).toEqual([7n]);
+  });
+
+  it("2c. sweeps leftover positions before closing any round", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      unsettledPositions: async () => [
+        {
+          address: Keypair.generate().publicKey.toBase58(),
+          owner: Keypair.generate().publicKey.toBase58(),
+          roundId: 3n,
+        },
+      ],
+      roundsToClose: async () => [7n],
+    });
+    expect(result.action).toBe("settle_position");
+  });
+
+  it("2c. closes a round even while the pool is shut down: close_round is permissionless throughout", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n, shutdown: true }),
+      openRound: null,
+      currentEpoch: null,
+      previousEpoch: null,
+      roundsToClose: async () => [7n],
+    });
+    expect(result.action).toBe("close_round");
+  });
+
   // --- 3. Begin Epoch: only once the Round and sweep above are clear, and
   // the previous Epoch (if any) is Paid or Rolled over.
 
@@ -471,6 +526,16 @@ describe("runTick", () => {
     // The error itself does not say which referrer in the batch tripped it,
     // so every one of them (and the amount tried) is named in the log.
     expect(warned[0]).toContain(`${referrer}:1000000`);
+  });
+
+  it("3b. does not grant tickets once the pool is shut down: grant_tickets is refused", async () => {
+    const result = await tickLabels({
+      pool: pool({ shutdown: true }),
+      referralGrantsDue: () => {
+        throw new Error("must not be asked while shut down");
+      },
+    });
+    expect(result.action).toBeNull();
   });
 
   // --- 4. Register / close registration. Closing waits for two consecutive
@@ -603,6 +668,18 @@ describe("runTick", () => {
     expect(outcome.registerCheck).toEqual({ epochId: 1n, empty: true });
   });
 
+  it("4. stops registering once the pool is shut down: close_registration is refused", async () => {
+    const result = await tickLabels({
+      pool: pool({ shutdown: true }),
+      previousEpoch: registering(),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+      playersToRegister: () => {
+        throw new Error("must not be asked while shut down");
+      },
+    });
+    expect(result.action).toBeNull();
+  });
+
   // --- 5. Draw or rollover.
 
   it("5. draws once the randomness is fulfilled", async () => {
@@ -640,6 +717,32 @@ describe("runTick", () => {
     expect(result.transactions).toBe(0);
   });
 
+  it("5. does not draw once the pool is shut down: draw is refused, even fulfilled", async () => {
+    const result = await tickLabels({
+      pool: pool({ shutdown: true }),
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWING,
+        requestedAt: NOW - 10n,
+      }),
+      fulfilled: async () => true,
+    });
+    expect(result.transactions).toBe(0);
+  });
+
+  it("5. still rolls a shut-down pool's stuck draw over once the timeout elapses", async () => {
+    const result = await tickLabels({
+      pool: pool({ shutdown: true }),
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWING,
+        requestedAt: NOW - 121n,
+      }),
+      fulfilled: async () => true,
+    });
+    expect(result.labels).toEqual(["rollover_epoch"]);
+  });
+
   // --- 6. Payout.
 
   it("6. pays the winner, compounding the prize into their principal", async () => {
@@ -656,6 +759,21 @@ describe("runTick", () => {
     });
     // No winner token account any more (ticket 02): the prize goes into
     // principal_vault instead, so payout is the whole transaction.
+    expect(result.labels).toEqual(["payout"]);
+  });
+
+  it("6. still pays an already-drawn epoch once the pool is shut down: payout is allowed throughout", async () => {
+    const winner = Keypair.generate().publicKey.toBase58();
+    const result = await tickLabels({
+      pool: pool({ shutdown: true }),
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+        drawnAt: NOW - 10n,
+      }),
+      winner: async () => winner,
+    });
     expect(result.labels).toEqual(["payout"]);
   });
 

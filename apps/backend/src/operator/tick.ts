@@ -156,6 +156,15 @@ export interface TickContext {
   /** Positions a confirmed `settle_position` just closed; keep them out of
    *  later `unsettledPositions` results. */
   forgetPositions(addresses: string[]): Promise<void>;
+  /**
+   * Terminal Rounds with no Position left on them and not yet marked
+   * closed (ops-and-envs ticket 08): what `close_round` may still reclaim
+   * rent from. Oldest id first.
+   */
+  roundsToClose(): Promise<bigint[]>;
+  /** A Round `close_round` was just sent for; keep it out of later
+   *  `roundsToClose` results until the indexer mirrors `RoundClosed`. */
+  forgetRound(id: bigint): void;
   /** Owner of the Player whose registered interval contains `target`. */
   winner(epochId: bigint, target: bigint): Promise<string | null>;
   send(instructions: TransactionInstruction[]): Promise<string>;
@@ -317,9 +326,24 @@ async function decide(ctx: TickContext): Promise<Decision> {
     return { action: "settle_position" };
   }
 
+  // 2c. Close a terminal Round once nothing settled on it is still owed
+  // (ops-and-envs ticket 08): reclaims its rent for the operator.
+  // Permissionless on the program side and never refused in shutdown, so
+  // this runs whether or not the pool is shut down.
+  const [roundToClose] = await ctx.roundsToClose();
+  if (roundToClose !== undefined) {
+    await ctx.send(await ctx.ix.closeRound(pool, roundToClose));
+    // The account is closed now, but the indexer mirrors that off the
+    // RoundClosed event asynchronously; tell the context so an immediate
+    // next tick does not resend close_round and get AccountNotInitialized.
+    ctx.forgetRound(roundToClose);
+    return { action: "close_round" };
+  }
+
   // 3. Begin Epoch: only once the Round and the sweep above are clear, and
   // the previous Epoch (if any) has actually finished, so no Epoch is ever
-  // left two behind.
+  // left two behind. Refused in shutdown, so the epoch loop stops here
+  // once the pool is shut down (spec.md "Shutdown").
   const epochEnded =
     pool.currentEpochId === 0n ||
     (currentEpoch !== null && now >= currentEpoch.endsAt);
@@ -327,7 +351,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
     previousEpoch === null ||
     previousEpoch.status === EPOCH_STATUS.PAID ||
     previousEpoch.status === EPOCH_STATUS.ROLLED_OVER;
-  if (epochEnded && pool.openRoundId === 0n && previousDone) {
+  if (!pool.shutdown && epochEnded && pool.openRoundId === 0n && previousDone) {
     await ctx.send(await ctx.ix.beginEpoch(pool));
     return { action: "begin_epoch" };
   }
@@ -338,8 +362,10 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // computes and records the whole epoch's bonuses the first time it is
   // asked (the ReferralGrant table's own uniqueness makes that idempotent
   // across restarts), then hands back whatever is still unsent; batched the
-  // same way step 4 batches registrations.
-  if (currentEpoch) {
+  // same way step 4 batches registrations. `grant_tickets` is refused in
+  // shutdown (ops-and-envs ticket 02), so this stops with the rest of the
+  // epoch loop.
+  if (!pool.shutdown && currentEpoch) {
     const grants = await ctx.referralGrantsDue(currentEpoch.epochId);
     if (grants.length > 0) {
       const batch = grants.slice(0, BATCH_SIZE);
@@ -377,7 +403,11 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // jackpot and close once the list has come back empty on two consecutive
   // ticks for this Epoch, so a player who registered right before `ends_at`
   // gets one more indexer sync window before being counted out.
-  if (previousEpoch?.status === EPOCH_STATUS.REGISTERING) {
+  // `close_registration` is refused in shutdown, and `pool.currentEpochId`
+  // never advances once `begin_epoch` has stopped, so this whole step
+  // stops too rather than spending forever on a registration that can
+  // never close (ops-and-envs ticket 02).
+  if (!pool.shutdown && previousEpoch?.status === EPOCH_STATUS.REGISTERING) {
     const owners = await ctx.playersToRegister(previousEpoch.epochId);
     if (owners.length > 0) {
       const batch = owners
@@ -423,9 +453,11 @@ async function decide(ctx: TickContext): Promise<Decision> {
     return { action: "close_registration" };
   }
 
-  // 5. Waiting on the draw's randomness.
+  // 5. Waiting on the draw's randomness. `draw` is refused in shutdown
+  // (ops-and-envs ticket 02); `rollover_epoch` is not, so a Drawing epoch
+  // still moves on past its `vrf_timeout` instead of waiting forever.
   if (previousEpoch?.status === EPOCH_STATUS.DRAWING) {
-    if (await ctx.fulfilled(previousEpoch.vrfSeed)) {
+    if (!pool.shutdown && (await ctx.fulfilled(previousEpoch.vrfSeed))) {
       await ctx.send(await ctx.ix.draw(pool, previousEpoch));
       return { action: "draw" };
     }
@@ -528,6 +560,12 @@ async function decide(ctx: TickContext): Promise<Decision> {
  * what `ChainService.mapSendError` puts in `Error.message`.
  */
 export const EXPECTED_ERRORS: ReadonlySet<string> = new Set([
+  // `close_round` resent for a Round a previous, now-restarted process
+  // already closed (ops-and-envs ticket 08): the in-memory `forgetRound`
+  // memory does not survive a restart, and the indexer's own mirror of
+  // `RoundClosed` may not have landed yet either, so `roundsToClose` can
+  // still hand back an id whose account is already gone on chain.
+  "AccountNotInitialized",
   "AlreadyRegistered",
   "EpochNotDrawing",
   "EpochNotDrawn",
@@ -538,6 +576,11 @@ export const EXPECTED_ERRORS: ReadonlySet<string> = new Set([
   // request re-stamped `pending_epoch` to the epoch now running.
   "NothingPending",
   "NotPreviousEpoch",
+  // The admin's shutdown() landed between this tick's read of `pool.shutdown`
+  // and one of the steps it gates confirming (ops-and-envs ticket 02): the
+  // gates above make this rare, not impossible, and the next tick reads the
+  // now-shut-down pool and stops asking.
+  "PoolShutDown",
   // The oracle answered between the tick's read and its void/rollover
   // landing, which is exactly the race the program guard exists for.
   "RandomnessAlreadyFulfilled",

@@ -289,6 +289,23 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         // nothing to do; it still has to be callable.
         referralGrantsDue: async () => [],
         markReferralGrantsSent: async () => {},
+        // Same terminal-and-clear rule as unsettledPositions above, off the
+        // chain instead of Postgres; this fixture has no `closed` flag to
+        // mirror, so a Round this validator has already closed simply stops
+        // showing up in `allRounds` at all.
+        roundsToClose: async () => {
+          const busy = new Set(
+            (await allPositions(chain)).map((position) => position.round.toBase58()),
+          );
+          return (await allRounds(chain))
+            .filter(
+              (round) =>
+                round.status !== ROUND_STATUS.OPEN &&
+                round.status !== ROUND_STATUS.REQUESTED &&
+                !busy.has(round.address.toBase58()),
+            )
+            .map((round) => round.roundId);
+        },
       };
 
       // SAFETY: the Operator only ever calls `wake()` on the Sparring player,
