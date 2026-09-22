@@ -30,6 +30,18 @@ use rounds::*;
 #[cfg(feature = "test-vrf")]
 use test_vrf::*;
 
+// One program ID per environment (ops-and-envs ticket 06): dev keeps the
+// original devnet/localnet id, staging and mainnet each get their own
+// keypair under `keys/`, gitignored. `scripts/check-deployable.sh` refuses
+// `test-vrf` built together with either, and this refuses both at once.
+#[cfg(all(feature = "staging", feature = "mainnet"))]
+compile_error!("features `staging` and `mainnet` are mutually exclusive");
+
+#[cfg(feature = "mainnet")]
+declare_id!("EwqRKGqnH7dGwL5ERMGQc2tsLKwT3duzKWPcCDphyPCH");
+#[cfg(feature = "staging")]
+declare_id!("H2iWyng2orJpHNGGWhrR7rBQNDqixThpTpAwF4dnPXax");
+#[cfg(not(any(feature = "staging", feature = "mainnet")))]
 declare_id!("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
 
 #[program]

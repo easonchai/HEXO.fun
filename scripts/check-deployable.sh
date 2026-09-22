@@ -4,6 +4,11 @@
 # one is silent: the program loads, and every draw is fabricated. There is no
 # CI here, so the runbook's deploy steps call this first.
 #
+# Unconditional, so it also covers ops-and-envs ticket 06's rule that
+# test-vrf may never combine with the staging or mainnet feature: any deploy
+# target (dev, staging or mainnet) refuses a test-vrf-tainted binary here,
+# before scripts/deploy.sh ever gets to `solana program deploy`.
+#
 # Usage: sh scripts/check-deployable.sh [path/to/hex_vault.so]
 set -eu
 
