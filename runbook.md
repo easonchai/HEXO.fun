@@ -1,40 +1,37 @@
- # terminal 1 — postgres + backend
+ # terminal 1 - postgres + backend
   docker compose -f docker-compose.dev.yml up -d
 
-  # terminal 2 — frontend
+  # terminal 2 - frontend
   pnpm --filter @hexvault/web dev
 
   Then http://localhost:5173, Phantom set to devnet. Faucet gives you 1000 hexUSDC.
 
   Check it came up: curl localhost:8080/status should show rpcOk: true and a lastAction a few seconds old. Watch it work with docker
-  compose -f docker-compose.dev.yml logs -f backend — a round every round_seconds plus a few seconds to settle.
+  compose -f docker-compose.dev.yml logs -f backend, a round every round_seconds plus a few seconds to settle.
 
   Shut down with down in place of up -d.
 
   Pushing runs a pre-push hook (check-deployable.sh plus pnpm test:unit, no CI); skip it once with git push --no-verify.
 
+  See also: docs/architecture.md (components, accounts, roles, fund flow), docs/ops/deploy.md
+  (deploying and upgrading), docs/ops/funds.md (pulling and returning principal, shutdown) and
+  docs/ops/environments.md (dev/staging/mainnet).
+
   When you change something
 
-  ┌────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-  │  Changed   │                                                          Do                                                          │
-  ├────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-  │ Backend    │ up -d --build backend                                                                                                │
-  │ code       │                                                                                                                      │
-  ├────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-  │ .env       │ up -d --force-recreate backend (restart won't re-read it)                                                            │
-  ├────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-  │ Frontend   │ nothing, Vite hot-reloads                                                                                            │
-  ├────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-  │ Program    │ anchor build, both sync-idls, sh scripts/check-deployable.sh, then solana program deploy --program-id                │
-  │            │ target/deploy/hex_vault-keypair.json target/deploy/hex_vault.so --url devnet, then up -d --build backend             │
-  └────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+  | Changed | Do |
+  | --- | --- |
+  | Backend code | `up -d --build backend` |
+  | .env | `up -d --force-recreate backend` (restart won't re-read it) |
+  | Frontend | nothing, Vite hot-reloads |
+  | Program | `scripts/deploy.sh dev`, or `--upgrade` on top of an existing pool, then `up -d --build backend`. See docs/ops/deploy.md. |
 
-  Two gotchas worth remembering. Never build with --features test-vrf before a devnet deploy — that stubs the ORAO CPI and the operator
-  picks the wrong randomness PDA off the IDL. And if solana program deploy says ExtendProgram requires a minimum of 10240 additional
-  bytes, run solana program extend LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6 10240 --url devnet first.
+  Two gotchas worth remembering. Never build with --features test-vrf before a devnet deploy: that stubs the ORAO CPI and the operator
+  picks the wrong randomness PDA off the IDL (deploy.sh's check-deployable.sh step catches this). And if a deploy says ExtendProgram
+  requires more bytes, deploy.sh prints the exact solana program extend command to run; see docs/ops/deploy.md.
 
   Nothing needs re-bootstrapping. Only bump POOL_ID and re-run bootstrap if you want a clean pool, and then paste the new ACCEPTED_MINT
-  into .env.
+  into .env. See docs/ops/environments.md for adding a pool without touching old ones.
 
   After the backend has been down
 
@@ -142,14 +139,6 @@
     set -a; . ./.env; set +a
     DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin set-params --house-cut-bps 600
 
-  House cut: the set-params flag
-
-  --house-cut-bps sets the pool's House cut rate in basis points, a whole number from 0 to
-  10000 inclusive (0% to 100%). The default at pool creation is 600, 6%. A change applies to
-  the next round settled, never to one already settled.
-
-    set -a; . ./.env; set +a; pnpm --filter @hexvault/backend admin set-params --house-cut-bps 600
-
   Epoch anchor: when the draw lands
 
   epoch_anchor is a unix timestamp on the Pool, and it is a phase reference rather than a start time. Every epoch boundary is a point
@@ -175,41 +164,28 @@
   weekly grid, and ends at the first weekly point after it. You get one short transition epoch, then Mondays. Going back to 3600 or
   86400 works the same way.
 
-  Standing up a fresh pool after a Pool or Round layout change
+  Standing up a fresh pool
 
-  Adding a field to Pool or Round changes the account size, and create_pool allocates exactly
-  8 + Pool::INIT_SPACE with no slack. An older pool is short by the new field's width, so Anchor
-  fails deserialization with error 3003 before any instruction body runs, withdraw included.
-  There is no in-place upgrade and no migration: the old pool's deposits, Player accounts and
-  epoch history are gone. Two changes have forced this so far, the epoch anchor fields and the
-  House cut.
+  `Pool`, `Epoch` and `Player` now carry version and reserved padding (ADR 0013), so a field
+  added there no longer forces this: `scripts/deploy.sh dev --upgrade` handles it in place. A
+  fresh pool is still how you get a clean slate for a demo, or the rare change that cannot be
+  append-only (removed or reordered fields; see docs/ops/environments.md, "When a new program
+  ID is warranted"). Two changes forced a fresh pool before ADR 0013 existed: the epoch anchor
+  fields and the House cut.
 
-  Both environments share one devnet program id, so the upgrade breaks dev and the VPS at the
-  same instant. Run the whole thing back to back, not over two days.
+  Both dev and the VPS share one devnet program id today (docs/ops/environments.md), so a
+  layout change that still needs a fresh pool breaks both at the same instant; run the whole
+  thing back to back, not over two days.
 
   Pool ids are global rather than per authority: the PDA seed is the id alone, so a VPS pool and
   a dev pool can never share one. 1 through 6 are spent; the next two are 7 and 8.
 
-  Keep a rollback before touching anything. This is the only way back to the old layout:
+  Build and deploy first (docs/ops/deploy.md has the full procedure, the rollback dump, and the
+  ExtendProgram gotcha):
 
-    solana program dump LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6 /tmp/hex_vault-prev.so --url devnet
+    scripts/deploy.sh dev
 
-    1. Build without the test feature and deploy. tests/run-local.sh leaves a --features test-vrf
-       build in target/, which stubs the ORAO CPI, so a plain rebuild has to follow any test run.
-       check-deployable.sh is the check that matters: it exits 1 on a test-vrf artifact, and on
-       a missing one. Run it before every deploy, on this cluster and on mainnet.
-
-         anchor build
-         pnpm --filter @hexvault/backend sync-idl
-         pnpm --filter @hexvault/web sync-idl
-         sh scripts/check-deployable.sh
-         solana program deploy --program-id target/deploy/hex_vault-keypair.json \
-           target/deploy/hex_vault.so --url devnet
-
-       "ExtendProgram requires a minimum of 10240 additional bytes" means run
-       solana program extend LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6 10240 --url devnet first.
-
-    2. Bootstrap the dev pool. Bump POOL_ID but leave ACCEPTED_MINT alone: bootstrap reuses a mint
+    1. Bootstrap the dev pool. Bump POOL_ID but leave ACCEPTED_MINT alone: bootstrap reuses a mint
        that already exists with 6 decimals and the authority as mint authority, so every wallet
        keeps its faucet balance. Principal does not carry over, because Player is a PDA of the
        pool and every depositor starts at zero.
@@ -229,7 +205,7 @@
        KEY=value block and progress goes to stderr, so `bootstrap > pool.env` gives a clean file.
        Paste ACCEPTED_MINT back into .env if the block names a mint you did not already have.
 
-    3. Wipe the dev database and rebuild the stack. Epoch, Round and Player rows carry no pool
+    2. Wipe the dev database and rebuild the stack. Epoch, Round and Player rows carry no pool
        column, so the previous pool's rows collide with the new pool's ids on the same numbers.
 
          docker compose -f docker-compose.dev.yml down -v
@@ -239,16 +215,16 @@
        columns. Confirm with curl localhost:8080/pool for the new poolId and curl
        localhost:8080/status for rpcOk true and a lastAction a few seconds old.
 
-    4. Repoint the dev frontend: VITE_POOL_ID=7 in apps/web/.env, plus VITE_PROGRAM_ID if the
+    3. Repoint the dev frontend: VITE_POOL_ID=7 in apps/web/.env, plus VITE_PROGRAM_ID if the
        program id moved. Vite reloads on its own. A stale id reads an account that no longer
        exists and the screen sits empty.
 
-    5. Sparring player, once per pool. Its Principal lived on the old pool, so the deposit has to
+    4. Sparring player, once per pool. Its Principal lived on the old pool, so the deposit has to
        happen again; the script reuses SPARRING_KEYPAIR from .env and only redoes what is missing.
 
          set -a; . ./.env; set +a; pnpm --filter @hexvault/backend sparring-setup
 
-    6. Now the VPS, which has its own authority, mint and pool. .env.vps is the local mirror of
+    5. Now the VPS, which has its own authority, mint and pool. .env.vps is the local mirror of
        the .env that lives on the box, and bootstrap runs from here against it:
 
          sed -i '' 's/^POOL_ID=.*/POOL_ID=8/' .env.vps
@@ -263,7 +239,7 @@
        exported, so leftover dev values silently win wherever .env.vps happens to be missing a
        key, and the command runs against the wrong authority.
 
-    7. On the box, set POOL_ID=8 in its .env, then pull and recreate. Compose hardcodes
+    6. On the box, set POOL_ID=8 in its .env, then pull and recreate. Compose hardcodes
        env_file: .env, so the file is named .env there whatever it is called in this repo.
        Wipe the volume for the same reason step 3 does: Epoch, Round and Player are keyed by
        chain id alone, so the previous pool's rows collide with the new pool's ids. FaucetClaim
@@ -274,10 +250,10 @@
          docker compose down -v
          docker compose up -d --build
 
-    8. Vercel: set VITE_POOL_ID to 8 on the project pointed at api-hexo.elvtd.io and redeploy.
+    7. Vercel: set VITE_POOL_ID to 8 on the project pointed at api-hexo.elvtd.io and redeploy.
        A Vercel env var only reaches the bundle on the next build, so a redeploy is required.
 
-    9. Smoke it once a round has settled. The authority's Player account is the House:
+    8. Smoke it once a round has settled. The authority's Player account is the House:
 
          curl -s https://api-hexo.elvtd.io/rounds/<id> | jq '{pot, houseCut}'
          curl -s https://api-hexo.elvtd.io/players/<authority> | jq .entries
@@ -350,91 +326,29 @@
   the variables in the shell instead looks like it works and is a trap, because interpolation then falls back to .env for everything
   else and API_HOST resolves to the devnet hostname, pointing the mainnet router at the devnet API's host rule.
 
-  1. On the box, in the existing checkout:
+  Every mainnet compose command needs the same flag, or you are talking to the devnet stack:
 
-       git pull
+    docker compose --env-file .env.mainnet up -d --build
+    docker compose --env-file .env.mainnet logs -f backend
+    docker compose --env-file .env.mainnet exec postgres psql -U hexvault -d hexvault_mainnet
 
-     One checkout feeds both stacks, so a pull stages new code for devnet too. Recreate each one deliberately.
+  Check which stack you are about to hit with `docker compose --env-file .env.mainnet config | head -1`: it prints
+  `name: hexvault-mainnet`. Traefik needs no configuration change; it picks the second router up from the container labels
+  (hexvault-mainnet-api against the devnet stack's hexvault-api). It does need a DNS A record for API_HOST in place first, or the
+  certresolver fails the challenge. Rolling back is `docker compose --env-file .env.mainnet down` on its own; it leaves the devnet
+  stack running and the mainnet volume in place unless you add -v.
 
-  2. Write .env.mainnet next to .env. Copy .env.mainnet.example and fill it in. It is gitignored by the `.env.*` rule, same as
-     .env. The values that must differ from .env are POSTGRES_DB, RPC_URL (its own Helius key, on its own bill and rate limit),
-     API_HOST, CORS_ORIGIN, OPERATOR_KEYPAIR and ADMIN_ADDRESS. ACCEPTED_MINT is real USDC,
-     EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v, and POOL_ID starts again at 1 because mainnet is a different chain.
-     COMPOSE_PROJECT_NAME, STACK_NAME and ENV_FILE are already set in the example and should be left alone.
-
-  3. Bring it up. Every mainnet compose command takes the same flag:
-
-       docker compose --env-file .env.mainnet up -d --build
-       docker compose --env-file .env.mainnet logs -f backend
-       docker compose --env-file .env.mainnet exec postgres psql -U hexvault -d hexvault_mainnet
-
-     Without the flag you are talking to the devnet stack. Check which one you are about to hit with
-     `docker compose --env-file .env.mainnet config | head -1`: it prints `name: hexvault-mainnet`.
-
-  4. Traefik needs no configuration change. It picks the second router up from the container labels, which come out as
-     hexvault-mainnet-api against the devnet stack's hexvault-api. What it does need is a DNS A record for API_HOST pointing at the
-     box, in place before the container starts, or the certresolver fails the challenge and Traefik serves its default certificate.
-     Confirm with `curl -s https://<api-host>/status | jq '{rpcOk, poolId}'` once the stack is up.
-
-  5. Second Vercel project, pointed at the same repo and the same branch as the devnet one, with its own domain and its own
-     environment:
-
-       VITE_CLUSTER=mainnet-beta
-       VITE_API_URL=https://<api-host>
-       VITE_POOL_ID=1
-       VITE_PUBLIC_RPC_URL=https://api.mainnet-beta.solana.com
-       VITE_PROGRAM_ID=LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6
-
-     VITE_CLUSTER=mainnet-beta is what switches the signing chain to solana:mainnet, hides the faucet and changes the copy. The
-     devnet project keeps VITE_CLUSTER=devnet, or leaves it unset for the same result. VITE_PUBLIC_RPC_URL must stay a public
-     endpoint: Vite inlines it into the bundle, so the mainnet Helius key belongs in the backend's RPC_URL and nowhere near this
-     project. A Vercel variable only reaches the bundle on the next build, so redeploy after any change.
-
-  6. Run the leaked-key check from "Frontend RPC endpoint and checking for a leaked key" above against the mainnet host before
-     announcing it. Both greps must print nothing.
-
-  Rolling back is `docker compose --env-file .env.mainnet down` on its own. It leaves the devnet stack running, because the project
-  names differ, and leaves the mainnet volume in place unless you add -v.
+  The full first-deploy procedure (program, env file, compose, Traefik DNS, the Vercel project's VITE_* values, and the leaked-key
+  check above against the mainnet host) is in docs/ops/deploy.md and docs/ops/environments.md; this stack-switching mechanism is the
+  part that is easy to get wrong day to day.
 
   Admin actions through Squads
 
-  On mainnet the pool's admin is a Squads multisig and no machine holds its key, so the admin CLI cannot send. Set ADMIN_ADDRESS to
-  the multisig's vault address in the env you export. When it is set and differs from OPERATOR_KEYPAIR's pubkey, every admin-gated
-  command builds the instruction with the multisig as signer and fee payer and prints one base58 transaction on stdout instead of
-  sending it. Everything else it prints, the summary line and the warnings, goes to stderr, so the line pipes cleanly:
+  How admin-gated commands sign, locally, through a Ledger, or by printing a base58 transaction for a Squads vault to import, is in
+  docs/ops/deploy.md ("Admin signing"). The fund commands themselves (withdraw-principal, return-principal, principal-out,
+  fund-jackpot, fund-yield, shutdown, emergency-crank, sweep-house) are in docs/ops/funds.md.
 
-    set -a; . ./.env.mainnet; set +a
-    DATABASE_URL=postgresql://x pnpm --filter @hexvault/backend admin withdraw-principal --amount 25000 | pbcopy
-
-  set-operator rotates `Pool.operator` but leaves the House Player's own `owner` on the retired key, so a Prize the House wins still
-  pays into that key's USDC associated token account. Keep the old operator's ATA open after every rotation; close it and a House
-  win is unpayable until `payout_timeout` lets the epoch roll over.
-
-  The commands that print this way are set-params, unpause, withdraw-principal, set-operator, propose-admin, accept-admin and
-  grant-tickets (the admin path; the referral job's operator-signed grants never go through this CLI).
-  pause, fund-jackpot and fund-yield always sign locally with the loaded key: the program lets either key pause, and funding
-  the jackpot or the yield budget is permissionless, so none of the three has to wait on the multisig. That matters in an
-  incident, where pause is the one thing that has to be instant.
-
-  Then, in the Squads app:
-
-    1. Transaction Builder, Add instruction, Import base58 encoded tx, paste.
-    2. Simulate. A simulation failure here is the program refusing the call, and the error name says which rule: BelowPendingWithdrawals
-       means the withdrawal would leave the vault short of what depositors have already requested, InvalidAdminTokenAccount means the
-       destination is not the admin's associated token account for the accepted mint.
-    3. Initiate, then collect approvals, then execute.
-
-  Do the paste right after the print. The transaction carries a blockhash that expires in about a minute, and an expired one can fail
-  the import or the simulation. Nothing is lost if it does: run the command again for a fresh line. Squads is expected to re-sign with
-  its own blockhash at execute, so the gap between initiating and the last approval should not matter. That is the part to confirm on
-  devnet before the mainnet cutover (ticket 08's rehearsal): initiate a set-params, leave it a few minutes, then approve and execute,
-  and record here what actually happened.
-
-  withdraw-principal takes whole USDC with up to six decimal places, not atomic units, and the CLI scales it by the mint's own
-  decimals. The destination is the admin's associated token account, which the program checks by address; when it does not exist yet
-  the CLI prepends its creation to the same transaction, paid for by the admin. Returning principal is a plain SPL transfer back to
-  the principal vault and needs no instruction from here.
-
-  The admin handover is two commands from two different keys. The current admin runs propose-admin --key <new-admin>, then the new
-  admin runs accept-admin, which signs as the pending admin: locally when a person is taking over, printed for Squads when
-  ADMIN_ADDRESS is the multisig taking over.
+  One gotcha that lives here because it is not really about signing: set-operator rotates `Pool.operator` but leaves the House
+  Player's own `owner` on the retired key, so a Prize the House wins still pays into that key's USDC associated token account. Keep
+  the old operator's ATA open after every rotation; close it and a House win is unpayable until `payout_timeout` lets the epoch roll
+  over.
