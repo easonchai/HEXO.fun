@@ -43,8 +43,11 @@ export function gateDecision(
  * backend's message text (see access.controller.ts for the exact strings).
  */
 export function classifyRedeemError(status: number | null, reason: string): string {
-  if (status === 400) return "signature refused";
-  if (status === 404) return "unknown code";
-  if (status === 409) return /no uses left/i.test(reason) ? "used up" : "already redeemed";
-  return reason || "could not reach the server";
+  if (status === 400) return "Signature refused. Try again.";
+  if (status === 404) return "Invite code not found.";
+  if (status === 409)
+    return /no uses left/i.test(reason)
+      ? "This invite code has no uses left."
+      : "This wallet already redeemed an invite code.";
+  return reason || "Could not reach the server. Try again.";
 }

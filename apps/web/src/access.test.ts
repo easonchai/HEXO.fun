@@ -58,18 +58,18 @@ describe("gateDecision", () => {
 describe("classifyRedeemError", () => {
   it("maps a bad signature (400)", () => {
     expect(classifyRedeemError(400, 'That signature does not match "...".')).toBe(
-      "signature refused",
+      "Signature refused. Try again.",
     );
   });
 
   it("maps an unknown code (404)", () => {
-    expect(classifyRedeemError(404, "That invite code does not exist.")).toBe("unknown code");
+    expect(classifyRedeemError(404, "That invite code does not exist.")).toBe("Invite code not found.");
   });
 
   it("tells the two 409s apart by message", () => {
-    expect(classifyRedeemError(409, "That invite code has no uses left.")).toBe("used up");
+    expect(classifyRedeemError(409, "That invite code has no uses left.")).toBe("This invite code has no uses left.");
     expect(classifyRedeemError(409, "This wallet has already redeemed an invite code.")).toBe(
-      "already redeemed",
+      "This wallet already redeemed an invite code.",
     );
   });
 

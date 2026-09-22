@@ -58,7 +58,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
     };
   }, [baseUrl, owner]);
 
-  const submit = useCallback(() => {
+  const redeem = useCallback(() => {
     const wallet = owner;
     const trimmed = normalizeInviteCode(code);
     if (!wallet || !signMessage || !trimmed) return;
@@ -84,11 +84,33 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
     })();
   }, [owner, code, signMessage, baseUrl]);
 
+  // The code comes first: SUBMIT while disconnected opens the wallet, then
+  // redeems once the access check says this wallet still needs a code. A
+  // wallet that already has access skips the redeem and the gate just closes.
+  const [pending, setPending] = useState(false);
+  const status = gateDecision(connected, access);
+  useEffect(() => {
+    if (!pending || status === "connect" || status === "checking") return;
+    setPending(false);
+    if (status === "redeem") redeem();
+  }, [pending, status, redeem]);
+
+  const submit = useCallback(() => {
+    if (normalizeInviteCode(code) === "") return;
+    if (connected) {
+      redeem();
+      return;
+    }
+    setError(null);
+    setPending(true);
+    connect();
+  }, [code, connected, redeem, connect]);
+
   return {
-    status: gateDecision(connected, access),
+    status,
     code,
     setCode,
-    busy,
+    busy: busy || (pending && connected),
     error,
     connect,
     submit,

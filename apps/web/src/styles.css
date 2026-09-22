@@ -4417,3 +4417,357 @@ input::placeholder {
   }
 }
 
+
+/* ---------------------------------------------------------------------------
+   INVITE GATE (Figma 141:52988; component 141:53126, input states 161:11865,
+   mobile 147:7608). Values are the frames' literal measurements.
+   --------------------------------------------------------------------------- */
+
+.invite-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.invite-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: min(1200px, 100%);
+  min-height: 623px;
+  overflow: hidden;
+  background: var(--brand-navy);
+  border-radius: 24px;
+  box-shadow: 0 4px 12px rgba(200, 255, 190, 0.28);
+  color: var(--brand-white);
+}
+
+.invite-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 23px;
+  padding: 0 30px 33px 33px;
+  overflow: hidden;
+}
+
+.invite-textile {
+  position: absolute;
+  top: -1px;
+  left: -421px;
+  width: 1442px;
+  height: 659.46px;
+  max-width: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+.invite-textile-mobile {
+  display: none;
+}
+
+.invite-headline,
+.invite-tagline {
+  position: relative;
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+}
+
+.invite-headline {
+  font-size: 48px;
+  line-height: 54px;
+  color: var(--brand-white);
+}
+
+.invite-headline span,
+.invite-tagline {
+  color: var(--brand-lime);
+}
+
+.invite-tagline {
+  font-size: 16px;
+  line-height: 16.66px;
+}
+
+.invite-form-pane {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 32px 22px;
+  overflow: hidden;
+}
+
+.invite-form {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(419px, 100%);
+}
+
+.invite-logo {
+  display: flex;
+  align-items: center;
+  gap: 11.87px;
+  color: var(--brand-lime);
+}
+
+.invite-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: min(398px, 100%);
+  margin-top: 32px;
+}
+
+.invite-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--brand-lime);
+}
+
+.invite-title-row svg {
+  width: 24.58px;
+  height: 24.58px;
+  flex-shrink: 0;
+}
+
+.invite-title {
+  margin: 0;
+  color: var(--brand-white);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 36px;
+  line-height: 37.48px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.invite-title-break {
+  display: none;
+}
+
+.invite-copy {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-size: 16px;
+  line-height: 21.1px;
+  text-align: center;
+}
+
+.invite-field {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin-top: 32px;
+  font-family: "Roboto Mono", monospace;
+}
+
+.invite-label {
+  font-size: 14px;
+  line-height: 18.46px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.invite-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 54.36px;
+  margin-top: 8px;
+  padding: 0 17.18px;
+  background: transparent;
+  border: 1px solid var(--brand-lime);
+  border-radius: 10px;
+  outline: none;
+  color: var(--brand-white);
+  font-family: "Roboto Mono", monospace;
+  font-size: 18px;
+  line-height: 23.74px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.invite-input::placeholder {
+  color: #4a5d48;
+  opacity: 1;
+}
+
+.invite-input:focus-visible {
+  box-shadow: 0 0 0 3px rgba(182, 255, 59, 0.25);
+}
+
+.invite-input.error {
+  border-color: var(--brand-red);
+}
+
+.invite-input.error:focus-visible {
+  box-shadow: 0 0 0 3px rgba(255, 65, 54, 0.25);
+}
+
+.invite-error {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--brand-red);
+  font-size: 14px;
+  line-height: 18.46px;
+}
+
+.invite-waitlist {
+  align-self: center;
+  margin-top: 16px;
+  color: var(--brand-lime);
+  font-size: 14px;
+  line-height: 18.46px;
+  text-align: center;
+  text-decoration: underline;
+}
+
+/* In the error variant the message row and the link row are both 34px tall
+   with the text centred, so the link sits 8px under the message. */
+.invite-error + .invite-waitlist {
+  margin-top: 0;
+  padding: 8px 0;
+}
+
+.invite-waitlist:hover,
+.invite-waitlist:focus-visible {
+  color: var(--brand-lime-text);
+}
+
+.invite-submit {
+  width: 208px;
+  height: 44px;
+  margin-top: 32px;
+  border: none;
+  border-radius: 22px;
+  background: var(--brand-lime);
+  color: #07101c;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.9px;
+  cursor: pointer;
+}
+
+.invite-submit:hover:not(:disabled) {
+  background: var(--brand-lime-text);
+}
+
+.invite-submit:focus-visible {
+  outline: 2px solid var(--brand-white);
+  outline-offset: 2px;
+}
+
+.invite-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 960px) {
+  .invite-card {
+    grid-template-columns: 1fr;
+    width: min(362px, 100%);
+    min-height: 445px;
+    border-radius: 18.39px;
+  }
+
+  .invite-hero {
+    display: none;
+  }
+
+  .invite-textile-mobile {
+    display: block;
+    top: -315px;
+    left: -555.3px;
+    width: 1472.61px;
+    height: 673.46px;
+    opacity: 0.4;
+  }
+
+  .invite-form-pane {
+    place-items: start center;
+    padding: 43.96px 20.74px 44.25px;
+  }
+
+  .invite-form {
+    width: min(321.12px, 100%);
+  }
+
+  .invite-logo {
+    gap: 9.1px;
+  }
+
+  .invite-logo svg:first-child {
+    width: 28.55px;
+    height: 31.66px;
+  }
+
+  .invite-logo svg:last-child {
+    width: 69.73px;
+    height: 12.6px;
+  }
+
+  .invite-intro {
+    gap: 10.73px;
+    width: min(305px, 100%);
+    margin-top: 24px;
+  }
+
+  .invite-title-row {
+    gap: 10.73px;
+  }
+
+  .invite-title-row svg {
+    width: 18.84px;
+    height: 18.84px;
+  }
+
+  .invite-title-break {
+    display: inline;
+  }
+
+  .invite-copy {
+    font-size: 14.01px;
+    line-height: 18.48px;
+  }
+
+  .invite-field {
+    margin-top: 24px;
+  }
+
+  .invite-label {
+    font-size: 10.73px;
+    line-height: 14.15px;
+  }
+
+  .invite-input {
+    height: 41.27px;
+    margin-top: 6.13px;
+    padding: 0 13.17px;
+    border-radius: 7.66px;
+    font-size: 13.8px;
+    line-height: 18.19px;
+  }
+
+  .invite-waitlist {
+    margin-top: 8px;
+    font-size: 14.01px;
+    line-height: 18.48px;
+  }
+
+  .invite-submit {
+    width: 215px;
+    height: 45px;
+    margin-top: 24px;
+    border-radius: 16.87px;
+    letter-spacing: 0.69px;
+  }
+}
