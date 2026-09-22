@@ -36,6 +36,7 @@ import {
   principalVaultAddress,
 } from "../chain/pda";
 import { createInvite, run, type InviteCodeStore } from "./index";
+import type { AdminSigner } from "./ledger";
 import type { AdminMode } from "./squads";
 
 const PROGRAM_ID = new PublicKey("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
@@ -116,11 +117,14 @@ interface Harness {
   chain: ChainService;
   /** Instruction batches the local-mode path signed and sent. */
   sent: TransactionInstruction[][];
+  /** Raw wire bytes `sendWithLedger` (ticket 09) handed to the connection. */
+  rawSent: Buffer[];
 }
 
 async function harness(): Promise<Harness> {
   const poolData = await program.coder.accounts.encode("pool", poolFields);
   const sent: TransactionInstruction[][] = [];
+  const rawSent: Buffer[] = [];
   const connection = {
     getAccountInfo: async (
       address: PublicKey,
@@ -143,6 +147,15 @@ async function harness(): Promise<Harness> {
       blockhash: BLOCKHASH,
       lastValidBlockHeight: 1,
     }),
+    // Only the Ledger path (ticket 09) calls these; the plain local path
+    // still goes through `chain.send` above.
+    sendRawTransaction: async (raw: Buffer): Promise<string> => {
+      rawSent.push(raw);
+      return "ledger-signature";
+    },
+    confirmTransaction: async (): Promise<{ value: { err: null } }> => ({
+      value: { err: null },
+    }),
   };
   const chain = {
     program,
@@ -158,7 +171,23 @@ async function harness(): Promise<Harness> {
       return "signature";
     },
   } as unknown as ChainService;
-  return { chain, sent };
+  return { chain, sent, rawSent };
+}
+
+/**
+ * A Ledger stand-in: signs with a real (software) keypair rather than
+ * hardware, so `sendWithLedger`'s `signed.serialize()` sees a real signature
+ * and does not reject it the way it would an all-zero placeholder. The point
+ * under test is `submit`'s wiring, not where the signature came from.
+ */
+function fakeLedger(keypair: Keypair): AdminSigner {
+  return {
+    publicKey: keypair.publicKey,
+    signTransaction: async (tx) => {
+      tx.partialSign(keypair);
+      return tx;
+    },
+  };
 }
 
 /** Everything the two streams received while `body` ran, as lines. */
@@ -322,6 +351,38 @@ describe("admin run", () => {
     expect(stderr.join("\n")).toContain("12500000 atomic");
     // No part of the human-readable summary leaked into the paste.
     expect(stdout[0]).not.toContain(" ");
+  });
+
+  it("unpause with a Ledger signer sends through the Ledger, not chain.send (ticket 09)", async () => {
+    const { chain, sent, rawSent } = await harness();
+    const ledgerKeypair = Keypair.generate();
+    const mode: AdminMode = { signer: ledgerKeypair.publicKey, multisig: false };
+
+    const { stdout, stderr } = await capture(() =>
+      run({ kind: "unpause" }, chain, mode, fakeLedger(ledgerKeypair)),
+    );
+
+    // Never reaches chain.send: the Ledger path builds and sends its own
+    // transaction straight off chain.connection.
+    expect(sent).toEqual([]);
+    expect(rawSent).toHaveLength(1);
+    const tx = Transaction.from(rawSent[0] as Buffer);
+    expect(tx.feePayer?.equals(ledgerKeypair.publicKey)).toBe(true);
+    expect(stdout).toEqual([]);
+    expect(stderr).toContain("confirm on the Ledger");
+    expect(stderr).toContain("signature ledger-signature");
+  });
+
+  it("a Ledger send that lands but fails on-chain throws instead of reporting success", async () => {
+    const { chain } = await harness();
+    (chain.connection as unknown as { confirmTransaction: unknown }).confirmTransaction =
+      async () => ({ value: { err: "InsufficientFunds" } });
+    const ledgerKeypair = Keypair.generate();
+    const mode: AdminMode = { signer: ledgerKeypair.publicKey, multisig: false };
+
+    await expect(
+      capture(() => run({ kind: "unpause" }, chain, mode, fakeLedger(ledgerKeypair))),
+    ).rejects.toThrow(/transaction .* failed/);
   });
 });
 

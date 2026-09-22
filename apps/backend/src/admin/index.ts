@@ -29,6 +29,7 @@ import {
 import {
   Connection,
   PublicKey,
+  Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
 
@@ -44,6 +45,12 @@ import {
   type AdminCommand,
   type SetParamsInput,
 } from "./args";
+import {
+  checkLedgerAddress,
+  ledgerSigner,
+  parseAdminKeypair,
+  type AdminSigner,
+} from "./ledger";
 import { adminMode, encodeForSquads, type AdminMode } from "./squads";
 
 const log = (message: string): void => {
@@ -90,17 +97,22 @@ async function readPool(chain: ChainService): Promise<PoolState> {
 
 /**
  * Every admin-gated command ends here. Local mode signs and sends with the
- * loaded key, as it always did. Multisig mode prints the unsigned
- * transaction on stdout and nothing else, for Squads to import.
+ * loaded key, as it always did, unless a Ledger is loaded (ticket 09), in
+ * which case it signs and sends through that instead. Multisig mode prints
+ * the unsigned transaction on stdout and nothing else, for Squads to import.
  */
 async function submit(
   chain: ChainService,
   mode: AdminMode,
   instructions: TransactionInstruction[],
   summary: string,
+  ledger?: AdminSigner,
 ): Promise<void> {
   if (!mode.multisig) {
-    log(`signature ${await chain.send(instructions)}`);
+    const signature = ledger
+      ? await sendWithLedger(chain, ledger, instructions)
+      : await chain.send(instructions);
+    log(`signature ${signature}`);
     log(summary);
     return;
   }
@@ -115,6 +127,47 @@ async function submit(
   );
 }
 
+/**
+ * Builds, signs through the Ledger and sends: `chain.send`'s shape, but for a
+ * signer that never hands over a `Keypair` for `chain.send`'s own signature
+ * to use. Confirms with web3.js's own poll rather than `chain.send`'s
+ * subscription-first wait, since an admin command runs once, off the hot
+ * crank path that wait is tuned for.
+ * ponytail: no dropped-subscription handling like chain.send's; upgrade if a
+ * Ledger command needs the same drop detection the operator's sends get.
+ */
+async function sendWithLedger(
+  chain: ChainService,
+  ledger: AdminSigner,
+  instructions: TransactionInstruction[],
+): Promise<string> {
+  const { blockhash, lastValidBlockHeight } =
+    await chain.connection.getLatestBlockhash("finalized");
+  const tx = new Transaction({
+    blockhash,
+    lastValidBlockHeight,
+    feePayer: ledger.publicKey,
+  }).add(...instructions);
+  log("confirm on the Ledger");
+  let signed: Transaction;
+  try {
+    signed = await ledger.signTransaction(tx);
+  } catch (cause) {
+    throw new Error("Ledger signing failed", { cause });
+  }
+  const signature = await chain.connection.sendRawTransaction(signed.serialize());
+  const confirmation = await chain.connection.confirmTransaction(
+    { signature, blockhash, lastValidBlockHeight },
+    "confirmed",
+  );
+  if (confirmation.value.err) {
+    throw new Error(
+      `transaction ${signature} failed: ${JSON.stringify(confirmation.value.err)}`,
+    );
+  }
+  return signature;
+}
+
 // `set_pause` takes the admin or the operator when pausing and the admin
 // alone when unpausing. Pausing therefore always signs locally, whichever of
 // the two keys is loaded; unpausing goes through `submit` because on mainnet
@@ -127,11 +180,15 @@ async function pause(chain: ChainService): Promise<void> {
   log("pool paused");
 }
 
-async function unpause(chain: ChainService, mode: AdminMode): Promise<void> {
+async function unpause(
+  chain: ChainService,
+  mode: AdminMode,
+  ledger?: AdminSigner,
+): Promise<void> {
   const ix = await method(chain, "setPause", false)
     .accountsPartial({ signer: mode.signer, pool: chain.poolAddress() })
     .instruction();
-  await submit(chain, mode, [ix], "unpause the pool");
+  await submit(chain, mode, [ix], "unpause the pool", ledger);
 }
 
 function bnOrNull(value: number | undefined): BN | null {
@@ -142,6 +199,7 @@ async function setParams(
   chain: ChainService,
   mode: AdminMode,
   params: SetParamsInput,
+  ledger?: AdminSigner,
 ): Promise<void> {
   // args.ts already compared the window against --epoch-seconds when both
   // were given; with only the window, the epoch it has to beat is the
@@ -175,6 +233,7 @@ async function setParams(
     mode,
     [ix],
     "set params (epoch/round changes apply to the next epoch/round, not the open one)",
+    ledger,
   );
 }
 
@@ -234,6 +293,7 @@ async function grantTickets(
   mode: AdminMode,
   owner: PublicKey,
   amount: bigint,
+  ledger?: AdminSigner,
 ): Promise<void> {
   const ix = await method(chain, "grantTickets", new BN(amount.toString()))
     .accountsPartial({
@@ -247,6 +307,7 @@ async function grantTickets(
     mode,
     [ix],
     `grant ${amount} tickets to ${owner.toBase58()} (admin path, uncapped)`,
+    ledger,
   );
 }
 
@@ -260,6 +321,7 @@ async function withdrawPrincipal(
   chain: ChainService,
   mode: AdminMode,
   amount: string,
+  ledger?: AdminSigner,
 ): Promise<void> {
   const pool = await readPool(chain);
   const { decimals } = await getMint(chain.connection, pool.acceptedMint);
@@ -296,6 +358,7 @@ async function withdrawPrincipal(
     mode,
     instructions,
     `withdraw ${amount} USDC (${atomic} atomic) of principal to ${adminToken.toBase58()}`,
+    ledger,
   );
 }
 
@@ -351,27 +414,34 @@ export async function run(
   command: AdminCommand,
   chain: ChainService,
   mode: AdminMode,
+  ledger?: AdminSigner,
 ): Promise<void> {
   switch (command.kind) {
     case "pause":
       return pause(chain);
     case "unpause":
-      return unpause(chain, mode);
+      return unpause(chain, mode, ledger);
     case "set-params":
-      return setParams(chain, mode, command.params);
+      return setParams(chain, mode, command.params, ledger);
     case "fund-jackpot":
       return fundJackpot(chain, command.amount);
     case "fund-yield":
       return fundYield(chain, command.amount);
     case "grant-tickets":
-      return grantTickets(chain, mode, command.owner, command.amount);
+      return grantTickets(chain, mode, command.owner, command.amount, ledger);
     case "withdraw-principal":
-      return withdrawPrincipal(chain, mode, command.amount);
+      return withdrawPrincipal(chain, mode, command.amount, ledger);
     case "set-operator": {
       const ix = await method(chain, "setOperator", command.key)
         .accountsPartial({ admin: mode.signer, pool: chain.poolAddress() })
         .instruction();
-      return submit(chain, mode, [ix], `set the operator to ${command.key.toBase58()}`);
+      return submit(
+        chain,
+        mode,
+        [ix],
+        `set the operator to ${command.key.toBase58()}`,
+        ledger,
+      );
     }
     case "propose-admin": {
       const ix = await method(chain, "proposeAdmin", command.key)
@@ -382,6 +452,7 @@ export async function run(
         mode,
         [ix],
         `propose ${command.key.toBase58()} as the next admin; it then runs accept-admin`,
+        ledger,
       );
     }
     // Signed by the pending admin, which is whoever is taking the pool over:
@@ -390,7 +461,13 @@ export async function run(
       const ix = await method(chain, "acceptAdmin")
         .accountsPartial({ pendingAdmin: mode.signer, pool: chain.poolAddress() })
         .instruction();
-      return submit(chain, mode, [ix], `accept the admin role as ${mode.signer.toBase58()}`);
+      return submit(
+        chain,
+        mode,
+        [ix],
+        `accept the admin role as ${mode.signer.toBase58()}`,
+        ledger,
+      );
     }
   }
 }
@@ -419,15 +496,45 @@ export async function main(): Promise<void> {
   // Built directly, not through Nest DI: this script never boots a Nest
   // application, so ChainService's own constructor is the whole wiring.
   const chain = new ChainService(connection, new ConfigService<HexVaultEnv, true>(env));
-  const mode = adminMode(env.ADMIN_ADDRESS, chain.keypair.publicKey);
+
+  const ledger = await loadLedgerSigner(env.ADMIN_ADDRESS);
+  const mode = adminMode(env.ADMIN_ADDRESS, ledger?.publicKey ?? chain.keypair.publicKey);
   log(
     `signer ${chain.keypair.publicKey.toBase58()} on ${connection.rpcEndpoint}, pool ${chain.poolAddress().toBase58()}`,
   );
+  if (ledger) {
+    log(`admin signer is the Ledger at ${ledger.publicKey.toBase58()}`);
+  }
   if (mode.multisig) {
     log(`admin is ${mode.signer.toBase58()}, not the loaded key: nothing will be sent`);
   }
 
-  await run(command, chain, mode);
+  await run(command, chain, mode, ledger);
+}
+
+/**
+ * ADMIN_KEYPAIR is admin-CLI-only (nothing else reads it), so it lives
+ * outside HexVaultEnv/validateEnv, same as bootstrap.ts's own ad hoc env
+ * reads. Unset, or anything that isn't a usb://ledger URI, returns
+ * `undefined`: signing stays on chain.keypair exactly as before this ticket.
+ */
+async function loadLedgerSigner(
+  adminAddress: string | undefined,
+): Promise<AdminSigner | undefined> {
+  const selector = parseAdminKeypair(process.env.ADMIN_KEYPAIR);
+  if (!selector.ledger) return undefined;
+  // Dynamic import: these two packages talk to real USB hardware at import
+  // time, so this only runs (and only needs to work) when ADMIN_KEYPAIR
+  // actually asks for a Ledger. admin.test.ts never sets it, so the test
+  // suite never touches USB.
+  const [{ default: TransportNodeHid }, { default: Solana }] = await Promise.all([
+    import("@ledgerhq/hw-transport-node-hid"),
+    import("@ledgerhq/hw-app-solana"),
+  ]);
+  const transport = await TransportNodeHid.create();
+  const ledger = await ledgerSigner(new Solana(transport), selector.account);
+  checkLedgerAddress(ledger.publicKey, adminAddress);
+  return ledger;
 }
 
 /** Same cause-chain print as bootstrap.ts: the outer message names the step
