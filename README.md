@@ -1,7 +1,8 @@
 # HexVault
 
-A no-loss lottery on Solana with a game bolted on. Deposit USDC, keep your principal, and
-your time-weighted Entries are your odds in the draw for the pool's prize. Between draws, put
+A no-loss lottery on Solana with a game bolted on. Deposit USDC, keep your principal, and earn
+a fixed Base yield on it. Your time-weighted Entries, topped up by depositing, buying extra with
+USDC, or a referral bonus, are your odds in the draw for the pool's prize. Between draws, put
 Entries on a 36-tile hex board. When your tile is drawn, the House takes a configurable cut,
 6% by default, and the rest of the pot splits among whoever covered it. Nothing in the game
 or the draw can take your principal. The worst round you can have costs Entries.
@@ -72,12 +73,21 @@ What that means if you deposit:
   straight away and records a pending amount; the USDC lands after that epoch ends. Anyone
   can push that second transaction, including you from the vault screen, so a stalled
   operator delays nobody.
-- The prize is whatever yield the admin harvested and funded into the jackpot vault. An
-  epoch that closes with less than the pool's `min_jackpot` rolls over rather than paying
-  out dust.
+- The prize is the daily draw's jackpot: yield the admin harvested above the Base yield rate,
+  whatever depositors spent on bought tickets, and any sponsor top-up, all funded into the
+  jackpot vault by hand. Every depositor also earns a fixed Base yield on their time-weighted
+  principal, credited daily out of a separately funded budget; it stops rather than runs a debt
+  once that budget is empty. An epoch that closes with less than the pool's `min_jackpot` rolls
+  over rather than paying out dust.
 - The hot key on the VPS opens rounds, draws and pays out, and does nothing else. It cannot
   change parameters, move principal, or unpause. Either key can pause; only the admin can
   lift it.
+- Inviting a friend who deposits and keeps at least 50 USDC in for 7 straight days earns you a
+  daily Entries bonus; see [`CONTEXT.md`](CONTEXT.md) for exact tiers. The invite code your
+  friend redeems, and every referral tie, is tracked in the app, not the program.
+- The admin can shut the pool down for good: deposits, tickets and the game stop, and a
+  withdrawal completes in one step instead of two, with no epoch wait. See
+  [`docs/ops/funds.md`](docs/ops/funds.md) for what that means operationally.
 
 ## Pages
 
@@ -116,8 +126,13 @@ answers, so a slow draw shows as a longer DRAWING rather than a timer stuck at z
 ## Read first
 
 - [`CONTEXT.md`](CONTEXT.md): the vocabulary. Use these words and no others.
-- [`runbook.md`](runbook.md): running it locally, redeploying, and what breaks.
-- [`docs/product-requirements.md`](docs/product-requirements.md): what the product does.
+- [`docs/architecture.md`](docs/architecture.md): components, accounts and PDAs, roles, fund
+  flow, the epoch and round lifecycle, and the backend's jobs and read model.
+- [`runbook.md`](runbook.md): running it locally day to day.
+- [`docs/ops/`](docs/ops/): deploying and upgrading, fund operations, and the dev/staging/mainnet
+  environments.
+- [`docs/archive/product-requirements.md`](docs/archive/product-requirements.md): what the
+  product does (superseded in part; see `docs/adr/`).
 - [`docs/plan/rebuild/spec.md`](docs/plan/rebuild/spec.md): program, backend, frontend, infra.
 - [`docs/plan/rebuild/issues/`](docs/plan/rebuild/issues/): the ordered build tickets.
 - [`docs/plan/mainnet/spec.md`](docs/plan/mainnet/spec.md): the private beta, the withdrawal

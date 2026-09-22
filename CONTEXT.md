@@ -196,3 +196,23 @@ _Avoid_: Cache, backend
 **Indexer**:
 The backend component that mirrors program accounts and finalized events into Postgres. It is the Read model: the browser's only path to learning anything about the protocol.
 _Avoid_: Cache, backend (too broad)
+
+**Shutdown**:
+An admin-only, irreversible pool state (`Pool.shutdown`) that stops every inflow, the game and the draw, and lets withdrawals skip the epoch lock. Set once, by `shutdown`. Modelled on Marginfi/Kamino's ReduceOnly.
+_Avoid_: Pause (a separate, reversible state), wind-down, freeze
+
+**Emergency withdraw**:
+A permissionless crank, valid only once a pool is shut down, that pays one Player's whole Principal and pending withdrawal to their own wallet in one instruction (`emergency_withdraw`). Anyone may run it for any Player; the House is excluded, since its principal is protocol money and leaves through a Sweep instead.
+_Avoid_: Force withdraw, bailout, rescue
+
+**Sweep**:
+The admin-only `sweep_house`, valid only once a pool is shut down, that moves the jackpot vault's surplus over `jackpot_reserved` and whatever of the Yield budget the principal vault still holds unspent to the Treasury. Never touches Principal; callable more than once.
+_Avoid_: Drain, liquidate, close out
+
+**Principal out**:
+`total_principal` plus Pending withdrawals plus the Yield budget, minus the principal vault's live balance, floored at zero: how much the Admin has moved out via `admin_withdraw` and not yet returned. Wider than Deployed principal above, which ignores Pending withdrawals and the Yield budget. Read with `admin principal-out` or `GET /status`'s `principalOut`.
+_Avoid_: Deployed principal (the narrower figure), TVL gap
+
+**Environment**:
+One deployment of the whole stack: its own program keypair, its own pools, its own Postgres database and its own env file. Dev, staging and mainnet share nothing but the box and Traefik. See `docs/ops/environments.md`.
+_Avoid_: Env (fine in code and flags), cluster (a Solana term, narrower than this)
