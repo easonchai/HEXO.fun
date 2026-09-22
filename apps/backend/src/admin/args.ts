@@ -25,6 +25,10 @@ export interface SetParamsInput {
   readonly bonusCapBps?: number;
 }
 
+/** `emergency-crank`'s default batch size when `--batch` is not given
+ *  (ops-and-envs ticket 08, spec.md "emergency-crank [--batch 5]"). */
+export const DEFAULT_EMERGENCY_CRANK_BATCH = 5;
+
 export type AdminCommand =
   | { readonly kind: "pause" }
   | { readonly kind: "unpause" }
@@ -47,7 +51,18 @@ export type AdminCommand =
       readonly maxUses: number;
       readonly owner?: PublicKey;
       readonly count: number;
-    };
+    }
+  /** Read-only (ops-and-envs ticket 08): prints the same figure `/status`
+   *  reports, and its inputs. */
+  | { readonly kind: "principal-out" }
+  /** Plain SPL transfer from the admin's own ATA into the principal vault;
+   *  `amount` is USDC as typed, same shape as `withdraw-principal`. */
+  | { readonly kind: "return-principal"; readonly amount: string }
+  /** Irreversible; refused unless `confirm` matches the configured pool. */
+  | { readonly kind: "shutdown"; readonly confirm: bigint }
+  /** Permissionless: any signer may run this. */
+  | { readonly kind: "emergency-crank"; readonly batch: number }
+  | { readonly kind: "sweep-house" };
 
 export const USAGE = [
   "usage: admin <command> [flags]",
@@ -62,6 +77,11 @@ export const USAGE = [
   "  propose-admin --key PUBKEY",
   "  accept-admin",
   "  create-invite --max-uses N [--owner PUBKEY] [--count K]",
+  "  principal-out",
+  "  return-principal --amount USDC   (whole USDC, up to 6 decimal places)",
+  "  shutdown --confirm POOL_ID   (irreversible; POOL_ID must match the configured pool)",
+  `  emergency-crank [--batch N]   (permissionless; N players per transaction, default ${DEFAULT_EMERGENCY_CRANK_BATCH})`,
+  "  sweep-house",
 ].join("\n");
 
 function positiveInt(flag: string, raw: string): number {
@@ -367,6 +387,46 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
         ...(values.owner !== undefined ? { owner: pubkey("owner", values.owner) } : {}),
       };
     }
+
+    case "principal-out":
+      rejectExtra(rest);
+      return { kind: "principal-out" };
+
+    case "return-principal":
+      return {
+        kind: "return-principal",
+        amount: usdcAmount("amount", oneFlag(command, "amount", rest)),
+      };
+
+    case "shutdown":
+      return {
+        kind: "shutdown",
+        confirm: nonNegativeBigInt("confirm", oneFlag(command, "confirm", rest)),
+      };
+
+    case "emergency-crank": {
+      let values: { batch?: string };
+      try {
+        ({ values } = parseArgs({
+          args: [...rest],
+          options: { batch: { type: "string" } },
+          allowPositionals: false,
+        }));
+      } catch (cause) {
+        throw new Error(USAGE, { cause });
+      }
+      return {
+        kind: "emergency-crank",
+        batch:
+          values.batch !== undefined
+            ? positiveInt("batch", values.batch)
+            : DEFAULT_EMERGENCY_CRANK_BATCH,
+      };
+    }
+
+    case "sweep-house":
+      rejectExtra(rest);
+      return { kind: "sweep-house" };
 
     default:
       throw new Error(USAGE);

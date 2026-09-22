@@ -15,7 +15,13 @@ import {
   Wallet,
   type Idl,
 } from "@anchor-lang/core";
-import { MINT_SIZE, MintLayout, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  ACCOUNT_SIZE,
+  AccountLayout,
+  MINT_SIZE,
+  MintLayout,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import {
   Connection,
   Keypair,
@@ -113,6 +119,35 @@ function mintAccount(): AccountInfo<Buffer> {
   };
 }
 
+/** An SPL token account holding `amount`, for the principal vault reads
+ *  `principal-out`/`return-principal`/`emergency-crank` make. */
+function tokenAccount(amount: bigint): AccountInfo<Buffer> {
+  const data = Buffer.alloc(ACCOUNT_SIZE);
+  AccountLayout.encode(
+    {
+      mint: MINT,
+      owner: POOL,
+      amount,
+      delegateOption: 0,
+      delegate: PublicKey.default,
+      delegatedAmount: 0n,
+      state: 1,
+      isNativeOption: 0,
+      isNative: 0n,
+      closeAuthorityOption: 0,
+      closeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return {
+    data,
+    owner: TOKEN_PROGRAM_ID,
+    executable: false,
+    lamports: 1,
+    rentEpoch: 0,
+  };
+}
+
 interface Harness {
   chain: ChainService;
   /** Instruction batches the local-mode path signed and sent. */
@@ -121,8 +156,46 @@ interface Harness {
   rawSent: Buffer[];
 }
 
-async function harness(): Promise<Harness> {
-  const poolData = await program.coder.accounts.encode("pool", poolFields);
+interface HarnessOptions {
+  /** Merged over the shared `poolFields` before encoding, for a test that
+   *  needs a specific total_principal/pending_withdrawals/yield_budget. */
+  pool?: Record<string, unknown>;
+  /** Principal vault balance, atomic units; absent means the account does
+   *  not exist (only `principal-out`/`return-principal`/`emergency-crank`
+   *  read it). */
+  vaultBalance?: bigint;
+  /** Player accounts `emergency-crank`'s chain scan should find. */
+  players?: readonly {
+    owner: PublicKey;
+    principal: bigint;
+    pendingWithdraw: bigint;
+    isHouse?: boolean;
+  }[];
+  /** Overrides the local-signing `chain.send` stub, for a test that needs a
+   *  batch to fail partway through (emergency-crank's InsufficientVault). */
+  send?: (instructions: TransactionInstruction[]) => Promise<string>;
+}
+
+async function harness(options: HarnessOptions = {}): Promise<Harness> {
+  const poolData = await program.coder.accounts.encode("pool", {
+    ...poolFields,
+    ...options.pool,
+  });
+  const principalVault = principalVaultAddress(PROGRAM_ID, POOL);
+  const vaultInfo = options.vaultBalance === undefined ? null : tokenAccount(options.vaultBalance);
+  const playerAccounts = await Promise.all(
+    (options.players ?? []).map(async (player) => ({
+      pubkey: playerAddress(PROGRAM_ID, POOL, player.owner),
+      account: {
+        data: await program.coder.accounts.encode("player", {
+          owner: player.owner,
+          principal: new BN(player.principal.toString()),
+          pendingWithdraw: new BN(player.pendingWithdraw.toString()),
+          isHouse: player.isHouse ?? false,
+        }),
+      },
+    })),
+  );
   const sent: TransactionInstruction[][] = [];
   const rawSent: Buffer[] = [];
   const connection = {
@@ -139,10 +212,15 @@ async function harness(): Promise<Harness> {
         };
       }
       if (address.equals(MINT)) return mintAccount();
+      if (vaultInfo && address.equals(principalVault)) return vaultInfo;
       // The admin's token account: absent, so withdraw-principal has to
       // prepend its creation to the same transaction.
       return null;
     },
+    // emergency-crank's own chain scan (admin/index.ts's playersOwedABalance);
+    // the filters argument is not honoured, same as every other fake here
+    // that trusts the real SDK to build the request correctly.
+    getProgramAccounts: async () => playerAccounts,
     getLatestBlockhash: async () => ({
       blockhash: BLOCKHASH,
       lastValidBlockHeight: 1,
@@ -161,15 +239,18 @@ async function harness(): Promise<Harness> {
     program,
     programId: PROGRAM_ID,
     keypair: Keypair.generate(),
+    poolId: 1n,
     connection,
     poolAddress: () => POOL,
-    principalVaultAddress: () => principalVaultAddress(PROGRAM_ID, POOL),
+    principalVaultAddress: () => principalVault,
     jackpotVaultAddress: () => jackpotVaultAddress(PROGRAM_ID, POOL),
     playerAddress: (owner: PublicKey) => playerAddress(PROGRAM_ID, POOL, owner),
-    send: async (instructions: TransactionInstruction[]): Promise<string> => {
-      sent.push(instructions);
-      return "signature";
-    },
+    send:
+      options.send ??
+      (async (instructions: TransactionInstruction[]): Promise<string> => {
+        sent.push(instructions);
+        return "signature";
+      }),
   } as unknown as ChainService;
   return { chain, sent, rawSent };
 }
@@ -383,6 +464,171 @@ describe("admin run", () => {
     await expect(
       capture(() => run({ kind: "unpause" }, chain, mode, fakeLedger(ledgerKeypair))),
     ).rejects.toThrow(/transaction .* failed/);
+  });
+
+  it("principal-out reads the pool and vault and sends nothing", async () => {
+    const { chain, sent } = await harness({
+      pool: {
+        totalPrincipal: new BN(3_000_000),
+        pendingWithdrawals: new BN(250_000),
+        yieldBudget: new BN(100_000),
+      },
+      vaultBalance: 1_000_000n,
+    });
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    const { stdout, stderr } = await capture(() =>
+      run({ kind: "principal-out" }, chain, mode),
+    );
+
+    expect(sent).toEqual([]);
+    expect(stdout).toEqual([]);
+    // 3,000,000 + 250,000 + 100,000 - 1,000,000.
+    expect(stderr.join("\n")).toContain("principal_out=2350000");
+  });
+
+  it("return-principal in local mode transfers from the admin's own ATA and prints before/after", async () => {
+    const { chain, sent } = await harness({
+      pool: {
+        totalPrincipal: new BN(3_000_000),
+        pendingWithdrawals: new BN(250_000),
+        yieldBudget: new BN(100_000),
+      },
+      vaultBalance: 1_000_000n,
+    });
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    const { stdout, stderr } = await capture(() =>
+      run({ kind: "return-principal", amount: "1" }, chain, mode),
+    );
+
+    expect(sent).toHaveLength(1);
+    // Just the transfer: the admin's own source ATA is assumed to already
+    // exist, same as fundJackpot/fundYield's own source reads.
+    expect(sent[0]).toHaveLength(1);
+    expect(stdout).toEqual([]);
+    const lines = stderr.join("\n");
+    expect(lines).toContain("1000000 atomic");
+    expect(lines).toMatch(/before:.*principal_out=2350000/);
+    expect(lines).toMatch(/after:.*principal_out=2350000/);
+  });
+
+  it("return-principal in multisig mode prints principal-out before, not after", async () => {
+    const { chain, sent } = await harness({ vaultBalance: 1_000_000n });
+    const multisigVault = Keypair.generate().publicKey;
+    const mode: AdminMode = { signer: multisigVault, multisig: true };
+
+    const { stdout, stderr } = await capture(() =>
+      run({ kind: "return-principal", amount: "1" }, chain, mode),
+    );
+
+    expect(sent).toEqual([]);
+    expect(stdout).toHaveLength(1);
+    const lines = stderr.join("\n");
+    expect(lines).toContain("before:");
+    expect(lines).not.toContain("after:");
+  });
+
+  it("shutdown refuses unless --confirm matches the configured pool, irreversible or not", async () => {
+    const { chain, sent } = await harness();
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    await expect(
+      capture(() => run({ kind: "shutdown", confirm: 99n }, chain, mode)),
+    ).rejects.toThrow(/does not match the configured pool/);
+    expect(sent).toEqual([]);
+  });
+
+  it("shutdown in local mode sends once --confirm matches the pool id", async () => {
+    const { chain, sent } = await harness();
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    await run({ kind: "shutdown", confirm: 1n }, chain, mode);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("emergency-crank pays every Player owed a balance, creating each owner's ATA idempotently", async () => {
+    const alice = Keypair.generate().publicKey;
+    const bob = Keypair.generate().publicKey;
+    const { chain, sent } = await harness({
+      players: [
+        { owner: alice, principal: 1_000_000n, pendingWithdraw: 0n },
+        { owner: bob, principal: 0n, pendingWithdraw: 500_000n },
+      ],
+    });
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    const { stdout, stderr } = await capture(() =>
+      run({ kind: "emergency-crank", batch: 5 }, chain, mode),
+    );
+
+    // One batch (2 players, batch size 5): an idempotent ATA create plus
+    // emergency_withdraw per player.
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toHaveLength(4);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("paid 2, skipped 0");
+  });
+
+  it("emergency-crank skips the House and a Player owed nothing", async () => {
+    const house = Keypair.generate().publicKey;
+    const zero = Keypair.generate().publicKey;
+    const { chain, sent } = await harness({
+      players: [
+        { owner: house, principal: 1_000_000n, pendingWithdraw: 0n, isHouse: true },
+        { owner: zero, principal: 0n, pendingWithdraw: 0n },
+      ],
+    });
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    const { stderr } = await capture(() =>
+      run({ kind: "emergency-crank", batch: 5 }, chain, mode),
+    );
+    expect(sent).toEqual([]);
+    expect(stderr.join("\n")).toContain("no Player owes a balance");
+  });
+
+  it("emergency-crank stops at the first InsufficientVault and prints principal-out", async () => {
+    const alice = Keypair.generate().publicKey;
+    const { chain, sent } = await harness({
+      pool: {
+        totalPrincipal: new BN(1_000_000),
+        pendingWithdrawals: new BN(0),
+        yieldBudget: new BN(0),
+      },
+      vaultBalance: 500_000n,
+      players: [{ owner: alice, principal: 1_000_000n, pendingWithdraw: 0n }],
+      send: async () => {
+        throw new Error("InsufficientVault");
+      },
+    });
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    const { stderr } = await capture(() =>
+      run({ kind: "emergency-crank", batch: 5 }, chain, mode),
+    );
+
+    expect(sent).toEqual([]);
+    const lines = stderr.join("\n");
+    expect(lines).toContain("insufficient vault");
+    expect(lines).toContain("principal_out=500000");
+    expect(lines).toContain("paid 0, skipped 1");
+  });
+
+  it("sweep-house in local mode signs, and multisig mode prints one transaction", async () => {
+    const local = await harness();
+    const localMode: AdminMode = { signer: local.chain.keypair.publicKey, multisig: false };
+    await run({ kind: "sweep-house" }, local.chain, localMode);
+    expect(local.sent).toHaveLength(1);
+
+    const multisig = await harness();
+    const multisigVault = Keypair.generate().publicKey;
+    const multisigMode: AdminMode = { signer: multisigVault, multisig: true };
+    const { stdout } = await capture(() =>
+      run({ kind: "sweep-house" }, multisig.chain, multisigMode),
+    );
+    expect(multisig.sent).toEqual([]);
+    expect(stdout).toHaveLength(1);
   });
 });
 

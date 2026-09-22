@@ -279,6 +279,48 @@ describe("parseAdminCommand", () => {
     ).toThrow(/base58 pubkey/);
   });
 
+  it("parses principal-out and sweep-house with no flags", () => {
+    expect(parseAdminCommand(["principal-out"])).toEqual({ kind: "principal-out" });
+    expect(parseAdminCommand(["sweep-house"])).toEqual({ kind: "sweep-house" });
+    expect(() => parseAdminCommand(["principal-out", "now"])).toThrow(/unexpected argument/);
+    expect(() => parseAdminCommand(["sweep-house", "now"])).toThrow(/unexpected argument/);
+  });
+
+  it("parses return-principal's amount the same way as withdraw-principal", () => {
+    expect(parseAdminCommand(["return-principal", "--amount", "12.5"])).toEqual({
+      kind: "return-principal",
+      amount: "12.5",
+    });
+    expect(() => parseAdminCommand(["return-principal", "--amount", "0"])).toThrow(
+      /positive amount of USDC/,
+    );
+  });
+
+  it("parses shutdown's confirm as the pool id", () => {
+    expect(parseAdminCommand(["shutdown", "--confirm", "1"])).toEqual({
+      kind: "shutdown",
+      confirm: 1n,
+    });
+    expect(() => parseAdminCommand(["shutdown"])).toThrow(/needs --confirm/);
+    expect(() => parseAdminCommand(["shutdown", "--confirm=-1"])).toThrow(
+      /non-negative whole number/,
+    );
+  });
+
+  it("parses emergency-crank's batch, defaulting when not given", () => {
+    expect(parseAdminCommand(["emergency-crank"])).toEqual({
+      kind: "emergency-crank",
+      batch: 5,
+    });
+    expect(parseAdminCommand(["emergency-crank", "--batch", "10"])).toEqual({
+      kind: "emergency-crank",
+      batch: 10,
+    });
+    expect(() => parseAdminCommand(["emergency-crank", "--batch", "0"])).toThrow(
+      /positive whole number/,
+    );
+  });
+
   it("scales a USDC amount by the mint's decimals", () => {
     expect(atomicUsdc("250", 6)).toBe(250_000_000n);
     expect(atomicUsdc("12.5", 6)).toBe(12_500_000n);

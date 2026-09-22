@@ -22,6 +22,8 @@ import { ConfigService } from "@nestjs/config";
 import { PrismaClient } from "@prisma/client";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
+  getAccount,
   getAssociatedTokenAddressSync,
   getMint,
   TOKEN_PROGRAM_ID,
@@ -33,6 +35,7 @@ import {
   type TransactionInstruction,
 } from "@solana/web3.js";
 
+import { principalOut } from "../api/api.service";
 import { generateInviteCode } from "../api/invite-code";
 import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
@@ -84,7 +87,18 @@ function method(chain: ChainService, name: string, ...args: unknown[]): MethodBu
   return factory(...args);
 }
 
-async function readPool(chain: ChainService): Promise<PoolState> {
+/**
+ * `PoolState` (operator/chain-state.ts) is scoped to what the tick needs,
+ * so `principal-out`'s two other inputs are decoded a second time off the
+ * same already-fetched bytes, rather than widening a type built for a
+ * different job (and every operator test fixture along with it).
+ */
+interface AdminPoolState extends PoolState {
+  readonly pendingWithdrawals: bigint;
+  readonly yieldBudget: bigint;
+}
+
+async function readPool(chain: ChainService): Promise<AdminPoolState> {
   const address = chain.poolAddress();
   const info = await chain.connection.getAccountInfo(address);
   if (!info) {
@@ -92,7 +106,39 @@ async function readPool(chain: ChainService): Promise<PoolState> {
       `pool ${address.toBase58()} not found on this cluster; has bootstrap run?`,
     );
   }
-  return decodePool(chain.program, address, info.data);
+  const pool = decodePool(chain.program, address, info.data);
+  const raw = chain.program.coder.accounts.decode<{ pendingWithdrawals: BN; yieldBudget: BN }>(
+    "pool",
+    info.data,
+  );
+  return {
+    ...pool,
+    pendingWithdrawals: BigInt(raw.pendingWithdrawals.toString()),
+    yieldBudget: BigInt(raw.yieldBudget.toString()),
+  };
+}
+
+/** Reads the principal vault's live balance and logs `principal-out`'s four
+ *  inputs and result under `label`. Shared by `principal-out`,
+ *  `return-principal` (before and after) and `emergency-crank` (on stop). */
+async function logPrincipalOut(
+  chain: ChainService,
+  pool: AdminPoolState,
+  label: string,
+): Promise<bigint> {
+  const vault = chain.principalVaultAddress(pool.address);
+  const { amount } = await getAccount(chain.connection, vault);
+  const out = principalOut({
+    totalPrincipal: pool.totalPrincipal,
+    pendingWithdrawals: pool.pendingWithdrawals,
+    yieldBudget: pool.yieldBudget,
+    vaultAmount: amount,
+  });
+  log(
+    `${label}: total_principal=${pool.totalPrincipal} pending_withdrawals=${pool.pendingWithdrawals} ` +
+      `yield_budget=${pool.yieldBudget} vault=${amount} principal_out=${out}`,
+  );
+  return out;
 }
 
 /**
@@ -237,12 +283,11 @@ async function setParams(
   );
 }
 
-// ponytail: unlike the operator's automatic fundJackpot (operator/instructions.ts),
-// this does not mint a shortfall first. An admin topping up the jackpot by
-// hand is expected to already hold hexUSDC (see the runbook's minting
-// recipe). Auto-minting here would silently paper over a genuinely
-// out-of-funds authority. Upgrade path: a --mint-shortfall flag if that
-// friction turns out to matter.
+// ponytail: no auto-mint of a shortfall first. The operator does not mint or
+// fund the jackpot itself; an admin topping this up by hand is expected to
+// already hold hexUSDC (see the runbook's minting recipe). Auto-minting here
+// would silently paper over a genuinely out-of-funds authority. Upgrade
+// path: a --mint-shortfall flag if that friction turns out to matter.
 async function fundJackpot(chain: ChainService, amount: bigint): Promise<void> {
   const pool = await readPool(chain);
   const source = getAssociatedTokenAddressSync(pool.acceptedMint, chain.keypair.publicKey);
@@ -362,6 +407,204 @@ async function withdrawPrincipal(
   );
 }
 
+/** Read-only: prints the same figure `/status` reports, and its inputs. */
+async function principalOutCommand(chain: ChainService): Promise<void> {
+  const pool = await readPool(chain);
+  await logPrincipalOut(chain, pool, "principal out");
+}
+
+/**
+ * Plain SPL transfer from the admin's own ATA into the principal vault
+ * (spec.md "Out of Scope": no on-chain `admin_return`, return is a transfer
+ * plus this figure). Prints `principal-out` before, and once a local send
+ * has actually landed, after; a multisig print has nothing to re-read yet.
+ */
+async function returnPrincipal(
+  chain: ChainService,
+  mode: AdminMode,
+  amount: string,
+  ledger?: AdminSigner,
+): Promise<void> {
+  const pool = await readPool(chain);
+  await logPrincipalOut(chain, pool, "before");
+  const { decimals } = await getMint(chain.connection, pool.acceptedMint);
+  const atomic = atomicUsdc(amount, decimals);
+  // Off-curve is allowed on purpose, same reason as withdraw-principal's own
+  // adminToken: a Squads vault is a PDA, and its ATA derives the same way.
+  const adminToken = getAssociatedTokenAddressSync(pool.acceptedMint, mode.signer, true);
+  const principalVault = chain.principalVaultAddress(pool.address);
+  const ix = createTransferCheckedInstruction(
+    adminToken,
+    pool.acceptedMint,
+    principalVault,
+    mode.signer,
+    atomic,
+    decimals,
+    [],
+    TOKEN_PROGRAM_ID,
+  );
+  await submit(
+    chain,
+    mode,
+    [ix],
+    `return ${amount} USDC (${atomic} atomic) of principal from ${adminToken.toBase58()} to the principal vault`,
+    ledger,
+  );
+  if (!mode.multisig) await logPrincipalOut(chain, pool, "after");
+}
+
+/**
+ * Irreversible on chain, so the CLI makes the operator name the pool out
+ * loud first: `--confirm` must equal the configured `POOL_ID`, not just be
+ * present, or nothing is sent.
+ */
+async function shutdownCommand(
+  chain: ChainService,
+  mode: AdminMode,
+  confirm: bigint,
+  ledger?: AdminSigner,
+): Promise<void> {
+  if (confirm !== chain.poolId) {
+    throw new Error(
+      `--confirm ${confirm} does not match the configured pool ${chain.poolId}; refusing an irreversible shutdown`,
+    );
+  }
+  const ix = await method(chain, "shutdown")
+    .accountsPartial({ admin: mode.signer, pool: chain.poolAddress() })
+    .instruction();
+  await submit(chain, mode, [ix], `shut down pool ${chain.poolId} (irreversible)`, ledger);
+}
+
+interface CrankPlayer {
+  readonly address: PublicKey;
+  readonly owner: PublicKey;
+  readonly principal: bigint;
+  readonly pendingWithdraw: bigint;
+}
+
+/**
+ * Every Player of this pool with `principal + pending_withdraw > 0`, House
+ * excluded, read straight off the chain rather than through the indexer's
+ * Postgres mirror: this crank is the last resort after `shutdown`, so it
+ * must not depend on the indexer being up or caught up. Mirrors
+ * `IndexerService.fetchAll`'s own discriminator-memcmp technique
+ * (indexer/indexer.service.ts).
+ */
+async function playersOwedABalance(chain: ChainService): Promise<CrankPlayer[]> {
+  const coder = chain.program.coder.accounts;
+  // SAFETY: same shape indexer.service.ts's own memcmp call relies on;
+  // BorshAccountsCoder.memcmp returns { offset: 0, bytes: base58(discriminator) }.
+  const { bytes } = coder.memcmp("player") as { bytes: string };
+  const accounts = await chain.connection.getProgramAccounts(chain.programId, {
+    filters: [{ memcmp: { offset: 0, bytes } }],
+  });
+  const pool = chain.poolAddress();
+  const players: CrankPlayer[] = [];
+  for (const { pubkey, account } of accounts) {
+    let raw: { owner: PublicKey; principal: BN; pendingWithdraw: BN; isHouse: boolean };
+    try {
+      raw = coder.decode("player", account.data);
+    } catch {
+      continue; // an account this program owns but a stale layout does not decode
+    }
+    if (!pubkey.equals(chain.playerAddress(raw.owner, pool))) continue; // a different pool's Player
+    if (raw.isHouse) continue; // exits through sweep-house instead
+    const principal = BigInt(raw.principal.toString());
+    const pendingWithdraw = BigInt(raw.pendingWithdraw.toString());
+    if (principal + pendingWithdraw <= 0n) continue;
+    players.push({ address: pubkey, owner: raw.owner, principal, pendingWithdraw });
+  }
+  return players;
+}
+
+/**
+ * Permissionless (spec.md "emergency_withdraw"): any signer pays the fee, so
+ * this signs and sends locally with whatever key is loaded rather than going
+ * through `submit()`'s admin/Squads path. Creates each owner's ATA
+ * idempotently first, same as the operator's own `processWithdrawals`
+ * (operator/instructions.ts), then batches `emergency_withdraw` `batchSize`
+ * players per transaction. Stops at the first `InsufficientVault` rather
+ * than sending every remaining batch into the same wall.
+ */
+async function emergencyCrank(chain: ChainService, batchSize: number): Promise<void> {
+  const pool = await readPool(chain);
+  const players = await playersOwedABalance(chain);
+  if (players.length === 0) {
+    log("no Player owes a balance; nothing to crank");
+    return;
+  }
+  const principalVault = chain.principalVaultAddress(pool.address);
+  let paid = 0;
+  for (let start = 0; start < players.length; start += batchSize) {
+    const batch = players.slice(start, start + batchSize);
+    const instructions: TransactionInstruction[] = [];
+    for (const player of batch) {
+      const ownerToken = getAssociatedTokenAddressSync(pool.acceptedMint, player.owner);
+      instructions.push(
+        createAssociatedTokenAccountIdempotentInstruction(
+          chain.keypair.publicKey,
+          ownerToken,
+          player.owner,
+          pool.acceptedMint,
+        ),
+        await method(chain, "emergencyWithdraw")
+          .accountsPartial({
+            pool: pool.address,
+            player: player.address,
+            owner: player.owner,
+            acceptedMint: pool.acceptedMint,
+            ownerToken,
+            principalVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .instruction(),
+      );
+    }
+    try {
+      const signature = await chain.send(instructions);
+      paid += batch.length;
+      log(`signature ${signature}`);
+      log(`paid ${batch.map((player) => player.owner.toBase58()).join(", ")}`);
+    } catch (cause) {
+      if ((cause instanceof Error ? cause.message : "") !== "InsufficientVault") throw cause;
+      const skipped = players.length - paid;
+      log(`insufficient vault: stopped before this batch of ${batch.length}; ${skipped} player(s) still owed`);
+      await logPrincipalOut(chain, pool, "principal out");
+      log(`emergency-crank done: paid ${paid}, skipped ${skipped}`);
+      return;
+    }
+  }
+  log(`emergency-crank done: paid ${paid}, skipped 0`);
+}
+
+/** Admin-only, only valid once the pool is shut down (spec.md "sweep_house"):
+ *  moves the whole jackpot and any unspent yield budget to treasury. */
+async function sweepHouse(
+  chain: ChainService,
+  mode: AdminMode,
+  ledger?: AdminSigner,
+): Promise<void> {
+  const pool = await readPool(chain);
+  const ix = await method(chain, "sweepHouse")
+    .accountsPartial({
+      admin: mode.signer,
+      pool: pool.address,
+      acceptedMint: pool.acceptedMint,
+      jackpotVault: chain.jackpotVaultAddress(pool.address),
+      principalVault: chain.principalVaultAddress(pool.address),
+      treasury: pool.treasury,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+  await submit(
+    chain,
+    mode,
+    [ix],
+    `sweep the jackpot and any unspent yield budget to treasury ${pool.treasury.toBase58()}`,
+    ledger,
+  );
+}
+
 /** The slice of PrismaClient `createInvite` needs, so `admin.test.ts` can
  *  drive it with an in-memory fake instead of a real Postgres. */
 export interface InviteCodeStore {
@@ -469,6 +712,16 @@ export async function run(
         ledger,
       );
     }
+    case "principal-out":
+      return principalOutCommand(chain);
+    case "return-principal":
+      return returnPrincipal(chain, mode, command.amount, ledger);
+    case "shutdown":
+      return shutdownCommand(chain, mode, command.confirm, ledger);
+    case "emergency-crank":
+      return emergencyCrank(chain, command.batch);
+    case "sweep-house":
+      return sweepHouse(chain, mode, ledger);
   }
 }
 
