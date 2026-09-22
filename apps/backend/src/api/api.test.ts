@@ -33,6 +33,7 @@ import { ConfigModule } from "../config/config.module";
 import { HealthController } from "../health/health.controller";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
+import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { ApiModule } from "./api.module";
 import { FaucetController } from "./faucet.controller";
 import {
@@ -394,7 +395,9 @@ describe("playerTicketExtras", () => {
   });
 });
 
-describe("API routes", () => {
+const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
+
+describe.skipIf(!DB_AVAILABLE)("API routes", () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let http: ReturnType<typeof request>;

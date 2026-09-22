@@ -8,15 +8,19 @@ import { ChainModule } from "../chain/chain.module";
 import { ConfigModule } from "../config/config.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
+import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { OperatorModule } from "./operator.module";
 import { OperatorService } from "./operator.service";
 
 // PrismaClient reads DATABASE_URL when it is constructed, which happens below
 // rather than at import time, so overriding the setup file's default here is
 // still early enough.
-process.env.DATABASE_URL =
+const TEST_DATABASE_URL =
   process.env.OPERATOR_DATABASE_URL ??
   "postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault_operator";
+process.env.DATABASE_URL = TEST_DATABASE_URL;
+
+const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 const OWNERS = ["winner-test-a", "winner-test-b", "winner-test-c"];
 
@@ -44,7 +48,7 @@ const player = (owner: string, regStart: string, regEnd: string) => ({
   bonusGranted: 0n,
 });
 
-describe("winner lookup", () => {
+describe.skipIf(!DB_AVAILABLE)("winner lookup", () => {
   let prisma: PrismaService;
   let operator: OperatorService;
 

@@ -4,9 +4,10 @@
 // confirmation reads as a stall (spec.md "Operator" and status.ts's 10 s
 // freshness window). Against a real Postgres, since that upsert is the thing
 // under test; the chain is fake, with `send` the only seam that matters here.
-process.env.DATABASE_URL =
+const TEST_DATABASE_URL =
   process.env.OPERATOR_DATABASE_URL ??
   "postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault_operator";
+process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 import {
   AnchorProvider,
@@ -29,12 +30,15 @@ import { loadIdl } from "../chain/idl";
 import { epochAddress, poolAddress, roundAddress } from "../chain/pda";
 import { PrismaService } from "../prisma/prisma.service";
 import { CountingConnection } from "../test-utils/counting-connection";
+import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { EPOCH_STATUS, ROUND_STATUS } from "./chain-state";
 import type { IndexerQueries } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
 import type { SparringService } from "./sparring";
 import { msUntilWake, SAFETY_INTERVAL_SECONDS } from "./tick";
 import { RANDOMNESS_DISCRIMINATOR, randomnessAddress } from "./vrf";
+
+const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 const PROGRAM_ID = new PublicKey("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
 const POOL = poolAddress(PROGRAM_ID, 1n);
@@ -91,7 +95,7 @@ const pool = (overrides: object = {}) => ({
   ...overrides,
 });
 
-describe("OperatorService end-of-tick timestamp", () => {
+describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
   it("records lastTickAt at or after the instant a slow send resolves", async () => {
     const prisma = new PrismaService();
     await prisma.$connect();
@@ -173,7 +177,7 @@ describe("OperatorService end-of-tick timestamp", () => {
 // Step 6b's queue comes straight out of Postgres, so the predicate is the
 // query, not any JS the tick runs afterwards: a wrong `lt`/`lte` here either
 // pays a withdrawal a whole epoch early or never pays it at all.
-describe("OperatorService.duePendingWithdrawals", () => {
+describe.skipIf(!DB_AVAILABLE)("OperatorService.duePendingWithdrawals", () => {
   const owner = (): string => Keypair.generate().publicKey.toBase58();
 
   const player = (over: {
@@ -256,7 +260,7 @@ describe("OperatorService.duePendingWithdrawals", () => {
   });
 });
 
-describe("OperatorService read budget", () => {
+describe.skipIf(!DB_AVAILABLE)("OperatorService read budget", () => {
   it("costs two account reads per tick and sleeps the safety interval when there is nothing to do", async () => {
     const prisma = new PrismaService();
     await prisma.$connect();
@@ -359,7 +363,7 @@ describe("OperatorService read budget", () => {
 // Epoch fixture needed) so `decide()`'s only live branch is step 1's Round
 // check; every other step falls through to nothing, and the fake `send`
 // throws if that assumption ever breaks.
-describe("OperatorService randomness subscription", () => {
+describe.skipIf(!DB_AVAILABLE)("OperatorService randomness subscription", () => {
   const CHAIN_NOW = 1_800_000_000n;
   const SEED = new Uint8Array(32).fill(7);
   // The checked-in IDL has no `testFulfill`, same derivation OperatorService

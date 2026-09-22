@@ -22,8 +22,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ConfigModule } from "../config/config.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
+import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { ReferralsController } from "./referrals.controller";
 import { SerializationInterceptor } from "./serialization.interceptor";
+
+const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 const REFERRER = Keypair.generate().publicKey.toBase58();
 const POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
@@ -63,7 +66,7 @@ const emptyPool = (overrides: Partial<Pool> = {}): Pool => ({
   ...overrides,
 });
 
-describe("GET /referrals/:wallet", () => {
+describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let http: ReturnType<typeof request>;

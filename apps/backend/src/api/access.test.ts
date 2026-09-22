@@ -23,8 +23,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
+import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { AccessController } from "./access.controller";
 import { accessMessage } from "./invite-code";
+
+const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 const ADMIN_KEY = "k".repeat(32);
 
@@ -70,7 +73,7 @@ const emptyPlayer = (owner: string): Player => ({
   bonusGranted: 0n,
 });
 
-describe("access routes", () => {
+describe.skipIf(!DB_AVAILABLE)("access routes", () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let http: ReturnType<typeof request>;

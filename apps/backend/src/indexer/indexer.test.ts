@@ -4,7 +4,8 @@
 //
 // DATABASE_URL is set before PrismaService is constructed (the client reads it
 // then, not at import), so this suite never touches the dev database.
-process.env.DATABASE_URL = "postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault_indexer";
+const TEST_DATABASE_URL = "postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault_indexer";
+process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 import { BN, BorshCoder, convertIdlToCamelCase } from "@anchor-lang/core";
 import type { ConfigService } from "@nestjs/config";
@@ -17,7 +18,10 @@ import type { HexVaultEnv } from "../config/env";
 import { loadIdl } from "../chain/idl";
 import { PrismaService } from "../prisma/prisma.service";
 import { CountingConnection } from "../test-utils/counting-connection";
+import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { IndexerService, type LogBatch } from "./indexer.service";
+
+const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 const idl = loadIdl();
 const PROGRAM_ID = new PublicKey(idl.address);
@@ -33,6 +37,12 @@ let indexer: IndexerService;
 
 const OWNER = Keypair.generate().publicKey;
 const STRANGER = Keypair.generate().publicKey;
+
+// Wrapped in one top-level describe, rather than adding `.skipIf` to each of
+// the six describes below, because they share this file's beforeAll/afterAll/
+// beforeEach: skipping only the describes would still run those hooks (and
+// their Prisma connections) against an unreachable or wrong-auth database.
+describe.skipIf(!DB_AVAILABLE)("indexer against Postgres", () => {
 
 beforeAll(async () => {
   prisma = new PrismaService();
@@ -1155,4 +1165,5 @@ describe("referral bonus job (ticket 08)", () => {
     expect(sent.txSig).toBe("sig-1");
     expect(unsent.txSig).toBeNull();
   });
+});
 });
