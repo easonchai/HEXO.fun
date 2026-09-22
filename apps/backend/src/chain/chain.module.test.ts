@@ -1,16 +1,22 @@
 import type { ConfigService } from "@nestjs/config";
 import { Test } from "@nestjs/testing";
 import {
+  ComputeBudgetInstruction,
   Connection,
   Keypair,
   PublicKey,
+  Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ConfigModule } from "../config/config.module";
-import { DEFAULT_PROGRAM_ID, type HexVaultEnv } from "../config/env";
+import {
+  DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS,
+  DEFAULT_PROGRAM_ID,
+  type HexVaultEnv,
+} from "../config/env";
 import { CountingConnection } from "../test-utils/counting-connection";
 import { ChainModule } from "./chain.module";
 import { CONFIRM_TIMEOUT_MS, ChainService, SOLANA_CONNECTION } from "./chain.service";
@@ -60,8 +66,9 @@ describe("ChainService.send", () => {
       OPERATOR_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
       POOL_ID: "1",
       PROGRAM_ID: DEFAULT_PROGRAM_ID,
+      PRIORITY_FEE_MAX_MICROLAMPORTS: DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS,
     };
-    // SAFETY: ChainService only reads those three keys through `get`.
+    // SAFETY: ChainService only reads those four keys through `get`.
     const config = {
       get: (key: keyof HexVaultEnv) => env[key],
     } as unknown as ConfigService<HexVaultEnv, true>;
@@ -140,5 +147,74 @@ describe("ChainService.send", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Ticket 10: every send prepends a priority fee, priced off
+  // getRecentPrioritizationFees over the transaction's own writable accounts.
+  describe("priority fee", () => {
+    /** The compute-budget instruction `send` actually put on the wire, decoded
+     *  from the raw bytes handed to `sendRawTransaction`. */
+    function sentPriceInstruction(connection: CountingConnection): number {
+      const raw = connection.lastParams("sendRawTransaction")?.[0] as Buffer;
+      const priceIx = Transaction.from(raw).instructions[0];
+      // SAFETY: `send` always prepends the compute-budget instruction, so a
+      // transaction it built always has at least this one.
+      return Number(
+        ComputeBudgetInstruction.decodeSetComputeUnitPrice(priceIx as TransactionInstruction)
+          .microLamports,
+      );
+    }
+
+    it("prices the fee at the 75th percentile of the writable accounts' recent samples", async () => {
+      const connection = new CountingConnection();
+      connection.prioritizationFees = [100, 400, 200, 300].map((prioritizationFee, i) => ({
+        slot: i,
+        prioritizationFee,
+      }));
+      const chain = chainWith(connection);
+      const writable = Keypair.generate().publicKey;
+      const ix = new TransactionInstruction({
+        programId: PublicKey.default,
+        keys: [{ pubkey: writable, isSigner: false, isWritable: true }],
+        data: Buffer.alloc(0),
+      });
+
+      await chain.send([ix]);
+
+      expect(connection.lastParams("getRecentPrioritizationFees")).toEqual([writable]);
+      expect(sentPriceInstruction(connection)).toBe(300);
+    });
+
+    it("caps the fee at PRIORITY_FEE_MAX_MICROLAMPORTS", async () => {
+      const connection = new CountingConnection();
+      connection.prioritizationFees = [
+        { slot: 0, prioritizationFee: DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS + 10_000 },
+      ];
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+
+      expect(sentPriceInstruction(connection)).toBe(DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS);
+    });
+
+    it("prices at 0 with no samples, rather than failing the send", async () => {
+      const connection = new CountingConnection();
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+
+      expect(sentPriceInstruction(connection)).toBe(0);
+    });
+
+    it("caches the fee per writable-account set, so a burst of sends costs one read", async () => {
+      const connection = new CountingConnection();
+      connection.prioritizationFees = [{ slot: 0, prioritizationFee: 500 }];
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+      await chain.send(noop);
+
+      expect(connection.callsTo("getRecentPrioritizationFees")).toBe(1);
+    });
   });
 });

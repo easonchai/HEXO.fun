@@ -18,8 +18,14 @@ const REQUIRED_KEYS = [
 // than failing boot.
 export const DEFAULT_PROGRAM_ID = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6";
 
-/** SOL the operator is warned about falling below, in `/status`. */
-export const DEFAULT_OPERATOR_SOL_WARN = 0.3;
+/** SOL the operator is warned about falling below, in `/status` and `/healthz`. */
+export const DEFAULT_OPERATOR_SOL_WARN = 0.5;
+
+/** Ceiling on the priority fee `ChainService.send` attaches (ticket 10):
+ *  `setComputeUnitPrice`'s microlamports-per-CU price, capped so a spike in
+ *  `getRecentPrioritizationFees` samples cannot run the operator's fee up
+ *  without a bound. */
+export const DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS = 50_000;
 
 export interface HexVaultEnv {
   DATABASE_URL: string;
@@ -38,6 +44,9 @@ export interface HexVaultEnv {
    *  Parsed here rather than at the reader, so a typo fails the boot instead
    *  of turning into a NaN comparison that is false forever. */
   OPERATOR_SOL_WARN: number;
+  /** Cap, in microlamports per compute unit, on the priority fee
+   *  `ChainService.send` attaches to operator transactions. */
+  PRIORITY_FEE_MAX_MICROLAMPORTS: number;
   FAUCET_AMOUNT: string;
   FAUCET_INTERVAL_SECONDS: string;
   /** Seconds a referral's Principal must stay above the qualify threshold
@@ -67,6 +76,23 @@ function solWarn(raw: unknown): number {
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(
       `OPERATOR_SOL_WARN must be a non-negative number of SOL, got "${String(raw)}"`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Same shape as `solWarn`: unset or empty takes the default cap, anything
+ * else must be a non-negative whole number of microlamports.
+ */
+function priorityFeeMax(raw: unknown): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `PRIORITY_FEE_MAX_MICROLAMPORTS must be a non-negative whole number of microlamports, got "${String(raw)}"`,
     );
   }
   return value;
@@ -112,6 +138,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     OPERATOR_KEYPAIR: String(env.OPERATOR_KEYPAIR),
     ACCEPTED_MINT: String(acceptedMint),
     OPERATOR_SOL_WARN: solWarn(env.OPERATOR_SOL_WARN),
+    PRIORITY_FEE_MAX_MICROLAMPORTS: priorityFeeMax(env.PRIORITY_FEE_MAX_MICROLAMPORTS),
     FAUCET_AMOUNT: String(env.FAUCET_AMOUNT ?? "1000000000"),
     FAUCET_INTERVAL_SECONDS: String(env.FAUCET_INTERVAL_SECONDS ?? "3600"),
     REFERRAL_QUALIFY_SECONDS: referralQualifySeconds(env.REFERRAL_QUALIFY_SECONDS),

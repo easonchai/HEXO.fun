@@ -37,7 +37,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import { playerAddress, positionAddress } from "../chain/pda";
-import type { HexVaultEnv } from "../config/env";
+import { DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS, type HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   decodeEpoch,
@@ -174,6 +174,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
         ACCEPTED_MINT: mint.toBase58(),
         OPERATOR_SOL_WARN: 0.3,
+        PRIORITY_FEE_MAX_MICROLAMPORTS: DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS,
         FAUCET_AMOUNT: "0",
         FAUCET_INTERVAL_SECONDS: "0",
         REFERRAL_QUALIFY_SECONDS: 604_800,

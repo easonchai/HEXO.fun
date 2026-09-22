@@ -10,6 +10,7 @@ import {
   type Idl,
 } from "@anchor-lang/core";
 import {
+  ComputeBudgetProgram,
   Connection,
   Keypair,
   PublicKey,
@@ -30,6 +31,7 @@ import {
   principalVaultAddress,
   roundAddress,
 } from "./pda";
+import { p75PriorityFeeMicroLamports } from "./priority-fee";
 
 export const SOLANA_CONNECTION = Symbol("SOLANA_CONNECTION");
 
@@ -45,6 +47,11 @@ export const CONFIRM_TIMEOUT_MS = 30_000;
 /** Ceiling for a one-off RPC read that nothing else bounds: a boot check or
  *  a read behind an HTTP request. */
 export const RPC_READ_TIMEOUT_MS = 10_000;
+
+/** How long `send`'s priority-fee read is cached per writable-account set
+ *  (ticket 10), so a burst of sends against the same accounts costs one
+ *  `getRecentPrioritizationFees` call rather than one per send. */
+export const PRIORITY_FEE_TTL_MS = 10_000;
 
 /**
  * Rejects with a named error once `ms` has passed, if `promise` has not
@@ -90,6 +97,14 @@ export class ChainService {
    */
   private lastChainTime: { value: bigint; observedAtMs: number } | undefined;
 
+  private readonly priorityFeeMaxMicroLamports: number;
+  /** `send`'s `getRecentPrioritizationFees` result, keyed by the sorted
+   *  writable-account set and held for `PRIORITY_FEE_TTL_MS`. */
+  private readonly priorityFeeCache = new Map<
+    string,
+    { at: number; result: Promise<number> }
+  >();
+
   constructor(
     @Inject(SOLANA_CONNECTION) connection: Connection,
     config: ConfigService<HexVaultEnv, true>,
@@ -99,6 +114,10 @@ export class ChainService {
       bs58.decode(config.get("OPERATOR_KEYPAIR", { infer: true })),
     );
     this.poolId = BigInt(config.get("POOL_ID", { infer: true }));
+    this.priorityFeeMaxMicroLamports = config.get(
+      "PRIORITY_FEE_MAX_MICROLAMPORTS",
+      { infer: true },
+    );
     this.programId = new PublicKey(config.get("PROGRAM_ID", { infer: true }));
 
     // The env-resolved program id wins over whatever address is baked into
@@ -183,13 +202,20 @@ export class ChainService {
     signer: Keypair = this.keypair,
   ): Promise<string> {
     try {
-      const { blockhash, lastValidBlockHeight } =
-        await this.connection.getLatestBlockhash("finalized");
+      // ponytail: no `setComputeUnitLimit`, so the fee is `microLamports ×
+      // the runtime's default 200k CU limit` rather than the transaction's
+      // real usage. Add the limit instruction once a transaction is measured
+      // running near that default, so the price applies to its actual cost.
+      const [{ blockhash, lastValidBlockHeight }, microLamports] = await Promise.all([
+        this.connection.getLatestBlockhash("finalized"),
+        this.priorityFeeMicroLamports(writableAccountsOf(instructions)),
+      ]);
+      const priceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports });
       const tx = new Transaction({
         blockhash,
         lastValidBlockHeight,
         feePayer: signer.publicKey,
-      }).add(...instructions);
+      }).add(priceIx, ...instructions);
       tx.sign(signer);
       // SAFETY: sign() has just filled the fee payer's signature slot.
       const signature = bs58.encode(tx.signature as Buffer);
@@ -300,4 +326,45 @@ export class ChainService {
       ? translated
       : new Error(String(translated), { cause });
   }
+
+  /**
+   * The microlamport price `send` attaches, from `getRecentPrioritizationFees`
+   * over `writable` (ticket 10). Cached per exact writable-account set for
+   * `PRIORITY_FEE_TTL_MS`. A failed read falls back to 0 rather than
+   * blocking or failing the send; congestion pricing is best-effort, landing
+   * the transaction is not.
+   */
+  private priorityFeeMicroLamports(writable: PublicKey[]): Promise<number> {
+    const key = writable.map((pubkey) => pubkey.toBase58()).sort().join(",");
+    const cached = this.priorityFeeCache.get(key);
+    if (cached && Date.now() - cached.at <= PRIORITY_FEE_TTL_MS) return cached.result;
+    const result = withTimeout(
+      this.connection.getRecentPrioritizationFees(
+        writable.length > 0 ? { lockedWritableAccounts: writable } : undefined,
+      ),
+      RPC_READ_TIMEOUT_MS,
+      "priority fee read",
+    )
+      .then((samples) =>
+        p75PriorityFeeMicroLamports(
+          samples.map((sample) => sample.prioritizationFee),
+          this.priorityFeeMaxMicroLamports,
+        ),
+      )
+      .catch(() => 0);
+    this.priorityFeeCache.set(key, { at: Date.now(), result });
+    return result;
+  }
+}
+
+/** Every writable account across `instructions`, deduplicated — the account
+ *  set `send` prices its priority fee against (ticket 10). */
+function writableAccountsOf(instructions: TransactionInstruction[]): PublicKey[] {
+  const writable = new Map<string, PublicKey>();
+  for (const instruction of instructions) {
+    for (const key of instruction.keys) {
+      if (key.isWritable) writable.set(key.pubkey.toBase58(), key.pubkey);
+    }
+  }
+  return [...writable.values()];
 }

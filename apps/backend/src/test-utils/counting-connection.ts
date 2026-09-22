@@ -17,6 +17,9 @@
 // `getLatestBlockhash`, `sendRawTransaction`), plus `fireLogs`/
 // `fireAccountChange` test hooks so a suite can simulate the RPC pushing a
 // notification instead of waiting on a real subscription.
+//
+// Ops-and-envs ticket 10 added `getRecentPrioritizationFees`, which
+// `ChainService.send` now calls on every send to price its priority fee.
 import { PublicKey } from "@solana/web3.js";
 
 /** Shape `onLogs`'s callback receives; mirrors web3.js's `Logs`. */
@@ -129,6 +132,17 @@ export class CountingConnection {
     this.record("getAccountInfo");
     const data = this.accounts.get(key.toBase58());
     return Promise.resolve(data ? { data } : null);
+  }
+
+  /** Samples `getRecentPrioritizationFees` answers with (ticket 10's
+   *  operator priority fee). Empty by default, the same as an idle cluster. */
+  prioritizationFees: { slot: number; prioritizationFee: number }[] = [];
+
+  getRecentPrioritizationFees(
+    config?: { lockedWritableAccounts?: PublicKey[] },
+  ): Promise<{ slot: number; prioritizationFee: number }[]> {
+    this.record("getRecentPrioritizationFees", config?.lockedWritableAccounts);
+    return Promise.resolve(this.prioritizationFees);
   }
 
   /** Signatures `getSignaturesForAddress` answers with, newest first as the
@@ -249,8 +263,10 @@ export class CountingConnection {
     });
   }
 
-  sendRawTransaction(_rawTransaction: Buffer | Uint8Array | number[]): Promise<string> {
-    this.record("sendRawTransaction");
+  sendRawTransaction(rawTransaction: Buffer | Uint8Array | number[]): Promise<string> {
+    // Params recorded (not just tallied) so a test can decode what was
+    // actually sent, e.g. ticket 10's prepended compute-budget instruction.
+    this.record("sendRawTransaction", [rawTransaction]);
     if (this.autoConfirmSignature) {
       const listeners = this.signatureListeners;
       this.signatureListeners = [];

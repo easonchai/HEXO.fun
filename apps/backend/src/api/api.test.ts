@@ -713,6 +713,13 @@ describe("API routes", () => {
     expect(body.operatorSolLow).toBe(false);
   });
 
+  it("GET /healthz reports the operator's SOL and its own status, separate from /status", async () => {
+    const { body } = await http.get("/healthz").expect(200);
+    expect(body.ok).toBe(true);
+    expect(body.operatorSol).toBe(2);
+    expect(body.status).toBe("ok");
+  });
+
   it("GET /status reports the yield budget, bonus grants and the low-budget warning", async () => {
     const { body } = await http.get("/status").expect(200);
     expect(body.yieldBudget).toBe(POOL_YIELD_BUDGET.toString());
