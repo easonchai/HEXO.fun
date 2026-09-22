@@ -146,6 +146,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.bonus_cap_bps = params.bonus_cap_bps;
     pool.bonus_epoch = 0;
     pool.bonus_granted = 0;
+    pool.version = crate::constants::CURRENT_VERSION;
     pool.paused = false;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
@@ -180,6 +181,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     house.pending_withdraw = 0;
     house.pending_epoch = 0;
     house.requested_at = 0;
+    house.version = crate::constants::CURRENT_VERSION;
 
     emit!(PoolCreated {
         pool: pool.key(),

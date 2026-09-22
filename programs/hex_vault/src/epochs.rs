@@ -226,6 +226,7 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
     new_epoch.bump = ctx.bumps.new_epoch;
     new_epoch.drawn_at = 0;
     new_epoch.registration_opened_at = 0;
+    new_epoch.version = crate::constants::CURRENT_VERSION;
 
     emit!(EpochBegan {
         epoch_id: new_epoch.epoch_id,
@@ -977,6 +978,8 @@ mod tests {
             bonus_cap_bps: 500,
             bonus_epoch: 0,
             bonus_granted: 0,
+            version: 1,
+            _reserved: [0; 128],
         }
     }
 
@@ -996,6 +999,8 @@ mod tests {
             bump: 0,
             drawn_at: 0,
             registration_opened_at: 0,
+            version: 1,
+            _reserved: [0; 64],
         }
     }
 
@@ -1024,6 +1029,8 @@ mod tests {
             bought_amount: 0,
             bonus_epoch: 0,
             bonus_granted: 0,
+            version: 1,
+            _reserved: [0; 64],
         }
     }
 

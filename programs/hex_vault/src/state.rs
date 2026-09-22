@@ -3,7 +3,7 @@
 
 use anchor_lang::prelude::*;
 
-use crate::constants::TILE_COUNT;
+use crate::constants::{CURRENT_VERSION, TILE_COUNT};
 use crate::errors::HexVaultError;
 
 /// One deployed instance of the product: one accepted mint, one principal
@@ -110,6 +110,13 @@ pub struct Pool {
     /// in `bonus_epoch`, capped at `total_principal * bonus_cap_bps /
     /// 10_000`. An admin grant does not count against it.
     pub bonus_granted: u64,
+    /// Set to [`CURRENT_VERSION`] by `create_pool`. Lets a future upgrade
+    /// tell an old account apart from a freshly created one and migrate it
+    /// lazily on first touch.
+    pub version: u8,
+    /// Take new fields from here. Their zero value must be the safe default,
+    /// or bump `version` and migrate on first touch. See ADR 0013.
+    pub _reserved: [u8; 128],
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.
@@ -140,6 +147,11 @@ pub struct Epoch {
     /// later of this and `ends_at`, so an operator who delays `begin_epoch`
     /// cannot bundle the whole registration window into one transaction.
     pub registration_opened_at: i64,
+    /// Set to [`CURRENT_VERSION`] by `begin_epoch`. See `Pool::version`.
+    pub version: u8,
+    /// Take new fields from here. Their zero value must be the safe default,
+    /// or bump `version` and migrate on first touch. See ADR 0013.
+    pub _reserved: [u8; 64],
 }
 
 /// One 60 second game on the 36-tile hex board.
@@ -224,6 +236,13 @@ pub struct Player {
     /// far in `bonus_epoch`, capped at `principal`. An admin grant does not
     /// count against it.
     pub bonus_granted: u64,
+    /// Set to [`CURRENT_VERSION`] by `Player::init_if_fresh`. See
+    /// `Pool::version`.
+    pub version: u8,
+    /// Take new fields from here. Their zero value must be the safe default,
+    /// or bump `version` and migrate on first touch. See ADR 0013. Smaller
+    /// than `Pool`'s and `Epoch`'s: Player rent is paid by the depositor.
+    pub _reserved: [u8; 64],
 }
 
 /// A Player's single immutable placement in one round.
@@ -252,6 +271,7 @@ impl Player {
         self.last_update = now;
         self.epoch_id = pool.current_epoch_id;
         self.bump = bump;
+        self.version = CURRENT_VERSION;
     }
 }
 
@@ -268,5 +288,22 @@ impl Round {
             .checked_add(amount)
             .ok_or(HexVaultError::ArithmeticOverflow)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pins every account's on-chain size to a literal so a field added,
+    // removed, reordered or resized has to update this test on purpose
+    // (ticket ops-and-envs/01) instead of silently churning the layout.
+    #[test]
+    fn account_sizes_are_pinned_to_their_literal_byte_counts() {
+        assert_eq!(Pool::INIT_SPACE, 653);
+        assert_eq!(Epoch::INIT_SPACE, 223);
+        assert_eq!(Player::INIT_SPACE, 307);
+        assert_eq!(Round::INIT_SPACE, 379);
+        assert_eq!(Position::INIT_SPACE, 81);
     }
 }

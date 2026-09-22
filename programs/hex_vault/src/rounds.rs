@@ -407,27 +407,31 @@ pub struct CreateRound<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// Boxed: unboxed, this struct's `try_accounts` overflows the BPF stack frame
+// (Pool and Player's ticket ops-and-envs/01 padding pushed it over, on top of
+// Round's 36-tile array), the same issue `SettleRound` and `SettlePosition`
+// already work around.
 #[derive(Accounts)]
 pub struct BuyPosition<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
 
     #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
-    pub pool: Account<'info, Pool>,
+    pub pool: Box<Account<'info, Pool>>,
 
     #[account(
         mut,
         seeds = [SEED_PLAYER, pool.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
     )]
-    pub player: Account<'info, Player>,
+    pub player: Box<Account<'info, Player>>,
 
     #[account(
         mut,
         seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
         bump = round.bump,
     )]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
 
     #[account(
         init,

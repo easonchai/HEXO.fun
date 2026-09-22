@@ -160,6 +160,8 @@ mod tests {
             bonus_cap_bps: 500,
             bonus_epoch: 0,
             bonus_granted: 0,
+            version: 1,
+            _reserved: [0; 128],
         }
     }
 
@@ -188,6 +190,8 @@ mod tests {
             bought_amount: 0,
             bonus_epoch: 0,
             bonus_granted: 0,
+            version: 1,
+            _reserved: [0; 64],
         }
     }
 
