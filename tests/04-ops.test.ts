@@ -14,12 +14,17 @@ import {
   epochPda,
   findEvent,
   fulfillRandomness,
+  onChainNowSeconds,
   playerPda,
   positionPda,
   program,
+  provider,
+  randomnessFor,
+  randomnessPda,
   retryUntilOk,
   roundPda,
   setupPool,
+  sleepUntilOnChain,
   type PoolCtx,
 } from "./helpers/hx.js";
 
@@ -266,6 +271,65 @@ async function buyPosition(
     })
     .signers([owner.keypair])
     .rpc();
+}
+
+async function requestRoundRandomness(pool: PoolCtx, roundId: bigint, seed: Uint8Array | number[]) {
+  return program.methods
+    .requestRoundRandomness()
+    .accountsPartial({
+      payer: pool.operator.publicKey,
+      pool: pool.pool,
+      round: roundPda(pool.pool, roundId),
+      randomness: randomnessPda(Uint8Array.from(seed)),
+      vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
+      vrfTreasury: DEVNET_VRF_TREASURY,
+      vrfProgram: ORAO_VRF_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([pool.operator])
+    .rpc();
+}
+
+async function settleRound(pool: PoolCtx, roundId: bigint, randomness: PublicKey) {
+  return program.methods
+    .settleRound()
+    .accountsPartial({
+      operator: pool.operator.publicKey,
+      pool: pool.pool,
+      round: roundPda(pool.pool, roundId),
+      randomness,
+      house: pool.house,
+    })
+    .signers([pool.operator])
+    .rpc();
+}
+
+async function settlePosition(pool: PoolCtx, roundId: bigint, owner: PublicKey) {
+  return program.methods
+    .settlePosition()
+    .accountsPartial({
+      pool: pool.pool,
+      round: roundPda(pool.pool, roundId),
+      player: playerPda(pool.pool, owner),
+      owner,
+      position: positionPda(roundPda(pool.pool, roundId), owner),
+    })
+    .rpc();
+}
+
+async function closeRound(pool: PoolCtx, roundId: bigint) {
+  return program.methods
+    .closeRound()
+    .accountsPartial({
+      pool: pool.pool,
+      operator: pool.operator.publicKey,
+      round: roundPda(pool.pool, roundId),
+    })
+    .rpc();
+}
+
+async function fetchRound(pool: PoolCtx, roundId: bigint) {
+  return program.account.round.fetch(roundPda(pool.pool, roundId));
 }
 
 async function fetchPlayer(pool: PoolCtx, owner: PublicKey) {
@@ -653,6 +717,82 @@ describe("sweep_house", () => {
       expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
       const event = await findEvent<{ jackpot: BN; yieldBudget: BN }>(sig, "houseSwept");
       expect(event?.yieldBudget.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+});
+
+describe("close_round", () => {
+  it(
+    "refuses on an Open round, then a Requested one, then an unsettled Settled one, and finally closes and pays rent to the operator",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 4, closeBuffer: 1 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 5_000_000n);
+
+      const roundId = 1n;
+      const startsAt = await onChainNowSeconds();
+      const endsAt = startsAt + 4;
+      await createRound(pool, 0n, roundId, startsAt, endsAt);
+
+      await expect(closeRound(pool, roundId)).rejects.toThrow(/RoundNotSettled/);
+
+      await buyPosition(pool, owner, roundId, 1n << 0n, 1_000_000n); // tile 0
+
+      await sleepUntilOnChain(endsAt - 1); // past the close buffer
+      const round = await fetchRound(pool, roundId);
+      const seed = Uint8Array.from(round.vrfSeed);
+      await requestRoundRandomness(pool, roundId, seed);
+
+      await expect(closeRound(pool, roundId)).rejects.toThrow(/RoundNotSettled/);
+
+      const randomness = await fulfillRandomness(seed, randomnessFor(0)); // tile 0 wins
+      await settleRound(pool, roundId, randomness);
+      expect((await fetchRound(pool, roundId)).status).toBe(2); // Settled
+
+      await expect(closeRound(pool, roundId)).rejects.toThrow(/RoundHasOpenPositions/);
+
+      const ownerBalBefore = await provider.connection.getBalance(owner.keypair.publicKey);
+      await settlePosition(pool, roundId, owner.keypair.publicKey);
+      expect(await provider.connection.getBalance(owner.keypair.publicKey)).toBeGreaterThan(
+        ownerBalBefore,
+      ); // Position rent came back to its owner
+      expect((await fetchRound(pool, roundId)).openPositions).toBe(0);
+
+      const roundLamports = (await provider.connection.getAccountInfo(roundPda(pool.pool, roundId)))!
+        .lamports;
+      const operatorBalBefore = await provider.connection.getBalance(pool.operator.publicKey);
+      const sig = await closeRound(pool, roundId);
+
+      expect(await provider.connection.getBalance(pool.operator.publicKey)).toBe(
+        operatorBalBefore + roundLamports,
+      );
+      await expect(fetchRound(pool, roundId)).rejects.toThrow();
+
+      const event = await findEvent<{ round: PublicKey; roundId: BN }>(sig, "roundClosed");
+      expect(event?.roundId.toString()).toBe(roundId.toString());
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "closes a forfeited round with nothing staked, and a voided round",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 4, closeBuffer: 1 });
+
+      const forfeitedId = 1n;
+      const startsAt = await onChainNowSeconds();
+      await createRound(pool, 0n, forfeitedId, startsAt, startsAt + 4);
+      await sleepUntilOnChain(startsAt + 3);
+      const forfeited = await fetchRound(pool, forfeitedId);
+      const forfeitedSeed = Uint8Array.from(forfeited.vrfSeed);
+      await requestRoundRandomness(pool, forfeitedId, forfeitedSeed);
+      const forfeitedRandomness = await fulfillRandomness(forfeitedSeed, randomnessFor(0));
+      await settleRound(pool, forfeitedId, forfeitedRandomness);
+      expect((await fetchRound(pool, forfeitedId)).status).toBe(3); // Forfeited
+
+      await closeRound(pool, forfeitedId); // no positions were ever bought
+      await expect(fetchRound(pool, forfeitedId)).rejects.toThrow();
     },
     TIMEOUT,
   );

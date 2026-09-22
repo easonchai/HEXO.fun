@@ -134,4 +134,8 @@ pub enum HexVaultError {
     HouseCannotEmergencyWithdraw,
     #[msg("the principal vault cannot cover this payout")]
     InsufficientVault,
+
+    // close_round (ops-and-envs ticket 05). Appended too.
+    #[msg("the round still has unsettled positions")]
+    RoundHasOpenPositions,
 }

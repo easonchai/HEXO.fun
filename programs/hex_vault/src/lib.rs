@@ -131,6 +131,12 @@ pub mod hex_vault {
         rounds::void_round(ctx)
     }
 
+    /// Permissionless (ops-and-envs ticket 05): reclaims a finished Round's
+    /// rent for the operator once every Position on it has settled.
+    pub fn close_round(ctx: Context<CloseRound>) -> Result<()> {
+        rounds::close_round(ctx)
+    }
+
     // Epochs (spec §2.3 "Epochs") - stubs, ticket 04 implements these.
 
     pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {

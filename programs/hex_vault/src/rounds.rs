@@ -2,13 +2,16 @@
 //!
 //! `create_round`, `settle_round` and `void_round` are operator-only via
 //! `has_one = operator` on the Pool account. `buy_position`,
-//! `request_round_randomness` and `settle_position` are permissionless.
+//! `request_round_randomness`, `settle_position` and `close_round` are
+//! permissionless.
 
 use anchor_lang::prelude::*;
 
 use crate::constants::{round_status, BPS_DENOMINATOR, SEED_EPOCH, SEED_PLAYER, SEED_POOL, SEED_POSITION, SEED_ROUND, TILE_COUNT};
 use crate::errors::HexVaultError;
-use crate::events::{PositionBought, PositionSettled, RoundOpened, RoundSettled, RoundVoided};
+use crate::events::{
+    PositionBought, PositionSettled, RoundClosed, RoundOpened, RoundSettled, RoundVoided,
+};
 use crate::state::{Epoch, Player, Pool, Position, Round};
 use crate::touch::touch;
 use crate::utils;
@@ -73,6 +76,7 @@ pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> 
     round.requested_at = 0;
     round.winning_tile = 0;
     round.bump = ctx.bumps.round;
+    round.open_positions = 0;
 
     emit!(RoundOpened {
         round_id,
@@ -140,6 +144,10 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
     round.pot = round
         .pot
         .checked_add(total)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    round.open_positions = round
+        .open_positions
+        .checked_add(1)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
 
     let round_id = round.round_id;
@@ -278,7 +286,7 @@ pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
 pub fn settle_position(ctx: Context<SettlePosition>) -> Result<()> {
     let now = utils::now()?;
     let pool = &ctx.accounts.pool;
-    let round = &ctx.accounts.round;
+    let round = &mut ctx.accounts.round;
     let player = &mut ctx.accounts.player;
     touch(player, pool, now)?;
 
@@ -324,6 +332,11 @@ pub fn settle_position(ctx: Context<SettlePosition>) -> Result<()> {
             .checked_add(reward)
             .ok_or(HexVaultError::ArithmeticOverflow)?;
     }
+
+    round.open_positions = round
+        .open_positions
+        .checked_sub(1)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
 
     emit!(PositionSettled {
         round_id: round.round_id,
@@ -375,6 +388,36 @@ pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
     let round_id = round.round_id;
     let carry_pot = pool.carry_pot;
     emit!(RoundVoided { round_id, carry_pot });
+    Ok(())
+}
+
+/// Permissionless: reclaims a finished Round's rent for the operator once
+/// every Position on it has settled (spec "close_round", ops-and-envs
+/// ticket 05; supersedes `docs/plan/mainnet/issues/09`, where devnet
+/// measured about 2.5 SOL a day of unreclaimed Round rent at 90s rounds).
+///
+/// The Round PDA's seeds (`SEED_ROUND`, pool, `round_id`) can never be
+/// replayed: `create_round` always mints the next id off `pool.next_round_id`,
+/// which only increases, so a closed Round's address can never be
+/// re-initialised with an old id.
+pub fn close_round(ctx: Context<CloseRound>) -> Result<()> {
+    let round = &ctx.accounts.round;
+    require!(
+        matches!(
+            round.status,
+            round_status::SETTLED | round_status::FORFEITED | round_status::VOIDED
+        ),
+        HexVaultError::RoundNotSettled
+    );
+    require!(
+        round.open_positions == 0,
+        HexVaultError::RoundHasOpenPositions
+    );
+
+    emit!(RoundClosed {
+        round: round.key(),
+        round_id: round.round_id,
+    });
     Ok(())
 }
 
@@ -528,7 +571,11 @@ pub struct SettlePosition<'info> {
     #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
 
+    // Mut: `settle_position` decrements `open_positions` (ops-and-envs
+    // ticket 05), so `close_round` can tell when every Position on this
+    // Round has settled.
     #[account(
+        mut,
         seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
         bump = round.bump,
     )]
@@ -579,4 +626,22 @@ pub struct VoidRound<'info> {
     /// does. It need not exist: an unfulfilled request is the normal case
     /// here.
     pub randomness: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseRound<'info> {
+    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = operator)]
+    pub pool: Account<'info, Pool>,
+
+    /// CHECK: rent destination; the `has_one` above pins it to `pool.operator`.
+    #[account(mut)]
+    pub operator: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        close = operator,
+        seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
+        bump = round.bump,
+    )]
+    pub round: Account<'info, Round>,
 }

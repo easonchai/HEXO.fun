@@ -180,6 +180,13 @@ pub struct Round {
     pub requested_at: i64,
     pub winning_tile: u8,
     pub bump: u8,
+    /// Positions bought on this round still open (not yet settled).
+    /// Incremented in `buy_position`, decremented when `settle_position`
+    /// closes its Position. `close_round` refuses while this is nonzero.
+    /// No `_reserved` to carve this from: Round has none by design (spec),
+    /// since it is short-lived and reclaimed by `close_round` (ops-and-envs
+    /// ticket 05), so a layout change here only affects in-flight rounds.
+    pub open_positions: u32,
 }
 
 /// One wallet's account in one pool.
@@ -308,7 +315,7 @@ mod tests {
         assert_eq!(Pool::INIT_SPACE, 653);
         assert_eq!(Epoch::INIT_SPACE, 223);
         assert_eq!(Player::INIT_SPACE, 307);
-        assert_eq!(Round::INIT_SPACE, 379);
+        assert_eq!(Round::INIT_SPACE, 383);
         assert_eq!(Position::INIT_SPACE, 81);
     }
 }

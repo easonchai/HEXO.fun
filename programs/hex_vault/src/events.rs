@@ -129,6 +129,14 @@ pub struct RoundVoided {
     pub carry_pot: u64,
 }
 
+/// Permissionless: `close_round` reclaimed a finished Round's rent for
+/// `pool.operator` once every Position on it had settled.
+#[event]
+pub struct RoundClosed {
+    pub round: Pubkey,
+    pub round_id: u64,
+}
+
 #[event]
 pub struct PositionSettled {
     pub round_id: u64,
