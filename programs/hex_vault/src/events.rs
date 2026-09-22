@@ -215,3 +215,11 @@ pub struct TicketsGranted {
     /// True for the uncapped admin path; false for the capped operator path.
     pub by_admin: bool,
 }
+
+/// Admin-only and irreversible (spec "Shutdown"). Stops every inflow, the
+/// game and the draw, and lets withdrawals skip the epoch lock.
+#[event]
+pub struct PoolShutdown {
+    pub pool: Pubkey,
+    pub at: i64,
+}

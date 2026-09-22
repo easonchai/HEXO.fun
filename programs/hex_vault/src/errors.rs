@@ -122,4 +122,8 @@ pub enum HexVaultError {
     DailyPlayerGrantCapExceeded,
     #[msg("this grant would exceed the pool's daily bonus cap")]
     DailyPoolGrantCapExceeded,
+
+    // Shutdown (ops-and-envs ticket 02). Appended too.
+    #[msg("the pool is shut down")]
+    PoolShutDown,
 }

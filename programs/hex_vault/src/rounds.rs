@@ -17,6 +17,7 @@ use crate::vrf;
 pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
 
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(!pool.paused, HexVaultError::PoolPaused);
     require!(pool.open_round_id == 0, HexVaultError::RoundAlreadyOpen);
     require!(
@@ -89,6 +90,7 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
     let player = &mut ctx.accounts.player;
     touch(player, pool, now)?;
 
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
     // The House is the counterparty, not a participant: it takes forfeited
     // pots and the cut, so letting the operator stake those Entries back on
     // tiles would be playing against the depositors with their own money.

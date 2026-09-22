@@ -15,7 +15,7 @@ use crate::constants::{BPS_DENOMINATOR, SEED_JACKPOT, SEED_PLAYER, SEED_POOL, SE
 use crate::errors::HexVaultError;
 use crate::events::{
     AdminChanged, AdminProposed, Deposited, OperatorChanged, ParamsSet, Paused, PoolCreated,
-    PrincipalDeployed, TicketsBought, TicketsGranted, WithdrawRequested, Withdrawn,
+    PoolShutdown, PrincipalDeployed, TicketsBought, TicketsGranted, WithdrawRequested, Withdrawn,
 };
 use crate::state::{Player, Pool};
 use crate::touch::touch;
@@ -283,11 +283,32 @@ pub fn set_pause(ctx: Context<SetPause>, paused: bool) -> Result<()> {
     // plain `has_one` on the account struct.
     let allowed = signer == pool.admin || (paused && signer == pool.operator);
     require!(allowed, HexVaultError::Unauthorized);
+    // Shutdown is irreversible: unpausing would resume deposits, tickets and
+    // the game a `shutdown()` already stopped for good.
+    require!(paused || !pool.shutdown, HexVaultError::PoolShutDown);
 
     pool.paused = paused;
     emit!(Paused {
         pool: pool.key(),
         paused,
+    });
+    Ok(())
+}
+
+/// Admin-only, irreversible (spec "Shutdown"). Stops every inflow, the game
+/// and the draw, and lets `process_withdraw` skip the epoch lock. Modelled
+/// on Marginfi/Kamino `ReduceOnly`: from here on, depositors pull their own
+/// money instead of the pool paying them out.
+pub fn shutdown(ctx: Context<Shutdown>) -> Result<()> {
+    let now = utils::now()?;
+    let pool = &mut ctx.accounts.pool;
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
+
+    pool.shutdown = true;
+    pool.paused = true;
+    emit!(PoolShutdown {
+        pool: pool.key(),
+        at: now,
     });
     Ok(())
 }
@@ -353,6 +374,7 @@ pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
     touch(player, pool, now)?;
 
     require!(!player.is_house, HexVaultError::HouseCannotDeposit);
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(!pool.paused, HexVaultError::PoolPaused);
     require!(
         amount >= pool.min_deposit,
@@ -468,8 +490,10 @@ pub fn process_withdraw(ctx: Context<ProcessWithdraw>) -> Result<()> {
         .requested_at
         .checked_add(pool.epoch_seconds)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
+    // Shutdown lets a request and its payout land in one transaction: a
+    // depositor pulls their own money instead of waiting on the epoch lock.
     require!(
-        pool.current_epoch_id > player.pending_epoch || now > deadline,
+        pool.shutdown || pool.current_epoch_id > player.pending_epoch || now > deadline,
         HexVaultError::WithdrawalNotDue
     );
     // Checked before anything is written, so a vault still waiting on the
@@ -612,6 +636,7 @@ pub fn buy_tickets(ctx: Context<BuyTickets>, amount: u64) -> Result<()> {
     // that predates the purchase (ticket 02's Comments).
     touch(player, pool, now)?;
 
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(!pool.paused, HexVaultError::PoolPaused);
     require!(amount > 0, HexVaultError::ZeroAmount);
     require!(!player.is_house, HexVaultError::HouseCannotBuyTickets);
@@ -722,6 +747,8 @@ pub fn grant_tickets(ctx: Context<GrantTickets>, amount: u64) -> Result<()> {
     // rule buy_tickets, credit_yield and payout's compounding follow (ticket
     // 02's Comments).
     touch(player, pool, now)?;
+    // Refused for both the admin and the operator path.
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(amount > 0, HexVaultError::ZeroAmount);
 
     if !by_admin {
@@ -849,6 +876,19 @@ pub struct SetPause<'info> {
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
+    )]
+    pub pool: Account<'info, Pool>,
+}
+
+#[derive(Accounts)]
+pub struct Shutdown<'info> {
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+        has_one = admin,
     )]
     pub pool: Account<'info, Pool>,
 }

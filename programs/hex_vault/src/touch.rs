@@ -161,7 +161,8 @@ mod tests {
             bonus_epoch: 0,
             bonus_granted: 0,
             version: 1,
-            _reserved: [0; 128],
+            shutdown: false,
+            _reserved: [0; 127],
         }
     }
 

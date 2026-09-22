@@ -50,6 +50,13 @@ pub mod hex_vault {
         custody::set_pause(ctx, paused)
     }
 
+    /// Admin-only and irreversible (ops-and-envs ticket 02, spec
+    /// "Shutdown"). Stops every inflow, the game and the draw, and lets
+    /// withdrawals skip the epoch lock.
+    pub fn shutdown(ctx: Context<Shutdown>) -> Result<()> {
+        custody::shutdown(ctx)
+    }
+
     pub fn set_operator(ctx: Context<SetOperator>, new_operator: Pubkey) -> Result<()> {
         custody::set_operator(ctx, new_operator)
     }

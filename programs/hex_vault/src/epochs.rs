@@ -160,6 +160,7 @@ fn grid_floor(anchor: i64, period: i64, t: i64) -> Result<i64> {
 pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
     let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
 
     let starts_at = if pool.current_epoch_id == 0 {
         now
@@ -332,6 +333,8 @@ pub fn fund_jackpot(ctx: Context<FundJackpot>, amount: u64) -> Result<()> {
 /// Permissionless like `fund_jackpot`: anyone can top up what Base yield
 /// draws down.
 pub fn fund_yield(ctx: Context<FundYield>, amount: u64) -> Result<()> {
+    require!(!ctx.accounts.pool.shutdown, HexVaultError::PoolShutDown);
+
     token_interface::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
@@ -364,6 +367,7 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
 
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(
         epoch.status == epoch_status::REGISTERING,
         HexVaultError::EpochNotRegistering
@@ -425,6 +429,7 @@ pub fn draw(ctx: Context<Draw>) -> Result<()> {
     let now = utils::now()?;
     let epoch = &mut ctx.accounts.epoch;
 
+    require!(!ctx.accounts.pool.shutdown, HexVaultError::PoolShutDown);
     require!(
         epoch.status == epoch_status::DRAWING,
         HexVaultError::EpochNotDrawing
@@ -979,7 +984,8 @@ mod tests {
             bonus_epoch: 0,
             bonus_granted: 0,
             version: 1,
-            _reserved: [0; 128],
+            shutdown: false,
+            _reserved: [0; 127],
         }
     }
 

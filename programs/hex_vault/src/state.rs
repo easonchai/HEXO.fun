@@ -114,9 +114,14 @@ pub struct Pool {
     /// tell an old account apart from a freshly created one and migrate it
     /// lazily on first touch.
     pub version: u8,
+    /// Admin-only and irreversible (spec "Shutdown"). Stops every inflow,
+    /// the game and the draw, and lets withdrawals skip the epoch lock.
+    /// Carved from the front of `_reserved` (ops-and-envs ticket 02),
+    /// exercising the ADR 0013 rule once: `false` is the safe zero value.
+    pub shutdown: bool,
     /// Take new fields from here. Their zero value must be the safe default,
     /// or bump `version` and migrate on first touch. See ADR 0013.
-    pub _reserved: [u8; 128],
+    pub _reserved: [u8; 127],
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.
