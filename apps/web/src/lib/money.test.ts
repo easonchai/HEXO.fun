@@ -89,13 +89,13 @@ describe("withdrawal math", () => {
 
 describe("pending withdrawal row", () => {
   it("is none while nothing has been requested", () => {
-    expect(pendingWithdrawal(0n, 0n, 7n, false)).toEqual({ kind: "none" });
+    expect(pendingWithdrawal(0n, 0n, 7n, false, false)).toEqual({ kind: "none" });
     // A sent payout with nothing pending is still nothing pending.
-    expect(pendingWithdrawal(0n, 6n, 7n, true)).toEqual({ kind: "none" });
+    expect(pendingWithdrawal(0n, 6n, 7n, true, false)).toEqual({ kind: "none" });
   });
 
   it("is pending inside the epoch it was requested in", () => {
-    expect(pendingWithdrawal(5_000_000n, 7n, 7n, false)).toEqual({
+    expect(pendingWithdrawal(5_000_000n, 7n, 7n, false, false)).toEqual({
       kind: "pending",
       amount: 5_000_000n,
       epoch: 7n,
@@ -103,7 +103,7 @@ describe("pending withdrawal row", () => {
   });
 
   it("is due once that epoch has ended", () => {
-    expect(pendingWithdrawal(5_000_000n, 7n, 8n, false)).toEqual({
+    expect(pendingWithdrawal(5_000_000n, 7n, 8n, false, false)).toEqual({
       kind: "due",
       amount: 5_000_000n,
       epoch: 7n,
@@ -111,7 +111,7 @@ describe("pending withdrawal row", () => {
   });
 
   it("is processing while the payout transaction is out", () => {
-    expect(pendingWithdrawal(5_000_000n, 7n, 8n, true)).toEqual({
+    expect(pendingWithdrawal(5_000_000n, 7n, 8n, true, false)).toEqual({
       kind: "processing",
       amount: 5_000_000n,
       epoch: 7n,
@@ -121,6 +121,24 @@ describe("pending withdrawal row", () => {
   it("stays pending when the current epoch is unknown", () => {
     // Backend unreachable: offering "pay out now" would only earn a
     // WithdrawalNotDue from the program.
-    expect(pendingWithdrawal(5_000_000n, 7n, null, false).kind).toBe("pending");
+    expect(pendingWithdrawal(5_000_000n, 7n, null, false, false).kind).toBe("pending");
+  });
+
+  it("is due immediately once the pool is shut down, even mid-epoch", () => {
+    expect(pendingWithdrawal(5_000_000n, 7n, 7n, false, true)).toEqual({
+      kind: "due",
+      amount: 5_000_000n,
+      epoch: 7n,
+    });
+    // And even with no epoch known at all.
+    expect(pendingWithdrawal(5_000_000n, 7n, null, false, true).kind).toBe("due");
+  });
+
+  it("still shows processing over due while a shutdown payout is in flight", () => {
+    expect(pendingWithdrawal(5_000_000n, 7n, 7n, true, true)).toEqual({
+      kind: "processing",
+      amount: 5_000_000n,
+      epoch: 7n,
+    });
   });
 });

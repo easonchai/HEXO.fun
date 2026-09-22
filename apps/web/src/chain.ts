@@ -7,7 +7,12 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { PublicKey, type Transaction, clusterApiUrl } from "@solana/web3.js";
+import {
+  PublicKey,
+  type Transaction,
+  type TransactionInstruction,
+  clusterApiUrl,
+} from "@solana/web3.js";
 
 export type HexVaultProgram = Program<Idl>;
 
@@ -18,6 +23,9 @@ export interface TxBuilder {
   rpc(options?: { commitment?: string }): Promise<string>;
   /** Unsigned legacy transaction; fee payer and blockhash left unset. */
   transaction(): Promise<Transaction>;
+  /** The raw instruction, for combining more than one into one transaction
+   *  (ticket 11's one-step shutdown withdraw). No RPC round trip. */
+  instruction(): Promise<TransactionInstruction>;
 }
 
 /** Decoded-account accessor for one account type. */

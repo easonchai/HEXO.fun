@@ -21,6 +21,8 @@ export interface UseBuyTicketsOptions {
   sendTransaction?: TxSigner["sendTransaction"] | undefined;
   pool: PoolLike | null;
   paused: boolean;
+  /** ticket 11: `buy_tickets` refuses outright once the pool is shut down. */
+  shutdown: boolean;
   principal: bigint;
   /** Null until `GET /players/:owner` has answered once. */
   allowanceLeft: bigint | null;
@@ -52,6 +54,7 @@ export function useBuyTickets(options: UseBuyTicketsOptions): BuyTicketsState {
     sendTransaction,
     pool,
     paused,
+    shutdown,
     principal,
     allowanceLeft,
     secondsLeft,
@@ -66,15 +69,16 @@ export function useBuyTickets(options: UseBuyTicketsOptions): BuyTicketsState {
   const tickets = amount !== null ? ticketsFromUsdc(amount, pool?.ticketsPerUsdc ?? 0) : 0n;
   const drawValueTickets = drawValue(tickets, secondsLeft, epochSeconds);
 
-  // `allowanceLeft` lags behind `principal`/`paused` (its own slower poll), so
-  // "loading…" only shows for a depositor who is genuinely waiting on it.
-  // Paused and zero-Principal are already known from the fast state poll, and
-  // short-circuit inside buyDisabledReason before its allowance check runs.
+  // `allowanceLeft` lags behind `principal`/`paused`/`shutdown` (its own
+  // slower poll), so "loading…" only shows for a depositor who is genuinely
+  // waiting on it. Shutdown, paused and zero-Principal are already known from
+  // the fast state poll, and short-circuit inside buyDisabledReason before
+  // its allowance check runs.
   const disabledReason =
     owner === null
       ? "connect a wallet"
-      : paused || principal <= 0n || allowanceLeft !== null
-        ? buyDisabledReason({ paused, principal, allowanceLeft: allowanceLeft ?? 0n })
+      : shutdown || paused || principal <= 0n || allowanceLeft !== null
+        ? buyDisabledReason({ paused, shutdown, principal, allowanceLeft: allowanceLeft ?? 0n })
         : "loading…";
 
   const canSubmit =

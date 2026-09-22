@@ -32,6 +32,7 @@ import {
 } from "./engine.js";
 import { formatAtomic, formatAtomic2, parseAtomic } from "./lib/money.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
+import { SHUTDOWN_BANNER, SHUTDOWN_REASON } from "./shutdown.js";
 import { SoundIcon } from "./SoundIcon.js";
 import { WalletMenu } from "./WalletMenu.js";
 import { poolFromDto, useWalletBalance } from "./read.js";
@@ -147,6 +148,10 @@ export function App() {
   // The tracked Round: open, or the last one this session saw once it has
   // settled (see api.service.ts `getState`'s comment on `round`).
   const round = state?.round ? roundLikeFrom(state.round) : null;
+  // Ticket 11: irreversible once true. Read off `/state`'s `status`, not
+  // `pool.paused` — shutdown forces `paused` too, but the reason shown for
+  // each is different (see `shutdown.ts`).
+  const shutdown = state?.status.shutdown ?? false;
   const now = useChainClock(state ? BigInt(state.chainTime) : null, round?.roundId ?? null);
   // The wallet balance is the one chain read left in the browser, so it
   // reloads when something actually moved, not on every poll: `snapshot` is
@@ -231,16 +236,21 @@ export function App() {
   // round, closed, already placed) is what the deploy button label already
   // says, so it only goes on the button as a tooltip.
   const problems: string[] = [];
+  if (shutdown) problems.push(SHUTDOWN_REASON);
   if (!pool) problems.push("no pool found yet");
   if (spend > entries)
     problems.push("not enough Tickets — deposit to earn more");
-  const deployHint = !openRound
-    ? "no open round (the operator opens rounds)"
-    : locked
-      ? `position already placed in round #${openRound.roundId}`
-      : phaseFor(openRound, now ?? 0n, pool?.closeBuffer ?? 0n) !== "mine"
-        ? "positions are closed for this round"
-        : null;
+  // ticket 11: `buy_position` refuses outright once shut down, ahead of the
+  // ordinary round-state reasons below.
+  const deployHint = shutdown
+    ? SHUTDOWN_REASON
+    : !openRound
+      ? "no open round (the operator opens rounds)"
+      : locked
+        ? `position already placed in round #${openRound.roundId}`
+        : phaseFor(openRound, now ?? 0n, pool?.closeBuffer ?? 0n) !== "mine"
+          ? "positions are closed for this round"
+          : null;
 
   /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction was sent. */
   const deploy = useCallback(
@@ -329,6 +339,7 @@ export function App() {
   const canPick = Boolean(
     pool &&
       openRound &&
+      !shutdown &&
       phaseFor(openRound, now ?? 0n, pool.closeBuffer) === "mine" &&
       !locked &&
       connected,
@@ -480,6 +491,12 @@ export function App() {
         </div>
       ) : null}
 
+      {shutdown ? (
+        <div className="screen-note err" data-testid="shutdown-banner">
+          {SHUTDOWN_BANNER}
+        </div>
+      ) : null}
+
       <main className="main-content-split">
         {tab === "HOME" ? (
           <Home
@@ -609,6 +626,7 @@ export function App() {
             entries={entries}
             walletBalance={walletBalance}
             paused={pool?.paused ?? false}
+            shutdown={shutdown}
             currentEpoch={state?.currentEpoch ?? null}
             now={now}
             pendingWithdraw={pendingWithdraw}

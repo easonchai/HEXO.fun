@@ -186,6 +186,12 @@ export interface StatusDto {
   };
   rpcOk: boolean;
   slot: number | null;
+  /** Irreversible once true (ops-and-envs ticket 08); false before the pool
+   *  is indexed. See `shutdown.ts` for what the web does with this. */
+  shutdown: boolean;
+  /** Principal pulled out and not yet returned; null when the pool or the
+   *  vault balance is not known yet. Not surfaced in this app's UI. */
+  principalOut: string | null;
 }
 
 export interface PoolSummaryDto {

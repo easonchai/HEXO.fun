@@ -4,6 +4,7 @@
  * compounds to (ADR 0011), and why the buy button is disabled. Kept out of
  * Vault.tsx so the designer's restyle doesn't touch any of this.
  */
+import { SHUTDOWN_REASON } from "./shutdown.js";
 
 /**
  * ADR 0011: `register` credits `base_rate_bps` APR once per ended epoch, so
@@ -41,9 +42,12 @@ export function drawValue(
 /** Why the buy-tickets button is disabled, or null when it can be pressed. */
 export function buyDisabledReason(opts: {
   paused: boolean;
+  /** ticket 11: `buy_tickets` refuses outright once the pool is shut down. */
+  shutdown: boolean;
   principal: bigint;
   allowanceLeft: bigint;
 }): string | null {
+  if (opts.shutdown) return SHUTDOWN_REASON;
   if (opts.paused) return "pool is paused";
   if (opts.principal <= 0n) return "deposit first";
   if (opts.allowanceLeft <= 0n) return "today's buy allowance is spent";

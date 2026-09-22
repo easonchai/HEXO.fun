@@ -51,7 +51,7 @@ describe("apyFromBaseRateBps", () => {
 });
 
 describe("buyDisabledReason", () => {
-  const base = { paused: false, principal: 100n, allowanceLeft: 50n };
+  const base = { paused: false, shutdown: false, principal: 100n, allowanceLeft: 50n };
 
   it("is enabled when nothing blocks it", () => {
     expect(buyDisabledReason(base)).toBeNull();
@@ -59,6 +59,12 @@ describe("buyDisabledReason", () => {
 
   it("is disabled while the pool is paused", () => {
     expect(buyDisabledReason({ ...base, paused: true })).toBe("pool is paused");
+  });
+
+  it("is disabled once the pool is shut down, ahead of the paused reason", () => {
+    expect(buyDisabledReason({ ...base, paused: true, shutdown: true })).toBe(
+      "pool is closed",
+    );
   });
 
   it("is disabled with zero Principal", () => {

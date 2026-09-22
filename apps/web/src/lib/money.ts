@@ -116,16 +116,22 @@ export type PendingWithdrawal =
   | { kind: "none" }
   | { kind: "pending" | "due" | "processing"; amount: bigint; epoch: bigint };
 
+/**
+ * `shutdown` (ticket 11): `process_withdraw` skips the epoch-lock check
+ * while the pool is shut down (custody.rs), so a pending amount is due the
+ * moment it exists, whatever epoch it was requested in.
+ */
 export function pendingWithdrawal(
   amount: bigint,
   pendingEpoch: bigint,
   currentEpoch: bigint | null,
   payoutSent: boolean,
+  shutdown: boolean,
 ): PendingWithdrawal {
   if (amount <= 0n) return { kind: "none" };
   if (payoutSent) return { kind: "processing", amount, epoch: pendingEpoch };
   // An unknown current epoch (backend unreachable) reads as not yet due: the
   // button would only fail with WithdrawalNotDue.
-  const due = currentEpoch !== null && currentEpoch > pendingEpoch;
+  const due = shutdown || (currentEpoch !== null && currentEpoch > pendingEpoch);
   return { kind: due ? "due" : "pending", amount, epoch: pendingEpoch };
 }

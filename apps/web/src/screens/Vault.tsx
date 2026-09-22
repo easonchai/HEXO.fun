@@ -27,6 +27,7 @@ import {
   deposit,
   processWithdraw,
   requestWithdraw,
+  shutdownWithdraw,
   type TxSigner,
 } from "../actions.js";
 import { apiBaseUrl, fetchPlayer, type CurrentEpochDto } from "../api.js";
@@ -42,6 +43,7 @@ import {
   previewWithdraw,
 } from "../lib/money.js";
 import type { PoolLike } from "../read.js";
+import { SHUTDOWN_BANNER } from "../shutdown.js";
 import { useApiPoll } from "../useApiPoll.js";
 import { useBuyTickets } from "../useBuyTickets.js";
 import { GlyphRow } from "./Home.js";
@@ -98,6 +100,8 @@ export interface VaultScreenProps {
   entries: bigint;
   walletBalance: bigint;
   paused: boolean;
+  /** ticket 11: irreversible. Withdraw goes one-step; everything else refuses. */
+  shutdown: boolean;
   currentEpoch: CurrentEpochDto | null;
   /** Chain clock seconds, for the buy-tickets draw-value preview. */
   now: bigint | null;
@@ -127,6 +131,7 @@ export function Vault(props: VaultScreenProps) {
     entries,
     walletBalance,
     paused,
+    shutdown,
     currentEpoch,
     now,
     pendingWithdraw,
@@ -184,6 +189,7 @@ export function Vault(props: VaultScreenProps) {
     sendTransaction,
     pool,
     paused,
+    shutdown,
     principal,
     allowanceLeft,
     secondsLeft,
@@ -202,6 +208,7 @@ export function Vault(props: VaultScreenProps) {
     pendingEpoch,
     currentEpoch ? BigInt(currentEpoch.id) : null,
     payoutSent !== null && payoutSent === pendingWithdraw,
+    shutdown,
   );
 
   const switchMode = (next: Mode) => {
@@ -251,6 +258,11 @@ export function Vault(props: VaultScreenProps) {
     const signer: TxSigner = { publicKey: owner, sendTransaction };
     if (mode === "deposit") {
       void run("Deposit", () => deposit(program, signer, pool, amount));
+    } else if (shutdown) {
+      // One transaction: request_withdraw + process_withdraw (ticket 11).
+      void run("Withdraw", () =>
+        shutdownWithdraw(program, signer, pool, amount, pendingWithdraw),
+      );
     } else {
       void run("Withdraw requested", () =>
         requestWithdraw(program, signer, pool, amount),
@@ -296,9 +308,11 @@ export function Vault(props: VaultScreenProps) {
     ? "CONNECT WALLET"
     : busy
       ? "SIGNING…"
-      : mode === "deposit" && paused
-        ? "POOL PAUSED"
-        : mode.toUpperCase();
+      : mode === "deposit" && shutdown
+        ? "POOL CLOSED"
+        : mode === "deposit" && paused
+          ? "POOL PAUSED"
+          : mode.toUpperCase();
 
   return (
     <div className="vault" data-testid="vault-screen">
@@ -437,15 +451,20 @@ export function Vault(props: VaultScreenProps) {
             </button>
 
             <div className="vault-notes">
-              {mode === "deposit" && paused ? (
+              {mode === "deposit" && shutdown ? (
+                <span className="vault-note" data-testid="deposit-shutdown-note">
+                  {SHUTDOWN_BANNER}
+                </span>
+              ) : mode === "deposit" && paused ? (
                 <span className="vault-note">
                   Pool is paused: deposits are blocked; withdrawals stay live.
                 </span>
               ) : null}
               {mode === "withdraw" ? (
                 <span className="vault-note" data-testid="withdraw-lock-note">
-                  Principal and Tickets leave your account now. The USDC pays
-                  out once today's draw is over.
+                  {shutdown
+                    ? "Principal and Tickets leave your account now. The pool is closed, so the payout lands in this same transaction."
+                    : "Principal and Tickets leave your account now. The USDC pays out once today's draw is over."}
                 </span>
               ) : null}
               {overCap ? (

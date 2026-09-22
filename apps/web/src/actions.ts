@@ -8,7 +8,12 @@
  * payer.
  */
 import { createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
-import { PublicKey, SystemProgram, type Transaction } from "@solana/web3.js";
+import {
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  type TransactionInstruction,
+} from "@solana/web3.js";
 
 import {
   acceptedAta,
@@ -25,6 +30,7 @@ import {
   type TxBuilder,
 } from "./chain.js";
 import type { PoolLike } from "./read.js";
+import { shutdownWithdrawStep } from "./shutdown.js";
 
 export type { PoolLike };
 
@@ -55,6 +61,32 @@ async function send(
     await program.provider.connection.getLatestBlockhash(CONFIRMED);
   transaction.recentBlockhash = blockhash;
   return owner.sendTransaction(transaction);
+}
+
+/**
+ * Sends more than one instruction in one transaction (ticket 11's one-step
+ * shutdown withdraw): there is no single `TxBuilder` to call `.rpc()` on, so
+ * a wallet with no sponsored `sendTransaction` signs and submits the way
+ * `.rpc()` does under the hood (`@anchor-lang/core`'s `RpcFactory`).
+ */
+async function sendMany(
+  program: HexVaultProgram,
+  owner: TxSigner,
+  instructions: TransactionInstruction[],
+): Promise<string> {
+  const transaction = new Transaction().add(...instructions);
+  transaction.feePayer = owner.publicKey;
+  const { blockhash } =
+    await program.provider.connection.getLatestBlockhash(CONFIRMED);
+  transaction.recentBlockhash = blockhash;
+  if (owner.sendTransaction) return owner.sendTransaction(transaction);
+  // SAFETY: App.tsx only ever builds this Program from an AnchorProvider,
+  // whose `sendAndConfirm` is always implemented; the SDK's `Provider` type
+  // just marks it optional for providers that never sign.
+  const provider = program.provider as unknown as {
+    sendAndConfirm(tx: Transaction, signers: never[], opts: typeof CONFIRMED): Promise<string>;
+  };
+  return provider.sendAndConfirm(transaction, [], CONFIRMED);
 }
 
 export async function deposit(
@@ -180,6 +212,63 @@ export async function processWithdraw(
       ),
     ]);
   return send(program, owner, builder);
+}
+
+/**
+ * Ticket 11: `process_withdraw` skips the epoch lock while the pool is shut
+ * down (custody.rs), so a fresh request and its payout collapse into one
+ * transaction instead of the ordinary two. `shutdownWithdrawStep` decides
+ * which instructions that needs; a Player with only an earlier pending
+ * amount and nothing new to request sends `process_withdraw` alone.
+ */
+export async function shutdownWithdraw(
+  program: HexVaultProgram,
+  owner: TxSigner,
+  pool: PoolLike,
+  requestAmount: bigint,
+  pendingWithdraw: bigint,
+): Promise<string> {
+  const step = shutdownWithdrawStep(requestAmount, pendingWithdraw);
+  if (step.kind === "none") throw new Error("nothing to withdraw");
+  const o = owner.publicKey;
+  const ownerToken = acceptedAta(pool.acceptedMint, o);
+  const instructions: TransactionInstruction[] = [];
+  if (step.kind === "request-and-process") {
+    instructions.push(
+      await method(
+        program,
+        "requestWithdraw",
+      )(bn(step.amount))
+        .accounts({
+          owner: o,
+          pool: pool.address,
+          player: playerAddress(pool.address, o),
+        })
+        .instruction(),
+    );
+  }
+  instructions.push(
+    // A mainnet depositor may have closed the ATA since depositing; the
+    // transfer needs it back, and this costs nothing when it is already there.
+    createAssociatedTokenAccountIdempotentInstruction(
+      o,
+      ownerToken,
+      o,
+      pool.acceptedMint,
+      TOKEN_PROGRAM,
+    ),
+    await method(program, "processWithdraw")()
+      .accounts({
+        pool: pool.address,
+        player: playerAddress(pool.address, o),
+        acceptedMint: pool.acceptedMint,
+        ownerToken,
+        principalVault: principalVaultAddress(pool.address),
+        tokenProgram: TOKEN_PROGRAM,
+      })
+      .instruction(),
+  );
+  return sendMany(program, owner, instructions);
 }
 
 /** Stakes `stakePerTile` Entries on every tile set in `tilesMask`. */
