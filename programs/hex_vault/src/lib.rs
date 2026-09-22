@@ -44,6 +44,28 @@ declare_id!("H2iWyng2orJpHNGGWhrR7rBQNDqixThpTpAwF4dnPXax");
 #[cfg(not(any(feature = "staging", feature = "mainnet")))]
 declare_id!("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
 
+// ops-and-envs ticket 12: a security.txt ELF section so a researcher can go
+// from the deployed program address to a contact. Gated on `no-entrypoint`
+// per the crate's own rule for library authors: a consumer building this
+// crate as a CPI dependency (the `cpi` feature, which implies
+// `no-entrypoint`) must not get a second `security_txt` symbol linked in
+// alongside its own program's.
+//
+// project_url and contacts are TODO: the user owns the live app URL and the
+// real contact channels (see spec.md "Open items the user owns"). Fill them
+// in before the mainnet deploy; a placeholder security.txt is worse than
+// none, since it earns a wasted report to a dead inbox.
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "HexVault",
+    // TODO(user): replace with the live app URL once deployed.
+    project_url: "TODO: https://hexvault.example",
+    // TODO(user): replace with a real, monitored contact before mainnet.
+    contacts: "email:TODO@hexvault.example",
+    policy: "We do not currently pay a bug bounty. Report vulnerabilities responsibly to the contact above; do not disclose or exploit before we confirm a fix.",
+    source_code: "https://github.com/easonchai/HexVault"
+}
+
 #[program]
 pub mod hex_vault {
     use super::*;
