@@ -124,8 +124,33 @@ export const CLUSTER = clusterFrom(
 export const SIGNING_CHAIN =
   CLUSTER === "devnet" ? "solana:devnet" : "solana:mainnet";
 
-/** VITE_PROGRAM_ID wins so one bundle can point at a redeployed program. */
-export const PROGRAM_ID = new PublicKey(env("VITE_PROGRAM_ID") ?? idl.address);
+/**
+ * VITE_PROGRAM_ID wins so one bundle can point at a redeployed program.
+ * `App.tsx` reads this same constant for the Anchor `Program`'s address
+ * override, so PDAs (derived here) and instructions (sent through that
+ * `Program`) can never point at two different program ids. A production
+ * build has no IDL fallback: signing against the dev address baked into the
+ * committed IDL would be a silent wrong-program bug, not a config default.
+ */
+export function programIdFrom(
+  raw: string | undefined,
+  idlAddress: string,
+  isProd: boolean,
+): PublicKey {
+  if (raw) return new PublicKey(raw);
+  if (isProd) {
+    throw new Error(
+      "VITE_PROGRAM_ID is required in a production build; refusing to fall back to the IDL's dev address.",
+    );
+  }
+  return new PublicKey(idlAddress);
+}
+
+export const PROGRAM_ID = programIdFrom(
+  env("VITE_PROGRAM_ID"),
+  idl.address,
+  import.meta.env.PROD,
+);
 
 /** The single pool this build talks to; the demo runs pool 1. */
 export const POOL_ID = BigInt(env("VITE_POOL_ID") ?? "1");

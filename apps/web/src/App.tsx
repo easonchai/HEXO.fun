@@ -17,7 +17,7 @@ import { Vault, type VaultMode } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
 import { buyPosition, settlePosition } from "./actions.js";
 import { apiBaseUrl, fetchFeed, type RoundDto } from "./api.js";
-import { type HexVaultProgram } from "./chain.js";
+import { PROGRAM_ID, type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
   covers,
@@ -127,8 +127,15 @@ export function App() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ownerAddress stands in for the signer, on purpose
   }, [connection, ownerAddress]);
+  // The IDL's baked-in address is the dev program; override it with the same
+  // VITE_PROGRAM_ID chain.ts uses for PDAs, so a transaction and the account
+  // it reads can never disagree on which program they mean.
   const program = useMemo<HexVaultProgram | null>(
-    () => new Program(idl, provider) as unknown as HexVaultProgram,
+    () =>
+      new Program(
+        { ...idl, address: PROGRAM_ID.toBase58() },
+        provider,
+      ) as unknown as HexVaultProgram,
     [provider],
   );
 
