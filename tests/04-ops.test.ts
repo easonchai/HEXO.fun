@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { BN } from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import {
   DEVNET_VRF_NETWORK_STATE,
   DEVNET_VRF_TREASURY,
@@ -279,6 +279,51 @@ async function fetchEpoch(pool: PoolCtx, epochId: bigint) {
 const vaultBalance = async (account: PublicKey): Promise<bigint> =>
   BigInt((await program.provider.connection.getTokenAccountBalance(account)).value.amount);
 
+async function adminAta(pool: PoolCtx): Promise<PublicKey> {
+  return (
+    await getOrCreateAssociatedTokenAccount(
+      program.provider.connection,
+      pool.operator,
+      pool.mint,
+      pool.admin.publicKey,
+    )
+  ).address;
+}
+
+async function adminWithdraw(pool: PoolCtx, adminToken: PublicKey, amount: bigint) {
+  return program.methods
+    .adminWithdraw(new BN(amount.toString()))
+    .accountsPartial({
+      admin: pool.admin.publicKey,
+      pool: pool.pool,
+      acceptedMint: pool.mint,
+      adminToken,
+      principalVault: pool.principalVault,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .signers([pool.admin])
+    .rpc();
+}
+
+async function emergencyWithdraw(
+  pool: PoolCtx,
+  owner: PublicKey,
+  ownerToken: PublicKey,
+) {
+  return program.methods
+    .emergencyWithdraw()
+    .accountsPartial({
+      pool: pool.pool,
+      player: playerPda(pool.pool, owner),
+      owner,
+      acceptedMint: pool.mint,
+      ownerToken,
+      principalVault: pool.principalVault,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .rpc();
+}
+
 describe("shutdown", () => {
   it(
     "flips shutdown and paused, refuses a second call, emits PoolShutdown, and only the admin may call it",
@@ -391,6 +436,134 @@ describe("shutdown", () => {
       await expect(closeRegistration(pool, 1n)).rejects.toThrow(/PoolShutDown/);
       await expect(draw(pool, 1n, pool.pool)).rejects.toThrow(/PoolShutDown/);
       await expect(fundYield(pool, owner, 1_000_000n)).rejects.toThrow(/PoolShutDown/);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("emergency_withdraw", () => {
+  it(
+    "refuses while the pool is not shut down",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+
+      await expect(
+        emergencyWithdraw(pool, owner.keypair.publicKey, owner.tokenAccount),
+      ).rejects.toThrow(/PoolNotShutDown/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "pays principal only, entries and principal zero out, total_principal drops",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+      await shutdown(pool);
+
+      const walletBefore = await vaultBalance(owner.tokenAccount);
+      const sig = await emergencyWithdraw(pool, owner.keypair.publicKey, owner.tokenAccount);
+
+      expect(await vaultBalance(owner.tokenAccount)).toBe(walletBefore + 4_000_000n);
+      const player = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(player.principal.toString()).toBe("0");
+      expect(player.entries.toString()).toBe("0");
+      expect((await program.account.pool.fetch(pool.pool)).totalPrincipal.toString()).toBe("0");
+
+      const event = await findEvent<{ principal: BN; pending: BN; total: BN }>(
+        sig,
+        "emergencyWithdrawn",
+      );
+      expect(event?.principal.toString()).toBe("4000000");
+      expect(event?.pending.toString()).toBe("0");
+      expect(event?.total.toString()).toBe("4000000");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "pays pending only, and both principal and pending together",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+      await requestWithdraw(pool, owner, 1_500_000n); // 2.5M principal, 1.5M pending
+      await shutdown(pool);
+
+      const walletBefore = await vaultBalance(owner.tokenAccount);
+      await emergencyWithdraw(pool, owner.keypair.publicKey, owner.tokenAccount);
+
+      expect(await vaultBalance(owner.tokenAccount)).toBe(walletBefore + 4_000_000n);
+      const player = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(player.principal.toString()).toBe("0");
+      expect(player.pendingWithdraw.toString()).toBe("0");
+      expect((await program.account.pool.fetch(pool.pool)).pendingWithdrawals.toString()).toBe(
+        "0",
+      );
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a short vault fails with InsufficientVault and pays nothing",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+      await shutdown(pool);
+      await adminWithdraw(pool, await adminAta(pool), 4_000_000n); // vault now empty
+
+      const walletBefore = await vaultBalance(owner.tokenAccount);
+      await expect(
+        emergencyWithdraw(pool, owner.keypair.publicKey, owner.tokenAccount),
+      ).rejects.toThrow(/InsufficientVault/);
+
+      expect(await vaultBalance(owner.tokenAccount)).toBe(walletBefore);
+      const player = await fetchPlayer(pool, owner.keypair.publicKey);
+      expect(player.principal.toString()).toBe("4000000"); // unchanged: the whole tx reverted
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the House refuses, even though it holds no principal",
+    async () => {
+      const pool = await setupPool();
+      await shutdown(pool);
+      const operatorAta = await getOrCreateAssociatedTokenAccount(
+        program.provider.connection,
+        pool.operator,
+        pool.mint,
+        pool.operator.publicKey,
+      );
+
+      await expect(
+        emergencyWithdraw(pool, pool.operator.publicKey, operatorAta.address),
+      ).rejects.toThrow(/HouseCannotEmergencyWithdraw/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a wrong ATA owner refuses, and a second call on a zero balance refuses",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      const stranger = await pool.fundedWallet(0n);
+      await deposit(pool, owner, 4_000_000n);
+      await shutdown(pool);
+
+      await expect(
+        emergencyWithdraw(pool, owner.keypair.publicKey, stranger.tokenAccount),
+      ).rejects.toThrow();
+
+      await emergencyWithdraw(pool, owner.keypair.publicKey, owner.tokenAccount);
+      await expect(
+        emergencyWithdraw(pool, owner.keypair.publicKey, owner.tokenAccount),
+      ).rejects.toThrow(/ZeroAmount/);
     },
     TIMEOUT,
   );

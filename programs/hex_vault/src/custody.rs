@@ -14,8 +14,9 @@ use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, Tran
 use crate::constants::{BPS_DENOMINATOR, SEED_JACKPOT, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
 use crate::errors::HexVaultError;
 use crate::events::{
-    AdminChanged, AdminProposed, Deposited, OperatorChanged, ParamsSet, Paused, PoolCreated,
-    PoolShutdown, PrincipalDeployed, TicketsBought, TicketsGranted, WithdrawRequested, Withdrawn,
+    AdminChanged, AdminProposed, Deposited, EmergencyWithdrawn, OperatorChanged, ParamsSet, Paused,
+    PoolCreated, PoolShutdown, PrincipalDeployed, TicketsBought, TicketsGranted,
+    WithdrawRequested, Withdrawn,
 };
 use crate::state::{Player, Pool};
 use crate::touch::touch;
@@ -586,6 +587,76 @@ pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
     Ok(())
 }
 
+/// Permissionless crank, only valid once the pool is shut down: pays one
+/// Player's whole `principal + pending_withdraw` to their own USDC ATA, so a
+/// depositor gets out even if the team disappears (spec
+/// "emergency_withdraw"). House is skipped: its principal is protocol money
+/// and leaves through `sweep_house` instead.
+pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
+    let now = utils::now()?;
+    let pool = &mut ctx.accounts.pool;
+    let player = &mut ctx.accounts.player;
+    touch(player, pool, now)?;
+
+    require!(pool.shutdown, HexVaultError::PoolNotShutDown);
+    require!(
+        !player.is_house,
+        HexVaultError::HouseCannotEmergencyWithdraw
+    );
+
+    let principal = player.principal;
+    let pending = player.pending_withdraw;
+    let total = principal
+        .checked_add(pending)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    require!(total > 0, HexVaultError::ZeroAmount);
+    // No partial payouts: either the vault covers this Player in full, or
+    // nothing moves and the next attempt starts from the same numbers.
+    require!(
+        ctx.accounts.principal_vault.amount >= total,
+        HexVaultError::InsufficientVault
+    );
+
+    player.principal = 0;
+    player.entries = 0;
+    player.pending_withdraw = 0;
+    pool.total_principal = pool
+        .total_principal
+        .checked_sub(principal)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+    pool.pending_withdrawals = pool
+        .pending_withdrawals
+        .checked_sub(pending)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+
+    let pool_id_bytes = pool.pool_id.to_le_bytes();
+    let pool_bump = [pool.bump];
+    let signer_seeds: &[&[u8]] = &[SEED_POOL, &pool_id_bytes, &pool_bump];
+
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.principal_vault.to_account_info(),
+                mint: ctx.accounts.accepted_mint.to_account_info(),
+                to: ctx.accounts.owner_token.to_account_info(),
+                authority: pool.to_account_info(),
+            },
+            &[signer_seeds],
+        ),
+        total,
+        ctx.accounts.accepted_mint.decimals,
+    )?;
+
+    emit!(EmergencyWithdrawn {
+        owner: player.owner,
+        principal,
+        pending,
+        total,
+    });
+    Ok(())
+}
+
 /// Resets `bought_amount` to 0 when `bought_epoch` is not `current_epoch_id`,
 /// adds `amount`, and checks the result against `principal`. Returns the new
 /// `bought_amount`; the caller still owns stamping `bought_epoch`.
@@ -1067,6 +1138,50 @@ pub struct AdminWithdraw<'info> {
         ) @ HexVaultError::InvalidAdminTokenAccount,
     )]
     pub admin_token: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [SEED_PRINCIPAL, pool.key().as_ref()],
+        bump = pool.principal_vault_bump,
+        token::mint = accepted_mint,
+        token::authority = pool,
+        token::token_program = token_program,
+    )]
+    pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+/// Permissionless: no signer at all, like `process_withdraw`. `owner` is
+/// unchecked but pinned to `player.owner`, and the destination below has to
+/// belong to that same owner, so nobody but the Player's own owner can ever
+/// receive the payout.
+#[derive(Accounts)]
+pub struct EmergencyWithdraw<'info> {
+    #[account(mut, seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
+    pub pool: Box<Account<'info, Pool>>,
+
+    #[account(
+        mut,
+        seeds = [SEED_PLAYER, pool.key().as_ref(), player.owner.as_ref()],
+        bump = player.bump,
+    )]
+    pub player: Box<Account<'info, Player>>,
+
+    /// CHECK: pinned to `player.owner` by the `address` constraint below.
+    #[account(address = player.owner)]
+    pub owner: UncheckedAccount<'info>,
+
+    #[account(address = pool.accepted_mint @ HexVaultError::MintMismatch)]
+    pub accepted_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(
+        mut,
+        token::mint = accepted_mint,
+        token::authority = owner,
+        token::token_program = token_program,
+    )]
+    pub owner_token: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         mut,

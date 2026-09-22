@@ -57,6 +57,12 @@ pub mod hex_vault {
         custody::shutdown(ctx)
     }
 
+    /// Permissionless, only valid once shut down (ops-and-envs ticket 03):
+    /// pays one Player's whole balance to their own USDC ATA.
+    pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
+        custody::emergency_withdraw(ctx)
+    }
+
     pub fn set_operator(ctx: Context<SetOperator>, new_operator: Pubkey) -> Result<()> {
         custody::set_operator(ctx, new_operator)
     }

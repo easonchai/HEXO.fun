@@ -126,4 +126,12 @@ pub enum HexVaultError {
     // Shutdown (ops-and-envs ticket 02). Appended too.
     #[msg("the pool is shut down")]
     PoolShutDown,
+
+    // emergency_withdraw (ops-and-envs ticket 03). Appended too.
+    #[msg("the pool is not shut down")]
+    PoolNotShutDown,
+    #[msg("the House exits through sweep_house, not emergency_withdraw")]
+    HouseCannotEmergencyWithdraw,
+    #[msg("the principal vault cannot cover this payout")]
+    InsufficientVault,
 }

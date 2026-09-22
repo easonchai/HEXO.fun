@@ -223,3 +223,13 @@ pub struct PoolShutdown {
     pub pool: Pubkey,
     pub at: i64,
 }
+
+/// Permissionless: `emergency_withdraw` paid one Player's whole balance to
+/// its own USDC ATA once the pool was shut down.
+#[event]
+pub struct EmergencyWithdrawn {
+    pub owner: Pubkey,
+    pub principal: u64,
+    pub pending: u64,
+    pub total: u64,
+}
