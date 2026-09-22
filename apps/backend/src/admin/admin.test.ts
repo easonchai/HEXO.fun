@@ -171,6 +171,14 @@ interface HarnessOptions {
     pendingWithdraw: bigint;
     isHouse?: boolean;
   }[];
+  /**
+   * Player-shaped accounts placed at an address other than their claimed
+   * owner's real PDA, the way a forged `owner` field would look on chain.
+   * `playersOwedABalance`'s `pubkey.equals(chain.playerAddress(...))` check
+   * (admin/index.ts) is what has to reject these before an ATA is ever
+   * derived for the address they claim to own.
+   */
+  spoofedPlayers?: readonly { owner: PublicKey; principal: bigint; pendingWithdraw: bigint }[];
   /** Overrides the local-signing `chain.send` stub, for a test that needs a
    *  batch to fail partway through (emergency-crank's InsufficientVault). */
   send?: (instructions: TransactionInstruction[]) => Promise<string>;
@@ -192,6 +200,22 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
           principal: new BN(player.principal.toString()),
           pendingWithdraw: new BN(player.pendingWithdraw.toString()),
           isHouse: player.isHouse ?? false,
+        }),
+      },
+    })),
+  );
+  const spoofedAccounts = await Promise.all(
+    (options.spoofedPlayers ?? []).map(async (player) => ({
+      // Deliberately NOT playerAddress(PROGRAM_ID, POOL, player.owner): a
+      // forged account claiming someone else's owner would not land at
+      // that owner's real PDA either.
+      pubkey: Keypair.generate().publicKey,
+      account: {
+        data: await program.coder.accounts.encode("player", {
+          owner: player.owner,
+          principal: new BN(player.principal.toString()),
+          pendingWithdraw: new BN(player.pendingWithdraw.toString()),
+          isHouse: false,
         }),
       },
     })),
@@ -220,7 +244,7 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
     // emergency-crank's own chain scan (admin/index.ts's playersOwedABalance);
     // the filters argument is not honoured, same as every other fake here
     // that trusts the real SDK to build the request correctly.
-    getProgramAccounts: async () => playerAccounts,
+    getProgramAccounts: async () => [...playerAccounts, ...spoofedAccounts],
     getLatestBlockhash: async () => ({
       blockhash: BLOCKHASH,
       lastValidBlockHeight: 1,
@@ -513,6 +537,19 @@ describe("admin run", () => {
     expect(lines).toMatch(/after:.*principal_out=2350000/);
   });
 
+  it("return-principal's transfer names the pool's own principal vault and accepted mint, never a substitute account", async () => {
+    const { chain, sent } = await harness({ vaultBalance: 1_000_000n });
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    await run({ kind: "return-principal", amount: "1" }, chain, mode);
+
+    const keys = sent[0]?.[0]?.keys.map((k) => k.pubkey.toBase58()) ?? [];
+    expect(keys).toContain(principalVaultAddress(PROGRAM_ID, POOL).toBase58());
+    expect(keys).toContain(MINT.toBase58());
+    // Not the jackpot vault: return-principal only ever moves principal.
+    expect(keys).not.toContain(jackpotVaultAddress(PROGRAM_ID, POOL).toBase58());
+  });
+
   it("return-principal in multisig mode prints principal-out before, not after", async () => {
     const { chain, sent } = await harness({ vaultBalance: 1_000_000n });
     const multisigVault = Keypair.generate().publicKey;
@@ -586,6 +623,28 @@ describe("admin run", () => {
     );
     expect(sent).toEqual([]);
     expect(stderr.join("\n")).toContain("no Player owes a balance");
+  });
+
+  it("emergency-crank ignores a Player-shaped account that is not at its claimed owner's real PDA (a spoofed account)", async () => {
+    const attacker = Keypair.generate().publicKey;
+    const alice = Keypair.generate().publicKey;
+    const { chain, sent } = await harness({
+      players: [{ owner: alice, principal: 1_000_000n, pendingWithdraw: 0n }],
+      spoofedPlayers: [{ owner: attacker, principal: 1_000_000n, pendingWithdraw: 0n }],
+    });
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    const { stderr } = await capture(() =>
+      run({ kind: "emergency-crank", batch: 5 }, chain, mode),
+    );
+
+    // Only Alice's real Player is paid; the spoofed account never gets an
+    // ATA derived for it or an emergency_withdraw built against it.
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toHaveLength(2);
+    const keys = sent[0]?.flatMap((ix) => ix.keys.map((k) => k.pubkey.toBase58())) ?? [];
+    expect(keys).not.toContain(attacker.toBase58());
+    expect(stderr.join("\n")).toContain("paid 1, skipped 0");
   });
 
   it("emergency-crank stops at the first InsufficientVault and prints principal-out", async () => {

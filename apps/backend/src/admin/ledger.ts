@@ -39,10 +39,18 @@ export type AdminKeypairSelector =
   | { readonly ledger: false };
 
 /**
- * Parses `ADMIN_KEYPAIR`. Unset, or any value that is not a `usb://ledger`
- * URI, means "sign locally with the loaded keypair" — the only behaviour
- * that existed before this ticket, so a deployment that never sets this var
- * needs no change.
+ * Parses `ADMIN_KEYPAIR`. Unset, or any value that does not start with the
+ * `usb:` scheme, means "sign locally with the loaded keypair" — the only
+ * behaviour that existed before this ticket, so a deployment that never sets
+ * this var needs no change.
+ *
+ * Anything that *does* start with `usb:` is a Ledger request, so it must be
+ * a well-formed `usb://ledger[?key=N]` or this throws. Without this, a typo
+ * (`usb://legder`) or a bad host (`usb://other-device`) fell through to
+ * "not a Ledger URI" and signed with the operator's hot key instead of the
+ * hardware key the admin thought they were requiring — the wrong failure
+ * mode for a misconfiguration on an admin signing path (fail closed, not
+ * fail open).
  */
 export function parseAdminKeypair(raw: string | undefined): AdminKeypairSelector {
   if (raw === undefined) return { ledger: false };
@@ -52,7 +60,13 @@ export function parseAdminKeypair(raw: string | undefined): AdminKeypairSelector
   } catch {
     return { ledger: false };
   }
-  if (url.protocol !== "usb:" || url.hostname !== "ledger") return { ledger: false };
+  if (url.protocol !== "usb:") return { ledger: false };
+  const isRootPath = url.pathname === "" || url.pathname === "/";
+  if (url.hostname.toLowerCase() !== "ledger" || !isRootPath || url.username || url.password) {
+    throw new Error(
+      `ADMIN_KEYPAIR "${raw}" starts with usb:// but is not a valid usb://ledger[?key=N] URI; check for a typo`,
+    );
+  }
   const keyParam = url.searchParams.get("key");
   if (keyParam === null) return { ledger: true, account: 0 };
   if (!/^\d+$/.test(keyParam)) {

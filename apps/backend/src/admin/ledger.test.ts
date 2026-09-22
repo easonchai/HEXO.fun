@@ -30,8 +30,7 @@ describe("parseAdminKeypair", () => {
     ).toEqual({ ledger: false });
   });
 
-  it("treats an unrelated URI as local signing", () => {
-    expect(parseAdminKeypair("usb://other-device")).toEqual({ ledger: false });
+  it("treats a non-usb URI as local signing, even with a ledger-like host", () => {
     expect(parseAdminKeypair("http://ledger")).toEqual({ ledger: false });
   });
 
@@ -43,6 +42,10 @@ describe("parseAdminKeypair", () => {
     expect(parseAdminKeypair("usb://ledger?key=3")).toEqual({ ledger: true, account: 3 });
   });
 
+  it("accepts an uppercase host, since usb:// hosts aren't case-normalised by URL", () => {
+    expect(parseAdminKeypair("usb://LEDGER")).toEqual({ ledger: true, account: 0 });
+  });
+
   it("rejects a non-numeric, empty or negative ?key", () => {
     expect(() => parseAdminKeypair("usb://ledger?key=abc")).toThrow(
       /non-negative whole number/,
@@ -52,6 +55,22 @@ describe("parseAdminKeypair", () => {
     );
     expect(() => parseAdminKeypair("usb://ledger?key=-1")).toThrow(
       /non-negative whole number/,
+    );
+  });
+
+  it("fails closed on a malformed usb:// URI instead of falling back to local signing", () => {
+    // A typo'd host: the actual case this ticket exists for.
+    expect(() => parseAdminKeypair("usb://legder")).toThrow(/not a valid usb:\/\/ledger/);
+    // A different, unrelated device on the same usb: scheme.
+    expect(() => parseAdminKeypair("usb://other-device")).toThrow(
+      /not a valid usb:\/\/ledger/,
+    );
+    // Extra path, userinfo: none of these are part of usb://ledger[?key=N].
+    expect(() => parseAdminKeypair("usb://ledger/extra")).toThrow(
+      /not a valid usb:\/\/ledger/,
+    );
+    expect(() => parseAdminKeypair("usb://user:pass@ledger")).toThrow(
+      /not a valid usb:\/\/ledger/,
     );
   });
 });
