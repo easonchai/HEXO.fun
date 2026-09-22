@@ -1,0 +1,17 @@
+# Staging: same backend stack as docker-compose.yml, run directly by name so
+# the user does not have to remember a --env-file flag pointed at the right
+# compose file the way the mainnet second stack does (see docker-compose.yml's
+# header and runbook.md's "Mainnet stack"). This file only includes
+# docker-compose.yml; there is nothing staging-specific to the stack itself,
+# only to the env file, so a separate copy of the services would just drift.
+#
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d --build
+#
+# .env.staging sets the same three switches the mainnet stack uses:
+# COMPOSE_PROJECT_NAME=hexvault-staging (project, containers, postgres volume),
+# STACK_NAME=hexvault-staging (Traefik router and service names) and
+# ENV_FILE=.env.staging (the backend container's own environment). --env-file
+# is what makes them take effect: compose interpolates ${...} only from the
+# shell and from the file --env-file names, never from env_file: below.
+include:
+  - docker-compose.yml
