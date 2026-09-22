@@ -233,3 +233,12 @@ pub struct EmergencyWithdrawn {
     pub pending: u64,
     pub total: u64,
 }
+
+/// Admin-only: `sweep_house` moved the whole jackpot and any unspent yield
+/// budget to `pool.treasury` once the pool was shut down. Principal is never
+/// swept.
+#[event]
+pub struct HouseSwept {
+    pub jackpot: u64,
+    pub yield_budget: u64,
+}

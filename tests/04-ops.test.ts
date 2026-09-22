@@ -324,6 +324,22 @@ async function emergencyWithdraw(
     .rpc();
 }
 
+async function sweepHouse(pool: PoolCtx, admin: Keypair = pool.admin) {
+  return program.methods
+    .sweepHouse()
+    .accountsPartial({
+      admin: admin.publicKey,
+      pool: pool.pool,
+      acceptedMint: pool.mint,
+      jackpotVault: pool.jackpotVault,
+      principalVault: pool.principalVault,
+      treasury: pool.treasury,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .signers([admin])
+    .rpc();
+}
+
 describe("shutdown", () => {
   it(
     "flips shutdown and paused, refuses a second call, emits PoolShutdown, and only the admin may call it",
@@ -564,6 +580,79 @@ describe("emergency_withdraw", () => {
       await expect(
         emergencyWithdraw(pool, owner.keypair.publicKey, owner.tokenAccount),
       ).rejects.toThrow(/ZeroAmount/);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("sweep_house", () => {
+  it(
+    "refuses while the pool is not shut down, and refuses the operator",
+    async () => {
+      const pool = await setupPool();
+      await expect(sweepHouse(pool)).rejects.toThrow(/PoolNotShutDown/);
+
+      await shutdown(pool);
+      await expect(sweepHouse(pool, pool.operator)).rejects.toThrow(/ConstraintHasOne/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "sweeps the whole jackpot and the unspent yield budget, leaving the principal vault at total_principal + pending_withdrawals",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+      await requestWithdraw(pool, owner, 1_000_000n); // 3M principal, 1M pending
+
+      const funder = await pool.fundedWallet(10_000_000n);
+      await fundYield(pool, funder, 500_000n);
+      await fundJackpot(pool, funder, 2_000_000n);
+      await shutdown(pool);
+
+      const treasuryBefore = await vaultBalance(pool.treasury);
+      const sig = await sweepHouse(pool);
+
+      expect(await vaultBalance(pool.jackpotVault)).toBe(0n);
+      expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore + 2_500_000n);
+      expect(await vaultBalance(pool.principalVault)).toBe(4_000_000n); // 3M + 1M
+      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
+
+      const event = await findEvent<{ jackpot: BN; yieldBudget: BN }>(sig, "houseSwept");
+      expect(event?.jackpot.toString()).toBe("2000000");
+      expect(event?.yieldBudget.toString()).toBe("500000");
+
+      // Callable again: a later fund_jackpot can be swept a second time.
+      await fundJackpot(pool, funder, 100_000n);
+      await sweepHouse(pool);
+      expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore + 2_600_000n);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "with principal pulled out via admin_withdraw, the yield-budget sweep is capped at the real surplus",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+
+      const funder = await pool.fundedWallet(10_000_000n);
+      await fundYield(pool, funder, 500_000n);
+      // Vault now holds 4.5M (4M principal + 0.5M yield budget). Pulling all
+      // 4.5M out leaves the vault at exactly total_principal (4M is still
+      // owed once returned) -- no surplus above obligations remains.
+      await adminWithdraw(pool, await adminAta(pool), 4_500_000n);
+      await shutdown(pool);
+
+      const treasuryBefore = await vaultBalance(pool.treasury);
+      const sig = await sweepHouse(pool);
+
+      expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore); // nothing to sweep
+      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
+      const event = await findEvent<{ jackpot: BN; yieldBudget: BN }>(sig, "houseSwept");
+      expect(event?.yieldBudget.toString()).toBe("0");
     },
     TIMEOUT,
   );

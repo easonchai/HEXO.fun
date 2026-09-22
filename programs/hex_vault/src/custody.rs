@@ -14,9 +14,9 @@ use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, Tran
 use crate::constants::{BPS_DENOMINATOR, SEED_JACKPOT, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
 use crate::errors::HexVaultError;
 use crate::events::{
-    AdminChanged, AdminProposed, Deposited, EmergencyWithdrawn, OperatorChanged, ParamsSet, Paused,
-    PoolCreated, PoolShutdown, PrincipalDeployed, TicketsBought, TicketsGranted,
-    WithdrawRequested, Withdrawn,
+    AdminChanged, AdminProposed, Deposited, EmergencyWithdrawn, HouseSwept, OperatorChanged,
+    ParamsSet, Paused, PoolCreated, PoolShutdown, PrincipalDeployed, TicketsBought,
+    TicketsGranted, WithdrawRequested, Withdrawn,
 };
 use crate::state::{Player, Pool};
 use crate::touch::touch;
@@ -657,6 +657,78 @@ pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
     Ok(())
 }
 
+/// Admin-only, only valid once the pool is shut down (spec "sweep_house").
+/// Moves protocol money out of the pool to `pool.treasury`: the whole
+/// jackpot vault, and whatever of `yield_budget` the principal vault still
+/// holds above its real obligations. Principal is never swept: the House is
+/// a Player like any other and exits through `request_withdraw`;
+/// `emergency_withdraw` skips it on purpose. Callable more than once -- a
+/// later `fund_jackpot` can be swept again.
+///
+/// Invariant this leans on: absent an `admin_withdraw` deployment, the
+/// principal vault holds exactly `total_principal + pending_withdrawals +
+/// yield_budget`. `fund_yield` and a compounded prize land in the principal
+/// vault without changing `total_principal`, and `request_withdraw` only
+/// moves principal into `pending_withdrawals` -- it never moves USDC. So the
+/// vault's balance above `total_principal + pending_withdrawals` is exactly
+/// the unspent yield budget, unless principal was pulled out and not yet
+/// returned, in which case that surplus -- and what this sweeps -- shrinks
+/// with it, saturating at 0 rather than dipping into principal.
+pub fn sweep_house(ctx: Context<SweepHouse>) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    require!(pool.shutdown, HexVaultError::PoolNotShutDown);
+
+    let jackpot = ctx.accounts.jackpot_vault.amount;
+    let surplus = ctx
+        .accounts
+        .principal_vault
+        .amount
+        .saturating_sub(pool.total_principal)
+        .saturating_sub(pool.pending_withdrawals);
+    let yield_swept = pool.yield_budget.min(surplus);
+    pool.yield_budget = 0;
+
+    let pool_id_bytes = pool.pool_id.to_le_bytes();
+    let pool_bump = [pool.bump];
+    let signer_seeds: &[&[u8]] = &[SEED_POOL, &pool_id_bytes, &pool_bump];
+
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.jackpot_vault.to_account_info(),
+                mint: ctx.accounts.accepted_mint.to_account_info(),
+                to: ctx.accounts.treasury.to_account_info(),
+                authority: pool.to_account_info(),
+            },
+            &[signer_seeds],
+        ),
+        jackpot,
+        ctx.accounts.accepted_mint.decimals,
+    )?;
+
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.principal_vault.to_account_info(),
+                mint: ctx.accounts.accepted_mint.to_account_info(),
+                to: ctx.accounts.treasury.to_account_info(),
+                authority: pool.to_account_info(),
+            },
+            &[signer_seeds],
+        ),
+        yield_swept,
+        ctx.accounts.accepted_mint.decimals,
+    )?;
+
+    emit!(HouseSwept {
+        jackpot,
+        yield_budget: yield_swept,
+    });
+    Ok(())
+}
+
 /// Resets `bought_amount` to 0 when `bought_epoch` is not `current_epoch_id`,
 /// adds `amount`, and checks the result against `principal`. Returns the new
 /// `bought_amount`; the caller still owns stamping `bought_epoch`.
@@ -1192,6 +1264,48 @@ pub struct EmergencyWithdraw<'info> {
         token::token_program = token_program,
     )]
     pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct SweepHouse<'info> {
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+        has_one = admin,
+        has_one = treasury,
+    )]
+    pub pool: Box<Account<'info, Pool>>,
+
+    #[account(address = pool.accepted_mint @ HexVaultError::MintMismatch)]
+    pub accepted_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(
+        mut,
+        seeds = [SEED_JACKPOT, pool.key().as_ref()],
+        bump = pool.jackpot_vault_bump,
+        token::mint = accepted_mint,
+        token::authority = pool,
+        token::token_program = token_program,
+    )]
+    pub jackpot_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [SEED_PRINCIPAL, pool.key().as_ref()],
+        bump = pool.principal_vault_bump,
+        token::mint = accepted_mint,
+        token::authority = pool,
+        token::token_program = token_program,
+    )]
+    pub principal_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut)]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }

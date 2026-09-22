@@ -63,6 +63,12 @@ pub mod hex_vault {
         custody::emergency_withdraw(ctx)
     }
 
+    /// Admin-only, only valid once shut down (ops-and-envs ticket 04): moves
+    /// the jackpot and any unspent yield budget to `pool.treasury`.
+    pub fn sweep_house(ctx: Context<SweepHouse>) -> Result<()> {
+        custody::sweep_house(ctx)
+    }
+
     pub fn set_operator(ctx: Context<SetOperator>, new_operator: Pubkey) -> Result<()> {
         custody::set_operator(ctx, new_operator)
     }
