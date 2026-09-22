@@ -10,6 +10,7 @@ process.env.DATABASE_URL = TEST_DATABASE_URL;
 import { createPrivateKey, sign as signEd25519 } from "node:crypto";
 
 import type { INestApplication } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
@@ -24,6 +25,8 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { AccessController } from "./access.controller";
 import { accessMessage } from "./invite-code";
+
+const ADMIN_KEY = "k".repeat(32);
 
 const DEPOSITOR = Keypair.generate().publicKey.toBase58();
 
@@ -76,6 +79,9 @@ describe("access routes", () => {
     const moduleRef = await Test.createTestingModule({
       imports: [PrismaModule],
       controllers: [AccessController],
+      providers: [
+        { provide: ConfigService, useValue: new ConfigService({ INVITE_ADMIN_KEY: ADMIN_KEY }) },
+      ],
     })
       .overrideProvider(PrismaService)
       .useValue(new PrismaService({ datasourceUrl: TEST_DATABASE_URL }))
@@ -117,6 +123,48 @@ describe("access routes", () => {
 
     it("is 400 for a malformed wallet", async () => {
       await http.get("/access/not-a-wallet").expect(400);
+    });
+  });
+
+  describe("POST /access/invites", () => {
+    it("401s a missing or wrong key and writes nothing", async () => {
+      await http.post("/access/invites").send({ maxUses: 5 }).expect(401);
+      await http
+        .post("/access/invites")
+        .set("x-admin-key", "wrong")
+        .send({ maxUses: 5 })
+        .expect(401);
+      expect(await prisma.inviteCode.count()).toBe(0);
+    });
+
+    it("creates `count` owned codes that redeem binds as a referral", async () => {
+      const owner = Keypair.generate().publicKey.toBase58();
+      const { body } = await http
+        .post("/access/invites")
+        .set("x-admin-key", ADMIN_KEY)
+        .send({ maxUses: 3, owner, count: 2 })
+        .expect(201);
+      expect(body.codes).toHaveLength(2);
+      const rows = await prisma.inviteCode.findMany();
+      expect(rows.map((row) => row.code).sort()).toEqual([...body.codes].sort());
+      expect(rows.every((row) => row.maxUses === 3 && row.ownerWallet === owner)).toBe(true);
+
+      const wallet = Keypair.generate();
+      const address = wallet.publicKey.toBase58();
+      const signature = sign(wallet, accessMessage(address, body.codes[0]));
+      await http
+        .post("/access/redeem")
+        .send({ wallet: address, code: body.codes[0], signature })
+        .expect(201);
+      expect(await prisma.referral.findUnique({ where: { referee: address } })).toMatchObject({
+        referrer: owner,
+      });
+    });
+
+    it("400s a bad body", async () => {
+      for (const bad of [{}, { maxUses: 0 }, { maxUses: 1, count: 101 }, { maxUses: 1, owner: "x" }]) {
+        await http.post("/access/invites").set("x-admin-key", ADMIN_KEY).send(bad).expect(400);
+      }
     });
   });
 

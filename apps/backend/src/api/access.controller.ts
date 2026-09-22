@@ -1,19 +1,31 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import {
   BadRequestException,
   Body,
   ConflictException,
   Controller,
   Get,
+  Headers,
   NotFoundException,
   Param,
   Post,
+  UnauthorizedException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Prisma } from "@prisma/client";
 import { PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
+import type { HexVaultEnv } from "../config/env";
+
 import { PrismaService } from "../prisma/prisma.service";
-import { accessMessage, normalizeInviteCode, verifyAccessSignature } from "./invite-code";
+import {
+  accessMessage,
+  generateInviteCode,
+  normalizeInviteCode,
+  verifyAccessSignature,
+} from "./invite-code";
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
 
@@ -58,6 +70,49 @@ function parseRedeemBody(body: unknown): RedeemBody {
   return { wallet, code: normalizeInviteCode(raw.code), signature };
 }
 
+/** Same limits as `admin create-invite`, plus a ceiling on `count` so one
+ *  request cannot fill the table. */
+const MAX_INVITES_PER_REQUEST = 100;
+
+interface CreateInvitesBody {
+  maxUses: number;
+  owner: string | null;
+  count: number;
+}
+
+function parseCreateInvitesBody(body: unknown): CreateInvitesBody {
+  const raw = body as { maxUses?: unknown; owner?: unknown; count?: unknown } | null | undefined;
+  const maxUses = raw?.maxUses;
+  if (typeof maxUses !== "number" || !Number.isSafeInteger(maxUses) || maxUses < 1) {
+    throw new BadRequestException("Send a JSON body with a positive whole `maxUses`.");
+  }
+  const count = raw?.count ?? 1;
+  if (
+    typeof count !== "number" ||
+    !Number.isSafeInteger(count) ||
+    count < 1 ||
+    count > MAX_INVITES_PER_REQUEST
+  ) {
+    throw new BadRequestException(`\`count\` must be a whole number from 1 to ${MAX_INVITES_PER_REQUEST}.`);
+  }
+  let owner: string | null = null;
+  if (raw?.owner !== undefined && raw.owner !== null) {
+    if (typeof raw.owner !== "string") {
+      throw new BadRequestException("`owner` must be a wallet address.");
+    }
+    owner = parseWallet(raw.owner).toBase58();
+  }
+  return { maxUses, owner, count };
+}
+
+/** Hashing first gives both sides the same length, which `timingSafeEqual`
+ *  needs, without leaking the key's length through an early return. */
+const sameKey = (given: string, expected: string): boolean =>
+  timingSafeEqual(
+    createHash("sha256").update(given).digest(),
+    createHash("sha256").update(expected).digest(),
+  );
+
 const isUniqueConstraintViolation = (cause: unknown): boolean =>
   cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2002";
 
@@ -69,7 +124,14 @@ const isUniqueConstraintViolation = (cause: unknown): boolean =>
  */
 @Controller("access")
 export class AccessController {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly inviteAdminKey: string | undefined;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    config: ConfigService<HexVaultEnv, true>,
+  ) {
+    this.inviteAdminKey = config.get("INVITE_ADMIN_KEY", { infer: true });
+  }
 
   @Get(":wallet")
   async getAccess(@Param("wallet") walletRaw: string) {
@@ -154,5 +216,32 @@ export class AccessController {
     }
 
     return { allowed: true, reason: "invite code redeemed" };
+  }
+
+  /**
+   * `admin create-invite` over HTTP, for whoever hands out codes without VPS
+   * access. Guarded by `INVITE_ADMIN_KEY` in the `x-admin-key` header; with
+   * the env var unset the route 404s as if it did not exist. Shares the
+   * 10/min throttle with redeem, which also caps guessing the key.
+   */
+  @Post("invites")
+  async createInvites(@Headers("x-admin-key") key: string | undefined, @Body() body: unknown) {
+    if (this.inviteAdminKey === undefined) {
+      throw new NotFoundException();
+    }
+    if (typeof key !== "string" || !sameKey(key, this.inviteAdminKey)) {
+      throw new UnauthorizedException("Missing or wrong `x-admin-key`.");
+    }
+    const { maxUses, owner, count } = parseCreateInvitesBody(body);
+    const createdAt = nowSeconds();
+    const rows = Array.from({ length: count }, () => ({
+      code: generateInviteCode(),
+      ownerWallet: owner,
+      maxUses,
+      uses: 0,
+      createdAt,
+    }));
+    await this.prisma.inviteCode.createMany({ data: rows });
+    return { codes: rows.map((row) => row.code), maxUses, owner };
   }
 }

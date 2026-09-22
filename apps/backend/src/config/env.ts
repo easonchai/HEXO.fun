@@ -48,6 +48,9 @@ export interface HexVaultEnv {
   PORT: string;
   /** Sparring player secret, base58. Absent switches the Sparring player off. */
   SPARRING_KEYPAIR?: string;
+  /** Shared secret for `POST /access/invites`, sent as `x-admin-key`. Absent
+   *  switches the route off (404). At least 32 characters when set. */
+  INVITE_ADMIN_KEY?: string;
 }
 
 /**
@@ -98,6 +101,9 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   if (missing.length > 0) {
     throw new Error(`missing required env vars: ${missing.join(", ")}`);
   }
+  if (env.INVITE_ADMIN_KEY && String(env.INVITE_ADMIN_KEY).length < 32) {
+    throw new Error("INVITE_ADMIN_KEY must be at least 32 characters (try `openssl rand -hex 32`)");
+  }
   return {
     DATABASE_URL: String(env.DATABASE_URL),
     RPC_URL: String(env.RPC_URL),
@@ -117,5 +123,6 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     ...(env.SPARRING_KEYPAIR
       ? { SPARRING_KEYPAIR: String(env.SPARRING_KEYPAIR) }
       : {}),
+    ...(env.INVITE_ADMIN_KEY ? { INVITE_ADMIN_KEY: String(env.INVITE_ADMIN_KEY) } : {}),
   };
 }
