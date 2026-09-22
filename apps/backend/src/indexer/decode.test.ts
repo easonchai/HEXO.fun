@@ -197,6 +197,11 @@ const CASES: Case[] = [
     data: { roundId: "4", carryPot: "9000" },
   },
   {
+    name: "RoundClosed",
+    fields: [key(MINT), u64(4n)],
+    data: { round: MINT, roundId: "4" },
+  },
+  {
     name: "PositionSettled",
     fields: [u64(4n), key(OWNER), u64(4_500n)],
     data: { roundId: "4", owner: OWNER, reward: "4500" },
@@ -263,6 +268,21 @@ const CASES: Case[] = [
     name: "TicketsGranted",
     fields: [key(OWNER), u64(2n), u64(750_000n), bool(false)],
     data: { owner: OWNER, epochId: "2", amount: "750000", byAdmin: false },
+  },
+  {
+    name: "PoolShutdown",
+    fields: [key(POOL), i64(1_700_000_000n)],
+    data: { pool: POOL, at: "1700000000" },
+  },
+  {
+    name: "EmergencyWithdrawn",
+    fields: [key(OWNER), u64(3_000_000n), u64(500_000n), u64(3_500_000n)],
+    data: { owner: OWNER, principal: "3000000", pending: "500000", total: "3500000" },
+  },
+  {
+    name: "HouseSwept",
+    fields: [u64(10_000_000n), u64(2_000_000n)],
+    data: { jackpot: "10000000", yieldBudget: "2000000" },
   },
 ];
 
@@ -361,6 +381,8 @@ describe("poolRow", () => {
       bonusCapBps: 500,
       bonusEpoch: new BN(3),
       bonusGranted: new BN(40_000),
+      version: 1,
+      shutdown: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       epochSeconds: 86_400n,
@@ -403,6 +425,8 @@ describe("poolRow", () => {
       bonusCapBps: 500,
       bonusEpoch: new BN(3),
       bonusGranted: new BN(40_000),
+      version: 1,
+      shutdown: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       baseRateBps: 488,
@@ -443,6 +467,8 @@ describe("poolRow", () => {
       bonusCapBps: 500,
       bonusEpoch: new BN(0),
       bonusGranted: new BN(0),
+      version: 1,
+      shutdown: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       admin: OWNER,
@@ -480,6 +506,8 @@ describe("poolRow", () => {
       bonusCapBps: 0,
       bonusEpoch: new BN(0),
       bonusGranted: new BN(0),
+      version: 1,
+      shutdown: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n).pendingAdmin).toBeNull();
   });

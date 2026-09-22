@@ -26,6 +26,7 @@ import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
+  closedRound,
   decodeEventLogs,
   epochRow,
   LIVE_ROUND_STATUSES,
@@ -311,6 +312,29 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       where: { roundId: { in: terminalRounds.map((round) => round.id) } },
       select: { address: true, owner: true, roundId: true },
     });
+  }
+
+  /**
+   * Terminal Rounds (Settled, Forfeited, Voided) with no Position left on
+   * them and not yet marked closed (ops-and-envs ticket 08): what
+   * `close_round` may still reclaim rent from. Two queries for the same
+   * reason as `unsettledPositions`: Position has no Prisma relation to
+   * Round. Oldest id first, so a long backlog drains in order.
+   */
+  async roundsToClose(): Promise<bigint[]> {
+    const rounds = await this.prisma.round.findMany({
+      where: { status: { notIn: LIVE_ROUND_STATUSES }, closed: false },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    if (rounds.length === 0) return [];
+    const busyRounds = await this.prisma.position.findMany({
+      where: { roundId: { in: rounds.map((round) => round.id) } },
+      select: { roundId: true },
+      distinct: ["roundId"],
+    });
+    const busy = new Set(busyRounds.map((position) => position.roundId));
+    return rounds.map((round) => round.id).filter((id) => !busy.has(id));
   }
 
   /**
@@ -931,6 +955,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const closed = events
       .map((event) => settledPosition(event))
       .filter((position): position is { owner: string; roundId: bigint } => position !== null);
+    // ops-and-envs ticket 08: `close_round` closed these Round accounts; the
+    // row keeps its last mirrored state (see `closedRound`'s own docs)
+    // instead of being deleted or blanked, so this only flips one flag.
+    const closedRounds = events
+      .map((event) => closedRound(event))
+      .filter((round): round is { id: bigint } => round !== null);
     // ticket 06: every owner this batch saw deposit, deduplicated so two
     // Deposited events for the same wallet in one batch check only once.
     const depositors = [
@@ -950,6 +980,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       const created = await tx.event.createMany({ data: rows, skipDuplicates: true });
       for (const { owner, roundId } of closed) {
         await tx.position.deleteMany({ where: { owner, roundId } });
+      }
+      for (const { id } of closedRounds) {
+        // updateMany, not update: a row this transaction has not seen yet
+        // (an out-of-order replay) is a no-op here, and the next sync or
+        // sweep still upserts the Round itself.
+        await tx.round.updateMany({ where: { id }, data: { closed: true } });
       }
       for (const owner of depositors) {
         const owned = await tx.inviteCode.findFirst({ where: { ownerWallet: owner } });

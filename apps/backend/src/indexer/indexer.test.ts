@@ -19,6 +19,7 @@ import { loadIdl } from "../chain/idl";
 import { PrismaService } from "../prisma/prisma.service";
 import { CountingConnection } from "../test-utils/counting-connection";
 import { isDatabaseReachableSync } from "../test-utils/db-probe";
+import { ROUND_STATUS } from "./decode";
 import { IndexerService, type LogBatch } from "./indexer.service";
 
 const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
@@ -482,6 +483,10 @@ const positionSettled = dataLine("PositionSettled", {
   owner: OWNER,
   reward: bn(0),
 });
+const roundClosed = dataLine("RoundClosed", {
+  round: Keypair.generate().publicKey,
+  roundId: bn(1),
+});
 
 // Parameterized, not fixed consts like `deposited`: ticket 07's tests build a
 // different event sequence (cross up, dip, restore) per case.
@@ -513,6 +518,30 @@ describe("event ingest", () => {
     expect(await indexer.ingestLogs(batch("sig-settle", 30n, [positionSettled]))).toBe(1);
 
     expect(await prisma.position.count()).toBe(0);
+  });
+
+  it("marks a Round closed on RoundClosed, keeping its last mirrored state", async () => {
+    await prisma.round.create({
+      data: {
+        id: 1n,
+        epochId: 5n,
+        startsAt: 0n,
+        endsAt: 60n,
+        status: ROUND_STATUS.SETTLED,
+        pot: 500_000n,
+        houseCut: 10_000n,
+        winningTile: 7,
+        tileTotals: [],
+      },
+    });
+
+    expect(await indexer.ingestLogs(batch("sig-close", 31n, [roundClosed]))).toBe(1);
+
+    const round = await prisma.round.findUniqueOrThrow({ where: { id: 1n } });
+    expect(round.closed).toBe(true);
+    // The account is gone on chain; nothing here re-derives its fields, so
+    // they must be exactly what the last mirror wrote.
+    expect(round).toMatchObject({ status: ROUND_STATUS.SETTLED, pot: 500_000n, winningTile: 7 });
   });
 
 
@@ -797,6 +826,21 @@ describe("operator queries", () => {
     ]);
   });
 
+  it("lists terminal, not-yet-closed rounds with nothing left owed on them", async () => {
+    await prisma.round.createMany({
+      data: [
+        { id: 1n, epochId: 5n, startsAt: 0n, endsAt: 60n, status: 2, pot: 0n, houseCut: 0n, tileTotals: [] }, // Settled, still has a Position
+        { id: 2n, epochId: 5n, startsAt: 60n, endsAt: 120n, status: 2, pot: 0n, houseCut: 0n, tileTotals: [] }, // Settled, clear
+        { id: 3n, epochId: 5n, startsAt: 120n, endsAt: 180n, status: 1, pot: 5n, houseCut: 0n, tileTotals: [] }, // Requested: still live
+        { id: 4n, epochId: 5n, startsAt: 180n, endsAt: 240n, status: 4, pot: 0n, houseCut: 0n, tileTotals: [], closed: true }, // Voided, already closed
+      ],
+    });
+    await prisma.position.create({
+      data: { address: "pos-a", owner: ALICE, roundId: 1n, tiles: 1n, stakePerTile: 1n },
+    });
+    expect(await indexer.roundsToClose()).toEqual([2n]);
+  });
+
   it("reads a single epoch and every player", async () => {
     expect(await indexer.getEpoch(5n)).toMatchObject({ id: 5n, status: 1 });
     expect(await indexer.getEpoch(6n)).toBeNull();
@@ -993,6 +1037,8 @@ describe("referral bonus job (ticket 08)", () => {
     bonusCapBps: 10_000, // 100%: no pool cap bind unless a test overrides it
     bonusEpoch: 0n,
     bonusGranted: 0n,
+    version: 1,
+    shutdown: false,
     updatedSlot: 1n,
     ...overrides,
   });

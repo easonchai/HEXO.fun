@@ -62,6 +62,8 @@ const emptyPool = (overrides: Partial<Pool> = {}): Pool => ({
   bonusCapBps: 500,
   bonusEpoch: 0n,
   bonusGranted: 0n,
+  version: 1,
+  shutdown: false,
   updatedSlot: 0n,
   ...overrides,
 });

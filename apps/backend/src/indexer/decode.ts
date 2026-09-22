@@ -110,6 +110,23 @@ export function settledPosition(event: DecodedEvent): { owner: string; roundId: 
   return { owner, roundId: BigInt(roundId) };
 }
 
+/**
+ * `close_round` reclaimed this Round's rent and closed the account
+ * (ops-and-envs ticket 08). The account read that follows this event in
+ * `refreshFromLogs` comes back missing, and `applyAccount` already leaves a
+ * missing Round row alone rather than deleting or blanking it, so this is
+ * the only place the row learns it is gone: `persist()` flips `closed` on
+ * the id this event names.
+ */
+export function closedRound(event: DecodedEvent): { id: bigint } | null {
+  if (event.name !== "RoundClosed") return null;
+  const { data } = event;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+  const { roundId } = data;
+  if (typeof roundId !== "string") return null;
+  return { id: BigInt(roundId) };
+}
+
 const big = (value: BN): bigint => BigInt(value.toString());
 const isUnset = (key: PublicKey): boolean => key.equals(PublicKey.default);
 
@@ -151,6 +168,11 @@ export interface DecodedPool {
   /** Tickets an operator `grant_tickets` call has credited pool-wide so far
    *  in `bonusEpoch`. */
   bonusGranted: BN;
+  /** Lets a future upgrade migrate an old account lazily (ADR 0013). */
+  version: number;
+  /** Admin-only and irreversible: stops every inflow, the game and the
+   *  draw, and lets withdrawals skip the epoch lock. */
+  shutdown: boolean;
 }
 
 export interface DecodedEpoch {
@@ -250,6 +272,8 @@ export function poolRow(
     bonusCapBps: pool.bonusCapBps,
     bonusEpoch: big(pool.bonusEpoch),
     bonusGranted: big(pool.bonusGranted),
+    version: pool.version,
+    shutdown: pool.shutdown,
     updatedSlot: slot,
   };
 }

@@ -44,6 +44,7 @@ import {
   oneDayYieldCost,
   playerTicketExtras,
   poolBonusCap,
+  principalOut,
   weightAt,
 } from "./api.service";
 
@@ -347,6 +348,21 @@ describe("poolBonusCap", () => {
 
   it("is zero at a zero cap", () => {
     expect(poolBonusCap(1_000_000_000n, 0)).toBe(0n);
+  });
+});
+
+describe("principalOut", () => {
+  const OWED = { totalPrincipal: 3_000_000n, pendingWithdrawals: 250_000n, yieldBudget: 100_000n };
+
+  it("is the gap between what the pool owes and what the vault holds", () => {
+    expect(principalOut({ ...OWED, vaultAmount: 1_000_000n })).toBe(2_350_000n);
+  });
+
+  it("is zero once the vault covers everything owed, never negative", () => {
+    expect(principalOut({ ...OWED, vaultAmount: 3_350_000n })).toBe(0n);
+    // A deposit landed after vaultAmount was read: more than owed sits in
+    // the vault, which is a stale read, not principal out.
+    expect(principalOut({ ...OWED, vaultAmount: 5_000_000n })).toBe(0n);
   });
 });
 
@@ -714,6 +730,13 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     // SOL, not lamports, so the warning threshold reads in the same unit.
     expect(body.operatorSol).toBe(2);
     expect(body.operatorSolLow).toBe(false);
+    // total_principal + pending_withdrawals + yield_budget - vault, past
+    // 2^53 like the seeded totalPrincipal itself, so a truncating path here
+    // would show up the same way `assertNoLargeNumbers` catches one below.
+    expect(body.principalOut).toBe(
+      (BigInt(HUGE_U64) + POOL_PENDING_WITHDRAWALS + POOL_YIELD_BUDGET - PRINCIPAL_VAULT_BALANCE).toString(),
+    );
+    expect(body.shutdown).toBe(false);
   });
 
   it("GET /healthz reports the operator's SOL and its own status, separate from /status", async () => {
@@ -1080,6 +1103,8 @@ async function seed(prisma: PrismaService): Promise<void> {
       bonusCapBps: POOL_BONUS_CAP_BPS,
       bonusEpoch: CURRENT_EPOCH,
       bonusGranted: POOL_BONUS_GRANTED,
+      version: 1,
+      shutdown: false,
       updatedSlot: 15n,
     },
   });

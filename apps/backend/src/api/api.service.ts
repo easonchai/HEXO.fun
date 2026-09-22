@@ -130,6 +130,35 @@ export function poolBonusCap(totalPrincipal: bigint, bonusCapBps: number): bigin
   return (totalPrincipal * BigInt(bonusCapBps)) / 10_000n;
 }
 
+export interface PrincipalOutInputs {
+  readonly totalPrincipal: bigint;
+  readonly pendingWithdrawals: bigint;
+  readonly yieldBudget: bigint;
+  readonly vaultAmount: bigint;
+}
+
+/**
+ * How much Principal is out of the pool (ops-and-envs ticket 08): absent an
+ * `admin_withdraw` deployment, `sweep_house`'s own invariant is that the
+ * principal vault holds exactly `total_principal + pending_withdrawals +
+ * yield_budget`. Whatever the vault falls short of that by is principal
+ * pulled out and not yet returned. Shared by `/status` and the admin CLI's
+ * `principal-out`/`return-principal` commands, so both report the same
+ * figure off the same rule.
+ *
+ * Clamped at 0: a vault that holds more than this (say, a deposit landed
+ * after `vaultAmount` was read) is not principal out, just a stale read.
+ */
+export function principalOut({
+  totalPrincipal,
+  pendingWithdrawals,
+  yieldBudget,
+  vaultAmount,
+}: PrincipalOutInputs): bigint {
+  const owed = totalPrincipal + pendingWithdrawals + yieldBudget;
+  return owed > vaultAmount ? owed - vaultAmount : 0n;
+}
+
 /** Share of the total as a percentage with two decimals, e.g. "12.34". */
 export function oddsPercent(weight: bigint, total: bigint): string {
   if (total <= 0n || weight <= 0n) return "0.00";
@@ -853,6 +882,21 @@ function statusFrom(
       balances.operatorSol === null
         ? null
         : balances.operatorSol < operatorSolWarn,
+    // Irreversible once true (ops-and-envs ticket 08); false, not null,
+    // before the pool is indexed, matching every other pool-derived figure
+    // above.
+    shutdown: pool?.shutdown ?? false,
+    // Null rather than a wrong number when either half of the sum is
+    // unknown: no pool indexed yet, or the vault balance read failed.
+    principalOut:
+      pool === null || balances.vaultLiquidity === null
+        ? null
+        : principalOut({
+            totalPrincipal: pool.totalPrincipal,
+            pendingWithdrawals: pool.pendingWithdrawals,
+            yieldBudget: pool.yieldBudget,
+            vaultAmount: balances.vaultLiquidity,
+          }),
   };
 }
 

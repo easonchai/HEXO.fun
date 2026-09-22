@@ -52,6 +52,11 @@ model Pool {
   /// Tickets an operator grant_tickets call has credited pool-wide so far
   /// in bonusEpoch.
   bonusGranted        BigInt
+  /// Lets a future upgrade migrate an old account lazily (ADR 0013).
+  version             Int
+  /// Admin-only and irreversible: stops every inflow, the game and the
+  /// draw, and lets withdrawals skip the epoch lock.
+  shutdown            Boolean
   updatedSlot         BigInt
 }
 
@@ -77,6 +82,12 @@ model Round {
   houseCut    BigInt
   winningTile Int?
   tileTotals  Json
+  /// `close_round` reclaimed this Round's rent and closed the account.
+  /// `roundRow` never carries this field, so mirroring the still-open
+  /// account never resets it back to false once the RoundClosed event has
+  /// set it; the row keeps its last mirrored state instead of being
+  /// deleted or blanked (ops-and-envs ticket 08).
+  closed      Boolean @default(false)
 }
 
 model Player {
