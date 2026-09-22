@@ -11,6 +11,8 @@
 
   Shut down with down in place of up -d.
 
+  Pushing runs a pre-push hook (check-deployable.sh plus pnpm test:unit, no CI); skip it once with git push --no-verify.
+
   When you change something
 
   ┌────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
