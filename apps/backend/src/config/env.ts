@@ -27,9 +27,21 @@ export const DEFAULT_OPERATOR_SOL_WARN = 0.5;
  *  without a bound. */
 export const DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS = 50_000;
 
+/** Per-call ceiling every chain read and send is bounded by (production-
+ *  hardening ticket 03): the RPC that accepts the connection and then says
+ *  nothing would otherwise hold the operator's tick, or an HTTP request,
+ *  open with no bound. */
+export const DEFAULT_RPC_TIMEOUT_MS = 10_000;
+
 export interface HexVaultEnv {
   DATABASE_URL: string;
   RPC_URL: string;
+  /** Optional second RPC (production-hardening ticket 03): a call that times
+   *  out, or errors with a 5xx or a 429, on `RPC_URL` is retried once here.
+   *  Absent means a failure just propagates, same as before this ticket. */
+  RPC_FALLBACK_URL?: string;
+  /** Per-call timeout, in ms, every chain read and send is bounded by. */
+  RPC_TIMEOUT_MS: number;
   PROGRAM_ID: string;
   POOL_ID: string;
   /** The hot crank key. The admin's key is never in this env. */
@@ -99,6 +111,23 @@ function priorityFeeMax(raw: unknown): number {
 }
 
 /**
+ * Same shape as `solWarn`: unset or empty takes the default timeout,
+ * anything else must be a positive whole number of milliseconds.
+ */
+function rpcTimeoutMs(raw: unknown): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_RPC_TIMEOUT_MS;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(
+      `RPC_TIMEOUT_MS must be a positive whole number of milliseconds, got "${String(raw)}"`,
+    );
+  }
+  return value;
+}
+
+/**
  * Same shape as `solWarn`: unset or empty takes referral.ts's own default,
  * anything else must be a non-negative whole number of seconds.
  */
@@ -133,6 +162,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   return {
     DATABASE_URL: String(env.DATABASE_URL),
     RPC_URL: String(env.RPC_URL),
+    RPC_TIMEOUT_MS: rpcTimeoutMs(env.RPC_TIMEOUT_MS),
     PROGRAM_ID: String(env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID),
     POOL_ID: String(env.POOL_ID ?? "1"),
     OPERATOR_KEYPAIR: String(env.OPERATOR_KEYPAIR),
@@ -146,6 +176,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     PORT: String(env.PORT ?? "8080"),
     // Spread rather than assigned: under `exactOptionalPropertyTypes` an
     // optional key cannot be set to `undefined`, and "absent" is the switch.
+    ...(env.RPC_FALLBACK_URL ? { RPC_FALLBACK_URL: String(env.RPC_FALLBACK_URL) } : {}),
     ...(env.ADMIN_ADDRESS ? { ADMIN_ADDRESS: String(env.ADMIN_ADDRESS) } : {}),
     ...(env.SPARRING_KEYPAIR
       ? { SPARRING_KEYPAIR: String(env.SPARRING_KEYPAIR) }

@@ -363,6 +363,79 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService read budget", () => {
   });
 });
 
+// Production-hardening ticket 03: every chain read now has a timeout, which
+// the operator's tick had none of before this ticket. A timed-out read is
+// just another failed tick to `runOnce` (it already wraps every read in
+// try/catch and writes `lastError`), so this proves that generic recovery
+// against the specific new failure mode instead of assuming it still holds.
+describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
+  it("records lastError from a timed-out read, and recovers on the next tick", async () => {
+    const prisma = new PrismaService();
+    await prisma.$connect();
+    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+
+    const accounts = new Map<string, Buffer>();
+    accounts.set(POOL.toBase58(), await program.coder.accounts.encode("pool", pool()));
+    const clock = Buffer.alloc(40);
+    clock.writeBigInt64LE(1_800_000_000n, 32);
+    accounts.set(SYSVAR_CLOCK_PUBKEY.toBase58(), clock);
+
+    const connection = new CountingConnection(accounts);
+    const realRead = connection.getMultipleAccountsInfo.bind(connection);
+    // Stands in for `ChainService`'s resilient connection (ticket 03) timing
+    // a hung read out: the very first read the tick makes rejects, once,
+    // exactly what a real timeout now surfaces as.
+    let failNextRead = true;
+    connection.getMultipleAccountsInfo = (keys) => {
+      if (!failNextRead) return realRead(keys);
+      failNextRead = false;
+      return Promise.reject(new Error("RPC getMultipleAccountsInfo timed out after 10000ms"));
+    };
+
+    const fakeChain = {
+      program,
+      programId: PROGRAM_ID,
+      keypair: Keypair.generate(),
+      connection,
+      poolAddress: () => POOL,
+      recordChainTime: () => {},
+      send: async () => "signature",
+    };
+    const indexer: IndexerQueries = {
+      playersToRegister: async () => [],
+      unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
+    };
+    const operator = new OperatorService(
+      fakeChain as unknown as ChainService,
+      prisma,
+      indexer,
+      noopSparring,
+    );
+
+    try {
+      await operator.runOnce();
+      const afterFailure = await prisma.operatorState.findUniqueOrThrow({
+        where: { id: 1 },
+      });
+      expect(afterFailure.lastError).toMatch(/timed out/);
+
+      // The single-flight guard resets in `runOnce`'s `finally`, so the next
+      // call is never skipped by the failed one still "running".
+      await operator.runOnce();
+      const afterRecovery = await prisma.operatorState.findUniqueOrThrow({
+        where: { id: 1 },
+      });
+      expect(afterRecovery.lastError).toBeNull();
+    } finally {
+      await prisma.operatorState.deleteMany({ where: { id: 1 } });
+      await prisma.$disconnect();
+    }
+  });
+});
+
 // Ticket 04: a Round awaiting VRF is watched via subscription rather than
 // polled. `roundAccount`/`requestedPool` below fix `currentEpochId` at 0 (no
 // Epoch fixture needed) so `decide()`'s only live branch is step 1's Round

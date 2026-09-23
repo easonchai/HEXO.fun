@@ -2,7 +2,7 @@ import { Controller, Get, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 
-import { ChainService, RPC_READ_TIMEOUT_MS, withTimeout } from "../chain/chain.service";
+import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 
 /** How long a `/healthz` probe's operator-SOL read is cached (ticket 10): a
@@ -63,11 +63,9 @@ export class HealthController {
       this.cache === undefined ||
       Date.now() - this.cache.at > OPERATOR_SOL_HEALTH_TTL_MS
     ) {
-      const result = withTimeout(
-        this.chain.connection.getMultipleAccountsInfo([this.chain.keypair.publicKey]),
-        RPC_READ_TIMEOUT_MS,
-        "operator SOL read",
-      ).then(([account]) => (account ? account.lamports / LAMPORTS_PER_SOL : 0));
+      const result = this.chain.connection
+        .getMultipleAccountsInfo([this.chain.keypair.publicKey])
+        .then(([account]) => (account ? account.lamports / LAMPORTS_PER_SOL : 0));
       const entry = { at: Date.now(), result };
       this.cache = entry;
       result.catch(() => {

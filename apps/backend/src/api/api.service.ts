@@ -12,11 +12,8 @@ import {
 import { unpackAccount } from "@solana/spl-token";
 import { LAMPORTS_PER_SOL, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
-import {
-  ChainService,
-  RPC_READ_TIMEOUT_MS,
-  withTimeout,
-} from "../chain/chain.service";
+import { ChainService } from "../chain/chain.service";
+import { rpcStatus } from "../chain/rpc-fallback";
 import type { HexVaultEnv } from "../config/env";
 import { clockUnixTimestamp } from "../operator/chain-state";
 import { PrismaService } from "../prisma/prisma.service";
@@ -185,6 +182,12 @@ interface LiveWeight {
 interface RpcHealth {
   rpcOk: boolean;
   slot: number | null;
+  /** Which RPC most recently served a call (production-hardening ticket 03):
+   *  "fallback" means `RPC_FALLBACK_URL` is currently carrying traffic. */
+  rpcEndpoint: "primary" | "fallback";
+  /** Wall-clock instant of the last failover, or null if there has never
+   *  been one. */
+  rpcFallbackAt: Date | null;
 }
 
 /**
@@ -741,17 +744,12 @@ export class ApiService {
       Date.now() - this.balances.at > BALANCES_TTL_MS
     ) {
       const principalVault = this.chain.principalVaultAddress();
-      const result = withTimeout(
-        this.chain.connection.getMultipleAccountsInfo([
-          principalVault,
-          this.chain.keypair.publicKey,
-        ]),
-        RPC_READ_TIMEOUT_MS,
-        "balance read",
-      ).then(([vault, fees]) => ({
-        vaultLiquidity: vault ? unpackAccount(principalVault, vault).amount : null,
-        operatorSol: fees ? fees.lamports / LAMPORTS_PER_SOL : 0,
-      }));
+      const result = this.chain.connection
+        .getMultipleAccountsInfo([principalVault, this.chain.keypair.publicKey])
+        .then(([vault, fees]) => ({
+          vaultLiquidity: vault ? unpackAccount(principalVault, vault).amount : null,
+          operatorSol: fees ? fees.lamports / LAMPORTS_PER_SOL : 0,
+        }));
       const entry: CachedRead<ChainBalances> = { at: Date.now(), result };
       this.balances = entry;
       result.catch(() => {
@@ -789,16 +787,33 @@ export class ApiService {
 
   private async probeRpc(): Promise<RpcHealth> {
     try {
-      return { rpcOk: true, slot: await this.chain.connection.getSlot() };
+      const slot = await this.chain.connection.getSlot();
+      return { rpcOk: true, slot, ...servedBy(this.chain.connection) };
     } catch (cause) {
       // The RPC url carries the provider api key, and web3.js puts the whole
       // url in its error text, so scrub it before it reaches a log line.
-      const endpoint = this.chain.connection.rpcEndpoint;
+      // `withRpcFallback` already redacts both endpoints' urls from an error
+      // it raises itself; this covers a plain `Connection` no wrapper touched.
+      const rpcUrl = this.chain.connection.rpcEndpoint;
       const detail = cause instanceof Error ? cause.message : String(cause);
-      this.logger.warn(`getSlot failed: ${detail.split(endpoint).join("<rpc-url>")}`);
-      return { rpcOk: false, slot: null };
+      this.logger.warn(`getSlot failed: ${detail.split(rpcUrl).join("<rpc-url>")}`);
+      return { rpcOk: false, slot: null, ...servedBy(this.chain.connection) };
     }
   }
+}
+
+/** `rpcStatus`'s fields, shaped for `/status` (ticket 03): the wrapper's
+ *  epoch-ms `fallbackAt` becomes the same `Date | null` every other /status
+ *  timestamp uses. */
+function servedBy(connection: ChainService["connection"]): {
+  rpcEndpoint: "primary" | "fallback";
+  rpcFallbackAt: Date | null;
+} {
+  const status = rpcStatus(connection);
+  return {
+    rpcEndpoint: status.endpoint,
+    rpcFallbackAt: status.fallbackAt === null ? null : new Date(status.fallbackAt),
+  };
 }
 
 export interface FeedRow {

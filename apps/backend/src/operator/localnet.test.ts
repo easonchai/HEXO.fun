@@ -37,7 +37,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import { playerAddress, positionAddress } from "../chain/pda";
-import { DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS, type HexVaultEnv } from "../config/env";
+import {
+  DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS,
+  DEFAULT_RPC_TIMEOUT_MS,
+  type HexVaultEnv,
+} from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   decodeEpoch,
@@ -169,6 +173,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       const config = stubConfig({
         DATABASE_URL: process.env.DATABASE_URL ?? "",
         RPC_URL: RPC_URL ?? "",
+        RPC_TIMEOUT_MS: DEFAULT_RPC_TIMEOUT_MS,
         PROGRAM_ID: programId,
         POOL_ID: poolId.toString(),
         OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),

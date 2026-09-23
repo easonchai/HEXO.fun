@@ -19,11 +19,7 @@ import {
 } from "@solana/spl-token";
 import { PublicKey } from "@solana/web3.js";
 
-import {
-  ChainService,
-  RPC_READ_TIMEOUT_MS,
-  withTimeout,
-} from "../chain/chain.service";
+import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -87,11 +83,7 @@ export class FaucetController implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     const operator = this.chain.keypair.publicKey;
     try {
-      const mint = await withTimeout(
-        getMint(this.chain.connection, this.mint),
-        RPC_READ_TIMEOUT_MS,
-        `mint ${this.mint.toBase58()} read`,
-      );
+      const mint = await getMint(this.chain.connection, this.mint);
       this.isMintAuthority = mint.mintAuthority?.equals(operator) ?? false;
     } catch (cause) {
       this.logger.warn(

@@ -5,7 +5,7 @@ import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_REFERRAL_QUALIFY_SECONDS } from "../api/referral";
-import { DEFAULT_OPERATOR_SOL_WARN, validateEnv } from "./env";
+import { DEFAULT_OPERATOR_SOL_WARN, DEFAULT_RPC_TIMEOUT_MS, validateEnv } from "./env";
 
 const MINT = Keypair.generate().publicKey.toBase58();
 
@@ -63,6 +63,32 @@ describe("validateEnv", () => {
     expect(() =>
       validateEnv({ ...base, ACCEPTED_MINT: MINT, OPERATOR_SOL_WARN: "-1" }),
     ).toThrow(/OPERATOR_SOL_WARN/);
+  });
+
+  it("defaults the RPC timeout", () => {
+    expect(validateEnv({ ...base, ACCEPTED_MINT: MINT }).RPC_TIMEOUT_MS).toBe(
+      DEFAULT_RPC_TIMEOUT_MS,
+    );
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, RPC_TIMEOUT_MS: "5000" }).RPC_TIMEOUT_MS,
+    ).toBe(5000);
+  });
+
+  it("fails the boot on an RPC timeout that is not a positive whole number", () => {
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, RPC_TIMEOUT_MS: "0" }),
+    ).toThrow(/RPC_TIMEOUT_MS/);
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, RPC_TIMEOUT_MS: "1.5" }),
+    ).toThrow(/RPC_TIMEOUT_MS/);
+  });
+
+  it("takes RPC_FALLBACK_URL when set, and leaves it out when not", () => {
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, RPC_FALLBACK_URL: "http://127.0.0.1:8900" })
+        .RPC_FALLBACK_URL,
+    ).toBe("http://127.0.0.1:8900");
+    expect(validateEnv({ ...base, ACCEPTED_MINT: MINT }).RPC_FALLBACK_URL).toBeUndefined();
   });
 
   it("defaults the referral qualify hold period", () => {
