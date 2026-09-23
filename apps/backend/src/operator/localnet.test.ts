@@ -183,6 +183,8 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         FAUCET_AMOUNT: "0",
         FAUCET_INTERVAL_SECONDS: "0",
         REFERRAL_QUALIFY_SECONDS: 604_800,
+        ALERT_TICK_STALE_S: 300,
+        ALERT_INDEXER_STALE_S: 600,
         CORS_ORIGIN: "http://localhost",
         PORT: "0",
       });

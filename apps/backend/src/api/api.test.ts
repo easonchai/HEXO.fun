@@ -28,6 +28,7 @@ import {
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { ChainModule } from "../chain/chain.module";
 import { ChainService } from "../chain/chain.service";
 import { ConfigModule } from "../config/config.module";
 import { HealthController } from "../health/health.controller";
@@ -421,8 +422,12 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       // HealthController rides along to prove the global throttler guard
-      // leaves the container probe alone.
-      imports: [ConfigModule, PrismaModule, ApiModule],
+      // leaves the container probe alone. It needs ChainModule imported
+      // here too, same as AppModule does at the real root: ApiModule
+      // importing ChainModule only makes ChainService visible inside
+      // ApiModule's own controllers, not to a controller declared on this
+      // root test module.
+      imports: [ConfigModule, PrismaModule, ChainModule, ApiModule],
       controllers: [HealthController],
     })
       .overrideProvider(PrismaService)
@@ -762,6 +767,77 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     ).toBe(true);
     expect(body.yieldBudgetLow).toBe(true);
     assertNoLargeNumbers(body, "/status (yield)");
+  });
+
+  describe("GET /alerts", () => {
+    // The default seed's OperatorState.withdrawShortfall is 250_000n (see
+    // "GET /status reports the withdrawal queue..." above), and every other
+    // condition reads healthy against it, so the untouched seed already
+    // proves the wiring for exactly one code without any setup of its own.
+    it("is 503 with exactly WITHDRAW_SHORTFALL against the seeded OperatorState row", async () => {
+      const { body } = await http.get("/alerts").expect(503);
+      expect(body).toEqual({
+        alerts: [{ code: "WITHDRAW_SHORTFALL", message: expect.any(String) }],
+      });
+    });
+
+    it("is 200 with an empty list once the withdraw shortfall clears", async () => {
+      await prisma.operatorState.update({
+        where: { id: 1 },
+        data: { withdrawShortfall: 0n },
+      });
+      try {
+        const { body } = await http.get("/alerts").expect(200);
+        expect(body).toEqual({ alerts: [] });
+      } finally {
+        await prisma.operatorState.update({
+          where: { id: 1 },
+          data: { withdrawShortfall: 250_000n },
+        });
+      }
+    });
+
+    it("is 503 with ROUND_VOIDED_RECENTLY and EPOCH_ROLLED_OVER_RECENTLY, from Event rows in the last hour", async () => {
+      await prisma.operatorState.update({
+        where: { id: 1 },
+        data: { withdrawShortfall: 0n },
+      });
+      await prisma.event.createMany({
+        data: [
+          {
+            slot: 900n,
+            signature: "sigAlertsVoided",
+            index: 0,
+            name: "RoundVoided",
+            data: { roundId: "101" },
+            blockTime: NOW - 60n,
+          },
+          {
+            slot: 901n,
+            signature: "sigAlertsRolledOver",
+            index: 0,
+            name: "EpochRolledOver",
+            data: { epochId: "7" },
+            blockTime: NOW - 30n,
+          },
+        ],
+      });
+      try {
+        const { body } = await http.get("/alerts").expect(503);
+        expect(body.alerts).toEqual([
+          { code: "ROUND_VOIDED_RECENTLY", message: expect.any(String) },
+          { code: "EPOCH_ROLLED_OVER_RECENTLY", message: expect.any(String) },
+        ]);
+      } finally {
+        await prisma.event.deleteMany({
+          where: { signature: { in: ["sigAlertsVoided", "sigAlertsRolledOver"] } },
+        });
+        await prisma.operatorState.update({
+          where: { id: 1 },
+          data: { withdrawShortfall: 250_000n },
+        });
+      }
+    });
   });
 
   describe("GET /state", () => {

@@ -4,6 +4,7 @@ import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 
 import { ChainModule } from "../chain/chain.module";
 import { AccessController } from "./access.controller";
+import { AlertsController } from "./alerts.controller";
 import { ApiController } from "./api.controller";
 import { ApiService } from "./api.service";
 import { FaucetController } from "./faucet.controller";
@@ -32,7 +33,13 @@ import { SerializationInterceptor } from "./serialization.interceptor";
       },
     ]),
   ],
-  controllers: [ApiController, FaucetController, AccessController, ReferralsController],
+  controllers: [
+    ApiController,
+    AlertsController,
+    FaucetController,
+    AccessController,
+    ReferralsController,
+  ],
   providers: [
     ApiService,
     { provide: APP_INTERCEPTOR, useClass: SerializationInterceptor },

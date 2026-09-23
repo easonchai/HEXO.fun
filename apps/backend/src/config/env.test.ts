@@ -5,7 +5,13 @@ import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_REFERRAL_QUALIFY_SECONDS } from "../api/referral";
-import { DEFAULT_OPERATOR_SOL_WARN, DEFAULT_RPC_TIMEOUT_MS, validateEnv } from "./env";
+import {
+  DEFAULT_ALERT_INDEXER_STALE_S,
+  DEFAULT_ALERT_TICK_STALE_S,
+  DEFAULT_OPERATOR_SOL_WARN,
+  DEFAULT_RPC_TIMEOUT_MS,
+  validateEnv,
+} from "./env";
 
 const MINT = Keypair.generate().publicKey.toBase58();
 
@@ -115,5 +121,28 @@ describe("validateEnv", () => {
     expect(() =>
       validateEnv({ ...base, ACCEPTED_MINT: MINT, REFERRAL_QUALIFY_SECONDS: "1.5" }),
     ).toThrow(/REFERRAL_QUALIFY_SECONDS/);
+  });
+
+  it("defaults the /alerts staleness thresholds", () => {
+    const env = validateEnv({ ...base, ACCEPTED_MINT: MINT });
+    expect(env.ALERT_TICK_STALE_S).toBe(DEFAULT_ALERT_TICK_STALE_S);
+    expect(env.ALERT_INDEXER_STALE_S).toBe(DEFAULT_ALERT_INDEXER_STALE_S);
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, ALERT_TICK_STALE_S: "60" })
+        .ALERT_TICK_STALE_S,
+    ).toBe(60);
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, ALERT_INDEXER_STALE_S: "120" })
+        .ALERT_INDEXER_STALE_S,
+    ).toBe(120);
+  });
+
+  it("fails the boot on an /alerts staleness threshold that is not a whole number", () => {
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, ALERT_TICK_STALE_S: "-1" }),
+    ).toThrow(/ALERT_TICK_STALE_S/);
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, ALERT_INDEXER_STALE_S: "1.5" }),
+    ).toThrow(/ALERT_INDEXER_STALE_S/);
   });
 });

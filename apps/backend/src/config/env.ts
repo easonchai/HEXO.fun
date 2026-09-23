@@ -33,6 +33,14 @@ export const DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS = 50_000;
  *  open with no bound. */
 export const DEFAULT_RPC_TIMEOUT_MS = 10_000;
 
+/** `GET /alerts`' `OPERATOR_STALE` threshold (production-hardening ticket
+ *  05): seconds since the operator's last tick before it counts as stuck. */
+export const DEFAULT_ALERT_TICK_STALE_S = 300;
+
+/** `GET /alerts`' `INDEXER_STALE` threshold: seconds since the indexer
+ *  cursor last advanced before it counts as stuck. */
+export const DEFAULT_ALERT_INDEXER_STALE_S = 600;
+
 export interface HexVaultEnv {
   DATABASE_URL: string;
   RPC_URL: string;
@@ -65,6 +73,10 @@ export interface HexVaultEnv {
    *  before the daily bonus job (ticket 08) pays it. Shortened on devnet to
    *  see a referral qualify sooner. */
   REFERRAL_QUALIFY_SECONDS: number;
+  /** `GET /alerts`' `OPERATOR_STALE` threshold, in seconds. */
+  ALERT_TICK_STALE_S: number;
+  /** `GET /alerts`' `INDEXER_STALE` threshold, in seconds. */
+  ALERT_INDEXER_STALE_S: number;
   CORS_ORIGIN: string;
   PORT: string;
   /** Sparring player secret, base58. Absent switches the Sparring player off. */
@@ -144,6 +156,37 @@ function referralQualifySeconds(raw: unknown): number {
   return value;
 }
 
+/**
+ * Same shape as `solWarn`: unset or empty takes the default, anything else
+ * must be a non-negative whole number of seconds.
+ */
+function alertTickStaleSeconds(raw: unknown): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_ALERT_TICK_STALE_S;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `ALERT_TICK_STALE_S must be a non-negative whole number of seconds, got "${String(raw)}"`,
+    );
+  }
+  return value;
+}
+
+/** Same shape as `alertTickStaleSeconds`. */
+function alertIndexerStaleSeconds(raw: unknown): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_ALERT_INDEXER_STALE_S;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `ALERT_INDEXER_STALE_S must be a non-negative whole number of seconds, got "${String(raw)}"`,
+    );
+  }
+  return value;
+}
+
 /** @nestjs/config `validate` hook: runs once at boot, on the raw process.env. */
 export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   if (!env.ACCEPTED_MINT && env.HEXUSDC_MINT) {
@@ -172,6 +215,8 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     FAUCET_AMOUNT: String(env.FAUCET_AMOUNT ?? "1000000000"),
     FAUCET_INTERVAL_SECONDS: String(env.FAUCET_INTERVAL_SECONDS ?? "3600"),
     REFERRAL_QUALIFY_SECONDS: referralQualifySeconds(env.REFERRAL_QUALIFY_SECONDS),
+    ALERT_TICK_STALE_S: alertTickStaleSeconds(env.ALERT_TICK_STALE_S),
+    ALERT_INDEXER_STALE_S: alertIndexerStaleSeconds(env.ALERT_INDEXER_STALE_S),
     CORS_ORIGIN: String(env.CORS_ORIGIN),
     PORT: String(env.PORT ?? "8080"),
     // Spread rather than assigned: under `exactOptionalPropertyTypes` an
