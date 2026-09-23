@@ -1,8 +1,10 @@
 # Deploying and upgrading
 
 One script, `scripts/deploy.sh <dev|staging|mainnet> [--upgrade] [--dry-run]`, builds, checks and
-deploys or upgrades the `hex_vault` program for one environment. Run it from the repo root, same
-as `scripts/check-deployable.sh` and `tests/run-local.sh`. See
+deploys or upgrades the `hex_vault` program for one environment. The same script also has two
+opt-in actions, `--idl` (publish the on-chain IDL) and `verify` (reproducible-build
+verification); see "Publishing the IDL" and "Verifiable build" below. Run it from the repo root,
+same as `scripts/check-deployable.sh` and `tests/run-local.sh`. See
 [`docs/ops/environments.md`](environments.md) for what each environment is.
 
 ## First deploy per environment
@@ -22,13 +24,26 @@ The script, in order:
 3. Runs `scripts/check-deployable.sh`, which refuses a `test-vrf` artifact.
 4. Asserts that the keypair's pubkey matches the built `declare_id!` (read from the built IDL's
    `address` field), so a mismatched keypair fails before anything is written on chain.
-5. Writes a buffer, then deploys or upgrades against it.
-6. Prints the program ID, upgrade authority and ProgramData size, then runs both apps'
-   `sync-idl` scripts.
+5. Writes a buffer, then deploys or upgrades against it. Both calls carry a priority fee
+   (`--with-compute-unit-price`, from `DEPLOY_CU_PRICE`, default `100000`) and
+   `--max-sign-attempts 50` so a large program lands under congestion; mainnet also adds
+   `--use-rpc`, since it only helps when the RPC is stake-weighted (Helius, Triton) and only
+   mainnet's RPC is.
+6. After the deploy, asserts the on-chain upgrade authority (`solana program show
+   <program-id>`) equals the authority expected for the env: the Ledger on mainnet, the locally
+   configured keypair (`solana address`) elsewhere. Then checks `solana program show --buffers
+   --buffer-authority <that authority>` and fails if any buffer remains.
+7. Prints the program's `solana program show` output, then runs both apps' `sync-idl` scripts.
 
 `--dry-run` does steps 1 to 4 (and the ProgramData size read under `--upgrade`) but never calls
-`solana program write-buffer`, `extend`, `deploy` or `sync-idl`. It touches no network write, so
-it is safe to run against real keys and a real cluster to sanity-check a build.
+`solana program write-buffer`, `extend`, `deploy` or `sync-idl`, and never checks buffers or the
+upgrade authority. It touches no network write, so it is safe to run against real keys and a real
+cluster to sanity-check a build.
+
+If a step after `write-buffer` fails, the script prints the exact `solana program close <buffer>
+--bypass-warning` command for the buffer it just wrote, so nothing is left stranded paying rent to
+nobody. The post-deploy buffer check catches the same thing for any other leftover buffer under
+the same authority (an interrupted previous run, for example).
 
 Mainnet asks for a typed confirmation of the program ID before writing the buffer, and signs with
 `--upgrade-authority usb://ledger`. The fee payer defaults to the locally configured keypair
@@ -106,6 +121,25 @@ solana program close <buffer-pubkey> --url <cluster>
 this repo are exactly that: leftovers from before the per-environment keypairs (`keys/`) and
 `deploy.sh` existed. Run `solana program show --buffers` against devnet, close whatever matches,
 and delete the two files; they are not read by anything.
+
+`deploy.sh` now catches this itself: it prints the close command if a later step fails right after
+`write-buffer`, and it fails the run outright if `solana program show --buffers` still lists a
+buffer under the deploy authority once the deploy has finished.
+
+## Publishing the IDL
+
+```bash
+scripts/deploy.sh dev --idl
+```
+
+Builds (so the IDL reflects the current source), then runs `anchor idl init` the first time and
+`anchor idl upgrade` on every run after that, against the env's cluster and program ID, signing
+with the same authority as a deploy (`usb://ledger` on mainnet). It does not write a program
+buffer or touch the deployed bytecode, so it is safe to run on its own after a deploy that only
+changed instructions, accounts or docs on the Rust side without a corresponding binary change, or
+any time the on-chain IDL has drifted. `--dry-run` prints which of `init`/`upgrade` it would run
+without calling either. Not run automatically by a plain deploy, so a staging deploy stays fast;
+run it whenever the IDL actually changed.
 
 ## Upgrade policy (ADR 0013)
 
@@ -192,19 +226,32 @@ Before a real mainnet deploy:
 
 ### Verifiable build
 
-Mainnet only, and it needs a public repo at the deployed commit; whether this repo goes public is
-still open (spec.md "Open items the user owns"). After a real mainnet deploy, from a machine with
-`solana-verify` installed (`cargo install solana-verify`, needs Docker) and the repo pushed at the
-deployed commit:
+It needs a public repo at the deployed commit; whether this repo goes public is still open
+(spec.md "Open items the user owns"). After a real deploy, from a machine with `solana-verify`
+installed (`cargo install solana-verify`, needs Docker) and the repo pushed at the deployed
+commit:
+
+```bash
+scripts/deploy.sh mainnet verify
+```
+
+This refuses on a dirty working tree, then runs, against the current commit:
 
 ```bash
 solana-verify verify-from-repo \
-  --url <mainnet RPC> --program-id <mainnet program id> \
+  --url <cluster for the env> --program-id <program id for the env> \
   <repo-url> --commit-hash <deployed sha> -- --features mainnet
 
 solana-verify remote submit-job \
-  --program-id <mainnet program id> --uploader <your key> -- --features mainnet
+  --program-id <program id for the env> [--uploader <key>] -- --features mainnet
 ```
+
+`<repo-url>` is `git remote get-url origin`, converted from SSH to HTTPS if needed; set
+`VERIFY_REPO_URL` to override it. `--uploader` is only added when `VERIFY_UPLOADER_KEYPAIR` is
+set; left unset, `solana-verify` falls back to its own default (the locally configured keypair).
+`verify` works for any env, not only mainnet, but only mainnet is built with `solana-verify build`
+(dev and staging use a plain `anchor build`), so it is the one whose deployed bytecode is actually
+reproducible this way.
 
 If the repo stays private, run `solana-verify build -- --features mainnet` (`deploy.sh` already
 does this for a mainnet build) plus `solana-verify get-executable-hash` locally, and publish the
