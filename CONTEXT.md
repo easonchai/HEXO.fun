@@ -160,16 +160,20 @@ _Avoid_: Cancel, refund
 ### Growth
 
 **Invite code**:
-A code that lets a wallet past the beta gate. It may have an owner, and it has a use limit. The gate is in the app, not the program.
-_Avoid_: Access token, whitelist
+A single-use code that lets a wallet past the beta gate. It may have an owner. Goes away with the beta. The gate is in the app, not the program.
+_Avoid_: Access token, whitelist, referral code (a different thing)
+
+**Referral code**:
+A depositor's own code, one per wallet, unlimited uses, shared as a link. Applying it before a wallet's first deposit makes its owner that wallet's Referrer. Outlives the beta; does not pass the beta gate.
+_Avoid_: Invite code (a different thing), promo code
 
 **Referrer**:
-The owner of the Invite code a wallet redeemed before its first deposit. Fixed for good once written.
+The owner of the Referral code a wallet applied before its first deposit, or failing that, the owner of the Invite code it redeemed. Fixed for good once written.
 _Avoid_: Sponsor, upline, inviter
 
 **Qualified referral**:
-A wallet whose Referrer is set and whose Principal has stayed at or above 50 USDC for the last 7 days without a break. Dropping below ends it at once; it restarts the 7 days from zero.
-_Avoid_: Active referral, crew member
+A wallet whose Referrer is set and whose Principal has stayed at or above 50 USDC for the last 7 days without a break. Dropping below ends it at once; it restarts the 7 days from zero. The screen labels it "Active".
+_Avoid_: Active referral (outside screen copy), crew member
 
 ### Operations
 
