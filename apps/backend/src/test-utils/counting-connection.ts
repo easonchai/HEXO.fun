@@ -148,7 +148,9 @@ export class CountingConnection {
   /** Signatures `getSignaturesForAddress` answers with, newest first as the
    *  real RPC orders them. Empty by default, matching the old unconditional
    *  `[]` stub; a test drives the indexer's finalized catch-up path (ticket
-   *  13) by populating this and `setTransaction` below. */
+   *  13) by populating this and `setTransaction` below. `getSignaturesForAddress`
+   *  pages this array with `before`/`limit` the same way the real RPC pages a
+   *  long backlog (ticket 06). */
   signaturesForAddress: { signature: string; slot: number; err: unknown; blockTime?: number }[] =
     [];
   private readonly transactions = new Map<
@@ -168,15 +170,21 @@ export class CountingConnection {
 
   getSignaturesForAddress(
     address: PublicKey,
-    options?: { until?: string; limit?: number },
+    options?: { before?: string; until?: string; limit?: number },
   ): Promise<{ signature: string; slot: number; err: unknown; blockTime?: number }[]> {
     this.record("getSignaturesForAddress");
     this.watched = [...this.watched, address];
+    // `before`: start just past that signature (older). `until`: stop just
+    // before it (newer). Both default to the whole array, same as no option.
+    const beforeIndex = options?.before
+      ? this.signaturesForAddress.findIndex((info) => info.signature === options.before)
+      : -1;
     const untilIndex = options?.until
       ? this.signaturesForAddress.findIndex((info) => info.signature === options.until)
       : -1;
-    const page =
-      untilIndex === -1 ? this.signaturesForAddress : this.signaturesForAddress.slice(0, untilIndex);
+    const start = beforeIndex === -1 ? 0 : beforeIndex + 1;
+    const end = untilIndex === -1 ? this.signaturesForAddress.length : untilIndex;
+    const page = this.signaturesForAddress.slice(start, end);
     return Promise.resolve(options?.limit ? page.slice(0, options.limit) : page);
   }
 

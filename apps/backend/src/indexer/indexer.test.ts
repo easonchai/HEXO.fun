@@ -273,6 +273,44 @@ describe("account sync", () => {
     expect(await prisma.position.count()).toBe(1);
   });
 
+  // ticket 06: the full walk is the backstop for a missed `PositionSettled`.
+  it("deletes a Position by its absence on a full walk", async () => {
+    indexer["lastSyncedSlot"] = undefined;
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await put("position", chain.positionAddress(round, OWNER), positionAccount(OWNER, round));
+    await indexer.syncAccounts(); // full walk, establishes the row
+    expect(await prisma.position.count()).toBe(1);
+
+    connection.deleteAccount(chain.positionAddress(round, OWNER));
+    indexer["lastFullWalkAt"] = 0; // force the next sweep full too, not incremental
+    await indexer.syncAccounts();
+
+    expect(await prisma.position.count()).toBe(0);
+  });
+
+  // ticket 06: the full walk is the backstop for a missed `RoundClosed`; the
+  // row is marked closed and kept, matching ops-and-envs ticket 08, not
+  // deleted the way an absent Position is.
+  it("marks a Round closed, not deleted, on a full walk that finds its account gone", async () => {
+    indexer["lastSyncedSlot"] = undefined;
+    const round = chain.roundAddress(1n);
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("round", round, roundAccount());
+    await indexer.syncAccounts(); // full walk, establishes the row
+    expect((await prisma.round.findUniqueOrThrow({ where: { id: 1n } })).closed).toBe(false);
+
+    connection.deleteAccount(round);
+    indexer["lastFullWalkAt"] = 0; // force the next sweep full too, not incremental
+    await indexer.syncAccounts();
+
+    const stored = await prisma.round.findUniqueOrThrow({ where: { id: 1n } });
+    expect(stored.closed).toBe(true);
+    // Kept, not blanked: it still mirrors the round's last on-chain state.
+    expect(stored.status).toBe(ROUND_STATUS.OPEN);
+  });
+
   it("walks every page of a multi-page result into the same rows a single page would", async () => {
     indexer["lastSyncedSlot"] = undefined;
     const round = chain.roundAddress(1n);
@@ -635,6 +673,68 @@ describe("event ingest", () => {
     // batch()'s own fixed block time, not the 999_999n last observed live.
     expect(event.blockTime).toBe(1_700_000_000n);
   });
+});
+
+// ticket 06: a long outage can pile up more signatures than one page.
+describe("event catch-up", () => {
+  it(
+    "pages past 1,000 signatures and stores a 2,500-signature backlog once",
+    async () => {
+      const total = 2_500;
+      // The fake, like the real RPC, answers newest first.
+      connection.signaturesForAddress = Array.from({ length: total }, (_, i) => {
+        const slot = total - i; // sig-(total-1) is newest, at slot `total`
+        return { signature: `sig-${slot - 1}`, slot, err: null, blockTime: 1_700_000_000 + slot };
+      });
+      for (let id = 0; id < total; id++) {
+        connection.setTransaction(`sig-${id}`, batch(`sig-${id}`, 1n, [roundOpened]).logs);
+      }
+
+      await indexer["catchUpEvents"]();
+
+      // 1,000 + 1,000 + 500: the third page comes back short, which is what
+      // ends the walk with no cursor to stop at.
+      expect(connection.callsTo("getSignaturesForAddress")).toBe(3);
+      expect(await prisma.event.count()).toBe(total);
+      expect(await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+        lastSignature: `sig-${total - 1}`,
+        lastSlot: BigInt(total),
+      });
+    },
+    120_000,
+  );
+
+  it(
+    "on a second run, pages only back to the cursor, not past it",
+    async () => {
+      const total = 1_500;
+      connection.signaturesForAddress = Array.from({ length: total }, (_, i) => {
+        const slot = total - i;
+        return { signature: `sig-${slot - 1}`, slot, err: null, blockTime: 1_700_000_000 + slot };
+      });
+      for (let id = 0; id < total; id++) {
+        connection.setTransaction(`sig-${id}`, batch(`sig-${id}`, 1n, [roundOpened]).logs);
+      }
+      await indexer["catchUpEvents"]();
+      expect(await prisma.event.count()).toBe(total);
+
+      // A fresh signature lands on top of the existing backlog.
+      connection.signaturesForAddress = [
+        { signature: "sig-new", slot: total + 1, err: null, blockTime: 1_700_000_000 + total + 1 },
+        ...connection.signaturesForAddress,
+      ];
+      connection.setTransaction("sig-new", batch("sig-new", 1n, [roundOpened]).logs);
+      connection.resetCalls();
+
+      await indexer["catchUpEvents"]();
+
+      // The cursor already sits on sig-1499; one page reaches it well before
+      // 1,000 signatures, so this does not walk the whole array again.
+      expect(connection.callsTo("getSignaturesForAddress")).toBe(1);
+      expect(await prisma.event.count()).toBe(total + 1);
+    },
+    120_000,
+  );
 });
 
 // `getProgramAccountsV2`'s index runs 13 to 24 seconds behind the chain

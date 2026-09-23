@@ -125,10 +125,9 @@ const SWEEP_INTERVAL_MS = 60_000;
  */
 const FULL_WALK_INTERVAL_MS = 60 * 60 * 1000;
 const CURSOR_ID = 1;
-// One page of `getSignaturesForAddress`. Beyond this the oldest signatures
-// behind the cursor are dropped, which only happens if the indexer was down
-// for longer than 1000 program transactions.
-// ponytail: single page, paginate with `before` if downtime gets that long.
+// One page of `getSignaturesForAddress`. `catchUpEvents` pages backwards
+// with `before` past as many of these as the backlog since the cursor takes,
+// so a long outage no longer loses anything older than one page.
 const SIGNATURE_PAGE = 1_000;
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
@@ -664,7 +663,9 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * settled Position is not detected by its absence any more: the
    * `PositionSettled` event `persist()` ingests removes the row instead, the
    * moment it lands, sweep or no sweep. A full walk still deletes by absence
-   * as a second guard, which is the only guard on an RPC without V2.
+   * as a second guard, which is the only guard on an RPC without V2; a
+   * missing Round account gets the same absence-based backstop, marked
+   * closed rather than deleted (ticket 06).
    */
   async syncAccounts(): Promise<void> {
     const pool = this.chain.poolAddress();
@@ -723,6 +724,31 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           return this.prisma.round.upsert({ where: { id: row.id }, create: row, update: row });
         }),
     );
+    // A full walk sees when a Round account is gone (`close_round` reclaimed
+    // its rent); an incremental walk cannot, the same reason it cannot see a
+    // gone Position (absence looks identical to unchanged). Marked closed and
+    // kept, not deleted, matching ops-and-envs ticket 08 and the `closed`
+    // column's own docs: the row keeps its last mirrored state. This is the
+    // backstop for a missed `RoundClosed` event, same as the Position delete
+    // below is the backstop for a missed `PositionSettled` (ticket 06).
+    if (fullWalk) {
+      const liveRoundIds = rounds.map(({ account }) => BigInt(account.roundId.toString()));
+      const stillOpen = await this.prisma.round.findMany({
+        where: { id: { notIn: liveRoundIds }, closed: false },
+        select: { id: true },
+      });
+      // The same `behindLogPath` guard as the upsert above, keyed by the
+      // round's own address rather than the id Postgres keys it by: a round
+      // just opened after this walk's stale snapshot (the V2 index runs 13
+      // to 24 seconds behind, see `fetchAll`) is not in `liveRoundIds` either,
+      // and must not be marked closed for that reason alone.
+      const toClose = stillOpen
+        .map((round) => round.id)
+        .filter((id) => !this.behindLogPath(this.chain.roundAddress(id, pool), slot));
+      if (toClose.length > 0) {
+        await this.prisma.round.updateMany({ where: { id: { in: toClose } }, data: { closed: true } });
+      }
+    }
 
     const players = accounts.get<DecodedPlayer>(ACCOUNT.player);
     await this.prisma.$transaction(
@@ -1051,31 +1077,51 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * Replays every finalized signature the cursor has not seen. Runs on the
    * sweep, not only at boot: it is what actually guarantees no event is lost
    * when the websocket is down, and it costs one RPC call when nothing moved.
+   *
+   * Pages backwards with `before` rather than bounding one call with `until`:
+   * `until` combined with `limit` only ever returns the newest `limit`
+   * signatures, so a backlog longer than one page silently dropped whatever
+   * sat between that page and the cursor (ticket 06). Paging keeps asking
+   * for the next page back until either the cursor's own signature turns up
+   * in one (the backlog ends there, exclusive) or a page comes back shorter
+   * than a full page, meaning there is nothing older left. A fresh cursor
+   * (first boot) walks all the way back to that address's first signature,
+   * which only happens once.
    */
   private async catchUpEvents(): Promise<void> {
     const cursor = await this.prisma.cursor.findUnique({ where: { id: CURSOR_ID } });
-    const signatures = await this.chain.connection.getSignaturesForAddress(
-      this.chain.poolAddress(),
-      cursor?.lastSignature
-        ? { until: cursor.lastSignature, limit: SIGNATURE_PAGE }
-        : { limit: SIGNATURE_PAGE },
-      "finalized",
-    );
+    const backlog: ConfirmedSignatureInfo[] = [];
+    let before: string | undefined;
+    for (;;) {
+      const page = await this.chain.connection.getSignaturesForAddress(
+        this.chain.poolAddress(),
+        { ...(before !== undefined ? { before } : {}), limit: SIGNATURE_PAGE },
+        "finalized",
+      );
+      const reached = cursor?.lastSignature
+        ? page.findIndex((info) => info.signature === cursor.lastSignature)
+        : -1;
+      backlog.push(...(reached === -1 ? page : page.slice(0, reached)));
+      if (reached !== -1 || page.length < SIGNATURE_PAGE) break;
+      // SAFETY: this branch only runs when `page.length >= SIGNATURE_PAGE`,
+      // so the page has at least one entry.
+      before = page[page.length - 1]!.signature;
+    }
 
-    // Newest first from the RPC; replay oldest first so the cursor only moves
-    // forward. The whole backlog is one `enqueue` call, not one per
-    // signature: `enqueue` is a plain FIFO, so a live event arriving mid-page
-    // used to be able to schedule itself between two still-unprocessed
-    // backlog signatures (ticket 13's security review) once this signature's
-    // own `getTransaction` await returned control to the event loop. A
-    // referee whose Principal-changing events span both sides of that gap
-    // would then have them applied out of chronological order, which is not
-    // idempotent to reordering the way the position/invite-code side effects
-    // in `persist()` are (see `applyReferralEvent`). Wrapping the loop keeps
-    // this whole page as one queue slot, so nothing enqueued afterwards can
-    // land inside it.
+    // Newest first from the RPC, across however many pages that took; replay
+    // oldest first so the cursor only moves forward. The whole backlog is one
+    // `enqueue` call, not one per signature: `enqueue` is a plain FIFO, so a
+    // live event arriving mid-page used to be able to schedule itself between
+    // two still-unprocessed backlog signatures (ticket 13's security review)
+    // once this signature's own `getTransaction` await returned control to
+    // the event loop. A referee whose Principal-changing events span both
+    // sides of that gap would then have them applied out of chronological
+    // order, which is not idempotent to reordering the way the
+    // position/invite-code side effects in `persist()` are (see
+    // `applyReferralEvent`). Wrapping the loop keeps this whole backlog as
+    // one queue slot, so nothing enqueued afterwards can land inside it.
     await this.enqueue(async () => {
-      for (const info of [...signatures].reverse()) {
+      for (const info of [...backlog].reverse()) {
         const consumed = await this.ingestSignature(info);
         if (!consumed) return;
       }
