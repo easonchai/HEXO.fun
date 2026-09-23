@@ -249,15 +249,12 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
       blockhash: BLOCKHASH,
       lastValidBlockHeight: 1,
     }),
-    // Only the Ledger path (ticket 09) calls these; the plain local path
+    // Only the Ledger path (ticket 09) calls this; the plain local path
     // still goes through `chain.send` above.
     sendRawTransaction: async (raw: Buffer): Promise<string> => {
       rawSent.push(raw);
       return "ledger-signature";
     },
-    confirmTransaction: async (): Promise<{ value: { err: null } }> => ({
-      value: { err: null },
-    }),
   };
   const chain = {
     program,
@@ -275,6 +272,12 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
         sent.push(instructions);
         return "signature";
       }),
+    // Only the Ledger path (ticket 09/04) calls this; a test overrides it to
+    // simulate an on-chain failure the way it used to override
+    // `connection.confirmTransaction`.
+    sendSigned: async (raw: Buffer): Promise<void> => {
+      await connection.sendRawTransaction(raw);
+    },
   } as unknown as ChainService;
   return { chain, sent, rawSent };
 }
@@ -468,20 +471,23 @@ describe("admin run", () => {
     );
 
     // Never reaches chain.send: the Ledger path builds and sends its own
-    // transaction straight off chain.connection.
+    // transaction straight off chain.connection, through chain.sendSigned.
     expect(sent).toEqual([]);
     expect(rawSent).toHaveLength(1);
     const tx = Transaction.from(rawSent[0] as Buffer);
     expect(tx.feePayer?.equals(ledgerKeypair.publicKey)).toBe(true);
+    // SAFETY: `sendWithLedger` fills this from the same bytes just asserted on.
+    const expectedSignature = bs58.encode(tx.signature as Buffer);
     expect(stdout).toEqual([]);
     expect(stderr).toContain("confirm on the Ledger");
-    expect(stderr).toContain("signature ledger-signature");
+    expect(stderr).toContain(`signature ${expectedSignature}`);
   });
 
   it("a Ledger send that lands but fails on-chain throws instead of reporting success", async () => {
     const { chain } = await harness();
-    (chain.connection as unknown as { confirmTransaction: unknown }).confirmTransaction =
-      async () => ({ value: { err: "InsufficientFunds" } });
+    chain.sendSigned = async () => {
+      throw new Error('transaction ledger-signature failed: {"Custom":6000}');
+    };
     const ledgerKeypair = Keypair.generate();
     const mode: AdminMode = { signer: ledgerKeypair.publicKey, multisig: false };
 

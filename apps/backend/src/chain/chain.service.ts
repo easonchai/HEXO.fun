@@ -1,4 +1,4 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
   AnchorError,
@@ -31,7 +31,11 @@ import {
   principalVaultAddress,
   roundAddress,
 } from "./pda";
-import { p75PriorityFeeMicroLamports } from "./priority-fee";
+import {
+  heliusPriorityFeeEstimate,
+  p75PriorityFeeMicroLamports,
+  type RpcRequester,
+} from "./priority-fee";
 
 export const SOLANA_CONNECTION = Symbol("SOLANA_CONNECTION");
 
@@ -44,36 +48,27 @@ export const SOLANA_CONNECTION = Symbol("SOLANA_CONNECTION");
  */
 export const CONFIRM_TIMEOUT_MS = 30_000;
 
-/** Ceiling for a one-off RPC read that nothing else bounds: a boot check or
- *  a read behind an HTTP request. */
-export const RPC_READ_TIMEOUT_MS = 10_000;
+/**
+ * How often `send`'s confirmation wait rebroadcasts the identical signed
+ * bytes (production-hardening ticket 04, research/report.md "Landing a
+ * transaction is a local auction"): the RPC node's own retry queue is not
+ * trusted to land it, so this loop owns resending instead.
+ */
+export const REBROADCAST_INTERVAL_MS = 2_000;
+
+/** Solana's hard compute-unit ceiling per transaction, used as the generous
+ *  limit `send` simulates under before pricing the real one. */
+const MAX_COMPUTE_UNIT_LIMIT = 1_400_000;
+
+/** The margin over a simulation's `unitsConsumed` the real compute-unit
+ *  limit is set to (ticket 04): rounded up, so a transaction never lands one
+ *  unit short of what it measured. */
+const COMPUTE_UNIT_MARGIN = 1.1;
 
 /** How long `send`'s priority-fee read is cached per writable-account set
  *  (ticket 10), so a burst of sends against the same accounts costs one
- *  `getRecentPrioritizationFees` call rather than one per send. */
+ *  fee-estimate call rather than one per send. */
 export const PRIORITY_FEE_TTL_MS = 10_000;
-
-/**
- * Rejects with a named error once `ms` has passed, if `promise` has not
- * settled by then. web3.js takes no per-call timeout, so an RPC that accepts
- * the connection and then says nothing would otherwise hold a boot step or a
- * `/status` request open with no ceiling. `send` has its own bounded wait
- * (`CONFIRM_TIMEOUT_MS` above); this is for the plain reads.
- */
-export function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  label: string,
-): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const expiry = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${ms}ms`)),
-      ms,
-    );
-  });
-  return Promise.race([promise, expiry]).finally(() => clearTimeout(timer));
-}
 
 /**
  * Connection, Program, operator keypair, PDA helpers and a signed-send
@@ -88,6 +83,7 @@ export class ChainService {
   readonly keypair: Keypair;
   readonly poolId: bigint;
 
+  private readonly logger = new Logger(ChainService.name);
   private readonly errorNames: Map<number, string>;
   private readonly idlErrorMessages: Map<number, string>;
   /**
@@ -202,38 +198,100 @@ export class ChainService {
     signer: Keypair = this.keypair,
   ): Promise<string> {
     try {
-      // ponytail: no `setComputeUnitLimit`, so the fee is `microLamports ×
-      // the runtime's default 200k CU limit` rather than the transaction's
-      // real usage. Add the limit instruction once a transaction is measured
-      // running near that default, so the price applies to its actual cost.
-      const [{ blockhash, lastValidBlockHeight }, microLamports] = await Promise.all([
-        this.connection.getLatestBlockhash("finalized"),
+      const { blockhash, lastValidBlockHeight } =
+        await this.connection.getLatestBlockhash("finalized");
+      const [microLamports, computeUnits] = await Promise.all([
         this.priorityFeeMicroLamports(writableAccountsOf(instructions)),
+        this.computeUnitLimit(instructions, signer.publicKey, blockhash, lastValidBlockHeight),
       ]);
-      const priceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports });
+      const budgetInstructions = [
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports }),
+        ...(computeUnits === undefined
+          ? []
+          : [ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits })]),
+      ];
       const tx = new Transaction({
         blockhash,
         lastValidBlockHeight,
         feePayer: signer.publicKey,
-      }).add(priceIx, ...instructions);
+      }).add(...budgetInstructions, ...instructions);
       tx.sign(signer);
       // SAFETY: sign() has just filled the fee payer's signature slot.
       const signature = bs58.encode(tx.signature as Buffer);
-      // Subscribe before sending. The RPC only notifies a signature that lands
-      // after the subscription opens, so one that confirms first never would.
-      const watch = this.watchSignature(signature);
-      try {
-        await this.connection.sendRawTransaction(tx.serialize(), {
-          preflightCommitment: "confirmed",
-        });
-      } catch (cause) {
-        watch.cancel();
-        throw cause;
-      }
-      await this.confirm(signature, await watch.result, lastValidBlockHeight);
+      await this.sendSigned(tx.serialize(), signature, lastValidBlockHeight);
       return signature;
     } catch (cause) {
       throw this.mapSendError(cause);
+    }
+  }
+
+  /**
+   * Sends already-signed bytes and confirms them (ticket 04): `send` above is
+   * this plus building, pricing and signing the transaction. The admin CLI's
+   * Ledger path, which signs its own way, calls this directly so it lands
+   * through the same subscription-and-rebroadcast loop rather than its own
+   * confirmation logic.
+   */
+  async sendSigned(
+    raw: Uint8Array,
+    signature: string,
+    lastValidBlockHeight: number,
+  ): Promise<void> {
+    // Subscribe before sending. The RPC only notifies a signature that lands
+    // after the subscription opens, so one that confirms first never would.
+    const watch = this.watchSignature(signature);
+    try {
+      await this.connection.sendRawTransaction(raw, {
+        maxRetries: 0,
+        preflightCommitment: "confirmed",
+      });
+    } catch (cause) {
+      watch.cancel();
+      throw cause;
+    }
+    await this.confirm(raw, signature, watch, lastValidBlockHeight);
+  }
+
+  /**
+   * Simulates `instructions` under a generous compute-unit limit, then
+   * answers with `ceil(unitsConsumed × COMPUTE_UNIT_MARGIN)` (ticket 04,
+   * research/report.md "Landing a transaction is a local auction"): the
+   * priority fee is charged against the requested limit, not what a
+   * transaction actually uses, so simulating first is what lets `send` stop
+   * paying for the runtime's 200k-per-instruction default.
+   *
+   * A failed simulation is logged once and answered with `undefined`, so
+   * `send` still lands the transaction without a limit instruction, same as
+   * before this ticket.
+   */
+  private async computeUnitLimit(
+    instructions: TransactionInstruction[],
+    payer: PublicKey,
+    blockhash: string,
+    lastValidBlockHeight: number,
+  ): Promise<number | undefined> {
+    const generousLimit = ComputeBudgetProgram.setComputeUnitLimit({
+      units: MAX_COMPUTE_UNIT_LIMIT,
+    });
+    const tx = new Transaction({ blockhash, lastValidBlockHeight, feePayer: payer }).add(
+      generousLimit,
+      ...instructions,
+    );
+    try {
+      const { value } = await this.connection.simulateTransaction(tx);
+      if (value.err || value.unitsConsumed === undefined) {
+        throw new Error(
+          value.err ? JSON.stringify(value.err) : "simulation reported no unitsConsumed",
+        );
+      }
+      return Math.ceil(value.unitsConsumed * COMPUTE_UNIT_MARGIN);
+    } catch (cause) {
+      this.logger.warn(
+        `simulate failed, sending without a compute limit: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+      );
+      return undefined;
     }
   }
 
@@ -243,6 +301,12 @@ export class ChainService {
    * a subscription rather than a block-height poll"): web3.js's own
    * `confirmTransaction`, given a blockhash strategy, races that very poll
    * against the subscription, so it pays for it even on the happy path.
+   * While waiting, the identical `raw` bytes are rebroadcast every
+   * `REBROADCAST_INTERVAL_MS` with `skipPreflight: true` (production-
+   * hardening ticket 04): the RPC node's own retry queue (`maxRetries`,
+   * unset before this ticket) is not trusted to land it, so this owns
+   * resending instead. It never re-signs — the bytes on the wire never
+   * change, only how many times they are sent.
    *
    * Bounded by `CONFIRM_TIMEOUT_MS`. Past it, one `getSignatureStatuses` plus
    * one `getBlockHeight` decide pending (the blockhash has not expired yet)
@@ -250,10 +314,26 @@ export class ChainService {
    * hang, which is the property the block-height strategy used to provide.
    */
   private async confirm(
+    raw: Uint8Array,
     signature: string,
-    result: SignatureResult | "timeout",
+    watch: { result: Promise<SignatureResult | "timeout">; cancel: () => void },
     lastValidBlockHeight: number,
   ): Promise<void> {
+    const rebroadcast = setInterval(() => {
+      void this.connection
+        .sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 })
+        .catch(() => {
+          // The signature subscription and the fallback below decide the
+          // outcome; a resend failing (already landed, blockhash expired) is
+          // not this loop's problem to report.
+        });
+    }, REBROADCAST_INTERVAL_MS);
+    let result: SignatureResult | "timeout";
+    try {
+      result = await watch.result;
+    } finally {
+      clearInterval(rebroadcast);
+    }
     if (result !== "timeout") {
       if (result.err) {
         throw new Error(
@@ -328,23 +408,42 @@ export class ChainService {
   }
 
   /**
-   * The microlamport price `send` attaches, from `getRecentPrioritizationFees`
-   * over `writable` (ticket 10). Cached per exact writable-account set for
-   * `PRIORITY_FEE_TTL_MS`. A failed read falls back to 0 rather than
-   * blocking or failing the send; congestion pricing is best-effort, landing
-   * the transaction is not.
+   * The microlamport price `send` attaches (ticket 10), over `writable`.
+   * Prefers Helius's own `getPriorityFeeEstimate` (production-hardening
+   * ticket 04, research/report.md "Landing a transaction is a local
+   * auction"), a percentile estimate scoped to the accounts a transaction
+   * actually writes; falls back to the 75th percentile of
+   * `getRecentPrioritizationFees`'s samples when the endpoint is not Helius
+   * or the call fails. Either way, capped at `PRIORITY_FEE_MAX_MICROLAMPORTS`.
+   *
+   * Cached per exact writable-account set for `PRIORITY_FEE_TTL_MS`. Public
+   * (ticket 08 needs this for the pool's hot accounts, over `/state`), and a
+   * failed read still falls back to 0 rather than blocking or failing the
+   * send; congestion pricing is best-effort, landing the transaction is not.
    */
-  private priorityFeeMicroLamports(writable: PublicKey[]): Promise<number> {
+  priorityFeeMicroLamports(writable: PublicKey[]): Promise<number> {
     const key = writable.map((pubkey) => pubkey.toBase58()).sort().join(",");
     const cached = this.priorityFeeCache.get(key);
     if (cached && Date.now() - cached.at <= PRIORITY_FEE_TTL_MS) return cached.result;
-    const result = withTimeout(
-      this.connection.getRecentPrioritizationFees(
+    const result = this.estimatePriorityFee(writable);
+    this.priorityFeeCache.set(key, { at: Date.now(), result });
+    return result;
+  }
+
+  private async estimatePriorityFee(writable: PublicKey[]): Promise<number> {
+    const helius = await heliusPriorityFeeEstimate(
+      // SAFETY: `_rpcRequest` is web3.js's own private JSON-RPC transport,
+      // the same one `indexer.service.ts`'s `programAccountsPage` reaches
+      // into for `getProgramAccountsV2`.
+      this.connection as unknown as RpcRequester,
+      writable,
+      this.priorityFeeMaxMicroLamports,
+    );
+    if (helius !== undefined) return helius;
+    return this.connection
+      .getRecentPrioritizationFees(
         writable.length > 0 ? { lockedWritableAccounts: writable } : undefined,
-      ),
-      RPC_READ_TIMEOUT_MS,
-      "priority fee read",
-    )
+      )
       .then((samples) =>
         p75PriorityFeeMicroLamports(
           samples.map((sample) => sample.prioritizationFee),
@@ -352,8 +451,6 @@ export class ChainService {
         ),
       )
       .catch(() => 0);
-    this.priorityFeeCache.set(key, { at: Date.now(), result });
-    return result;
   }
 }
 

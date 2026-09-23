@@ -263,11 +263,48 @@ export class CountingConnection {
     });
   }
 
+  /** `simulateTransaction`'s `unitsConsumed`/error (production-hardening
+   *  ticket 04's compute-limit simulation). Defaults to a clean simulation
+   *  reporting 5,000 units, same order of magnitude as a real instruction. */
+  simulateUnitsConsumed: number | undefined = 5_000;
+  simulateError: unknown = undefined;
+
+  simulateTransaction(): Promise<{
+    value: { err: unknown; unitsConsumed?: number; logs: string[] | null };
+  }> {
+    this.record("simulateTransaction");
+    if (this.simulateError) {
+      return Promise.resolve({ value: { err: this.simulateError, logs: null } });
+    }
+    return Promise.resolve({
+      value: {
+        err: null,
+        logs: [],
+        ...(this.simulateUnitsConsumed === undefined
+          ? {}
+          : { unitsConsumed: this.simulateUnitsConsumed }),
+      },
+    });
+  }
+
+  /** `getPriorityFeeEstimate`'s answer (ticket 04's Helius estimate), served
+   *  through `_rpcRequest` the same way the real Helius method arrives.
+   *  Undefined (the default) makes `_rpcRequest` answer "unexpected RPC
+   *  method", the same as a non-Helius endpoint, so `send` falls back to the
+   *  p75 method below without a test having to opt in. */
+  priorityFeeEstimateMicroLamports: number | undefined = undefined;
+
+  /** `sendRawTransaction` calls, by 1-based count, that land no landing
+   *  notification (simulates a dropped packet); every other call still
+   *  notifies via `autoConfirmSignature`, same as today (ticket 04's
+   *  rebroadcast loop). */
+  dropSendsBeforeCall = 0;
+
   sendRawTransaction(rawTransaction: Buffer | Uint8Array | number[]): Promise<string> {
     // Params recorded (not just tallied) so a test can decode what was
     // actually sent, e.g. ticket 10's prepended compute-budget instruction.
-    this.record("sendRawTransaction", [rawTransaction]);
-    if (this.autoConfirmSignature) {
+    const count = this.record("sendRawTransaction", [rawTransaction]);
+    if (this.autoConfirmSignature && count > this.dropSendsBeforeCall) {
       const listeners = this.signatureListeners;
       this.signatureListeners = [];
       queueMicrotask(() => {
@@ -323,6 +360,17 @@ export class CountingConnection {
     const count = this.record(method, params);
     if (this.failOnCallNumber?.method === method && this.failOnCallNumber.number === count) {
       return Promise.reject(new Error(`CountingConnection: forced failure on ${method} call ${count}`));
+    }
+    if (method === "getPriorityFeeEstimate") {
+      // Undefined answers "method not found", the same shape a non-Helius
+      // endpoint returns, so `heliusPriorityFeeEstimate` falls back to
+      // `getRecentPrioritizationFees` without a test having to opt in.
+      if (this.priorityFeeEstimateMicroLamports === undefined) {
+        return Promise.resolve({ error: { code: -32601, message: "Method not found" } });
+      }
+      return Promise.resolve({
+        result: { priorityFeeEstimate: this.priorityFeeEstimateMicroLamports },
+      });
     }
     if (method !== "getProgramAccountsV2") {
       return Promise.reject(new Error(`CountingConnection: unexpected RPC method ${method}`));

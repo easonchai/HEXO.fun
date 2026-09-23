@@ -34,10 +34,12 @@ import {
   Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
+import bs58 from "bs58";
 
 import { principalOut } from "../api/api.service";
 import { generateInviteCode } from "../api/invite-code";
 import { ChainService } from "../chain/chain.service";
+import { withRpcFallback } from "../chain/rpc-fallback";
 import type { HexVaultEnv } from "../config/env";
 import { validateEnv } from "../config/env";
 import { decodePool, type PoolState } from "../operator/chain-state";
@@ -176,11 +178,9 @@ async function submit(
 /**
  * Builds, signs through the Ledger and sends: `chain.send`'s shape, but for a
  * signer that never hands over a `Keypair` for `chain.send`'s own signature
- * to use. Confirms with web3.js's own poll rather than `chain.send`'s
- * subscription-first wait, since an admin command runs once, off the hot
- * crank path that wait is tuned for.
- * ponytail: no dropped-subscription handling like chain.send's; upgrade if a
- * Ledger command needs the same drop detection the operator's sends get.
+ * to use. Lands through `chain.sendSigned` (ticket 04), the same
+ * subscription-and-rebroadcast loop the operator's own sends use, so a
+ * dropped packet gets the same second flight here too.
  */
 async function sendWithLedger(
   chain: ChainService,
@@ -201,16 +201,9 @@ async function sendWithLedger(
   } catch (cause) {
     throw new Error("Ledger signing failed", { cause });
   }
-  const signature = await chain.connection.sendRawTransaction(signed.serialize());
-  const confirmation = await chain.connection.confirmTransaction(
-    { signature, blockhash, lastValidBlockHeight },
-    "confirmed",
-  );
-  if (confirmation.value.err) {
-    throw new Error(
-      `transaction ${signature} failed: ${JSON.stringify(confirmation.value.err)}`,
-    );
-  }
+  // SAFETY: signTransaction has just filled the fee payer's signature slot.
+  const signature = bs58.encode(signed.signature as Buffer);
+  await chain.sendSigned(signed.serialize(), signature, lastValidBlockHeight);
   return signature;
 }
 
@@ -745,7 +738,11 @@ export async function main(): Promise<void> {
     return;
   }
 
-  const connection = new Connection(env.RPC_URL, "confirmed");
+  const primary = new Connection(env.RPC_URL, "confirmed");
+  const fallback = env.RPC_FALLBACK_URL
+    ? new Connection(env.RPC_FALLBACK_URL, "confirmed")
+    : undefined;
+  const connection = withRpcFallback(primary, fallback, env.RPC_TIMEOUT_MS);
   // Built directly, not through Nest DI: this script never boots a Nest
   // application, so ChainService's own constructor is the whole wiring.
   const chain = new ChainService(connection, new ConfigService<HexVaultEnv, true>(env));

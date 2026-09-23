@@ -1,6 +1,51 @@
 // Ticket 10: the price `ChainService.send` attaches via
 // `ComputeBudgetProgram.setComputeUnitPrice`, so operator transactions land
-// during congestion without overpaying the rest of the time.
+// during congestion without overpaying the rest of the time. Production-
+// hardening ticket 04 adds `heliusPriorityFeeEstimate`, which `ChainService`
+// now prefers: a percentile estimate over the transaction's own writable
+// accounts, rather than `getRecentPrioritizationFees`'s floor.
+import type { PublicKey } from "@solana/web3.js";
+
+/** The slice of a `Connection` `heliusPriorityFeeEstimate` needs: web3.js's
+ *  own private JSON-RPC transport, the same one `indexer.service.ts`'s
+ *  `getProgramAccountsV2` walk reaches into, since Helius's estimator is a
+ *  JSON-RPC method with no typed `Connection` method. */
+export interface RpcRequester {
+  _rpcRequest(
+    method: string,
+    params: unknown[],
+  ): Promise<{ result?: unknown; error?: { code?: number; message: string } }>;
+}
+
+/**
+ * Helius `getPriorityFeeEstimate` at the `Medium` priority level, scoped to
+ * `writable` (research/report.md "Landing a transaction is a local
+ * auction"). `undefined` on any failure — a non-Helius endpoint answering
+ * "method not found", a network error, a timeout, or a malformed response —
+ * so the caller falls back to `p75PriorityFeeMicroLamports`; this never
+ * throws, the same contract the old `getRecentPrioritizationFees` read had.
+ */
+export async function heliusPriorityFeeEstimate(
+  connection: RpcRequester,
+  writable: readonly PublicKey[],
+  maxMicroLamports: number,
+): Promise<number | undefined> {
+  try {
+    const response = await connection._rpcRequest("getPriorityFeeEstimate", [
+      {
+        accountKeys: writable.map((pubkey) => pubkey.toBase58()),
+        options: { priorityLevel: "Medium" },
+      },
+    ]);
+    if (response.error) return undefined;
+    const estimate = (response.result as { priorityFeeEstimate?: unknown } | undefined)
+      ?.priorityFeeEstimate;
+    if (typeof estimate !== "number" || !Number.isFinite(estimate)) return undefined;
+    return Math.min(Math.round(estimate), maxMicroLamports);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * The 75th percentile of the non-zero `getRecentPrioritizationFees` samples,
