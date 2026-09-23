@@ -28,6 +28,7 @@ import {
   processWithdraw,
   requestWithdraw,
   shutdownWithdraw,
+  type SendResult,
   type TxSigner,
 } from "../actions.js";
 import { apiBaseUrl, fetchPlayer, type CurrentEpochDto } from "../api.js";
@@ -45,6 +46,7 @@ import {
 import {
   decodeErrorCode,
   decodePlayerError,
+  decodeSendFailure,
   NOTHING_PENDING_CODE,
 } from "../playerErrors.js";
 import type { PoolLike } from "../read.js";
@@ -207,18 +209,22 @@ export function Vault(props: VaultScreenProps) {
   const addQuick = (units: bigint) =>
     setAmountText(fmt2(addCapped(amount ?? 0n, units * ONE, connected ? cap : null)));
 
-  const run = async (label: string, action: () => Promise<string>) => {
+  const run = async (label: string, action: () => Promise<SendResult>) => {
     setBusy(true);
     setNote(null);
     try {
-      const signature = await action();
+      const result = await action();
+      if (result.kind !== "landed") {
+        setNote({ tone: "err", text: decodeSendFailure(result) });
+        return;
+      }
       // Deposit gets the confirmed modal; withdraw keeps the inline note.
       if (label === "Deposit" && amount !== null) {
         setConfirmed(amount);
       } else {
         setNote({
           tone: "ok",
-          text: `${label}: ${signature.slice(0, 16)}…`,
+          text: `${label}: ${result.signature.slice(0, 16)}…`,
         });
       }
       setAmountText("");
@@ -262,20 +268,23 @@ export function Vault(props: VaultScreenProps) {
     setNote(null);
     setPayoutSent(pendingWithdraw);
     try {
-      await processWithdraw(program, { publicKey: owner, sendTransaction }, pool);
-      setNote({ tone: "ok", text: "Payout sent." });
-      onDone();
-    } catch (error) {
-      const text = decodePlayerError(error);
-      // Already paid by the operator: the read model is stale, so refresh it
-      // the same way a successful payout does instead of offering the button again.
-      if (text === NOTHING_PENDING_NOTE) {
-        setNote({ tone: "ok", text });
+      const result = await processWithdraw(program, { publicKey: owner, sendTransaction }, pool);
+      if (result.kind === "landed") {
+        setNote({ tone: "ok", text: "Payout sent." });
+        onDone();
+      } else if (result.kind === "failed" && result.code === NOTHING_PENDING_CODE) {
+        // Already paid by the operator: the read model is stale, so refresh
+        // it the same way a successful payout does instead of offering the
+        // button again.
+        setNote({ tone: "ok", text: NOTHING_PENDING_NOTE });
         onDone();
       } else {
         setPayoutSent(null);
-        setNote({ tone: "err", text });
+        setNote({ tone: "err", text: decodeSendFailure(result) });
       }
+    } catch (error) {
+      setPayoutSent(null);
+      setNote({ tone: "err", text: decodePlayerError(error) });
     } finally {
       setBusy(false);
     }

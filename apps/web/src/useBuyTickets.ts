@@ -10,7 +10,7 @@ import { buyTickets, type TxSigner } from "./actions.js";
 import { buyDisabledReason, drawValue, ticketsFromUsdc } from "./buyTickets.js";
 import type { HexVaultProgram } from "./chain.js";
 import { parseAtomic } from "./lib/money.js";
-import { decodePlayerError } from "./playerErrors.js";
+import { decodePlayerError, decodeSendFailure } from "./playerErrors.js";
 import type { PoolLike } from "./read.js";
 
 const DECIMALS = 6;
@@ -99,7 +99,11 @@ export function useBuyTickets(options: UseBuyTicketsOptions): BuyTicketsState {
     setError(null);
     void (async () => {
       try {
-        await buyTickets(program, { publicKey: owner, sendTransaction }, pool, amount);
+        const result = await buyTickets(program, { publicKey: owner, sendTransaction }, pool, amount);
+        if (result.kind !== "landed") {
+          setError(decodeSendFailure(result));
+          return;
+        }
         setAmountText("");
         onDone();
       } catch (err) {

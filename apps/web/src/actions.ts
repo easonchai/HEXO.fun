@@ -1,7 +1,11 @@
 /**
- * The six instructions this app sends. Each builds from the IDL by name,
- * signs with the connected wallet, confirms at `confirmed` and returns the
- * signature; the caller triggers the chain re-read.
+ * The six instructions this app sends. Each builds from the IDL by name and
+ * goes through `sendMany` (ticket 08, production-hardening): a compute
+ * budget sized from a public-RPC simulation, signed through the wallet
+ * adapter or Privy, confirmed with the blockhash strategy at `confirmed`.
+ * The caller gets a `SendResult` — `landed`, `expired` or `failed(code,
+ * message)` — instead of a bare signature or a thrown error, and triggers
+ * the chain re-read only on `landed`.
  *
  * `settlePosition`, `register` and `processWithdraw` are permissionless: the
  * program takes no signer for them, so the connected wallet is only the fee
@@ -9,9 +13,12 @@
  */
 import { createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 import {
+  ComputeBudgetProgram,
   PublicKey,
   SystemProgram,
   Transaction,
+  TransactionExpiredBlockheightExceededError,
+  type Connection,
   type TransactionInstruction,
 } from "@solana/web3.js";
 
@@ -37,56 +44,180 @@ export type { PoolLike };
 export interface TxSigner {
   readonly publicKey: PublicKey;
   /**
-   * Wallet-owned send path (sign, broadcast, confirm; returns the base58
-   * signature). When set, the transaction goes through it instead of
-   * Anchor's `.rpc()`, so a sponsoring wallet can swap in its own fee payer.
+   * Privy's sponsored path: signs and broadcasts, returning the base58
+   * signature straight away — it does not itself wait for the transaction to
+   * land (research/notes/frontend_and_wallets.md). `sendMany` confirms it the
+   * same way as every other path (ticket 08), so a dropped sponsored send
+   * still resolves to `expired`/`failed` instead of hanging. Unset for the
+   * ordinary wallet-adapter path, which signs through `program.provider`.
    */
   readonly sendTransaction?:
     | ((transaction: Transaction) => Promise<string>)
     | undefined;
 }
 
-const CONFIRMED = { commitment: "confirmed" } as const;
+/** One player transaction's outcome (ticket 08): `sendMany` always resolves
+ *  to one of these once a transaction has actually reached the network —
+ *  never a hang, and never a raw thrown RPC error for these three cases. A
+ *  rejected signature or a failed blockhash fetch, which never reach the
+ *  network, still throw; callers keep their existing catch block for those. */
+export type SendResult =
+  | { readonly kind: "landed"; readonly signature: string }
+  /** The blockhash expired before the transaction confirmed: dropped, not
+   *  failed. The UI's answer is "try again", not the decoded program error. */
+  | { readonly kind: "expired" }
+  /** `code` is the on-chain `Custom` program error number when the failure
+   *  carries one (`playerErrors.ts`'s `decodeErrorCode` turns it into player
+   *  copy), null otherwise. `message` is the raw diagnostic for `console.error`. */
+  | { readonly kind: "failed"; readonly code: number | null; readonly message: string };
 
-/** Sends `builder` through the wallet's own path when it has one, else Anchor's. */
+const CONFIRMED = "confirmed" as const;
+
+/** Solana's hard compute-unit ceiling per transaction, the generous limit
+ *  the simulation probe below runs under before pricing the real one. */
+const MAX_COMPUTE_UNIT_LIMIT = 1_400_000;
+
+/** Margin over a simulation's `unitsConsumed`, same as the backend's
+ *  (chain.service.ts `COMPUTE_UNIT_MARGIN`): rounded up, so a transaction
+ *  never lands one unit short of what it measured. */
+const COMPUTE_UNIT_MARGIN = 1.1;
+
+/** `setComputeUnitLimit` when the public RPC's simulation fails: the
+ *  runtime's own per-instruction default (solana.com's Compute Budget doc),
+ *  so a struggling simulation still gets a transaction sent instead of
+ *  blocking the send on it. */
+const FALLBACK_COMPUTE_UNITS_PER_INSTRUCTION = 200_000;
+
+/** The slice of `program.provider` this file signs and reads a blockhash
+ *  through — narrower than Anchor's own `Provider` type so a test stub needs
+ *  no more than this to stand in for one. */
+interface SendProvider {
+  connection: Connection;
+  wallet?: { signTransaction<T>(tx: T): Promise<T> } | undefined;
+}
+
+function providerOf(program: HexVaultProgram): SendProvider {
+  // SAFETY: every Program this app builds (App.tsx) carries an
+  // AnchorProvider, whose `connection` and `wallet` are always set; the
+  // SDK's `Provider` type only marks `wallet` optional for providers that
+  // never sign.
+  return program.provider as unknown as SendProvider;
+}
+
+/** The on-chain `Custom` program error code inside a landed transaction's
+ *  failure, the same `{InstructionError: [index, {Custom: N}]}` shape
+ *  `confirmTransaction`/`getSignatureStatuses` report; null for a failure
+ *  with no such code (an account-level error, not a program `require`). */
+function customErrorCode(err: unknown): number | null {
+  if (typeof err !== "object" || err === null || !("InstructionError" in err)) return null;
+  const detail = (err as { InstructionError: unknown }).InstructionError;
+  if (!Array.isArray(detail) || detail.length !== 2) return null;
+  const kind = detail[1] as unknown;
+  if (typeof kind !== "object" || kind === null || !("Custom" in kind)) return null;
+  const code = (kind as { Custom: unknown }).Custom;
+  return typeof code === "number" ? code : null;
+}
+
+/**
+ * `setComputeUnitLimit`'s value: `unitsConsumed × COMPUTE_UNIT_MARGIN` from a
+ * simulation on `connection` (ticket 08, research/notes/transactions_and_rpc.md
+ * "Simulate every transaction to measure real compute-unit usage"), or the
+ * per-instruction fallback when simulation throws — a stuttering public RPC,
+ * or an instruction set the simulator rejects for an unrelated reason.
+ */
+async function computeUnitLimit(
+  connection: Connection,
+  instructions: TransactionInstruction[],
+  payer: PublicKey,
+): Promise<number> {
+  try {
+    const probe = new Transaction().add(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT }),
+      ...instructions,
+    );
+    probe.feePayer = payer;
+    const { value } = await connection.simulateTransaction(probe);
+    if (value.err || value.unitsConsumed === undefined) {
+      throw new Error(
+        value.err ? JSON.stringify(value.err) : "simulation reported no unitsConsumed",
+      );
+    }
+    return Math.ceil(value.unitsConsumed * COMPUTE_UNIT_MARGIN);
+  } catch {
+    return Math.min(
+      MAX_COMPUTE_UNIT_LIMIT,
+      FALLBACK_COMPUTE_UNITS_PER_INSTRUCTION * instructions.length,
+    );
+  }
+}
+
+/**
+ * The one send helper every player transaction goes through (ticket 08,
+ * production-hardening): fetches the blockhash and `lastValidBlockHeight`,
+ * prepends compute-budget instructions (the capped priority fee from
+ * `/state`, and a compute-unit limit sized above), signs through the wallet
+ * adapter or Privy's own `sendTransaction`, then confirms with the blockhash
+ * strategy at `confirmed` — never the deprecated signature-only confirm, and
+ * never left to Anchor's `.rpc()`/`sendAndConfirm`, so an expired or
+ * on-chain-failed send always resolves to a `SendResult` instead of hanging.
+ */
+export async function sendMany(
+  program: HexVaultProgram,
+  owner: TxSigner,
+  instructions: TransactionInstruction[],
+  priorityFeeMicroLamports: number,
+): Promise<SendResult> {
+  const provider = providerOf(program);
+  const connection = provider.connection;
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(CONFIRMED);
+  const computeUnits = await computeUnitLimit(connection, instructions, owner.publicKey);
+  const transaction = new Transaction({
+    blockhash,
+    lastValidBlockHeight,
+    feePayer: owner.publicKey,
+  }).add(
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }),
+    ...instructions,
+  );
+
+  let signature: string;
+  if (owner.sendTransaction) {
+    signature = await owner.sendTransaction(transaction);
+  } else {
+    if (!provider.wallet) throw new Error("wallet cannot sign transactions");
+    const signed = await provider.wallet.signTransaction(transaction);
+    signature = await connection.sendRawTransaction(signed.serialize());
+  }
+
+  try {
+    const { value } = await connection.confirmTransaction(
+      { signature, blockhash, lastValidBlockHeight },
+      CONFIRMED,
+    );
+    if (value.err) {
+      return { kind: "failed", code: customErrorCode(value.err), message: JSON.stringify(value.err) };
+    }
+    return { kind: "landed", signature };
+  } catch (error) {
+    if (error instanceof TransactionExpiredBlockheightExceededError) return { kind: "expired" };
+    return {
+      kind: "failed",
+      code: null,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Sends `builder`'s instructions through `sendMany` above. */
 async function send(
   program: HexVaultProgram,
   owner: TxSigner,
   builder: TxBuilder,
-): Promise<string> {
-  if (!owner.sendTransaction) return builder.rpc(CONFIRMED);
-  const transaction = await builder.transaction();
-  transaction.feePayer = owner.publicKey;
-  const { blockhash } =
-    await program.provider.connection.getLatestBlockhash(CONFIRMED);
-  transaction.recentBlockhash = blockhash;
-  return owner.sendTransaction(transaction);
-}
-
-/**
- * Sends more than one instruction in one transaction (ticket 11's one-step
- * shutdown withdraw): there is no single `TxBuilder` to call `.rpc()` on, so
- * a wallet with no sponsored `sendTransaction` signs and submits the way
- * `.rpc()` does under the hood (`@anchor-lang/core`'s `RpcFactory`).
- */
-async function sendMany(
-  program: HexVaultProgram,
-  owner: TxSigner,
-  instructions: TransactionInstruction[],
-): Promise<string> {
-  const transaction = new Transaction().add(...instructions);
-  transaction.feePayer = owner.publicKey;
-  const { blockhash } =
-    await program.provider.connection.getLatestBlockhash(CONFIRMED);
-  transaction.recentBlockhash = blockhash;
-  if (owner.sendTransaction) return owner.sendTransaction(transaction);
-  // SAFETY: App.tsx only ever builds this Program from an AnchorProvider,
-  // whose `sendAndConfirm` is always implemented; the SDK's `Provider` type
-  // just marks it optional for providers that never sign.
-  const provider = program.provider as unknown as {
-    sendAndConfirm(tx: Transaction, signers: never[], opts: typeof CONFIRMED): Promise<string>;
-  };
-  return provider.sendAndConfirm(transaction, [], CONFIRMED);
+  priorityFeeMicroLamports: number,
+): Promise<SendResult> {
+  const unsigned = await builder.transaction();
+  return sendMany(program, owner, unsigned.instructions, priorityFeeMicroLamports);
 }
 
 export async function deposit(
@@ -94,7 +225,7 @@ export async function deposit(
   owner: TxSigner,
   pool: PoolLike,
   amount: bigint,
-): Promise<string> {
+): Promise<SendResult> {
   const o = owner.publicKey;
   const ownerToken = acceptedAta(pool.acceptedMint, o);
   const builder = method(
@@ -121,7 +252,7 @@ export async function deposit(
         TOKEN_PROGRAM,
       ),
     ]);
-  return send(program, owner, builder);
+  return send(program, owner, builder, pool.priorityFeeMicroLamports);
 }
 
 /**
@@ -135,7 +266,7 @@ export async function buyTickets(
   owner: TxSigner,
   pool: PoolLike,
   amount: bigint,
-): Promise<string> {
+): Promise<SendResult> {
   const o = owner.publicKey;
   const builder = method(
     program,
@@ -150,7 +281,7 @@ export async function buyTickets(
       jackpotVault: jackpotVaultAddress(pool.address),
       tokenProgram: TOKEN_PROGRAM,
     });
-  return send(program, owner, builder);
+  return send(program, owner, builder, pool.priorityFeeMicroLamports);
 }
 
 /**
@@ -163,7 +294,7 @@ export async function requestWithdraw(
   owner: TxSigner,
   pool: PoolLike,
   amount: bigint,
-): Promise<string> {
+): Promise<SendResult> {
   const o = owner.publicKey;
   const builder = method(
     program,
@@ -174,7 +305,7 @@ export async function requestWithdraw(
       pool: pool.address,
       player: playerAddress(pool.address, o),
     });
-  return send(program, owner, builder);
+  return send(program, owner, builder, pool.priorityFeeMicroLamports);
 }
 
 /**
@@ -188,7 +319,7 @@ export async function processWithdraw(
   program: HexVaultProgram,
   owner: TxSigner,
   pool: PoolLike,
-): Promise<string> {
+): Promise<SendResult> {
   const o = owner.publicKey;
   const ownerToken = acceptedAta(pool.acceptedMint, o);
   const builder = method(program, "processWithdraw")()
@@ -211,7 +342,7 @@ export async function processWithdraw(
         TOKEN_PROGRAM,
       ),
     ]);
-  return send(program, owner, builder);
+  return send(program, owner, builder, pool.priorityFeeMicroLamports);
 }
 
 /**
@@ -227,7 +358,7 @@ export async function shutdownWithdraw(
   pool: PoolLike,
   requestAmount: bigint,
   pendingWithdraw: bigint,
-): Promise<string> {
+): Promise<SendResult> {
   const step = shutdownWithdrawStep(requestAmount, pendingWithdraw);
   if (step.kind === "none") throw new Error("nothing to withdraw");
   const o = owner.publicKey;
@@ -268,7 +399,7 @@ export async function shutdownWithdraw(
       })
       .instruction(),
   );
-  return sendMany(program, owner, instructions);
+  return sendMany(program, owner, instructions, pool.priorityFeeMicroLamports);
 }
 
 /** Stakes `stakePerTile` Entries on every tile set in `tilesMask`. */
@@ -279,7 +410,7 @@ export async function buyPosition(
   roundId: bigint,
   tilesMask: bigint,
   stakePerTile: bigint,
-): Promise<string> {
+): Promise<SendResult> {
   const o = owner.publicKey;
   const round = roundAddress(pool.address, roundId);
   const builder = method(program, "buyPosition")(bn(tilesMask), bn(stakePerTile))
@@ -291,7 +422,7 @@ export async function buyPosition(
       position: positionAddress(round, o),
       systemProgram: SystemProgram.programId,
     });
-  return send(program, owner, builder);
+  return send(program, owner, builder, pool.priorityFeeMicroLamports);
 }
 
 /** Credits the round reward as Entries and closes the Position (rent back). */
@@ -300,7 +431,7 @@ export async function settlePosition(
   owner: TxSigner,
   pool: PoolLike,
   roundId: bigint,
-): Promise<string> {
+): Promise<SendResult> {
   const o = owner.publicKey;
   const round = roundAddress(pool.address, roundId);
   const builder = method(program, "settlePosition")()
@@ -311,7 +442,7 @@ export async function settlePosition(
       owner: o,
       position: positionAddress(round, o),
     });
-  return send(program, owner, builder);
+  return send(program, owner, builder, pool.priorityFeeMicroLamports);
 }
 
 /** Records this Player's final Weight in an ended epoch that is Registering. */
@@ -320,7 +451,7 @@ export async function register(
   owner: TxSigner,
   pool: PoolLike,
   epochId: bigint,
-): Promise<string> {
+): Promise<SendResult> {
   const o = owner.publicKey;
   const builder = method(program, "register")()
     .accounts({
@@ -328,5 +459,5 @@ export async function register(
       epoch: epochAddress(pool.address, epochId),
       player: playerAddress(pool.address, o),
     });
-  return send(program, owner, builder);
+  return send(program, owner, builder, pool.priorityFeeMicroLamports);
 }

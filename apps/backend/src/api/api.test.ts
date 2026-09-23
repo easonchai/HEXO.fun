@@ -73,6 +73,9 @@ const HUGE_U128 = "123456789012345678901234567890";
 const FAKE_SIGNATURE = "FakeSignature1111111111111111111111111111111";
 /** What the fake RPC says sits in the jackpot vault while epoch 7 is open. */
 const VAULT_BALANCE = 5_000_000n;
+/** GET /state's ticket 08 field: the fake `priorityFeeMicroLamports`'s
+ *  canned answer. */
+const FAKE_PRIORITY_FEE = 4_242;
 /** The seeded Pool row's `closeBuffer`/`minDeposit`, which the browser reads
  *  off `/state` rather than off the chain (ticket 07). */
 const POOL_CLOSE_BUFFER = 15n;
@@ -211,6 +214,8 @@ const fakeChain = {
   },
   jackpotVaultAddress: (): PublicKey => Keypair.generate().publicKey,
   principalVaultAddress: (): PublicKey => PRINCIPAL_VAULT,
+  roundAddress: (): PublicKey => Keypair.generate().publicKey,
+  priorityFeeMicroLamports: async (): Promise<number> => FAKE_PRIORITY_FEE,
   keypair: OPERATOR,
   send: async (instructions: TransactionInstruction[]): Promise<string> => {
     sentInstructions.push(instructions);
@@ -876,6 +881,8 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       expect(body.status.operator).toMatchObject({ lastAction: "settle_round" });
       expect(body.status.cursor.lastSlot).toBe("15");
       expect(BigInt(body.chainTime)).toBeGreaterThanOrEqual(CHAIN_NOW);
+      // Ticket 08: the cached estimate over the pool's hot writable accounts.
+      expect(body.priorityFeeMicroLamports).toBe(FAKE_PRIORITY_FEE);
       assertNoLargeNumbers(body, "/state?owner");
     });
 

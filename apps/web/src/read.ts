@@ -33,11 +33,48 @@ export interface PoolLike {
   baseRateBps: number;
   /** Tickets credited per USDC spent in `buy_tickets`. */
   ticketsPerUsdc: number;
+  /** Already validated and capped (`safePriorityFee`); the only fee the send
+   *  helper (`actions.ts`, ticket 08) ever signs with. */
+  priorityFeeMicroLamports: number;
+}
+
+/**
+ * The floor the send helper signs with when `/state`'s estimate is 0 or
+ * missing (a failed backend read, or genuinely no congestion) — the ticket's
+ * "the web uses its own floor".
+ */
+const PRIORITY_FEE_FLOOR_MICROLAMPORTS = 1_000;
+
+/**
+ * Hard ceiling on `/state`'s `priorityFeeMicroLamports` before it ever
+ * reaches a signature (security review ticket 14): `/state` is
+ * unauthenticated input, so this caps what a compromised or misconfigured
+ * backend could make a wallet sign away in fees, independent of whatever cap
+ * the backend itself applies (`PRIORITY_FEE_MAX_MICROLAMPORTS`). Matches
+ * that config's own default so a correctly configured backend never gets
+ * clamped a second time.
+ */
+const PRIORITY_FEE_CEILING_MICROLAMPORTS = 50_000;
+
+/**
+ * Validates `/state`'s `priorityFeeMicroLamports` at the boundary: a finite
+ * non-negative integer, clamped to `[PRIORITY_FEE_FLOOR_MICROLAMPORTS,
+ * PRIORITY_FEE_CEILING_MICROLAMPORTS]`. Anything else — `NaN`, a negative
+ * number, a fraction, `Infinity` — floors to the minimum rather than signing
+ * whatever the backend sent.
+ */
+export function safePriorityFee(raw: number): number {
+  const value = Number.isInteger(raw) && raw >= 0 ? raw : 0;
+  return Math.min(
+    Math.max(value, PRIORITY_FEE_FLOOR_MICROLAMPORTS),
+    PRIORITY_FEE_CEILING_MICROLAMPORTS,
+  );
 }
 
 /** Pure mapping from the API's decimal-string shape to the PublicKey/bigint one signing code needs. */
 export function poolFromDto(
   dto: PoolDto & { closeBuffer: string; minDeposit: string },
+  priorityFeeMicroLamports: number,
 ): PoolLike {
   return {
     address: new PublicKey(dto.address),
@@ -49,6 +86,7 @@ export function poolFromDto(
     epochSeconds: BigInt(dto.epochSeconds),
     baseRateBps: dto.baseRateBps,
     ticketsPerUsdc: dto.ticketsPerUsdc,
+    priorityFeeMicroLamports: safePriorityFee(priorityFeeMicroLamports),
   };
 }
 

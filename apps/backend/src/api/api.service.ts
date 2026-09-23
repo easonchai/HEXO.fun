@@ -10,7 +10,7 @@ import {
   type Round,
 } from "@prisma/client";
 import { unpackAccount } from "@solana/spl-token";
-import { LAMPORTS_PER_SOL, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
+import { LAMPORTS_PER_SOL, PublicKey, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
 import { rpcStatus } from "../chain/rpc-fallback";
@@ -466,11 +466,28 @@ export class ApiService {
       );
     }
 
-    const [jackpotAmount, rpc, chainTime, balances] = await Promise.all([
+    // The accounts a player transaction actually writes (deposit/withdraw:
+    // pool + principal vault; buyTickets: pool + jackpot vault; buyPosition:
+    // pool + the open round), so `priorityFeeMicroLamports` prices the fee
+    // market they compete in rather than an unscoped network-wide estimate
+    // (production-hardening ticket 08, research/notes/transactions_and_rpc.md
+    // "Fee markets are local"). `priorityFeeMicroLamports` never rejects —
+    // it falls back to 0 on any read failure (chain.service.ts) — so /state
+    // never fails because of this.
+    const poolAddress = new PublicKey(pool.address);
+    const hotWritableAccounts = [
+      poolAddress,
+      this.chain.principalVaultAddress(poolAddress),
+      this.chain.jackpotVaultAddress(poolAddress),
+      ...(openRound === null ? [] : [this.chain.roundAddress(openRound.id, poolAddress)]),
+    ];
+
+    const [jackpotAmount, rpc, chainTime, balances, priorityFeeMicroLamports] = await Promise.all([
       this.liveJackpot(epoch),
       this.rpcHealth(),
       this.extrapolatedChainNow(),
       this.chainBalances(),
+      this.chain.priorityFeeMicroLamports(hotWritableAccounts),
     ]);
 
     // Same extrapolated instant for the response's chainTime and for the
@@ -493,6 +510,10 @@ export class ApiService {
         position === null ? null : { tiles: position.tiles, stakePerTile: position.stakePerTile },
       status: statusFrom(operator, cursor, rpc, pool, balances, this.operatorSolWarn),
       chainTime,
+      /** Ticket 04's cached estimate, scoped to `hotWritableAccounts` above.
+       *  Untrusted by the time it reaches the browser: the web send helper
+       *  caps and validates it before signing (ticket 08). */
+      priorityFeeMicroLamports,
     };
   }
 

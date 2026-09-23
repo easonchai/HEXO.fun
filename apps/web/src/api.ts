@@ -236,6 +236,15 @@ export interface StateDto {
   status: StatusDto;
   /** Chain time as the backend last observed it, extrapolated to now (decimal, unix seconds). */
   chainTime: string;
+  /**
+   * Ticket 08: the backend's cached priority-fee estimate (production-
+   * hardening ticket 04) over the pool's hot writable accounts, in
+   * micro-lamports per compute unit. Untrusted the moment it arrives here —
+   * `/state` is unauthenticated input — so nothing signs with it directly;
+   * `read.ts`'s `poolFromDto` validates and caps it before the send helper
+   * ever sees it.
+   */
+  priorityFeeMicroLamports: number;
 }
 
 export const fetchPoolSummary = (

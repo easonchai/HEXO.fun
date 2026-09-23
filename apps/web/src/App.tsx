@@ -31,7 +31,7 @@ import {
   type RoundLike,
 } from "./engine.js";
 import { formatAtomic, formatAtomic2, parseAtomic } from "./lib/money.js";
-import { decodePlayerError } from "./playerErrors.js";
+import { decodePlayerError, decodeSendFailure } from "./playerErrors.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { SHUTDOWN_BANNER, SHUTDOWN_REASON } from "./shutdown.js";
 import { SoundIcon } from "./SoundIcon.js";
@@ -144,7 +144,7 @@ export function App() {
   const ownerKey = publicKey?.toBase58();
   const statePoll = useStatePoll(apiBaseUrl(), ownerKey);
   const state = statePoll.data;
-  const pool = state ? poolFromDto(state.pool) : null;
+  const pool = state ? poolFromDto(state.pool, state.priorityFeeMicroLamports) : null;
   const player = state?.player ?? null;
   // The tracked Round: open, or the last one this session saw once it has
   // settled (see api.service.ts `getState`'s comment on `round`).
@@ -253,7 +253,7 @@ export function App() {
           ? "positions are closed for this round"
           : null;
 
-  /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction was sent. */
+  /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction landed. */
   const deploy = useCallback(
     async (tiles: number[], stakeAmount: bigint): Promise<boolean> => {
       if (!pool || !openRound || !txSigner || !program) return false;
@@ -266,7 +266,7 @@ export function App() {
           (acc, tile) => acc | (1n << BigInt(tile - 1)),
           0n,
         );
-        await buyPosition(
+        const result = await buyPosition(
           program,
           txSigner,
           pool,
@@ -274,6 +274,10 @@ export function App() {
           tileMask,
           stakeAmount,
         );
+        if (result.kind !== "landed") {
+          setDeployNote(decodeSendFailure(result));
+          return false;
+        }
         // No predicted Tickets balance: the panel shows "confirming…" (see
         // `deployNote` below) until the next poll's Position actually moves.
         setDeployNote(null);
@@ -371,7 +375,11 @@ export function App() {
     setSettleBusy(true);
     try {
       sfx("land");
-      await settlePosition(program, txSigner, pool, settleState.roundId);
+      const result = await settlePosition(program, txSigner, pool, settleState.roundId);
+      if (result.kind !== "landed") {
+        setDeployNote(decodeSendFailure(result));
+        return;
+      }
       setDeployNote(
         settleState.reward > 0n
           ? `round reward settled: +${fmt(settleState.reward)} Tickets`

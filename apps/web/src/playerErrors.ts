@@ -73,3 +73,20 @@ export function decodePlayerError(error: unknown): string {
   const code = extractCode(text);
   return code === null ? GENERIC : decodeErrorCode(code);
 }
+
+const EXPIRED_TEXT = "Transaction expired. Try again.";
+
+/**
+ * Player copy for `actions.ts`'s `SendResult` once a call site has ruled out
+ * `landed` (ticket 08): `expired` gets its own "try again" line, and
+ * `failed(code, message)` feeds `code` straight into `decodeErrorCode`,
+ * skipping the text-parsing `decodePlayerError` needs for a thrown error.
+ * The raw `message` still reaches `console.error` for debugging.
+ */
+export function decodeSendFailure(
+  result: { kind: "expired" } | { kind: "failed"; code: number | null; message: string },
+): string {
+  if (result.kind === "expired") return EXPIRED_TEXT;
+  console.error(result.message);
+  return decodeErrorCode(result.code ?? -1);
+}
