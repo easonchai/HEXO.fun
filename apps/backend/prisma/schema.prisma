@@ -181,6 +181,18 @@ model InviteRedemption {
   redeemedAt BigInt
 }
 
+// A depositor's own code (ADR 0014, docs/plan/referral-page ticket 01): one
+// per wallet, unlimited uses, created by the indexer on that wallet's first
+// Deposited event. Replaces the depositor-owned InviteCode ticket 06 used to
+// create; admin-issued Invite codes are unaffected. No relation to
+// InviteCode: generation checks both tables by hand (invite-code.ts) so a
+// fresh code never collides with either.
+model ReferralCode {
+  code      String @id
+  owner     String @unique
+  createdAt BigInt
+}
+
 // Referral binding and qualification (docs/plan/hexo-referrals ticket 07).
 // Written once, in the same transaction as the redeem that creates it
 // (access.controller.ts); referrer, code and boundAt are never touched again.

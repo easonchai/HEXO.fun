@@ -20,8 +20,9 @@ describe("maskWallet", () => {
 
 describe("buildReferralsResponse", () => {
   it("is the empty state for a wallet with no owned codes and no referrals", () => {
-    const response = buildReferralsResponse([], [], NOW, QUALIFY_SECONDS, 0n, 0n);
+    const response = buildReferralsResponse(null, [], [], NOW, QUALIFY_SECONDS, 0n, 0n);
     expect(response).toEqual({
+      referralCode: null,
       ownedCodes: [],
       referrals: [],
       qualifiedCount: 0,
@@ -33,8 +34,17 @@ describe("buildReferralsResponse", () => {
     });
   });
 
+  it("passes the wallet's own referral code through, null before its first deposit", () => {
+    const withCode = buildReferralsResponse("ABCD2345", [], [], NOW, QUALIFY_SECONDS, 0n, 0n);
+    expect(withCode.referralCode).toBe("ABCD2345");
+
+    const withoutCode = buildReferralsResponse(null, [], [], NOW, QUALIFY_SECONDS, 0n, 0n);
+    expect(withoutCode.referralCode).toBeNull();
+  });
+
   it("reduces owned codes to code + usesLeft, floored at 0", () => {
     const response = buildReferralsResponse(
+      null,
       [
         { code: "ABCD2345", maxUses: 5, uses: 2 },
         { code: "WXYZ6789", maxUses: 5, uses: 5 },
@@ -59,7 +69,7 @@ describe("buildReferralsResponse", () => {
       { referee: WALLET, aboveSince: NOW - 100_000n }, // above, not yet qualified
       { referee: WALLET, aboveSince: null }, // never crossed the threshold
     ];
-    const response = buildReferralsResponse([], referrals, NOW, QUALIFY_SECONDS, 0n, 0n);
+    const response = buildReferralsResponse(null, [], referrals, NOW, QUALIFY_SECONDS, 0n, 0n);
     expect(response.referrals).toEqual([
       { wallet: "9xQe…VFin", qualified: true, daysToQualify: 0 },
       { wallet: "9xQe…VFin", qualified: false, daysToQualify: 6 },
@@ -69,7 +79,7 @@ describe("buildReferralsResponse", () => {
   });
 
   it("passes today's and yesterday's bonus amounts through unchanged", () => {
-    const response = buildReferralsResponse([], [], NOW, QUALIFY_SECONDS, 72_000_000n, 50_000_000n);
+    const response = buildReferralsResponse(null, [], [], NOW, QUALIFY_SECONDS, 72_000_000n, 50_000_000n);
     expect(response.bonusToday).toBe(72_000_000n);
     expect(response.bonusYesterday).toBe(50_000_000n);
   });
@@ -100,7 +110,7 @@ describe("buildReferralsResponse", () => {
         referee: WALLET,
         aboveSince: NOW - BigInt(QUALIFY_SECONDS), // exactly qualified
       }));
-      const response = buildReferralsResponse([], referrals, NOW, QUALIFY_SECONDS, 0n, 0n);
+      const response = buildReferralsResponse(null, [], referrals, NOW, QUALIFY_SECONDS, 0n, 0n);
       expect(response.qualifiedCount).toBe(qualifiedCount);
       expect(response.rateBps).toBe(rateBps);
       expect(response.countToNextBand).toBe(countToNextBand);

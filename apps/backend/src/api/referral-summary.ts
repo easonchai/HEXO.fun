@@ -40,6 +40,9 @@ export interface ReferralRowDto {
 }
 
 export interface ReferralsResponse {
+  /** The wallet's own Referral code (ADR 0014); null before its first
+   *  deposit, since the indexer creates it on that event. */
+  readonly referralCode: string | null;
   readonly ownedCodes: OwnedCodeDto[];
   readonly referrals: ReferralRowDto[];
   readonly qualifiedCount: number;
@@ -56,14 +59,16 @@ export interface ReferralsResponse {
 }
 
 /**
- * Builds GET /referrals/:wallet's response (ticket 11) from already-fetched
- * rows: this wallet's owned InviteCodes, its Referrals, and today's/
- * yesterday's ReferralGrant amount (0n when the job has not granted either
- * day yet). `nextRateBps` calls `bandForCount` a second time at
- * `qualifiedCount + countToNextBand`, the exact count that lands in the next
- * tier, instead of re-deriving the rate table here.
+ * Builds GET /referrals/:wallet's response (ticket 11; `referralCode` added
+ * by ADR 0014 / docs/plan/referral-page ticket 01) from already-fetched
+ * rows: this wallet's own ReferralCode, its owned InviteCodes, its
+ * Referrals, and today's/yesterday's ReferralGrant amount (0n when the job
+ * has not granted either day yet). `nextRateBps` calls `bandForCount` a
+ * second time at `qualifiedCount + countToNextBand`, the exact count that
+ * lands in the next tier, instead of re-deriving the rate table here.
  */
 export function buildReferralsResponse(
+  referralCode: string | null,
   ownedCodes: readonly OwnedCodeInput[],
   referrals: readonly ReferralInput[],
   now: bigint,
@@ -79,6 +84,7 @@ export function buildReferralsResponse(
     countToNextBand === null ? null : bandForCount(qualifiedCount + countToNextBand).rateBps;
 
   return {
+    referralCode,
     ownedCodes: ownedCodes.map((invite) => ({
       code: invite.code,
       usesLeft: Math.max(0, invite.maxUses - invite.uses),

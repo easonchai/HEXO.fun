@@ -10,11 +10,6 @@ import type { PublicKey } from "@solana/web3.js";
 export const INVITE_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const INVITE_CODE_LENGTH = 8;
 
-/** Uses a wallet's own code gets when the indexer creates it on their first
- *  deposit (spec.md "Backend"). Not env-configurable: nothing about a
- *  running pool needs this to change without a redeploy. */
-export const INVITE_DEFAULT_USES = 5;
-
 /** A fresh 8-character code. Collisions against `INVITE_CODE_ALPHABET`'s
  *  32^8 (~1.1e12) space are not checked for: the caller's `InviteCode.code`
  *  primary key surfaces one as a clear insert failure instead. */

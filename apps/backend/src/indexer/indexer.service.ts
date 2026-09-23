@@ -10,7 +10,7 @@ import type { Epoch, Player, Prisma, Round } from "@prisma/client";
 import { PublicKey, type ConfirmedSignatureInfo } from "@solana/web3.js";
 import bs58 from "bs58";
 
-import { generateInviteCode, INVITE_DEFAULT_USES } from "../api/invite-code";
+import { generateInviteCode } from "../api/invite-code";
 import {
   applyReferralEvent,
   isQualified,
@@ -111,6 +111,25 @@ function referralPrincipalEvents(
     }
   }
   return result;
+}
+
+/**
+ * A fresh code for a wallet's first-deposit ReferralCode (ADR 0014,
+ * docs/plan/referral-page ticket 01), reusing InviteCode's own alphabet and
+ * length. Unlike InviteCode's insert, which lets its own primary key catch a
+ * collision, ReferralCode and InviteCode are separate tables: a generated
+ * code landing in the other one would not fail an insert, so this checks
+ * both by hand before returning one.
+ */
+async function generateReferralCode(tx: Prisma.TransactionClient): Promise<string> {
+  for (;;) {
+    const code = generateInviteCode();
+    const [invite, referral] = await Promise.all([
+      tx.inviteCode.findUnique({ where: { code } }),
+      tx.referralCode.findUnique({ where: { code } }),
+    ]);
+    if (invite === null && referral === null) return code;
+  }
 }
 
 /**
@@ -1034,14 +1053,15 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         await tx.round.updateMany({ where: { id }, data: { closed: true } });
       }
       for (const owner of depositors) {
-        const owned = await tx.inviteCode.findFirst({ where: { ownerWallet: owner } });
+        // ADR 0014: a wallet's first deposit gets it a ReferralCode, not a
+        // depositor-owned InviteCode; InviteCode.ownerWallet is now
+        // Admin-only.
+        const owned = await tx.referralCode.findUnique({ where: { owner } });
         if (owned === null) {
-          await tx.inviteCode.create({
+          await tx.referralCode.create({
             data: {
-              code: generateInviteCode(),
-              ownerWallet: owner,
-              maxUses: INVITE_DEFAULT_USES,
-              uses: 0,
+              code: await generateReferralCode(tx),
+              owner,
               createdAt: nowSeconds(),
             },
           });

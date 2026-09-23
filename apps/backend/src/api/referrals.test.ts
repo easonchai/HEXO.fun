@@ -32,7 +32,9 @@ const REFERRER = Keypair.generate().publicKey.toBase58();
 const POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
 
 async function truncate(prisma: PrismaService): Promise<void> {
-  await prisma.$executeRawUnsafe('TRUNCATE "Pool", "InviteCode", "Referral", "ReferralGrant"');
+  await prisma.$executeRawUnsafe(
+    'TRUNCATE "Pool", "InviteCode", "Referral", "ReferralGrant", "ReferralCode"',
+  );
 }
 
 const emptyPool = (overrides: Partial<Pool> = {}): Pool => ({
@@ -102,6 +104,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     await prisma.inviteCode.deleteMany();
     await prisma.referral.deleteMany();
     await prisma.referralGrant.deleteMany();
+    await prisma.referralCode.deleteMany();
   });
 
   it("400s a malformed wallet", async () => {
@@ -111,6 +114,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
   it("is the empty state for a wallet with nothing indexed yet (no pool either)", async () => {
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
     expect(body).toEqual({
+      referralCode: null,
       ownedCodes: [],
       referrals: [],
       qualifiedCount: 0,
@@ -120,6 +124,15 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
       bonusToday: "0",
       bonusYesterday: "0",
     });
+  });
+
+  it("returns the wallet's own referral code once the indexer has created one", async () => {
+    await prisma.referralCode.create({
+      data: { code: "ABCD2345", owner: REFERRER, createdAt: 0n },
+    });
+
+    const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
+    expect(body.referralCode).toBe("ABCD2345");
   });
 
   it("lists owned invite codes with uses left", async () => {

@@ -13,6 +13,7 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from "../api/invite-code";
 import { ChainService } from "../chain/chain.service";
 import { withRpcFallback } from "../chain/rpc-fallback";
 import type { HexVaultEnv } from "../config/env";
@@ -99,6 +100,8 @@ async function wipe(): Promise<void> {
     prisma.pool.deleteMany(),
     prisma.referral.deleteMany(),
     prisma.referralGrant.deleteMany(),
+    prisma.referralCode.deleteMany(),
+    prisma.inviteCode.deleteMany(),
   ]);
 }
 
@@ -683,6 +686,35 @@ describe("event ingest", () => {
     const event = await prisma.event.findFirstOrThrow();
     expect(event.blockTime).toBe(1_700_000_000n);
     expect(event.data).toMatchObject({ owner: OWNER.toBase58(), amount: "1000000" });
+  });
+
+  // ADR 0014, docs/plan/referral-page ticket 01: a wallet's first deposit
+  // gets it a ReferralCode, not the depositor-owned InviteCode ticket 06
+  // used to create.
+  it("creates a ReferralCode on a wallet's first Deposited event", async () => {
+    await indexer.ingestLogs(batch("sig-first-deposit", 40n, [deposited]));
+
+    const codes = await prisma.referralCode.findMany();
+    expect(codes).toHaveLength(1);
+    expect(codes[0]?.owner).toBe(OWNER.toBase58());
+    expect(codes[0]?.code).toHaveLength(INVITE_CODE_LENGTH);
+    for (const char of codes[0]?.code ?? "") {
+      expect(INVITE_CODE_ALPHABET).toContain(char);
+    }
+    expect(await prisma.inviteCode.count()).toBe(0);
+  });
+
+  it("does not create a second ReferralCode on a later Deposited event for the same wallet", async () => {
+    await indexer.ingestLogs(batch("sig-first-deposit", 40n, [deposited]));
+    const first = await prisma.referralCode.findUniqueOrThrow({ where: { owner: OWNER.toBase58() } });
+
+    await indexer.ingestLogs(
+      batch("sig-second-deposit", 41n, [depositedFor(OWNER, 500_000, 1_500_000, 1_500_000)]),
+    );
+
+    const codes = await prisma.referralCode.findMany({ where: { owner: OWNER.toBase58() } });
+    expect(codes).toHaveLength(1);
+    expect(codes[0]?.code).toBe(first.code);
   });
 
   it("advances the cursor past a transaction that emitted nothing", async () => {

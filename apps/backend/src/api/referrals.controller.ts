@@ -18,8 +18,9 @@ const parseWallet = (raw: string): string => {
 
 /**
  * The referrals screen (docs/plan/hexo-referrals ticket 11): this wallet's
- * owned invite codes, its referrals with qualification state, the current
- * band and today's/yesterday's bonus. The response shape lives in
+ * own Referral code (ADR 0014), its owned invite codes, its referrals with
+ * qualification state, the current band and today's/yesterday's bonus. The
+ * response shape lives in
  * referral-summary.ts's `buildReferralsResponse` so it is unit tested
  * without a database; this controller only fetches the rows it needs.
  *
@@ -40,7 +41,11 @@ export class ReferralsController {
     const wallet = parseWallet(walletRaw);
     const qualifySeconds = this.config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
 
-    const [ownedCodes, referrals, pool] = await Promise.all([
+    const [referralCode, ownedCodes, referrals, pool] = await Promise.all([
+      this.prisma.referralCode.findUnique({
+        where: { owner: wallet },
+        select: { code: true },
+      }),
       this.prisma.inviteCode.findMany({
         where: { ownerWallet: wallet },
         select: { code: true, maxUses: true, uses: true },
@@ -61,6 +66,7 @@ export class ReferralsController {
     ]);
 
     return buildReferralsResponse(
+      referralCode?.code ?? null,
       ownedCodes,
       referrals,
       nowSeconds(),
