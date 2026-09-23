@@ -15,6 +15,7 @@
 import { DemoBoard } from "../arena/DemoBoard.js";
 import { LogoCog, LogoWordmark } from "../arena/Arena.js";
 import { Textile } from "../arena/Textile.js";
+import { Faq, type FaqItem } from "../Faq.js";
 import { GlyphRow } from "./Home.js";
 
 const STATS = [
@@ -62,35 +63,35 @@ const RULES = [
   ],
 ] as const;
 
-const FAQ = [
-  [
-    "Can I lose my deposit?",
-    "No. Your deposit is never at stake. Only tickets are.",
-  ],
-  [
-    "Do I have to play?",
-    "No. Every dollar you deposit is already a ticket in the daily draw. Playing is how you win more tickets, not how you enter.",
-  ],
-  [
-    "What if I lose a game round?",
-    "You lose the tickets you put in. Your deposit isn't touched, and your tickets refresh tomorrow.",
-  ],
-  [
-    "Where does the jackpot come from?",
-    "From the yield the pool earned that day. Nothing else.",
-  ],
-  [
-    "How big is the prize?",
-    "Whatever the pool earned that day, split with nobody. There is no promised rate: a quiet day is a small prize, and a day that earns less than the pool's minimum rolls into tomorrow instead of paying out.",
-  ],
-  [
-    "Can I withdraw anytime?",
-    "You can ask anytime. The USDC arrives after the current day ends, because the principal is out earning for most of the day. Your principal and tickets drop the moment you ask.",
-  ],
-  [
-    "Do you take any of the prize?",
-    "A small protocol fee funds ongoing operations and token buybacks. The rest goes to that day's winner.",
-  ],
+const FAQ: readonly FaqItem[] = [
+  {
+    q: "Can I lose my deposit?",
+    a: "No. Your deposit is never at stake. Only tickets are.",
+  },
+  {
+    q: "Do I have to play?",
+    a: "No. Every dollar you deposit is already a ticket in the daily draw. Playing is how you win more tickets, not how you enter.",
+  },
+  {
+    q: "What if I lose a game round?",
+    a: "You lose the tickets you put in. Your deposit isn't touched, and your tickets refresh tomorrow.",
+  },
+  {
+    q: "Where does the jackpot come from?",
+    a: "From the yield the pool earned that day. Nothing else.",
+  },
+  {
+    q: "How big is the prize?",
+    a: "Whatever the pool earned that day, split with nobody. There is no promised rate: a quiet day is a small prize, and a day that earns less than the pool's minimum rolls into tomorrow instead of paying out.",
+  },
+  {
+    q: "Can I withdraw anytime?",
+    a: "You can ask anytime. The USDC arrives after the current day ends, because the principal is out earning for most of the day. Your principal and tickets drop the moment you ask.",
+  },
+  {
+    q: "Do you take any of the prize?",
+    a: "A small protocol fee funds ongoing operations and token buybacks. The rest goes to that day's winner.",
+  },
 ] as const;
 
 /** Numbered step: the Figma cycles a circle, star, square and plus badge. */
@@ -253,12 +254,7 @@ export function About() {
           The Short <em>Answers</em>
         </h2>
         <div className="about-faq" data-testid="about-faq">
-          {FAQ.map(([q, a]) => (
-            <details key={q} className="about-faq-item">
-              <summary>{q}</summary>
-              <p>{a}</p>
-            </details>
-          ))}
+          <Faq items={FAQ} itemClassName="about-faq-item" />
         </div>
       </section>
 
