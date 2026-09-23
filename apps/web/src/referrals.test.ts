@@ -2,20 +2,26 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyReferralMessage,
+  bonusRateView,
   refCodeFromSearch,
   referralHeroState,
   shareLink,
 } from "./referrals.js";
-import type { ReferralsDto } from "./api.js";
+import type { ReferralBandDto, ReferralsDto } from "./api.js";
+
+const ZERO_BAND: ReferralBandDto = { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 };
+const TIER_1: ReferralBandDto = { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 };
+const TIER_2: ReferralBandDto = { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 };
+const TIER_3: ReferralBandDto = { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 };
+const TIER_4: ReferralBandDto = { tier: 4, rateBps: 500, minCount: 11, maxCount: null };
 
 const dto = (referralCode: string | null): ReferralsDto => ({
   referralCode,
   ownedCodes: [],
   referrals: [],
   qualifiedCount: 0,
-  rateBps: 0,
-  countToNextBand: null,
-  nextRateBps: null,
+  band: ZERO_BAND,
+  nextBand: TIER_1,
   bonusToday: "0",
   bonusYesterday: "0",
 });
@@ -73,5 +79,60 @@ describe("applyReferralMessage", () => {
     expect(applyReferralMessage("Ai1ce", "ABC123XY")).toBe(
       "HEXO apply referral: Ai1ce ABC123XY",
     );
+  });
+});
+
+const OWNER = "11111111111111111111111111111111";
+
+const bandDto = (
+  qualifiedCount: number,
+  band: ReferralBandDto,
+  nextBand: ReferralBandDto | null,
+): ReferralsDto => ({ ...dto(null), qualifiedCount, band, nextBand });
+
+describe("bonusRateView", () => {
+  it("is disconnected with no owner, regardless of any loaded data", () => {
+    expect(bonusRateView(null, null)).toEqual({ kind: "disconnected" });
+    expect(bonusRateView(undefined, bandDto(4, TIER_2, TIER_3))).toEqual({ kind: "disconnected" });
+  });
+
+  it("is the zero state at 0 qualified referrals: 0%, no tier line, empty bar, points at tier 1", () => {
+    expect(bonusRateView(OWNER, bandDto(0, ZERO_BAND, TIER_1))).toEqual({
+      kind: "ready",
+      ratePercent: "0%",
+      tierLabel: null,
+      progressFraction: 0,
+      progressCopy: "1-2 qualified referrals unlock 2%",
+    });
+  });
+
+  it("treats no data yet (poll not landed) the same as the zero state", () => {
+    expect(bonusRateView(OWNER, null)).toEqual({
+      kind: "ready",
+      ratePercent: "0%",
+      tierLabel: null,
+      progressFraction: 0,
+      progressCopy: "1-2 qualified referrals unlock 2%",
+    });
+  });
+
+  it("mid-band: 4 qualified referrals sits in Tier 2, 2 more to unlock 4%", () => {
+    expect(bonusRateView(OWNER, bandDto(4, TIER_2, TIER_3))).toEqual({
+      kind: "ready",
+      ratePercent: "3%",
+      tierLabel: "TIER 2 (3-5 QUALIFIED REFERRALS)",
+      progressFraction: 4 / 6,
+      progressCopy: "4 qualified referrals · 2 more to unlock 4%",
+    });
+  });
+
+  it("is full with 'Max tier' at the top tier (11+), which has no next band", () => {
+    expect(bonusRateView(OWNER, bandDto(14, TIER_4, null))).toEqual({
+      kind: "ready",
+      ratePercent: "5%",
+      tierLabel: "TIER 4 (11+ QUALIFIED REFERRALS)",
+      progressFraction: 1,
+      progressCopy: "14 qualified referrals · Max tier",
+    });
   });
 });

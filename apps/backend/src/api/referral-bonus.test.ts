@@ -206,20 +206,39 @@ describe("computeBonuses: referrers who earn nothing", () => {
 });
 
 describe("bandForCount", () => {
-  it.each([
-    [0, 0, 1],
-    [1, 200, 2],
-    [2, 200, 1],
-    [3, 300, 3],
-    [5, 300, 1],
-    [6, 400, 5],
-    [10, 400, 1],
-  ])("%d qualified referrals: %d bps, %d more to the next band", (count, rateBps, countToNextBand) => {
-    expect(bandForCount(count)).toEqual({ rateBps, countToNextBand });
+  it("0 qualified referrals: tier 0 (no rate), next band is tier 1 (1-2, 200 bps)", () => {
+    expect(bandForCount(0)).toEqual({
+      band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
+      nextBand: { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 },
+    });
   });
 
-  it("the top band (11+) has no next band", () => {
-    expect(bandForCount(11)).toEqual({ rateBps: 500, countToNextBand: null });
-    expect(bandForCount(50)).toEqual({ rateBps: 500, countToNextBand: null });
+  it("4 qualified referrals: tier 2 (3-5, 300 bps), next band is tier 3 (6-10, 400 bps)", () => {
+    expect(bandForCount(4)).toEqual({
+      band: { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 },
+      nextBand: { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 },
+    });
+  });
+
+  it.each([
+    [1, { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 }, { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 }],
+    [2, { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 }, { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 }],
+    [3, { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 }, { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 }],
+    [5, { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 }, { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 }],
+    [6, { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 }, { tier: 4, rateBps: 500, minCount: 11, maxCount: null }],
+    [10, { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 }, { tier: 4, rateBps: 500, minCount: 11, maxCount: null }],
+  ])("%d qualified referrals bands as %o, next %o", (count, band, nextBand) => {
+    expect(bandForCount(count)).toEqual({ band, nextBand });
+  });
+
+  it("the top band (11+, tier 4) has no next band", () => {
+    expect(bandForCount(11)).toEqual({
+      band: { tier: 4, rateBps: 500, minCount: 11, maxCount: null },
+      nextBand: null,
+    });
+    expect(bandForCount(50)).toEqual({
+      band: { tier: 4, rateBps: 500, minCount: 11, maxCount: null },
+      nextBand: null,
+    });
   });
 });

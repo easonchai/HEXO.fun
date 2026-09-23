@@ -4,7 +4,7 @@
 // hands them here, so the response shape is unit tested without a database.
 
 import { daysToQualify, isQualified } from "./referral";
-import { bandForCount } from "./referral-bonus";
+import { bandForCount, type ReferralBand } from "./referral-bonus";
 
 /** First 4 and last 4 characters of a base58 wallet, so a referrer sees who
  *  referred without seeing the full address (spec.md Frontend: "Mask
@@ -46,14 +46,10 @@ export interface ReferralsResponse {
   readonly ownedCodes: OwnedCodeDto[];
   readonly referrals: ReferralRowDto[];
   readonly qualifiedCount: number;
-  /** Current band's rate, in basis points; 0 below the first tier. */
-  readonly rateBps: number;
-  /** Qualified referrals still needed to reach the next band; null at the
-   *  top band (11+). */
-  readonly countToNextBand: number | null;
-  /** The next band's rate, in basis points, for "N more to reach X%"; null
-   *  alongside countToNextBand at the top band. */
-  readonly nextRateBps: number | null;
+  /** Current band (referral-page ticket 03); tier 0 means no rate yet. */
+  readonly band: ReferralBand;
+  /** The next, higher band; null at the top band (11+). */
+  readonly nextBand: ReferralBand | null;
   readonly bonusToday: bigint;
   readonly bonusYesterday: bigint;
 }
@@ -63,9 +59,8 @@ export interface ReferralsResponse {
  * by ADR 0014 / docs/plan/referral-page ticket 01) from already-fetched
  * rows: this wallet's own ReferralCode, its owned InviteCodes, its
  * Referrals, and today's/yesterday's ReferralGrant amount (0n when the job
- * has not granted either day yet). `nextRateBps` calls `bandForCount` a
- * second time at `qualifiedCount + countToNextBand`, the exact count that
- * lands in the next tier, instead of re-deriving the rate table here.
+ * has not granted either day yet). `band`/`nextBand` (referral-page ticket
+ * 03) come straight from `bandForCount`.
  */
 export function buildReferralsResponse(
   referralCode: string | null,
@@ -79,9 +74,7 @@ export function buildReferralsResponse(
   const qualifiedCount = referrals.filter((referral) =>
     isQualified(referral.aboveSince, now, qualifySeconds),
   ).length;
-  const { rateBps, countToNextBand } = bandForCount(qualifiedCount);
-  const nextRateBps =
-    countToNextBand === null ? null : bandForCount(qualifiedCount + countToNextBand).rateBps;
+  const { band, nextBand } = bandForCount(qualifiedCount);
 
   return {
     referralCode,
@@ -95,9 +88,8 @@ export function buildReferralsResponse(
       daysToQualify: daysToQualify(referral.aboveSince, now, qualifySeconds),
     })),
     qualifiedCount,
-    rateBps,
-    countToNextBand,
-    nextRateBps,
+    band,
+    nextBand,
     bonusToday,
     bonusYesterday,
   };

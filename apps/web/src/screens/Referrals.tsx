@@ -14,9 +14,10 @@
  */
 import type { PublicKey } from "@solana/web3.js";
 
+import { BonusRateCard } from "../BonusRateCard.js";
 import { Faq, type FaqItem } from "../Faq.js";
 import { InfoTip } from "../InfoTip.js";
-import { referralHeroState, type ReferralHeroState } from "../referrals.js";
+import { bonusRateView, referralHeroState, type ReferralHeroState } from "../referrals.js";
 import { useReferrals } from "../useReferrals.js";
 
 export interface ReferralsScreenProps {
@@ -119,7 +120,7 @@ export function Referrals({ owner, onConnect, onDeposit }: ReferralsScreenProps)
         />
 
         <div className="referrals-row">
-          {/* Bonus Rate card (Figma 230:16970, ticket referral-page/03) drops in here, flex: 1. */}
+          <BonusRateCard state={bonusRateView(walletKey, referrals.data)} />
           {/* Referral's Bonus card (Figma 230:17196, ticket referral-page/04) drops in here, flex: 1. */}
         </div>
         {/* Your Team (Figma 204:12548, ticket referral-page/05) drops in here, full width. */}

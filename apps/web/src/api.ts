@@ -444,6 +444,15 @@ export interface ReferralRowDto {
   daysToQualify: number | null;
 }
 
+/** A referral rate tier (referral-page ticket 03): tier 0 means no rate yet;
+ *  `maxCount` is null at the top tier (11+), which has no upper bound. */
+export interface ReferralBandDto {
+  tier: number;
+  rateBps: number;
+  minCount: number;
+  maxCount: number | null;
+}
+
 /** `GET /referrals/:wallet` (ticket 11). */
 export interface ReferralsDto {
   /** The wallet's own Referral code (referral-page ticket 01); null before
@@ -453,13 +462,10 @@ export interface ReferralsDto {
   ownedCodes: OwnedCodeDto[];
   referrals: ReferralRowDto[];
   qualifiedCount: number;
-  /** Current band's rate, in basis points; 0 below the first tier. */
-  rateBps: number;
-  /** Qualified referrals still needed to reach the next band; null at the
-   *  top band (11+). */
-  countToNextBand: number | null;
-  /** The next band's rate, in basis points; null alongside countToNextBand. */
-  nextRateBps: number | null;
+  /** Current band (referral-page ticket 03). */
+  band: ReferralBandDto;
+  /** The next, higher band; null at the top band (11+). */
+  nextBand: ReferralBandDto | null;
   bonusToday: string;
   bonusYesterday: string;
 }

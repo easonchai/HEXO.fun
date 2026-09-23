@@ -10,12 +10,13 @@
 
 /** Qualified-referral counts to rate tiers, in basis points: 1-2 -> 2%,
  *  3-5 -> 3%, 6-10 -> 4%, 11+ -> 5%. Checked highest `min` first so the
- *  first match wins. */
-const RATE_TIERS: readonly { min: number; rateBps: number }[] = [
-  { min: 11, rateBps: 500 },
-  { min: 6, rateBps: 400 },
-  { min: 3, rateBps: 300 },
-  { min: 1, rateBps: 200 },
+ *  first match wins. `max: null` at the top tier (11+, tier 4), which has no
+ *  upper bound. */
+const RATE_TIERS: readonly { tier: number; min: number; max: number | null; rateBps: number }[] = [
+  { tier: 4, min: 11, max: null, rateBps: 500 },
+  { tier: 3, min: 6, max: 10, rateBps: 400 },
+  { tier: 2, min: 3, max: 5, rateBps: 300 },
+  { tier: 1, min: 1, max: 2, rateBps: 200 },
 ];
 
 /** $2,500 at 6 decimals: a qualified referral counts toward its referrer's
@@ -109,23 +110,37 @@ export function computeBonuses(
 }
 
 export interface ReferralBand {
+  readonly tier: number;
   readonly rateBps: number;
-  /** Qualified referrals still needed to reach the next, higher band; null
-   *  at the top band (11+), where there is no next band. */
-  readonly countToNextBand: number | null;
+  readonly minCount: number;
+  /** Null at the top tier (11+), which has no upper bound. */
+  readonly maxCount: number | null;
 }
 
+/** Tier 0: no rate yet, below the first tier's minimum of 1. */
+const NO_BAND: ReferralBand = { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 };
+
 /**
- * The rate tier `qualifiedCount` referrals sits in, and how many more are
- * needed to reach the next one (docs/plan/hexo-referrals ticket 11: "current
- * band, count to next band"). `rateBps` is 0 below the first tier (0
- * qualified referrals), matching `computeBonuses`' own "nothing" case.
+ * The tier `qualifiedCount` referrals sits in, and the next, higher tier
+ * (null at the top tier, 11+); spec.md "Referrals API response" `band` /
+ * `nextBand`. Tier 0 means no rate yet (0 qualified referrals).
  */
-export function bandForCount(qualifiedCount: number): ReferralBand {
-  const rateBps = rateBpsFor(qualifiedCount);
-  // RATE_TIERS is ordered highest-min-first; the next band up is the
-  // smallest min still greater than the current count, found by scanning
-  // from the low end.
+export function bandForCount(
+  qualifiedCount: number,
+): { band: ReferralBand; nextBand: ReferralBand | null } {
+  // RATE_TIERS is ordered highest-min-first, so the first match is the
+  // current tier.
+  const current = RATE_TIERS.find((tier) => qualifiedCount >= tier.min);
+  const band: ReferralBand = current
+    ? { tier: current.tier, rateBps: current.rateBps, minCount: current.min, maxCount: current.max }
+    : NO_BAND;
+
+  // The next band up is the smallest min still greater than the current
+  // count, found by scanning from the low end.
   const next = [...RATE_TIERS].reverse().find((tier) => tier.min > qualifiedCount);
-  return { rateBps, countToNextBand: next ? next.min - qualifiedCount : null };
+  const nextBand: ReferralBand | null = next
+    ? { tier: next.tier, rateBps: next.rateBps, minCount: next.min, maxCount: next.max }
+    : null;
+
+  return { band, nextBand };
 }

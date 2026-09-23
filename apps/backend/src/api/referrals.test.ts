@@ -160,9 +160,8 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
       ownedCodes: [],
       referrals: [],
       qualifiedCount: 0,
-      rateBps: 0,
-      countToNextBand: 1,
-      nextRateBps: 200,
+      band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
+      nextBand: { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 },
       bonusToday: "0",
       bonusYesterday: "0",
     });
@@ -236,7 +235,8 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
       expect(row.wallet).toMatch(/^.{4}….{4}$/);
     }
     expect(body.qualifiedCount).toBe(1);
-    expect(body.rateBps).toBe(200);
+    expect(body.band).toEqual({ tier: 1, rateBps: 200, minCount: 1, maxCount: 2 });
+    expect(body.nextBand).toEqual({ tier: 2, rateBps: 300, minCount: 3, maxCount: 5 });
   });
 
   it("reads today's and yesterday's bonus off the pool's currentEpochId", async () => {

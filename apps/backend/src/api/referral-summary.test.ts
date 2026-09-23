@@ -26,9 +26,8 @@ describe("buildReferralsResponse", () => {
       ownedCodes: [],
       referrals: [],
       qualifiedCount: 0,
-      rateBps: 0,
-      countToNextBand: 1,
-      nextRateBps: 200,
+      band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
+      nextBand: { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 },
       bonusToday: 0n,
       bonusYesterday: 0n,
     });
@@ -89,32 +88,62 @@ describe("buildReferralsResponse", () => {
   // match against.
   const BAND_EDGES: {
     qualifiedCount: number;
-    rateBps: number;
-    countToNextBand: number | null;
-    nextRateBps: number | null;
+    band: { tier: number; rateBps: number; minCount: number; maxCount: number | null };
+    nextBand: { tier: number; rateBps: number; minCount: number; maxCount: number | null } | null;
   }[] = [
-    { qualifiedCount: 0, rateBps: 0, countToNextBand: 1, nextRateBps: 200 },
-    { qualifiedCount: 1, rateBps: 200, countToNextBand: 2, nextRateBps: 300 },
-    { qualifiedCount: 2, rateBps: 200, countToNextBand: 1, nextRateBps: 300 },
-    { qualifiedCount: 3, rateBps: 300, countToNextBand: 3, nextRateBps: 400 },
-    { qualifiedCount: 5, rateBps: 300, countToNextBand: 1, nextRateBps: 400 },
-    { qualifiedCount: 6, rateBps: 400, countToNextBand: 5, nextRateBps: 500 },
-    { qualifiedCount: 10, rateBps: 400, countToNextBand: 1, nextRateBps: 500 },
-    { qualifiedCount: 11, rateBps: 500, countToNextBand: null, nextRateBps: null },
+    {
+      qualifiedCount: 0,
+      band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
+      nextBand: { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 },
+    },
+    {
+      qualifiedCount: 1,
+      band: { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 },
+      nextBand: { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 },
+    },
+    {
+      qualifiedCount: 2,
+      band: { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 },
+      nextBand: { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 },
+    },
+    {
+      qualifiedCount: 3,
+      band: { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 },
+      nextBand: { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 },
+    },
+    {
+      qualifiedCount: 5,
+      band: { tier: 2, rateBps: 300, minCount: 3, maxCount: 5 },
+      nextBand: { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 },
+    },
+    {
+      qualifiedCount: 6,
+      band: { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 },
+      nextBand: { tier: 4, rateBps: 500, minCount: 11, maxCount: null },
+    },
+    {
+      qualifiedCount: 10,
+      band: { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 },
+      nextBand: { tier: 4, rateBps: 500, minCount: 11, maxCount: null },
+    },
+    {
+      qualifiedCount: 11,
+      band: { tier: 4, rateBps: 500, minCount: 11, maxCount: null },
+      nextBand: null,
+    },
   ];
 
   it.each(BAND_EDGES)(
-    "bands $qualifiedCount qualified referrals as rate $rateBps, countToNextBand $countToNextBand, nextRateBps $nextRateBps",
-    ({ qualifiedCount, rateBps, countToNextBand, nextRateBps }) => {
+    "bands $qualifiedCount qualified referrals as $band.tier, next $nextBand.tier",
+    ({ qualifiedCount, band, nextBand }) => {
       const referrals: ReferralInput[] = Array.from({ length: qualifiedCount }, () => ({
         referee: WALLET,
         aboveSince: NOW - BigInt(QUALIFY_SECONDS), // exactly qualified
       }));
       const response = buildReferralsResponse(null, [], referrals, NOW, QUALIFY_SECONDS, 0n, 0n);
       expect(response.qualifiedCount).toBe(qualifiedCount);
-      expect(response.rateBps).toBe(rateBps);
-      expect(response.countToNextBand).toBe(countToNextBand);
-      expect(response.nextRateBps).toBe(nextRateBps);
+      expect(response.band).toEqual(band);
+      expect(response.nextBand).toEqual(nextBand);
     },
   );
 });
