@@ -14,8 +14,9 @@
   Pushing runs a pre-push hook (check-deployable.sh plus pnpm test:unit, no CI); skip it once with git push --no-verify.
 
   See also: docs/architecture.md (components, accounts, roles, fund flow), docs/ops/deploy.md
-  (deploying and upgrading), docs/ops/funds.md (pulling and returning principal, shutdown) and
-  docs/ops/environments.md (dev/staging/mainnet).
+  (deploying and upgrading), docs/ops/funds.md (pulling and returning principal, shutdown),
+  docs/ops/environments.md (dev/staging/mainnet) and docs/ops/incidents.md (what to do when an
+  /alerts code fires).
 
   When you change something
 

@@ -219,7 +219,8 @@ Before a real mainnet deploy:
 - [ ] `PRIORITY_FEE_MAX_MICROLAMPORTS` set for mainnet congestion, not left at the devnet default
   by accident.
 - [ ] Monitoring on `/healthz` (operator SOL) and `/status` (`rpcOk`, `shutdown`,
-  `principalOut`).
+  `principalOut`). See [`docs/ops/incidents.md`](incidents.md) for what to do when an `/alerts`
+  code fires.
 - [ ] The mainnet program keypair backed up offline before its first deploy. After that, only the
   upgrade authority (the Ledger) matters, but losing the keypair before the first deploy loses
   the program ID.
