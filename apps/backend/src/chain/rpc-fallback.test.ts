@@ -117,6 +117,13 @@ describe("withRpcFallback", () => {
     expect(calledOnPrimary).toBe(true);
   });
 
+  it("passes rpcEndpoint straight through unredacted (security review ticket 14: callers must read rpcStatus() instead, never log .rpcEndpoint on a wrapped connection)", () => {
+    const primary = fakeConnection("https://primary.example/?api-key=SECRET", {});
+    const connection = withRpcFallback(primary, undefined, 1_000);
+
+    expect(connection.rpcEndpoint).toBe("https://primary.example/?api-key=SECRET");
+  });
+
   it("scrubs both endpoints' urls out of a failed-on-both-endpoints error", async () => {
     const primary = fakeConnection("https://primary.example/?api-key=SECRET1", {
       getSlot: () =>

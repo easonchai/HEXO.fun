@@ -39,7 +39,7 @@ import bs58 from "bs58";
 import { principalOut } from "../api/api.service";
 import { generateInviteCode } from "../api/invite-code";
 import { ChainService } from "../chain/chain.service";
-import { withRpcFallback } from "../chain/rpc-fallback";
+import { rpcStatus, withRpcFallback } from "../chain/rpc-fallback";
 import type { HexVaultEnv } from "../config/env";
 import { validateEnv } from "../config/env";
 import { decodePool, type PoolState } from "../operator/chain-state";
@@ -749,8 +749,14 @@ export async function main(): Promise<void> {
 
   const ledger = await loadLedgerSigner(env.ADMIN_ADDRESS);
   const mode = adminMode(env.ADMIN_ADDRESS, ledger?.publicKey ?? chain.keypair.publicKey);
+  // `connection.rpcEndpoint` reads straight through withRpcFallback's proxy
+  // to the real Connection's own URL (security review ticket 14: it is a
+  // plain getter, not a wrapped method, so the proxy never gets a chance to
+  // redact it) — logging it here would print the RPC URL, api key and all,
+  // to every CLI run. `rpcStatus` reports which endpoint is serving without
+  // ever naming it, the same "primary"/"fallback" pair /status uses.
   log(
-    `signer ${chain.keypair.publicKey.toBase58()} on ${connection.rpcEndpoint}, pool ${chain.poolAddress().toBase58()}`,
+    `signer ${chain.keypair.publicKey.toBase58()} on the ${rpcStatus(connection).endpoint} RPC, pool ${chain.poolAddress().toBase58()}`,
   );
   if (ledger) {
     log(`admin signer is the Ledger at ${ledger.publicKey.toBase58()}`);
