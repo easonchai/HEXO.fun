@@ -45,6 +45,11 @@ export interface ReferrerBonusInput {
 export interface ReferrerBonus {
   readonly referrer: string;
   readonly amount: bigint;
+  /** referral-page ticket 04: what `amount` would be without the
+   *  own-Principal cap (`remainingGrantCap`), with the pool-wide scale-down
+   *  in `computeBonuses` still applied to it the same way. Equal to `amount`
+   *  whenever the own-Principal cap doesn't bind. */
+  readonly uncapped: bigint;
   readonly qualifiedCount: number;
   readonly rateBps: number;
 }
@@ -67,14 +72,16 @@ export function remainingGrantCap(principal: bigint, alreadyGrantedToday: bigint
   return headroom > 0n ? headroom : 0n;
 }
 
-/** One referrer's bonus before the pool-wide cap scales it down. */
+/** One referrer's bonus before the pool-wide cap scales it down. `uncapped`
+ *  is the raw basis*rate figure, i.e. `amount` before `remainingGrantCap`
+ *  clamps it. */
 function preScaleBonus(input: ReferrerBonusInput): ReferrerBonus {
   const qualifiedCount = input.qualifiedReferralPrincipals.length;
   const rateBps = rateBpsFor(qualifiedCount);
-  const cap = remainingGrantCap(input.principal, input.alreadyGrantedToday);
-  if (rateBps === 0 || cap <= 0n) {
-    return { referrer: input.referrer, amount: 0n, qualifiedCount, rateBps };
+  if (rateBps === 0) {
+    return { referrer: input.referrer, amount: 0n, uncapped: 0n, qualifiedCount, rateBps };
   }
+  const cap = remainingGrantCap(input.principal, input.alreadyGrantedToday);
   const basis = input.qualifiedReferralPrincipals.reduce(
     (sum, principal) =>
       sum + (principal < REFERRAL_BONUS_BASIS_CAP ? principal : REFERRAL_BONUS_BASIS_CAP),
@@ -82,7 +89,7 @@ function preScaleBonus(input: ReferrerBonusInput): ReferrerBonus {
   );
   const raw = (basis * BigInt(rateBps)) / 10_000n;
   const amount = raw < cap ? raw : cap;
-  return { referrer: input.referrer, amount, qualifiedCount, rateBps };
+  return { referrer: input.referrer, amount, uncapped: raw, qualifiedCount, rateBps };
 }
 
 /**
@@ -104,8 +111,15 @@ export function computeBonuses(
   const cap = (totalPrincipal * BigInt(capBps)) / 10_000n;
   if (sum <= cap) return preScaled;
 
+  // Same cap/sum factor applied to `uncapped` as to `amount`, so a referrer
+  // whose own-Principal cap didn't bind (uncapped === amount pre-scale)
+  // still reads uncapped === amount after this scale-down too.
   return preScaled
-    .map((bonus) => ({ ...bonus, amount: (bonus.amount * cap) / sum }))
+    .map((bonus) => ({
+      ...bonus,
+      amount: (bonus.amount * cap) / sum,
+      uncapped: (bonus.uncapped * cap) / sum,
+    }))
     .filter((bonus) => bonus.amount > 0n);
 }
 

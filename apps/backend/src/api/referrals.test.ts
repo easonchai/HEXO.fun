@@ -162,8 +162,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
       qualifiedCount: 0,
       band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
       nextBand: { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 },
-      bonusToday: "0",
-      bonusYesterday: "0",
+      bonusToday: { amount: "0", uncapped: "0" },
     });
   });
 
@@ -239,26 +238,39 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     expect(body.nextBand).toEqual({ tier: 2, rateBps: 300, minCount: 3, maxCount: 5 });
   });
 
-  it("reads today's and yesterday's bonus off the pool's currentEpochId", async () => {
+  it("reads today's bonus amount and uncapped off the pool's currentEpochId", async () => {
     await prisma.pool.create({ data: emptyPool({ currentEpochId: 5n }) });
     await prisma.referralGrant.create({
-      data: { epochId: 5n, referrer: REFERRER, amount: 72_000_000n, qualifiedCount: 6, rateBps: 400 },
+      data: {
+        epochId: 5n,
+        referrer: REFERRER,
+        amount: 10_000_000n,
+        uncapped: 72_000_000n,
+        qualifiedCount: 6,
+        rateBps: 400,
+      },
     });
+    // A different epoch's grant must not leak into today's reading.
     await prisma.referralGrant.create({
-      data: { epochId: 4n, referrer: REFERRER, amount: 50_000_000n, qualifiedCount: 4, rateBps: 300 },
+      data: {
+        epochId: 4n,
+        referrer: REFERRER,
+        amount: 50_000_000n,
+        uncapped: 50_000_000n,
+        qualifiedCount: 4,
+        rateBps: 300,
+      },
     });
 
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
-    expect(body.bonusToday).toBe("72000000");
-    expect(body.bonusYesterday).toBe("50000000");
+    expect(body.bonusToday).toEqual({ amount: "10000000", uncapped: "72000000" });
   });
 
-  it("reads 0 for a wallet the bonus job has not granted today", async () => {
+  it("reads 0/0 for a wallet the bonus job has not granted today", async () => {
     await prisma.pool.create({ data: emptyPool({ currentEpochId: 5n }) });
 
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
-    expect(body.bonusToday).toBe("0");
-    expect(body.bonusYesterday).toBe("0");
+    expect(body.bonusToday).toEqual({ amount: "0", uncapped: "0" });
   });
 });
 

@@ -50,17 +50,21 @@ export interface ReferralsResponse {
   readonly band: ReferralBand;
   /** The next, higher band; null at the top band (11+). */
   readonly nextBand: ReferralBand | null;
-  readonly bonusToday: bigint;
-  readonly bonusYesterday: bigint;
+  /** referral-page ticket 04: atomic Ticket amounts. `uncapped` is what the
+   *  Referrer would get without their own Principal capping it; the web
+   *  shows the capped-hint state only when it's greater than `amount`.
+   *  `bonusYesterday` is gone (spec.md "Referrals API response"). */
+  readonly bonusToday: { amount: bigint; uncapped: bigint };
 }
 
 /**
  * Builds GET /referrals/:wallet's response (ticket 11; `referralCode` added
  * by ADR 0014 / docs/plan/referral-page ticket 01) from already-fetched
  * rows: this wallet's own ReferralCode, its owned InviteCodes, its
- * Referrals, and today's/yesterday's ReferralGrant amount (0n when the job
- * has not granted either day yet). `band`/`nextBand` (referral-page ticket
- * 03) come straight from `bandForCount`.
+ * Referrals, and today's ReferralGrant `{amount, uncapped}` (both 0n when
+ * the job has not granted today yet — referral-page ticket 04).
+ * `band`/`nextBand` (referral-page ticket 03) come straight from
+ * `bandForCount`.
  */
 export function buildReferralsResponse(
   referralCode: string | null,
@@ -68,8 +72,7 @@ export function buildReferralsResponse(
   referrals: readonly ReferralInput[],
   now: bigint,
   qualifySeconds: number,
-  bonusToday: bigint,
-  bonusYesterday: bigint,
+  bonusToday: { amount: bigint; uncapped: bigint },
 ): ReferralsResponse {
   const qualifiedCount = referrals.filter((referral) =>
     isQualified(referral.aboveSince, now, qualifySeconds),
@@ -91,6 +94,5 @@ export function buildReferralsResponse(
     band,
     nextBand,
     bonusToday,
-    bonusYesterday,
   };
 }

@@ -412,6 +412,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           epochId,
           referrer: bonus.referrer,
           amount: bonus.amount,
+          // referral-page ticket 04: written once here, like amount/
+          // qualifiedCount/rateBps, and never touched by the re-clamp loop
+          // below — it is defined as what the referrer would get without
+          // their own Principal moving, so a later Principal change has
+          // nothing to re-derive it from.
+          uncapped: bonus.uncapped,
           qualifiedCount: bonus.qualifiedCount,
           rateBps: bonus.rateBps,
         })),

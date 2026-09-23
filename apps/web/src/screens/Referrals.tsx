@@ -17,7 +17,13 @@ import type { PublicKey } from "@solana/web3.js";
 import { BonusRateCard } from "../BonusRateCard.js";
 import { Faq, type FaqItem } from "../Faq.js";
 import { InfoTip } from "../InfoTip.js";
-import { bonusRateView, referralHeroState, type ReferralHeroState } from "../referrals.js";
+import {
+  bonusRateView,
+  referralBonusCardState,
+  referralHeroState,
+  type ReferralBonusCardState,
+  type ReferralHeroState,
+} from "../referrals.js";
 import { useReferrals } from "../useReferrals.js";
 
 export interface ReferralsScreenProps {
@@ -100,11 +106,20 @@ const REFERRAL_FAQ: readonly FaqItem[] = [
   },
 ] as const;
 
+/** spec.md Copy, "Referral's Bonus tooltip". */
+const REFERRAL_BONUS_TIP = [
+  "Bonus tickets earned for today's draw.",
+  "• Calculated from qualified referral deposit tickets (capped at $2,500 per friend).",
+  "• Expire after each 24h draw and do not roll over.",
+  "• You cannot earn more bonus tickets than your own deposit tickets.",
+] as const;
+
 export function Referrals({ owner, onConnect, onDeposit }: ReferralsScreenProps) {
   const walletKey = owner?.toBase58();
   const referrals = useReferrals(walletKey);
   const hero = referralHeroState(walletKey, referrals.data);
   const copied = hero.kind === "has-code" && referrals.copiedCode === hero.code;
+  const bonus = referralBonusCardState(walletKey, referrals.data);
 
   return (
     <div className="referrals-page" data-testid="referrals-screen">
@@ -121,7 +136,7 @@ export function Referrals({ owner, onConnect, onDeposit }: ReferralsScreenProps)
 
         <div className="referrals-row">
           <BonusRateCard state={bonusRateView(walletKey, referrals.data)} />
-          {/* Referral's Bonus card (Figma 230:17196, ticket referral-page/04) drops in here, flex: 1. */}
+          <ReferralBonusCard state={bonus} onDeposit={onDeposit} />
         </div>
         {/* Your Team (Figma 204:12548, ticket referral-page/05) drops in here, full width. */}
         <ReferralFaq />
@@ -246,6 +261,60 @@ function ReferralFaq() {
       <div className="referral-faq-list" data-testid="referral-faq">
         <Faq items={REFERRAL_FAQ} itemClassName="referral-faq-item" numbered />
       </div>
+    </section>
+  );
+}
+
+/**
+ * Referral's Bonus card (referral-page ticket 04; Figma `230:17196` for the
+ * card, `230:17195` for its two states). The capped state's DEPOSIT button
+ * goes to EARN, same as the hero's own `onDeposit`.
+ */
+function ReferralBonusCard({
+  state,
+  onDeposit,
+}: {
+  state: ReferralBonusCardState;
+  onDeposit: () => void;
+}) {
+  return (
+    <section className="referral-bonus-card" aria-label="Referral's bonus">
+      <div className="referral-bonus-head">
+        <h2 className="referral-bonus-title">Referral's bonus</h2>
+        <InfoTip id="referral-bonus-tip" paragraphs={REFERRAL_BONUS_TIP} />
+      </div>
+
+      <div className="referral-bonus-amount-block">
+        <p className="referral-bonus-amount" data-testid="referral-bonus-amount">
+          {state.kind === "disconnected" ? (
+            "—"
+          ) : state.kind === "capped" ? (
+            <>
+              {`+${state.amount}`}
+              <span className="referral-bonus-amount-uncapped">{`/${state.uncapped}`}</span>
+            </>
+          ) : (
+            `+${state.amount}`
+          )}
+        </p>
+        <p className="referral-bonus-caption">Bonus tickets for today's draw</p>
+      </div>
+
+      {state.kind === "capped" ? (
+        <>
+          <p className="referral-bonus-hint" data-testid="referral-bonus-hint">
+            {`Deposit $${state.hintUsdc} more to unlock all ${state.uncapped} bonus tickets in the next draw.`}
+          </p>
+          <button
+            type="button"
+            className="referral-bonus-deposit"
+            data-testid="referral-bonus-deposit"
+            onClick={onDeposit}
+          >
+            DEPOSIT
+          </button>
+        </>
+      ) : null}
     </section>
   );
 }

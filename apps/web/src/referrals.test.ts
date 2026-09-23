@@ -4,6 +4,7 @@ import {
   applyReferralMessage,
   bonusRateView,
   refCodeFromSearch,
+  referralBonusCardState,
   referralHeroState,
   shareLink,
 } from "./referrals.js";
@@ -15,15 +16,17 @@ const TIER_2: ReferralBandDto = { tier: 2, rateBps: 300, minCount: 3, maxCount: 
 const TIER_3: ReferralBandDto = { tier: 3, rateBps: 400, minCount: 6, maxCount: 10 };
 const TIER_4: ReferralBandDto = { tier: 4, rateBps: 500, minCount: 11, maxCount: null };
 
-const dto = (referralCode: string | null): ReferralsDto => ({
+const dto = (
+  referralCode: string | null,
+  bonusToday: { amount: string; uncapped: string } = { amount: "0", uncapped: "0" },
+): ReferralsDto => ({
   referralCode,
   ownedCodes: [],
   referrals: [],
   qualifiedCount: 0,
   band: ZERO_BAND,
   nextBand: TIER_1,
-  bonusToday: "0",
-  bonusYesterday: "0",
+  bonusToday,
 });
 
 describe("referralHeroState", () => {
@@ -134,5 +137,43 @@ describe("bonusRateView", () => {
       progressFraction: 1,
       progressCopy: "14 qualified referrals · Max tier",
     });
+  });
+});
+
+describe("referralBonusCardState", () => {
+  const atomic = (whole: number) => String(whole * 1_000_000);
+
+  it("is disconnected with no owner, regardless of any loaded data", () => {
+    expect(referralBonusCardState(null, null)).toEqual({ kind: "disconnected" });
+    expect(referralBonusCardState(undefined, dto("ABCD2345"))).toEqual({ kind: "disconnected" });
+  });
+
+  it("is not-capped at 0 before the poll has landed (no data yet)", () => {
+    expect(referralBonusCardState(OWNER, null)).toEqual({ kind: "not-capped", amount: 0 });
+  });
+
+  it("is not-capped at 0 once connected with no grant today", () => {
+    const data = dto("ABCD2345");
+    expect(referralBonusCardState(OWNER, data)).toEqual({ kind: "not-capped", amount: 0 });
+  });
+
+  it("is not-capped when the own-Principal cap didn't bind (uncapped == amount)", () => {
+    const data = dto("ABCD2345", { amount: atomic(72), uncapped: atomic(72) });
+    expect(referralBonusCardState(OWNER, data)).toEqual({ kind: "not-capped", amount: 72 });
+  });
+
+  it("is capped with the hint amount when uncapped exceeds amount", () => {
+    const data = dto("ABCD2345", { amount: atomic(10), uncapped: atomic(72) });
+    expect(referralBonusCardState(OWNER, data)).toEqual({
+      kind: "capped",
+      amount: 10,
+      uncapped: 72,
+      hintUsdc: 62,
+    });
+  });
+
+  it("truncates atomic amounts to whole Tickets", () => {
+    const data = dto("ABCD2345", { amount: "10999999", uncapped: "10999999" });
+    expect(referralBonusCardState(OWNER, data)).toEqual({ kind: "not-capped", amount: 10 });
   });
 });

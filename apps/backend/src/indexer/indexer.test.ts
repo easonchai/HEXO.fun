@@ -1289,7 +1289,43 @@ describe("referral bonus job (ticket 08)", () => {
     const row = await prisma.referralGrant.findUniqueOrThrow({
       where: { epochId_referrer: { epochId: EPOCH_ID, referrer: REFERRER } },
     });
-    expect(row).toMatchObject({ amount: 2_000_000n, qualifiedCount: 1, rateBps: 200, txSig: null });
+    expect(row).toMatchObject({
+      amount: 2_000_000n,
+      // referral-page ticket 04: the own-Principal cap and pool cap are both
+      // ample here (referrerPlayer's default Principal, poolRow's default
+      // bonusCapBps), so uncapped equals amount.
+      uncapped: 2_000_000n,
+      qualifiedCount: 1,
+      rateBps: 200,
+      txSig: null,
+    });
+  });
+
+  it("records uncapped as the raw grant when the referrer's own Principal caps amount, and it stays idempotent across restarts", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER, { principal: 10_000_000n }) }); // $10
+    for (let i = 0; i < 11; i++) {
+      await seedQualifiedReferral({ principal: 2_500_000_000n }); // $2,500 each, 11 -> 5% tier
+    }
+
+    const first = await indexer.referralGrantsDue(EPOCH_ID);
+    expect(first).toEqual([{ referrer: REFERRER, amount: 10_000_000n }]); // capped at the $10 Principal
+
+    const row = await prisma.referralGrant.findUniqueOrThrow({
+      where: { epochId_referrer: { epochId: EPOCH_ID, referrer: REFERRER } },
+    });
+    expect(row.uncapped).toBe(1_375_000_000n); // 5% of 11 * $2,500 raw, uncapped by the $10 cap
+
+    // A later Principal move re-clamps `amount` (see the test above this
+    // one) but must not touch the already-recorded `uncapped`: it stays
+    // idempotent across restarts / repeated ticks the same way amount's own
+    // recorded qualifiedCount and rateBps do.
+    await prisma.player.update({ where: { owner: REFERRER }, data: { principal: 5_000_000n } });
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    const after = await prisma.referralGrant.findUniqueOrThrow({
+      where: { epochId_referrer: { epochId: EPOCH_ID, referrer: REFERRER } },
+    });
+    expect(after.uncapped).toBe(1_375_000_000n);
   });
 
   it("a referral not yet qualified earns its referrer nothing", async () => {

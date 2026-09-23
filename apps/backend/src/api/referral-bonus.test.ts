@@ -160,7 +160,9 @@ describe("computeBonuses: pool-wide pro-rata scale-down", () => {
   it("does not scale when the sum is already within the pool cap", () => {
     const inputs = [referrer("a", [10n * USDC])];
     const bonuses = computeBonuses(inputs, NO_POOL_CAP.totalPrincipal, NO_POOL_CAP.capBps);
-    expect(bonuses).toEqual([{ referrer: "a", amount: 200_000n, qualifiedCount: 1, rateBps: 200 }]);
+    expect(bonuses).toEqual([
+      { referrer: "a", amount: 200_000n, uncapped: 200_000n, qualifiedCount: 1, rateBps: 200 },
+    ]);
   });
 
   it("a scale-down that floors a small bonus to 0 leaves it out", () => {
@@ -202,6 +204,60 @@ describe("computeBonuses: referrers who earn nothing", () => {
       NO_POOL_CAP.capBps,
     );
     expect(bonuses.map((bonus) => bonus.referrer)).toEqual(["earns"]);
+  });
+});
+
+// referral-page ticket 04: `uncapped` is `amount` before the own-Principal
+// cap, with the pool-wide scale-down still applied. Four cases: neither cap
+// binds, only the own cap, only the pool cap, and both.
+describe("computeBonuses: uncapped", () => {
+  it("not capped: uncapped equals amount when neither cap binds", () => {
+    const [bonus] = computeBonuses(
+      [referrer("r", [10n * USDC])],
+      NO_POOL_CAP.totalPrincipal,
+      NO_POOL_CAP.capBps,
+    );
+    expect(bonus).toMatchObject({ amount: 200_000n, uncapped: 200_000n });
+  });
+
+  it("own-Principal cap binding: uncapped is the raw grant, amount is capped at the Principal", () => {
+    // Same worked case as "the reported worked case" above: 11 referrals at
+    // $2,500 (5% tier) raw to $1,375, a $10 Principal caps amount at $10.
+    const referrals = Array.from({ length: 11 }, () => 2_500n * USDC);
+    const [bonus] = computeBonuses(
+      [referrer("r", referrals, 10n * USDC)],
+      NO_POOL_CAP.totalPrincipal,
+      NO_POOL_CAP.capBps,
+    );
+    expect(bonus).toMatchObject({ amount: 10n * USDC, uncapped: 1_375n * USDC });
+  });
+
+  it("pool-wide scale binding without an own-Principal cap: uncapped still equals amount", () => {
+    // Same worked case as the pool-wide scale-down test above: both
+    // referrers' own cap is ample, so their pre-scale amount and uncapped
+    // are identical and the same cap/sum factor lands them on 75 USDC each.
+    const threeReferrals = Array.from({ length: 3 }, () => 1_000n * USDC);
+    const inputs = [referrer("a", threeReferrals), referrer("b", threeReferrals)];
+    const bonuses = computeBonuses(inputs, 3_000n * USDC, 500);
+    for (const bonus of bonuses) {
+      expect(bonus.amount).toBe(75n * USDC);
+      expect(bonus.uncapped).toBe(bonus.amount);
+    }
+  });
+
+  it("both binding: the pool scale-down shrinks uncapped too, but it stays above amount", () => {
+    // 11 referrals at $2,500 (5% tier, raw/uncapped pre-scale $1,375), a $100
+    // Principal caps amount pre-scale at $100. A single referrer's pool
+    // scale is exact (amount*cap/sum === cap since amount === sum), so a
+    // $40 pool cap lands amount at exactly $40 and uncapped at exactly
+    // $1,375 * 40/100 = $550.
+    const referrals = Array.from({ length: 11 }, () => 2_500n * USDC);
+    const [bonus] = computeBonuses(
+      [referrer("r", referrals, 100n * USDC)],
+      4_000n * USDC,
+      100, // 1% of $4,000 = $40 pool cap
+    );
+    expect(bonus).toMatchObject({ amount: 40n * USDC, uncapped: 550n * USDC });
   });
 });
 

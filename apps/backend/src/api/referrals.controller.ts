@@ -66,8 +66,8 @@ function parseApplyReferralBody(body: unknown): ApplyReferralBody {
 /**
  * The referrals screen (docs/plan/hexo-referrals ticket 11): this wallet's
  * own Referral code (ADR 0014), its owned invite codes, its referrals with
- * qualification state, the current band and today's/yesterday's bonus. The
- * response shape lives in
+ * qualification state, the current band and today's bonus `{amount,
+ * uncapped}` (referral-page ticket 04). The response shape lives in
  * referral-summary.ts's `buildReferralsResponse` so it is unit tested
  * without a database; this controller only fetches the rows it needs.
  *
@@ -104,13 +104,7 @@ export class ReferralsController {
       this.prisma.pool.findFirst(),
     ]);
 
-    const [grantToday, grantYesterday] = await Promise.all([
-      this.bonusGrant(pool?.currentEpochId, wallet),
-      this.bonusGrant(
-        pool !== null && pool.currentEpochId > 0n ? pool.currentEpochId - 1n : undefined,
-        wallet,
-      ),
-    ]);
+    const grantToday = await this.bonusGrant(pool?.currentEpochId, wallet);
 
     return buildReferralsResponse(
       referralCode?.code ?? null,
@@ -118,8 +112,7 @@ export class ReferralsController {
       referrals,
       nowSeconds(),
       qualifySeconds,
-      grantToday?.amount ?? 0n,
-      grantYesterday?.amount ?? 0n,
+      { amount: grantToday?.amount ?? 0n, uncapped: grantToday?.uncapped ?? 0n },
     );
   }
 
@@ -178,13 +171,13 @@ export class ReferralsController {
     }
   }
 
-  /** undefined `epochId` (no pool indexed yet, or no epoch before the
-   *  first) short-circuits without a query. */
+  /** undefined `epochId` (no pool indexed yet) short-circuits without a
+   *  query. */
   private bonusGrant(epochId: bigint | undefined, referrer: string) {
     if (epochId === undefined) return Promise.resolve(null);
     return this.prisma.referralGrant.findUnique({
       where: { epochId_referrer: { epochId, referrer } },
-      select: { amount: true },
+      select: { amount: true, uncapped: true },
     });
   }
 }

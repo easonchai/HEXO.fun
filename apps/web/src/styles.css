@@ -4729,6 +4729,100 @@ input::placeholder {
   margin-top: 22px;
 }
 
+/* ---------- Referral's Bonus card (ticket 04; Figma 230:17196 / 230:17195).
+   Bonus Rate (03) is the sibling on the left; .referrals-row's default
+   align-items: stretch matches both cards to the taller one's height, the
+   same way Figma's two 249px-tall sibling frames do. ---------- */
+
+.referral-bonus-card {
+  flex: none;
+  width: 517px;
+  padding: 24px;
+  background: var(--brand-slate);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.referral-bonus-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.referral-bonus-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--brand-white);
+  text-transform: lowercase;
+}
+
+.referral-bonus-amount-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 19px;
+}
+
+.referral-bonus-amount {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 64px;
+  line-height: 52px;
+  letter-spacing: -0.52px;
+  color: var(--brand-lime);
+}
+
+.referral-bonus-amount-uncapped {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.referral-bonus-caption {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  letter-spacing: 0.36px;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+}
+
+.referral-bonus-hint {
+  margin: 16px 0 0;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 16.5px;
+  color: var(--brand-lime);
+}
+
+/* Same "slate 75% ground, white 30% hairline" ghost button as .dash-btn
+   (Dashboard.tsx), at this card's own Figma type size. */
+.referral-bonus-deposit {
+  width: 219px;
+  height: 44px;
+  margin-top: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(54, 62, 75, 0.75);
+  color: rgba(255, 255, 255, 0.75);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.9px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.referral-bonus-deposit:hover {
+  color: var(--brand-white);
+  background: rgba(54, 62, 75, 0.95);
+}
+
 @media (max-width: 960px) {
   .referrals-content {
     padding: 24px 16px 48px;
@@ -4918,6 +5012,20 @@ input::placeholder {
   .bonus-rate-percent {
     font-size: 48px;
     line-height: 1;
+  }
+
+  .referral-bonus-card {
+    width: 100%;
+    padding: 20px;
+  }
+
+  .referral-bonus-amount {
+    font-size: 44px;
+    line-height: 40px;
+  }
+
+  .referral-bonus-deposit {
+    width: 100%;
   }
 }
 

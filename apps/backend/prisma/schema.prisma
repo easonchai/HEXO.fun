@@ -223,6 +223,10 @@ model ReferralGrant {
   epochId        BigInt
   referrer       String
   amount         BigInt
+  /** referral-page ticket 04: `amount` without the own-Principal cap, pool
+   *  scale-down still applied. Equal to `amount` when that cap doesn't
+   *  bind. Migration 20260923020000 backfills existing rows to `amount`. */
+  uncapped       BigInt
   qualifiedCount Int
   rateBps        Int
   txSig          String?

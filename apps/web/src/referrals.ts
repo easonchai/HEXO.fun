@@ -6,8 +6,9 @@
  *
  * The band/bonus/team helpers this file used to hold (hexo-referrals ticket
  * 11) are gone with the placeholder screen they served; ticket 03 brings the
- * band view-model back below, now over the API's `band`/`nextBand` shape.
- * Tickets 04-05 bring the rest back once the API grows the paginated
+ * band view-model back below, now over the API's `band`/`nextBand` shape,
+ * and ticket 04 adds `referralBonusCardState` for the Referral's Bonus card.
+ * Ticket 05 brings the team rows back once the API grows the paginated
  * `referrals` shape (spec.md "Referrals API response").
  */
 import type { ReferralBandDto, ReferralsDto } from "./api.js";
@@ -114,4 +115,42 @@ export function bonusRateView(
     progressFraction: qualifiedCount / nextBand.minCount,
     progressCopy,
   };
+}
+
+/** Tickets share USDC's atomic scale (money.ts, useBuyTickets.ts's
+ *  `ticketsFromUsdc`): 6 decimals. The Referral's Bonus card shows whole
+ *  Tickets only (ticket 04), so this truncates rather than rounds. */
+const TICKET_DECIMALS = 1_000_000n;
+
+function wholeTickets(atomic: string): number {
+  return Number(BigInt(atomic) / TICKET_DECIMALS);
+}
+
+/** Referral's Bonus card state (referral-page ticket 04, Figma `230:17196` /
+ *  `230:17195`): the capped state shows only once the own-Principal cap
+ *  actually bound (`uncapped > amount`), never merely because a grant hasn't
+ *  landed yet — a wallet with no grant today is "not-capped" at `amount: 0`,
+ *  which the card renders as "+0" (spec.md "No grant today shows '+0'"). */
+export type ReferralBonusCardState =
+  | { kind: "disconnected" }
+  | { kind: "not-capped"; amount: number }
+  | { kind: "capped"; amount: number; uncapped: number; hintUsdc: number };
+
+export function referralBonusCardState(
+  owner: string | null | undefined,
+  data: ReferralsDto | null,
+): ReferralBonusCardState {
+  if (!owner) return { kind: "disconnected" };
+  const bonus = data?.bonusToday ?? { amount: "0", uncapped: "0" };
+  const amount = wholeTickets(bonus.amount);
+  const uncapped = wholeTickets(bonus.uncapped);
+  if (uncapped <= amount) return { kind: "not-capped", amount };
+  // spec.md "Referral grant gains uncapped": both are already whole Tickets
+  // computed the same own-Principal-cap boundary as the deposit headroom
+  // (referral-bonus.ts's remainingGrantCap), so the gap between them reads
+  // directly as whole USDC still needed — exact while the pool-wide cap
+  // isn't binding, understating it when the pool cap also binds (ponytail:
+  // spec.md's own note; the API would need to expose the scale factor to
+  // fix this precisely).
+  return { kind: "capped", amount, uncapped, hintUsdc: uncapped - amount };
 }

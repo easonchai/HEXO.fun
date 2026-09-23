@@ -466,8 +466,10 @@ export interface ReferralsDto {
   band: ReferralBandDto;
   /** The next, higher band; null at the top band (11+). */
   nextBand: ReferralBandDto | null;
-  bonusToday: string;
-  bonusYesterday: string;
+  /** referral-page ticket 04: atomic Ticket decimal strings. `uncapped` is
+   *  what the Referrer would get without their own Principal capping it;
+   *  equal to `amount` when that cap doesn't bind. `bonusYesterday` is gone. */
+  bonusToday: { amount: string; uncapped: string };
 }
 
 export const fetchReferrals = (
