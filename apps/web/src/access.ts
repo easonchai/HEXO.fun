@@ -15,9 +15,14 @@ export function normalizeInviteCode(raw: string): string {
   return raw.trim().toUpperCase();
 }
 
-/** The exact bytes the wallet signs for `POST /access/redeem`. */
-export function accessMessage(wallet: string, code: string): string {
-  return `HEXO access: ${wallet} ${code}`;
+/** The exact bytes the wallet signs for `POST /access/redeem`. With a
+ *  `referralCode` (referral-page ticket 02), it rides inside this same
+ *  message so applying one costs no extra signature; omitted, the message is
+ *  exactly what it was before ticket 02. */
+export function accessMessage(wallet: string, code: string, referralCode?: string): string {
+  return referralCode
+    ? `HEXO access: ${wallet} ${code} ref:${referralCode}`
+    : `HEXO access: ${wallet} ${code}`;
 }
 
 /** `?invite=CODE` from `location.search`; "" when absent. */

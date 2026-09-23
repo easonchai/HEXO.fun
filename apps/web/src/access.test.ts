@@ -18,6 +18,12 @@ describe("accessMessage", () => {
   it("matches the backend's exact wire format", () => {
     expect(accessMessage("Ai1ce", "ABC123XY")).toBe("HEXO access: Ai1ce ABC123XY");
   });
+
+  it("carries a referral code inside the same message when given (ticket 02)", () => {
+    expect(accessMessage("Ai1ce", "ABC123XY", "REFC2345")).toBe(
+      "HEXO access: Ai1ce ABC123XY ref:REFC2345",
+    );
+  });
 });
 
 describe("inviteCodeFromSearch", () => {

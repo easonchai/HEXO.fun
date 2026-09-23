@@ -14,10 +14,13 @@ import { SerializationInterceptor } from "./serialization.interceptor";
 /**
  * spec.md §3.5. The interceptor and the guard are registered here rather than
  * in main.ts so importing this module is the whole wiring. `skipIf` keeps the
- * global guard off every route but the faucet and access: the frontend polls
- * the read routes every 2 s and /healthz is a container probe. Access is
- * throttled too, same limit: a script trying invite codes against POST
- * /access/redeem is exactly what this guards against (ticket 06).
+ * global guard off every route but the faucet, access and one referrals
+ * route: the frontend polls the read routes every 2 s and /healthz is a
+ * container probe. Access is throttled too, same limit: a script trying
+ * invite codes against POST /access/redeem is exactly what this guards
+ * against (ticket 06). `POST /referrals/apply` shares that limit for the
+ * same reason (ticket 02); the rest of ReferralsController (the polled GET
+ * /referrals/:wallet) stays unthrottled.
  */
 @Module({
   imports: [
@@ -28,7 +31,11 @@ import { SerializationInterceptor } from "./serialization.interceptor";
         limit: 10,
         skipIf: (context) => {
           const controller = context.getClass();
-          return controller !== FaucetController && controller !== AccessController;
+          if (controller === FaucetController || controller === AccessController) return false;
+          return !(
+            controller === ReferralsController &&
+            context.getHandler() === ReferralsController.prototype.applyReferral
+          );
         },
       },
     ]),

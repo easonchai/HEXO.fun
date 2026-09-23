@@ -32,3 +32,17 @@ export function referralHeroState(
 export function shareLink(origin: string, code: string): string {
   return `${origin}/?ref=${code}`;
 }
+
+/** `?ref=CODE` from `location.search`; "" when absent. Mirrors
+ *  `inviteCodeFromSearch` (access.ts ticket 09). */
+export function refCodeFromSearch(search: string): string {
+  return new URLSearchParams(search).get("ref")?.trim() ?? "";
+}
+
+/** The exact bytes `POST /referrals/apply` must be signed over (ticket 02),
+ *  mirroring the backend's `applyReferralMessage`
+ *  (apps/backend/src/api/invite-code.ts). Distinct from `accessMessage`, so a
+ *  redeem signature can't be replayed here. */
+export function applyReferralMessage(wallet: string, code: string): string {
+  return `HEXO apply referral: ${wallet} ${code}`;
+}

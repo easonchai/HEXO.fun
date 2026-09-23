@@ -41,11 +41,14 @@ interface RedeemBody {
   wallet: PublicKey;
   code: string;
   signature: Uint8Array;
+  /** Optional Referral code riding along on the redeem signature (ADR 0014,
+   *  ticket 02); null when the client sent none. */
+  referralCode: string | null;
 }
 
 function parseRedeemBody(body: unknown): RedeemBody {
   const raw = body as
-    | { wallet?: unknown; code?: unknown; signature?: unknown }
+    | { wallet?: unknown; code?: unknown; signature?: unknown; referralCode?: unknown }
     | null
     | undefined;
   if (typeof raw?.wallet !== "string" || raw.wallet.length === 0) {
@@ -67,7 +70,14 @@ function parseRedeemBody(body: unknown): RedeemBody {
   if (signature.length !== 64) {
     throw new BadRequestException("`signature` must be a 64-byte ed25519 signature.");
   }
-  return { wallet, code: normalizeInviteCode(raw.code), signature };
+  let referralCode: string | null = null;
+  if (raw.referralCode !== undefined && raw.referralCode !== null) {
+    if (typeof raw.referralCode !== "string" || raw.referralCode.trim().length === 0) {
+      throw new BadRequestException("`referralCode` must be a non-empty string when present.");
+    }
+    referralCode = normalizeInviteCode(raw.referralCode);
+  }
+  return { wallet, code: normalizeInviteCode(raw.code), signature, referralCode };
 }
 
 /** Same limits as `admin create-invite`, plus a ceiling on `count` so one
@@ -113,7 +123,9 @@ const sameKey = (given: string, expected: string): boolean =>
     createHash("sha256").update(expected).digest(),
   );
 
-const isUniqueConstraintViolation = (cause: unknown): boolean =>
+/** Exported for referrals.controller.ts's apply endpoint, which needs the
+ *  same race-to-unique-constraint handling as redeem below. */
+export const isUniqueConstraintViolation = (cause: unknown): boolean =>
   cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2002";
 
 /**
@@ -163,18 +175,20 @@ export class AccessController {
    * `InviteRedemption` primary key: a losing race there surfaces as a
    * Postgres unique-violation (P2002), caught below.
    *
-   * When the code has an owner, the owner is not the redeemer (no
-   * self-referral) and the redeemer has no Player yet (binding only before a
-   * first deposit), this also writes the `Referral` (ticket 07). It is never
-   * updated after that: a wallet redeems at most once, so this branch runs
-   * at most once per referee.
+   * When the redeemer has no Player yet (binding only before a first
+   * deposit), this also writes the `Referral` (ticket 07). Referrer
+   * precedence (ADR 0014, ticket 02): a valid `referralCode` wins — it
+   * exists and is not owned by the redeemer itself — otherwise the invite
+   * code's owner is used, provided that owner is not the redeemer either (no
+   * self-referral). It is never updated after that: a wallet redeems at most
+   * once, so this branch runs at most once per referee.
    */
   @Post("redeem")
   async redeem(@Body() body: unknown) {
-    const { wallet, code, signature } = parseRedeemBody(body);
-    if (!verifyAccessSignature(wallet, code, signature)) {
+    const { wallet, code, signature, referralCode } = parseRedeemBody(body);
+    if (!verifyAccessSignature(wallet, code, signature, referralCode ?? undefined)) {
       throw new BadRequestException(
-        `That signature does not match "${accessMessage(wallet.toBase58(), code)}".`,
+        `That signature does not match "${accessMessage(wallet.toBase58(), code, referralCode ?? undefined)}".`,
       );
     }
     const address = wallet.toBase58();
@@ -199,11 +213,22 @@ export class AccessController {
         await tx.inviteRedemption.create({
           data: { wallet: address, code, redeemedAt: nowSeconds() },
         });
-        if (invite.ownerWallet !== null && invite.ownerWallet !== address) {
-          const player = await tx.player.findUnique({ where: { owner: address } });
-          if (player === null) {
+
+        const player = await tx.player.findUnique({ where: { owner: address } });
+        if (player === null) {
+          let bound: { referrer: string; code: string } | null = null;
+          if (referralCode !== null) {
+            const owner = await tx.referralCode.findUnique({ where: { code: referralCode } });
+            if (owner !== null && owner.owner !== address) {
+              bound = { referrer: owner.owner, code: referralCode };
+            }
+          }
+          if (bound === null && invite.ownerWallet !== null && invite.ownerWallet !== address) {
+            bound = { referrer: invite.ownerWallet, code };
+          }
+          if (bound !== null) {
             await tx.referral.create({
-              data: { referee: address, referrer: invite.ownerWallet, code, boundAt: nowSeconds() },
+              data: { referee: address, referrer: bound.referrer, code: bound.code, boundAt: nowSeconds() },
             });
           }
         }

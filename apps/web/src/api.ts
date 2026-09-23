@@ -371,6 +371,7 @@ export async function redeemAccess(
   wallet: string,
   code: string,
   signature: string,
+  referralCode?: string,
   signal?: AbortSignal,
 ): Promise<RedeemAccessResult> {
   try {
@@ -378,7 +379,7 @@ export async function redeemAccess(
       method: "POST",
       signal: signal ?? null,
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ wallet, code, signature }),
+      body: JSON.stringify({ wallet, code, signature, ...(referralCode ? { referralCode } : {}) }),
     });
     const body = (await response.json().catch(() => null)) as
       | (Partial<AccessDto> & { message?: string })
@@ -395,6 +396,34 @@ export async function redeemAccess(
     return {
       ok: false,
       status: null,
+      reason: error instanceof Error ? error.message : "indexer offline",
+    };
+  }
+}
+
+/** `POST /referrals/apply` (ticket 02): applies a `?ref=CODE` for a wallet
+ *  already past the beta gate. `applied: false` is never an error and never
+ *  shown to the user (spec.md "?ref= capture"): `ok: false` here only means
+ *  the request itself failed to reach the server. */
+export async function applyReferral(
+  baseUrl: string,
+  wallet: string,
+  code: string,
+  signature: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<{ applied: boolean; reason: string }>> {
+  try {
+    const response = await fetch(`${baseUrl}/referrals/apply`, {
+      method: "POST",
+      signal: signal ?? null,
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ wallet, code, signature }),
+    });
+    if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
+    return { ok: true, data: (await response.json()) as { applied: boolean; reason: string } };
+  } catch (error) {
+    return {
+      ok: false,
       reason: error instanceof Error ? error.message : "indexer offline",
     };
   }

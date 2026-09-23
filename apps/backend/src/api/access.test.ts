@@ -46,7 +46,9 @@ function sign(keypair: Keypair, message: string): string {
 }
 
 async function truncate(prisma: PrismaService): Promise<void> {
-  await prisma.$executeRawUnsafe('TRUNCATE "InviteCode", "InviteRedemption", "Player", "Referral"');
+  await prisma.$executeRawUnsafe(
+    'TRUNCATE "InviteCode", "InviteRedemption", "Player", "Referral", "ReferralCode"',
+  );
 }
 
 const emptyPlayer = (owner: string): Player => ({
@@ -109,6 +111,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
     await prisma.inviteCode.deleteMany();
     await prisma.inviteRedemption.deleteMany();
     await prisma.referral.deleteMany();
+    await prisma.referralCode.deleteMany();
   });
 
   describe("GET /access/:wallet", () => {
@@ -396,6 +399,83 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       } finally {
         await prisma.player.delete({ where: { owner: existingDepositor.publicKey.toBase58() } });
       }
+    });
+  });
+
+  describe("referral code precedence (referral-page ticket 02)", () => {
+    it("binds via a valid referral code, not the invite code's owner", async () => {
+      const inviteOwner = Keypair.generate();
+      const referralOwner = Keypair.generate();
+      const referee = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: {
+          code: "INVT2345",
+          maxUses: 5,
+          uses: 0,
+          createdAt: 0n,
+          ownerWallet: inviteOwner.publicKey.toBase58(),
+        },
+      });
+      await prisma.referralCode.create({
+        data: { code: "REFC2345", owner: referralOwner.publicKey.toBase58(), createdAt: 0n },
+      });
+      const signature = sign(
+        referee,
+        accessMessage(referee.publicKey.toBase58(), "INVT2345", "REFC2345"),
+      );
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: referee.publicKey.toBase58(),
+          code: "INVT2345",
+          referralCode: "REFC2345",
+          signature,
+        })
+        .expect(201);
+
+      const referral = await prisma.referral.findUnique({
+        where: { referee: referee.publicKey.toBase58() },
+      });
+      expect(referral?.referrer).toBe(referralOwner.publicKey.toBase58());
+      expect(referral?.code).toBe("REFC2345");
+    });
+
+    it("falls back to the invite owner when the referral code is self-owned", async () => {
+      const inviteOwner = Keypair.generate();
+      const referee = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: {
+          code: "INVT6789",
+          maxUses: 5,
+          uses: 0,
+          createdAt: 0n,
+          ownerWallet: inviteOwner.publicKey.toBase58(),
+        },
+      });
+      // A referral code the referee itself owns: not a valid Referrer (no
+      // self-referral), so precedence falls through to the invite owner.
+      await prisma.referralCode.create({
+        data: { code: "SELFOWNR", owner: referee.publicKey.toBase58(), createdAt: 0n },
+      });
+      const signature = sign(
+        referee,
+        accessMessage(referee.publicKey.toBase58(), "INVT6789", "SELFOWNR"),
+      );
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: referee.publicKey.toBase58(),
+          code: "INVT6789",
+          referralCode: "SELFOWNR",
+          signature,
+        })
+        .expect(201);
+
+      const referral = await prisma.referral.findUnique({
+        where: { referee: referee.publicKey.toBase58() },
+      });
+      expect(referral?.referrer).toBe(inviteOwner.publicKey.toBase58());
+      expect(referral?.code).toBe("INVT6789");
     });
   });
 });

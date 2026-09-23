@@ -5,11 +5,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   accessMessage,
+  applyReferralMessage,
   generateInviteCode,
   INVITE_CODE_ALPHABET,
   INVITE_CODE_LENGTH,
   normalizeInviteCode,
   verifyAccessSignature,
+  verifyApplyReferralSignature,
 } from "./invite-code";
 
 /** Signs with a Solana keypair's own seed, mirroring what a wallet's
@@ -51,12 +53,35 @@ describe("normalizeInviteCode", () => {
   });
 });
 
+describe("accessMessage", () => {
+  it("is unchanged with no referral code (ticket 02: the old message stays valid)", () => {
+    expect(accessMessage("Ai1ce", "ABC123XY")).toBe("HEXO access: Ai1ce ABC123XY");
+  });
+
+  it("carries the referral code inside the same message when given", () => {
+    expect(accessMessage("Ai1ce", "ABC123XY", "REFC2345")).toBe(
+      "HEXO access: Ai1ce ABC123XY ref:REFC2345",
+    );
+  });
+});
+
 describe("verifyAccessSignature", () => {
   it("accepts a wallet's own signature over the fixed message", () => {
     const wallet = Keypair.generate();
     const code = "ABCD2345";
     const signature = sign(wallet, accessMessage(wallet.publicKey.toBase58(), code));
     expect(verifyAccessSignature(wallet.publicKey, code, signature)).toBe(true);
+  });
+
+  it("accepts a signature over the message with a referral code, only when the referral code is passed back in", () => {
+    const wallet = Keypair.generate();
+    const code = "ABCD2345";
+    const signature = sign(
+      wallet,
+      accessMessage(wallet.publicKey.toBase58(), code, "REFC2345"),
+    );
+    expect(verifyAccessSignature(wallet.publicKey, code, signature, "REFC2345")).toBe(true);
+    expect(verifyAccessSignature(wallet.publicKey, code, signature)).toBe(false);
   });
 
   it("rejects a signature from a different wallet", () => {
@@ -99,5 +124,40 @@ describe("verifyAccessSignature", () => {
       verifyAccessSignature(offCurve, "ABCD2345", new Uint8Array(64)),
     ).not.toThrow();
     expect(verifyAccessSignature(offCurve, "ABCD2345", new Uint8Array(64))).toBe(false);
+  });
+});
+
+describe("applyReferralMessage", () => {
+  it("is distinct from accessMessage (ADR 0014: not replayable as a redeem signature)", () => {
+    expect(applyReferralMessage("Ai1ce", "ABC123XY")).toBe(
+      "HEXO apply referral: Ai1ce ABC123XY",
+    );
+    expect(applyReferralMessage("Ai1ce", "ABC123XY")).not.toBe(
+      accessMessage("Ai1ce", "ABC123XY"),
+    );
+  });
+});
+
+describe("verifyApplyReferralSignature", () => {
+  it("accepts a wallet's own signature over the fixed message", () => {
+    const wallet = Keypair.generate();
+    const code = "ABCD2345";
+    const signature = sign(wallet, applyReferralMessage(wallet.publicKey.toBase58(), code));
+    expect(verifyApplyReferralSignature(wallet.publicKey, code, signature)).toBe(true);
+  });
+
+  it("rejects a redeem signature replayed as an apply signature", () => {
+    const wallet = Keypair.generate();
+    const code = "ABCD2345";
+    const signature = sign(wallet, accessMessage(wallet.publicKey.toBase58(), code));
+    expect(verifyApplyReferralSignature(wallet.publicKey, code, signature)).toBe(false);
+  });
+
+  it("rejects a signature from a different wallet", () => {
+    const wallet = Keypair.generate();
+    const impostor = Keypair.generate();
+    const code = "ABCD2345";
+    const signature = sign(impostor, applyReferralMessage(wallet.publicKey.toBase58(), code));
+    expect(verifyApplyReferralSignature(wallet.publicKey, code, signature)).toBe(false);
   });
 });

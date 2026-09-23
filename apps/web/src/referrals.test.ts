@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { referralHeroState, shareLink } from "./referrals.js";
+import {
+  applyReferralMessage,
+  refCodeFromSearch,
+  referralHeroState,
+  shareLink,
+} from "./referrals.js";
 import type { ReferralsDto } from "./api.js";
 
 const dto = (referralCode: string | null): ReferralsDto => ({
@@ -45,6 +50,28 @@ describe("shareLink", () => {
   it("builds the ?ref=CODE link off the app's origin", () => {
     expect(shareLink("https://hexvault.app", "ABCD2345")).toBe(
       "https://hexvault.app/?ref=ABCD2345",
+    );
+  });
+});
+
+describe("refCodeFromSearch", () => {
+  it("reads ?ref=CODE", () => {
+    expect(refCodeFromSearch("?ref=abc123xy")).toBe("abc123xy");
+  });
+
+  it("is empty with no query string", () => {
+    expect(refCodeFromSearch("")).toBe("");
+  });
+
+  it("ignores unrelated params", () => {
+    expect(refCodeFromSearch("?invite=someone")).toBe("");
+  });
+});
+
+describe("applyReferralMessage", () => {
+  it("matches the backend's exact wire format", () => {
+    expect(applyReferralMessage("Ai1ce", "ABC123XY")).toBe(
+      "HEXO apply referral: Ai1ce ABC123XY",
     );
   });
 });
