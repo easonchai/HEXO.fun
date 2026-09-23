@@ -1,5 +1,5 @@
 {
-  "address": "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6",
+  "address": "8JVqp7anmrrE5ZvJPnz9jimbZDHotMT8aq877Xgg7Aih",
   "metadata": {
     "name": "hex_vault",
     "version": "0.1.0",
@@ -2682,78 +2682,6 @@
         }
       ],
       "args": []
-    },
-    {
-      "name": "test_fulfill",
-      "discriminator": [
-        150,
-        84,
-        4,
-        82,
-        192,
-        168,
-        165,
-        11
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "randomness",
-          "docs": [
-            "here instead of deserialized."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  101,
-                  115,
-                  116,
-                  45,
-                  118,
-                  114,
-                  102
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "seed"
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "seed",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "randomness",
-          "type": {
-            "array": [
-              "u8",
-              64
-            ]
-          }
-        }
-      ]
     },
     {
       "name": "void_round",

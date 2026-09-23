@@ -43,8 +43,8 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <dev|staging|mainnet> [--upgrade] [--dry-run] [--idl]" >&2
-  echo "       $0 <dev|staging|mainnet> verify" >&2
+  echo "usage: $0 <dev|devnew|staging|mainnet> [--upgrade] [--dry-run] [--idl]" >&2
+  echo "       $0 <dev|devnew|staging|mainnet> verify" >&2
   exit 1
 }
 
@@ -67,17 +67,20 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$env_name" in
-  dev | staging | mainnet) ;;
+  dev | devnew | staging | mainnet) ;;
   *) usage ;;
 esac
 
 # --- 1. env -> feature, keypair, cluster --------------------------------
 feature=""
 keypair="keys/hex_vault-$env_name-keypair.json"
-cluster="devnet"
+# The public devnet endpoint drops buffer writes under load ("Blockhash
+# expired", "N write transactions failed"); DEPLOY_RPC_URL points devnet
+# deploys at a keyed RPC instead. Mainnet reads RPC_URL from .env.mainnet.
+cluster="${DEPLOY_RPC_URL:-devnet}"
 
-if [ "$env_name" = "staging" ]; then
-  feature="staging"
+if [ "$env_name" = "staging" ] || [ "$env_name" = "devnew" ]; then
+  feature="$env_name"
 elif [ "$env_name" = "mainnet" ]; then
   feature="mainnet"
   mainnet_env=".env.mainnet"
@@ -300,7 +303,13 @@ if [ "$actual_authority" != "$expected_authority" ]; then
 fi
 echo "==> upgrade authority $actual_authority matches $env_name"
 
-buffers_json=$(solana program show --buffers --buffer-authority "$expected_authority" --url "$cluster" --output json)
+# The RPC's account index lags the deploy by a few seconds, so the buffer the
+# deploy just consumed can still show up. Re-check before calling it stray.
+for attempt in 1 2 3 4 5 6; do
+  buffers_json=$(solana program show --buffers --buffer-authority "$expected_authority" --url "$cluster" --output json)
+  [ "$(printf '%s' "$buffers_json" | tr -d '[:space:]')" = '{"buffers":[]}' ] && break
+  [ "$attempt" -lt 6 ] && sleep 5
+done
 if [ "$(printf '%s' "$buffers_json" | tr -d '[:space:]')" != '{"buffers":[]}' ]; then
   echo "$buffers_json" >&2
   echo "deploy: buffer(s) left under $expected_authority; close them:" >&2

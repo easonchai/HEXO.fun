@@ -36,12 +36,16 @@ use test_vrf::*;
 // `test-vrf` built together with either, and this refuses both at once.
 #[cfg(all(feature = "staging", feature = "mainnet"))]
 compile_error!("features `staging` and `mainnet` are mutually exclusive");
+#[cfg(all(feature = "devnew", any(feature = "staging", feature = "mainnet")))]
+compile_error!("feature `devnew` cannot combine with `staging` or `mainnet`");
 
 #[cfg(feature = "mainnet")]
 declare_id!("EwqRKGqnH7dGwL5ERMGQc2tsLKwT3duzKWPcCDphyPCH");
 #[cfg(feature = "staging")]
 declare_id!("H2iWyng2orJpHNGGWhrR7rBQNDqixThpTpAwF4dnPXax");
-#[cfg(not(any(feature = "staging", feature = "mainnet")))]
+#[cfg(feature = "devnew")]
+declare_id!("8JVqp7anmrrE5ZvJPnz9jimbZDHotMT8aq877Xgg7Aih");
+#[cfg(not(any(feature = "staging", feature = "mainnet", feature = "devnew")))]
 declare_id!("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
 
 // ops-and-envs ticket 12: a security.txt ELF section so a researcher can go
