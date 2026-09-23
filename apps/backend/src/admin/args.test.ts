@@ -269,8 +269,15 @@ describe("parseAdminCommand", () => {
     });
   });
 
-  it("rejects create-invite with no --max-uses, or a bad one", () => {
-    expect(() => parseAdminCommand(["create-invite"])).toThrow(/needs --max-uses/);
+  it("defaults create-invite's --max-uses to 1 when omitted (ticket 07)", () => {
+    expect(parseAdminCommand(["create-invite"])).toEqual({
+      kind: "create-invite",
+      maxUses: 1,
+      count: 1,
+    });
+  });
+
+  it("rejects a bad --max-uses or --owner", () => {
     expect(() => parseAdminCommand(["create-invite", "--max-uses", "0"])).toThrow(
       /positive whole number/,
     );

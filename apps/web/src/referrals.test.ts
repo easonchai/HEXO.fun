@@ -21,7 +21,7 @@ const dto = (
   bonusToday: { amount: string; uncapped: string } = { amount: "0", uncapped: "0" },
 ): ReferralsDto => ({
   referralCode,
-  ownedCodes: [],
+  inviteCodes: [],
   referrals: [],
   qualifiedCount: 0,
   band: ZERO_BAND,

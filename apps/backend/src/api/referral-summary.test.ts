@@ -25,7 +25,7 @@ describe("buildReferralsResponse", () => {
     const response = buildReferralsResponse(null, [], [], NOW, QUALIFY_SECONDS, NO_BONUS);
     expect(response).toEqual({
       referralCode: null,
-      ownedCodes: [],
+      inviteCodes: [],
       referrals: [],
       qualifiedCount: 0,
       band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
@@ -42,7 +42,7 @@ describe("buildReferralsResponse", () => {
     expect(withoutCode.referralCode).toBeNull();
   });
 
-  it("reduces owned codes to code + usesLeft, floored at 0", () => {
+  it("reduces owned codes to code + redeemed", () => {
     const response = buildReferralsResponse(
       null,
       [
@@ -55,10 +55,10 @@ describe("buildReferralsResponse", () => {
       QUALIFY_SECONDS,
       NO_BONUS,
     );
-    expect(response.ownedCodes).toEqual([
-      { code: "ABCD2345", usesLeft: 3 },
-      { code: "WXYZ6789", usesLeft: 0 },
-      { code: "STUV2468", usesLeft: 0 },
+    expect(response.inviteCodes).toEqual([
+      { code: "ABCD2345", redeemed: false },
+      { code: "WXYZ6789", redeemed: true },
+      { code: "STUV2468", redeemed: true },
     ]);
   });
 

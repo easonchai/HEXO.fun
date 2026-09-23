@@ -10,6 +10,30 @@ import type { PublicKey } from "@solana/web3.js";
 export const INVITE_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const INVITE_CODE_LENGTH = 8;
 
+/** Invite codes are single use from now on (referral-page ticket 07); the
+ *  admin issue endpoint and CLI default `maxUses` to this. */
+export const INVITE_CODE_MAX_USES = 1;
+
+/** No more than this many remaining uses, summed across every Invite code
+ *  (admin-issued included), may be in circulation at once (ADR 0014,
+ *  referral-page ticket 07). */
+export const INVITE_CIRCULATION_CAP = 50;
+
+/** A successful redeem grants the redeemer up to this many new codes of its
+ *  own, capped by INVITE_CIRCULATION_CAP. */
+export const INVITE_REDEEM_GRANT_COUNT = 2;
+
+/**
+ * How many new Invite codes a successful redeem grants its redeemer, given
+ * how many remaining uses (maxUses − uses, summed over every Invite code)
+ * are already in circulation. `min(INVITE_REDEEM_GRANT_COUNT,
+ * INVITE_CIRCULATION_CAP − circulation)`, floored at 0: at or over the cap
+ * the redeemer gets fewer or none, and nobody tops them up later.
+ */
+export function inviteGrantCount(circulation: number): number {
+  return Math.max(0, Math.min(INVITE_REDEEM_GRANT_COUNT, INVITE_CIRCULATION_CAP - circulation));
+}
+
 /** A fresh 8-character code. Collisions against `INVITE_CODE_ALPHABET`'s
  *  32^8 (~1.1e12) space are not checked for: the caller's `InviteCode.code`
  *  primary key surfaces one as a clear insert failure instead. */

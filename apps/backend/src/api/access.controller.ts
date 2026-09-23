@@ -23,6 +23,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import {
   accessMessage,
   generateInviteCode,
+  INVITE_CODE_MAX_USES,
+  inviteGrantCount,
   normalizeInviteCode,
   verifyAccessSignature,
 } from "./invite-code";
@@ -92,9 +94,11 @@ interface CreateInvitesBody {
 
 function parseCreateInvitesBody(body: unknown): CreateInvitesBody {
   const raw = body as { maxUses?: unknown; owner?: unknown; count?: unknown } | null | undefined;
-  const maxUses = raw?.maxUses;
+  // Invite codes are single use from now on (ticket 07): `maxUses` defaults
+  // to INVITE_CODE_MAX_USES rather than being required.
+  const maxUses = raw?.maxUses ?? INVITE_CODE_MAX_USES;
   if (typeof maxUses !== "number" || !Number.isSafeInteger(maxUses) || maxUses < 1) {
-    throw new BadRequestException("Send a JSON body with a positive whole `maxUses`.");
+    throw new BadRequestException("`maxUses` must be a positive whole number when present.");
   }
   const count = raw?.count ?? 1;
   if (
@@ -127,6 +131,14 @@ const sameKey = (given: string, expected: string): boolean =>
  *  same race-to-unique-constraint handling as redeem below. */
 export const isUniqueConstraintViolation = (cause: unknown): boolean =>
   cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2002";
+
+/** Postgres advisory-lock key (ticket 07): an arbitrary but fixed number
+ *  serializing the "read circulation, grant quota codes" section of redeem
+ *  across concurrent requests, so two transactions can't both act on a
+ *  stale circulation count and push it over INVITE_CIRCULATION_CAP. Scoped
+ *  to the transaction (`pg_advisory_xact_lock`), so Postgres releases it on
+ *  commit or rollback without any unlock call. */
+const INVITE_QUOTA_LOCK_KEY = 472_819_003;
 
 /**
  * The private-beta gate (docs/plan/hexo-referrals ticket 06). The program
@@ -182,6 +194,18 @@ export class AccessController {
    * code's owner is used, provided that owner is not the redeemer either (no
    * self-referral). It is never updated after that: a wallet redeems at most
    * once, so this branch runs at most once per referee.
+   *
+   * Finally, still in the same transaction, the redeemer is granted
+   * `inviteGrantCount(circulation)` new single-use codes of its own
+   * (ticket 07), where `circulation` is the summed remaining uses
+   * (`maxUses − uses`) across every Invite code, admin-issued ones included.
+   * The `pg_advisory_xact_lock` above that read serializes this section
+   * across concurrent redeems, so it always counts against the latest
+   * committed circulation rather than a stale snapshot: without it, two
+   * requests could each see room for 2 more and both insert, overshooting
+   * INVITE_CIRCULATION_CAP. A redeemed quota code's `ownerWallet` is the
+   * redeemer, so a later redemption of one falls through the same
+   * owner-becomes-Referrer path above.
    */
   @Post("redeem")
   async redeem(@Body() body: unknown) {
@@ -231,6 +255,28 @@ export class AccessController {
               data: { referee: address, referrer: bound.referrer, code: bound.code, boundAt: nowSeconds() },
             });
           }
+        }
+
+        // ticket 07: grant the redeemer its own quota codes, serialized
+        // against every other redeem's grant so circulation never overshoots
+        // INVITE_CIRCULATION_CAP (see the lock key's own comment above).
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${INVITE_QUOTA_LOCK_KEY}::bigint)`;
+        const inCirculation = await tx.inviteCode.aggregate({
+          _sum: { maxUses: true, uses: true },
+        });
+        const circulation = (inCirculation._sum.maxUses ?? 0) - (inCirculation._sum.uses ?? 0);
+        const grantCount = inviteGrantCount(circulation);
+        if (grantCount > 0) {
+          const grantedAt = nowSeconds();
+          await tx.inviteCode.createMany({
+            data: Array.from({ length: grantCount }, () => ({
+              code: generateInviteCode(),
+              ownerWallet: address,
+              maxUses: INVITE_CODE_MAX_USES,
+              uses: 0,
+              createdAt: grantedAt,
+            })),
+          });
         }
       });
     } catch (cause) {

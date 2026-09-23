@@ -25,7 +25,7 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { AccessController } from "./access.controller";
-import { accessMessage } from "./invite-code";
+import { accessMessage, INVITE_CIRCULATION_CAP } from "./invite-code";
 
 const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
@@ -168,9 +168,25 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
     });
 
     it("400s a bad body", async () => {
-      for (const bad of [{}, { maxUses: 0 }, { maxUses: 1, count: 101 }, { maxUses: 1, owner: "x" }]) {
+      for (const bad of [
+        { maxUses: 0 },
+        { maxUses: 1, count: 101 },
+        { maxUses: 1, owner: "x" },
+      ]) {
         await http.post("/access/invites").set("x-admin-key", ADMIN_KEY).send(bad).expect(400);
       }
+    });
+
+    it("defaults maxUses to 1 when omitted (ticket 07: single use from now on)", async () => {
+      const { body } = await http
+        .post("/access/invites")
+        .set("x-admin-key", ADMIN_KEY)
+        .send({})
+        .expect(201);
+      expect(body).toMatchObject({ maxUses: 1, owner: null });
+      expect(body.codes).toHaveLength(1);
+      const row = await prisma.inviteCode.findUnique({ where: { code: body.codes[0] } });
+      expect(row).toMatchObject({ maxUses: 1, uses: 0, ownerWallet: null });
     });
   });
 
@@ -476,6 +492,142 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       });
       expect(referral?.referrer).toBe(inviteOwner.publicKey.toBase58());
       expect(referral?.code).toBe("INVT6789");
+    });
+  });
+
+  describe("invite code quota (ticket 07)", () => {
+    /** Summed remaining uses (maxUses − uses) across every Invite code,
+     *  the same "in circulation" figure access.controller.ts computes. */
+    async function circulation(): Promise<number> {
+      const rows = await prisma.inviteCode.findMany({ select: { maxUses: true, uses: true } });
+      return rows.reduce((sum, row) => sum + (row.maxUses - row.uses), 0);
+    }
+
+    /** Seeds enough remaining uses on codes nobody redeems in this test so
+     *  circulation sits at `target` before the code under test is created. */
+    async function padCirculationTo(target: number): Promise<void> {
+      if (target <= 0) return;
+      await prisma.inviteCode.create({
+        data: { code: `PAD${target}`.padEnd(8, "9"), maxUses: target, uses: 0, createdAt: 0n, ownerWallet: null },
+      });
+    }
+
+    it("grants the redeemer 2 new codes of its own when circulation has room", async () => {
+      expect(await circulation()).toBe(0);
+      const wallet = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: { code: "QUOTA001", maxUses: 1, uses: 0, createdAt: 0n, ownerWallet: null },
+      });
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: wallet.publicKey.toBase58(),
+          code: "QUOTA001",
+          signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "QUOTA001")),
+        })
+        .expect(201);
+
+      const granted = await prisma.inviteCode.findMany({
+        where: { ownerWallet: wallet.publicKey.toBase58() },
+      });
+      expect(granted).toHaveLength(2);
+      expect(granted.every((row) => row.maxUses === 1 && row.uses === 0)).toBe(true);
+      expect(await circulation()).toBe(2);
+    });
+
+    it("grants 0 once redeeming would put circulation at the cap, and circulation drops", async () => {
+      // Padded to the cap itself, plus the redeemed code's own 1 remaining
+      // use: after that use is spent, circulation lands exactly at the cap.
+      await padCirculationTo(INVITE_CIRCULATION_CAP);
+      const wallet = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: { code: "QUOTA050", maxUses: 1, uses: 0, createdAt: 0n, ownerWallet: null },
+      });
+      expect(await circulation()).toBe(INVITE_CIRCULATION_CAP + 1);
+
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: wallet.publicKey.toBase58(),
+          code: "QUOTA050",
+          signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "QUOTA050")),
+        })
+        .expect(201);
+
+      const granted = await prisma.inviteCode.findMany({
+        where: { ownerWallet: wallet.publicKey.toBase58() },
+      });
+      expect(granted).toHaveLength(0);
+      // Circulation dropped by exactly the redeemed code's spent use, since
+      // no grant refilled it: the cap is never topped up later.
+      expect(await circulation()).toBe(INVITE_CIRCULATION_CAP);
+    });
+
+    it("never lets concurrent redeems push circulation over the cap", async () => {
+      const wallets = [Keypair.generate(), Keypair.generate(), Keypair.generate()];
+      // Padded so each of the 3 codes below, read in isolation of the
+      // others' still-uncommitted redemptions, looks like it has room for a
+      // full grant of 2: without the advisory lock serializing them, all 3
+      // would grant 2 each and circulation would land at 52, over the cap.
+      await padCirculationTo(INVITE_CIRCULATION_CAP - 1 - wallets.length);
+      await prisma.inviteCode.createMany({
+        data: wallets.map((_, index) => ({
+          code: `RACE000${index}`,
+          maxUses: 1,
+          uses: 0,
+          createdAt: 0n,
+          ownerWallet: null,
+        })),
+      });
+
+      const responses = await Promise.all(
+        wallets.map((wallet, index) =>
+          http.post("/access/redeem").send({
+            wallet: wallet.publicKey.toBase58(),
+            code: `RACE000${index}`,
+            signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), `RACE000${index}`)),
+          }),
+        ),
+      );
+      expect(responses.every((response) => response.status === 201)).toBe(true);
+      expect(await circulation()).toBeLessThanOrEqual(INVITE_CIRCULATION_CAP);
+    });
+
+    it("makes a granted code's owner the fallback Referrer once redeemed", async () => {
+      const first = Keypair.generate();
+      const second = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: { code: "CHAIN001", maxUses: 1, uses: 0, createdAt: 0n, ownerWallet: null },
+      });
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: first.publicKey.toBase58(),
+          code: "CHAIN001",
+          signature: sign(first, accessMessage(first.publicKey.toBase58(), "CHAIN001")),
+        })
+        .expect(201);
+
+      const granted = await prisma.inviteCode.findMany({
+        where: { ownerWallet: first.publicKey.toBase58() },
+      });
+      expect(granted).toHaveLength(2);
+      const grantedCode = granted[0]?.code as string;
+
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: second.publicKey.toBase58(),
+          code: grantedCode,
+          signature: sign(second, accessMessage(second.publicKey.toBase58(), grantedCode)),
+        })
+        .expect(201);
+
+      const referral = await prisma.referral.findUnique({
+        where: { referee: second.publicKey.toBase58() },
+      });
+      expect(referral?.referrer).toBe(first.publicKey.toBase58());
+      expect(referral?.code).toBe(grantedCode);
     });
   });
 });

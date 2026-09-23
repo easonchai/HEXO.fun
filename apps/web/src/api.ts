@@ -429,10 +429,11 @@ export async function applyReferral(
   }
 }
 
-/** One owned InviteCode, reduced to what the share-link list needs. */
-export interface OwnedCodeDto {
+/** One of the wallet's own Invite codes (ticket 07); no web UI shows these
+ *  yet. */
+export interface InviteCodeDto {
   code: string;
-  usesLeft: number;
+  redeemed: boolean;
 }
 
 /** One Referral row, wallet already masked server-side. */
@@ -459,7 +460,7 @@ export interface ReferralsDto {
    *  its first deposit, since the indexer mints one on the first Deposited
    *  event. */
   referralCode: string | null;
-  ownedCodes: OwnedCodeDto[];
+  inviteCodes: InviteCodeDto[];
   referrals: ReferralRowDto[];
   qualifiedCount: number;
   /** Current band (referral-page ticket 03). */

@@ -7,8 +7,11 @@ import {
   accessMessage,
   applyReferralMessage,
   generateInviteCode,
+  INVITE_CIRCULATION_CAP,
   INVITE_CODE_ALPHABET,
   INVITE_CODE_LENGTH,
+  inviteGrantCount,
+  INVITE_REDEEM_GRANT_COUNT,
   normalizeInviteCode,
   verifyAccessSignature,
   verifyApplyReferralSignature,
@@ -43,6 +46,30 @@ describe("generateInviteCode", () => {
       const code = generateInviteCode();
       expect(code).not.toMatch(/[0O1I]/);
     }
+  });
+});
+
+describe("inviteGrantCount", () => {
+  it("grants the full INVITE_REDEEM_GRANT_COUNT with headroom to spare", () => {
+    expect(inviteGrantCount(0)).toBe(2);
+    expect(inviteGrantCount(48)).toBe(2);
+  });
+
+  it("grants only what fits under the cap", () => {
+    expect(inviteGrantCount(49)).toBe(1);
+  });
+
+  it("grants none exactly at the cap", () => {
+    expect(inviteGrantCount(INVITE_CIRCULATION_CAP)).toBe(0);
+  });
+
+  it("grants none over the cap, never a negative count", () => {
+    expect(inviteGrantCount(51)).toBe(0);
+    expect(inviteGrantCount(1000)).toBe(0);
+  });
+
+  it("never grants more than INVITE_REDEEM_GRANT_COUNT", () => {
+    expect(inviteGrantCount(-100)).toBe(INVITE_REDEEM_GRANT_COUNT);
   });
 });
 

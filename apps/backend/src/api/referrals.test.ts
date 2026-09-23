@@ -157,7 +157,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
     expect(body).toEqual({
       referralCode: null,
-      ownedCodes: [],
+      inviteCodes: [],
       referrals: [],
       qualifiedCount: 0,
       band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
@@ -175,7 +175,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     expect(body.referralCode).toBe("ABCD2345");
   });
 
-  it("lists owned invite codes with uses left", async () => {
+  it("lists owned invite codes with redeemed state", async () => {
     await prisma.inviteCode.create({
       data: { code: "ABCD2345", ownerWallet: REFERRER, maxUses: 5, uses: 2, createdAt: 0n },
     });
@@ -194,9 +194,9 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     });
 
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
-    expect(body.ownedCodes).toEqual([
-      { code: "ABCD2345", usesLeft: 3 },
-      { code: "WXYZ6789", usesLeft: 0 },
+    expect(body.inviteCodes).toEqual([
+      { code: "ABCD2345", redeemed: false },
+      { code: "WXYZ6789", redeemed: true },
     ]);
   });
 

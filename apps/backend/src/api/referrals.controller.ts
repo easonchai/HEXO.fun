@@ -88,7 +88,7 @@ export class ReferralsController {
     const wallet = parseWallet(walletRaw);
     const qualifySeconds = this.config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
 
-    const [referralCode, ownedCodes, referrals, pool] = await Promise.all([
+    const [referralCode, inviteCodes, referrals, pool] = await Promise.all([
       this.prisma.referralCode.findUnique({
         where: { owner: wallet },
         select: { code: true },
@@ -108,7 +108,7 @@ export class ReferralsController {
 
     return buildReferralsResponse(
       referralCode?.code ?? null,
-      ownedCodes,
+      inviteCodes,
       referrals,
       nowSeconds(),
       qualifySeconds,

@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 
 import { PublicKey } from "@solana/web3.js";
 
+import { INVITE_CODE_MAX_USES } from "../api/invite-code";
 import { houseCutBps, isoSeconds, wholeUsdc } from "../bootstrap/params";
 
 export interface SetParamsInput {
@@ -76,7 +77,7 @@ export const USAGE = [
   "  set-operator --key PUBKEY",
   "  propose-admin --key PUBKEY",
   "  accept-admin",
-  "  create-invite --max-uses N [--owner PUBKEY] [--count K]",
+  `  create-invite [--max-uses N] [--owner PUBKEY] [--count K]   (max-uses defaults to ${INVITE_CODE_MAX_USES})`,
   "  principal-out",
   "  return-principal --amount USDC   (whole USDC, up to 6 decimal places)",
   "  shutdown --confirm POOL_ID   (irreversible; POOL_ID must match the configured pool)",
@@ -377,12 +378,11 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
         throw new Error(USAGE, { cause });
       }
       const maxUsesRaw = values["max-uses"];
-      if (typeof maxUsesRaw !== "string") {
-        throw new Error(`create-invite needs --max-uses\n${USAGE}`);
-      }
       return {
         kind: "create-invite",
-        maxUses: positiveInt("max-uses", maxUsesRaw),
+        // Invite codes are single use from now on (ticket 07): --max-uses
+        // defaults to INVITE_CODE_MAX_USES rather than being required.
+        maxUses: maxUsesRaw !== undefined ? positiveInt("max-uses", maxUsesRaw) : INVITE_CODE_MAX_USES,
         count: values.count !== undefined ? positiveInt("count", values.count) : 1,
         ...(values.owner !== undefined ? { owner: pubkey("owner", values.owner) } : {}),
       };
