@@ -31,6 +31,7 @@ import {
   type RoundLike,
 } from "./engine.js";
 import { formatAtomic, formatAtomic2, parseAtomic } from "./lib/money.js";
+import { decodePlayerError } from "./playerErrors.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { SHUTDOWN_BANNER, SHUTDOWN_REASON } from "./shutdown.js";
 import { SoundIcon } from "./SoundIcon.js";
@@ -281,7 +282,7 @@ export function App() {
         statePoll.kick();
         return true;
       } catch (error) {
-        setDeployNote(error instanceof Error ? error.message : String(error));
+        setDeployNote(decodePlayerError(error));
         return false;
       } finally {
         setDeployBusy(false);
@@ -379,7 +380,7 @@ export function App() {
       if (settleState.reward > 0n) sfx("win");
       statePoll.kick();
     } catch (error) {
-      setDeployNote(error instanceof Error ? error.message : String(error));
+      setDeployNote(decodePlayerError(error));
     } finally {
       setSettleBusy(false);
     }

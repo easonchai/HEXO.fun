@@ -10,6 +10,7 @@ import { buyTickets, type TxSigner } from "./actions.js";
 import { buyDisabledReason, drawValue, ticketsFromUsdc } from "./buyTickets.js";
 import type { HexVaultProgram } from "./chain.js";
 import { parseAtomic } from "./lib/money.js";
+import { decodePlayerError } from "./playerErrors.js";
 import type { PoolLike } from "./read.js";
 
 const DECIMALS = 6;
@@ -102,7 +103,7 @@ export function useBuyTickets(options: UseBuyTicketsOptions): BuyTicketsState {
         setAmountText("");
         onDone();
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(decodePlayerError(err));
       } finally {
         setBusy(false);
       }

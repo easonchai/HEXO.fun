@@ -42,6 +42,11 @@ import {
   pendingWithdrawal,
   previewWithdraw,
 } from "../lib/money.js";
+import {
+  decodeErrorCode,
+  decodePlayerError,
+  NOTHING_PENDING_CODE,
+} from "../playerErrors.js";
 import type { PoolLike } from "../read.js";
 import { SHUTDOWN_BANNER } from "../shutdown.js";
 import { useApiPoll } from "../useApiPoll.js";
@@ -61,30 +66,11 @@ const INPUT_DECIMALS = 2;
 const QUICK_ADDS = [50n, 100n, 500n] as const;
 
 /**
- * `InsufficientVaultLiquidity` (6036): the admin has not brought the
- * principal back from the lending venue yet. Nothing the depositor did, and
- * nothing they can fix, so the raw Anchor error would only alarm them.
+ * `NothingPending` (playerErrors.ts, ticket 09 — this used to be this file's
+ * own `payoutError`): the operator's crank paid this withdrawal before the
+ * click landed. `payOutNow` below treats that as a success, not an error.
  */
-const VAULT_SHORT_CODE = "6036";
-const VAULT_SHORT_NOTE =
-  "The vault is being topped up. Try the payout again in a few minutes.";
-/**
- * `NothingPending` (6038): the operator's crank paid this withdrawal before
- * the click landed. The money is already in the wallet.
- */
-const NOTHING_PENDING_CODE = "6038";
-const NOTHING_PENDING_NOTE = "Already paid out. Refreshing your balance.";
-
-export const payoutError = (error: unknown): string => {
-  const text = error instanceof Error ? error.message : String(error);
-  if (text.includes(VAULT_SHORT_CODE) || text.includes("InsufficientVaultLiquidity")) {
-    return VAULT_SHORT_NOTE;
-  }
-  if (text.includes(NOTHING_PENDING_CODE) || text.includes("NothingPending")) {
-    return NOTHING_PENDING_NOTE;
-  }
-  return text;
-};
+const NOTHING_PENDING_NOTE = decodeErrorCode(NOTHING_PENDING_CODE);
 
 export type VaultMode = "deposit" | "withdraw";
 type Mode = VaultMode;
@@ -240,7 +226,7 @@ export function Vault(props: VaultScreenProps) {
     } catch (error) {
       setNote({
         tone: "err",
-        text: error instanceof Error ? error.message : String(error),
+        text: decodePlayerError(error),
       });
     } finally {
       setBusy(false);
@@ -280,7 +266,7 @@ export function Vault(props: VaultScreenProps) {
       setNote({ tone: "ok", text: "Payout sent." });
       onDone();
     } catch (error) {
-      const text = payoutError(error);
+      const text = decodePlayerError(error);
       // Already paid by the operator: the read model is stale, so refresh it
       // the same way a successful payout does instead of offering the button again.
       if (text === NOTHING_PENDING_NOTE) {
