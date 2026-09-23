@@ -13,3 +13,6 @@ else
 fi
 
 pnpm test:unit
+
+# Production-hardening ticket 07: a provider key in the web bundle never ships.
+pnpm -C apps/web check
