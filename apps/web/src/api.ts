@@ -417,6 +417,10 @@ export interface ReferralRowDto {
 
 /** `GET /referrals/:wallet` (ticket 11). */
 export interface ReferralsDto {
+  /** The wallet's own Referral code (referral-page ticket 01); null before
+   *  its first deposit, since the indexer mints one on the first Deposited
+   *  event. */
+  referralCode: string | null;
   ownedCodes: OwnedCodeDto[];
   referrals: ReferralRowDto[];
   qualifiedCount: number;

@@ -43,7 +43,7 @@ import { snapshot, useStatePoll } from "./useStatePoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
-import { TABS, tabFromHash, type Tab } from "./tabs.js";
+import { TABS, hashForTab, tabFromHash, type Tab } from "./tabs.js";
 
 /** `GET /state`'s tracked Round (any status) → the engine's `RoundLike`. */
 function roundLikeFrom(dto: RoundDto): RoundLike {
@@ -340,6 +340,22 @@ export function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
   useEffect(() => subscribeSound(setSoundOnState), []);
+
+  // Keep the URL hash in sync with the tab (INVITE/#referrals, ticket
+  // referral-page/01): write it on every tab change, and follow it back on
+  // `hashchange` so the browser's back/forward buttons work too. Guarded by
+  // a same-value check so setting the hash never fires a redundant
+  // `hashchange` (window.location.hash assignment is a no-op history entry
+  // when unchanged, but browsers differ on firing the event).
+  useEffect(() => {
+    const hash = hashForTab(tab);
+    if (window.location.hash !== hash) window.location.hash = hash;
+  }, [tab]);
+  useEffect(() => {
+    const onHashChange = () => setTab(tabFromHash(window.location.hash));
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   const canPick = Boolean(
     pool &&
@@ -662,7 +678,11 @@ export function App() {
           <Leaderboard owner={publicKey ?? undefined} />
         ) : null}
         {tab === "REFERRALS" ? (
-          <Referrals owner={publicKey ?? null} onConnect={() => signer.connect()} />
+          <Referrals
+            owner={publicKey ?? null}
+            onConnect={() => signer.connect()}
+            onDeposit={() => setTab("DASHBOARD")}
+          />
         ) : null}
         {tab === "ABOUT" ? <About /> : null}
       </main>

@@ -4419,6 +4419,348 @@ input::placeholder {
 
 
 /* ---------------------------------------------------------------------------
+   REFERRALS PAGE (Figma "Invite Page_Draft" 204:12137, channel oano454a).
+   referral-page ticket 01 builds the hero (204:12172) and this shell.
+   .referrals-row and the two full-width slots after it are where tickets
+   03-06 drop in the Bonus Rate (230:16970), Referral's Bonus (230:17196),
+   Your Team (204:12548) and FAQ (204:12299) cards; the gaps and widths are
+   set up for them but the cards themselves aren't built here.
+   --------------------------------------------------------------------------- */
+
+.referrals-page {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--brand-navy);
+  color: var(--brand-white);
+  z-index: 5;
+}
+
+.referrals-content {
+  max-width: 1102px;
+  margin: 0 auto;
+  padding: 37px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.referral-hero {
+  position: relative;
+  background: var(--brand-navy);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 16px;
+  padding: 25px;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+/* Clips the background image + glow to the card's rounded corners. Not on
+   .referral-hero itself: that would also clip the InfoTip bubble, which
+   spec.md says may overflow its card. */
+.referral-hero-bgclip {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  pointer-events: none;
+}
+
+/* image169 (610, -147) 562² @ 50%, pulled out of the Figma SVG export as a
+   2x WebP; anchored to the card's right edge (not a literal `left`) so it
+   holds its position if the card's width ever differs from the 1054px
+   Figma frame. */
+.referral-hero-bg {
+  position: absolute;
+  top: -147px;
+  right: -118px;
+  width: 562px;
+  height: 562px;
+  opacity: 0.5;
+}
+
+/* Ellipse 15: a radial lime glow, (-170,-170) 353x354 @ 45%. */
+.referral-hero-glow {
+  position: absolute;
+  top: -170px;
+  left: -170px;
+  width: 353px;
+  height: 354px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(182, 255, 59, 0.45) 0%, rgba(14, 27, 43, 0) 100%);
+}
+
+.referral-hero-copy,
+.referral-hero-stats,
+.referral-hero-invite {
+  position: relative;
+  z-index: 2;
+}
+
+.referral-hero-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.referral-hero-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 64px;
+  line-height: 64px;
+  letter-spacing: -0.52px;
+  color: var(--brand-lime);
+  text-transform: lowercase;
+}
+
+.referral-hero-lead {
+  margin: 0;
+  max-width: 390px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 20.4px;
+  color: var(--brand-white);
+}
+
+.referral-hero-stats {
+  display: flex;
+  gap: 16px;
+}
+
+.referral-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.referral-stat-value {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 36px;
+  line-height: 1;
+  letter-spacing: -0.52px;
+  color: var(--brand-white);
+}
+
+.referral-stat-label {
+  font-family: "Roboto Mono", monospace;
+  font-size: 12px;
+  color: var(--brand-white);
+  text-transform: uppercase;
+}
+
+.referral-hero-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.referral-hero-invite-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.referral-hero-invite-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  color: var(--brand-white);
+  text-transform: lowercase;
+}
+
+.referral-code-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 53px;
+  padding: 0 13px;
+  border: 1px solid var(--brand-white);
+  border-radius: 16px;
+}
+
+.referral-code-value {
+  font-family: "Roboto Mono", monospace;
+  font-size: 16px;
+  line-height: 24px;
+  color: var(--brand-lime);
+  overflow-wrap: anywhere;
+}
+
+.referral-code-placeholder {
+  font-family: "Roboto Mono", monospace;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.referral-pill-btn {
+  flex: none;
+  background: var(--brand-lime);
+  color: var(--on-primary);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.9px;
+  border: none;
+  border-radius: 22px;
+  height: 39px;
+  padding: 0 26px;
+  cursor: pointer;
+  transition: filter 0.2s ease;
+}
+
+.referral-pill-btn:hover {
+  filter: brightness(0.92);
+}
+
+.referral-pill-btn:active {
+  filter: brightness(0.85);
+}
+
+/* Bonus Rate (03) + Referral's Bonus (04) drop in here, 517px each with a
+   20px gap (Figma 230:16969). Empty until then, so it takes no space. */
+.referrals-row {
+  display: flex;
+  gap: 20px;
+}
+
+.referrals-row:empty {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .referrals-content {
+    padding: 24px 16px 48px;
+    gap: 16px;
+  }
+
+  .referral-hero {
+    padding: 20px;
+    gap: 24px;
+  }
+
+  .referral-hero-bg {
+    width: 300px;
+    height: 300px;
+    top: -70px;
+    right: -70px;
+    opacity: 0.35;
+  }
+
+  .referral-hero-glow {
+    width: 200px;
+    height: 200px;
+    top: -100px;
+    left: -100px;
+  }
+
+  .referral-hero-title {
+    font-size: 34px;
+    line-height: 1.15;
+  }
+
+  .referral-hero-lead {
+    max-width: none;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .referral-stat-value {
+    font-size: 28px;
+  }
+
+  .referral-hero-invite-title {
+    font-size: 18px;
+  }
+
+  .referral-code-field {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 53px;
+    padding: 12px 13px;
+    row-gap: 10px;
+  }
+
+  .referral-code-placeholder {
+    font-size: 12px;
+  }
+
+  .referrals-row {
+    flex-direction: column;
+  }
+}
+
+/* ---------- InfoTip (spec.md "InfoTip"; Figma tooltip 230:17717) ---------- */
+
+.info-tip {
+  position: relative;
+  display: inline-flex;
+}
+
+.info-tip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+}
+
+.info-tip-trigger:hover,
+.info-tip-trigger:focus-visible {
+  color: var(--brand-lime);
+}
+
+/* Placed as in Figma 204:15702: flush under the icon, nudged 3px right,
+   overflowing its card rather than staying inside it. */
+.info-tip-bubble {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 10px);
+  left: 3px;
+  width: 414px;
+  max-width: min(414px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 8px;
+  background: rgba(14, 27, 43, 0.9);
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  /* Figma's node measures 16px (its own font metrics allow it); Roboto Mono
+     via a browser clips descenders at that value, so this is 1.4 instead. */
+  line-height: 1.4;
+  letter-spacing: 0.36px;
+  color: var(--brand-white);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.info-tip-bubble.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.info-tip-bubble p {
+  margin: 0 0 12px;
+}
+
+.info-tip-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+
+/* ---------------------------------------------------------------------------
    INVITE GATE (Figma 141:52988; component 141:53126, input states 161:11865,
    mobile 147:7608). Values are the frames' literal measurements.
    --------------------------------------------------------------------------- */
