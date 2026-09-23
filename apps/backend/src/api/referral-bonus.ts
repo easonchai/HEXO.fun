@@ -123,6 +123,61 @@ export function computeBonuses(
     .filter((bonus) => bonus.amount > 0n);
 }
 
+/** One entry `splitShares` divides a grant across: `weight` is the basis it
+ *  gets its proportional cut from. */
+export interface ShareWeight {
+  readonly referee: string;
+  readonly weight: bigint;
+}
+
+export interface RefereeShare {
+  readonly referee: string;
+  readonly amount: bigint;
+}
+
+/**
+ * referral-page ticket 05: splits `grantAmount` across `weights` in
+ * proportion to each entry's own `weight`, floored, with the leftover atomic
+ * units (`grantAmount` minus the floor sum) handed out one each by largest
+ * remainder, so the shares always sum exactly to `grantAmount`. Ties break by
+ * `referee` ascending, for a deterministic order. Returns 0 for every entry
+ * when `grantAmount` or the total weight is 0 (or negative).
+ *
+ * The indexer's grant-time call weighs each qualified referee by their own
+ * basis (min(Principal, REFERRAL_BONUS_BASIS_CAP)); its re-clamp call reuses
+ * this with each existing share's own amount as the weight, so a later
+ * shrink (the referrer's own-Principal cap tightening) keeps the same
+ * proportions instead of re-deriving them from Principal data that may have
+ * moved again since the shares were first written.
+ */
+export function splitShares(
+  grantAmount: bigint,
+  weights: readonly ShareWeight[],
+): RefereeShare[] {
+  const totalWeight = weights.reduce((sum, w) => sum + w.weight, 0n);
+  if (grantAmount <= 0n || totalWeight <= 0n) {
+    return weights.map((w) => ({ referee: w.referee, amount: 0n }));
+  }
+
+  const floors = weights.map((w) => {
+    const numerator = grantAmount * w.weight;
+    return { referee: w.referee, amount: numerator / totalWeight, remainder: numerator % totalWeight };
+  });
+  let leftover = grantAmount - floors.reduce((sum, f) => sum + f.amount, 0n);
+
+  const byLargestRemainder = [...floors].sort((a, b) => {
+    if (a.remainder !== b.remainder) return a.remainder > b.remainder ? -1 : 1;
+    return a.referee < b.referee ? -1 : a.referee > b.referee ? 1 : 0;
+  });
+  const amounts = new Map(floors.map((f) => [f.referee, f.amount]));
+  for (const f of byLargestRemainder) {
+    if (leftover <= 0n) break;
+    amounts.set(f.referee, (amounts.get(f.referee) ?? 0n) + 1n);
+    leftover -= 1n;
+  }
+  return weights.map((w) => ({ referee: w.referee, amount: amounts.get(w.referee) ?? 0n }));
+}
+
 export interface ReferralBand {
   readonly tier: number;
   readonly rateBps: number;

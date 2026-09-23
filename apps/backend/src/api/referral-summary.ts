@@ -26,19 +26,38 @@ export interface InviteCodeDto {
   readonly redeemed: boolean;
 }
 
-/** One Referral row, reduced to what qualification needs. */
+/** One Referral row, reduced to what the Your Team table needs
+ *  (referral-page ticket 05): qualification, when it bound, and its own
+ *  share of today's grant (0n when the referral isn't part of the basis, or
+ *  no grant has landed yet). */
 export interface ReferralInput {
   readonly referee: string;
   readonly aboveSince: bigint | null;
+  readonly boundAt: bigint;
+  readonly bonusToday: bigint;
 }
 
-export interface ReferralRowDto {
+/** spec.md "Referrals API response": Active / N days left / Under $50. */
+export type ReferralStatus = "qualified" | "holding" | "below";
+
+export interface ReferralItemDto {
   readonly wallet: string;
-  readonly qualified: boolean;
-  /** Whole days left before qualifying; null while Principal has never
-   *  crossed the threshold (nothing counting down yet). */
-  readonly daysToQualify: number | null;
+  readonly status: ReferralStatus;
+  /** Whole days left before qualifying; null except while `status` is
+   *  "holding" (below $50 has nothing counting down, qualified already
+   *  arrived). */
+  readonly daysLeft: number | null;
+  readonly bonusToday: bigint;
+  readonly joinedAt: bigint;
 }
+
+export interface ReferralsPageDto {
+  readonly items: ReferralItemDto[];
+  readonly nextCursor: string | null;
+}
+
+/** spec.md "Referrals API response": default page size. */
+export const DEFAULT_REFERRALS_PAGE_SIZE = 50;
 
 export interface ReferralsResponse {
   /** The wallet's own Referral code (ADR 0014); null before its first
@@ -47,7 +66,7 @@ export interface ReferralsResponse {
   /** This wallet's own Invite codes, granted by redeeming one (ticket 07);
    *  no web UI yet. */
   readonly inviteCodes: InviteCodeDto[];
-  readonly referrals: ReferralRowDto[];
+  readonly referrals: ReferralsPageDto;
   readonly qualifiedCount: number;
   /** Current band (referral-page ticket 03); tier 0 means no rate yet. */
   readonly band: ReferralBand;
@@ -60,14 +79,48 @@ export interface ReferralsResponse {
   readonly bonusToday: { amount: bigint; uncapped: bigint };
 }
 
+function referralStatus(
+  aboveSince: bigint | null,
+  now: bigint,
+  qualifySeconds: number,
+): ReferralStatus {
+  if (isQualified(aboveSince, now, qualifySeconds)) return "qualified";
+  return aboveSince === null ? "below" : "holding";
+}
+
+/**
+ * Newest `boundAt` first, ties broken by `referee` ascending so the order is
+ * deterministic; `cursor` names the last referee already seen, so the page
+ * starts right after it. A cursor that no longer matches any row (stale, or
+ * simply never sent) restarts from the top — cheap and safe, since the web
+ * only ever reads the first page (spec.md "no load-more control").
+ */
+function paginateReferrals(
+  referrals: readonly ReferralInput[],
+  cursor: string | null,
+  limit: number,
+): { page: ReferralInput[]; nextCursor: string | null } {
+  const sorted = [...referrals].sort((a, b) => {
+    if (a.boundAt !== b.boundAt) return a.boundAt > b.boundAt ? -1 : 1;
+    return a.referee < b.referee ? -1 : a.referee > b.referee ? 1 : 0;
+  });
+  const startIndex = cursor === null ? 0 : sorted.findIndex((r) => r.referee === cursor) + 1;
+  const slice = sorted.slice(startIndex, startIndex + limit + 1);
+  const hasMore = slice.length > limit;
+  const page = hasMore ? slice.slice(0, limit) : slice;
+  return { page, nextCursor: hasMore ? page[page.length - 1]!.referee : null };
+}
+
 /**
  * Builds GET /referrals/:wallet's response (ticket 11; `referralCode` added
  * by ADR 0014 / docs/plan/referral-page ticket 01; `inviteCodes` by ticket
- * 07) from already-fetched rows: this wallet's own ReferralCode, its owned InviteCodes, its
- * Referrals, and today's ReferralGrant `{amount, uncapped}` (both 0n when
- * the job has not granted today yet — referral-page ticket 04).
- * `band`/`nextBand` (referral-page ticket 03) come straight from
- * `bandForCount`.
+ * 07) from already-fetched rows: this wallet's own ReferralCode, its owned
+ * InviteCodes, its Referrals (each already carrying its own share of
+ * today's grant — ticket 05), and today's ReferralGrant `{amount, uncapped}`
+ * (both 0n when the job has not granted today yet — referral-page ticket
+ * 04). `band`/`nextBand` (referral-page ticket 03) and `qualifiedCount` are
+ * computed over every Referral, not just the page that ends up in
+ * `referrals.items`.
  */
 export function buildReferralsResponse(
   referralCode: string | null,
@@ -76,11 +129,14 @@ export function buildReferralsResponse(
   now: bigint,
   qualifySeconds: number,
   bonusToday: { amount: bigint; uncapped: bigint },
+  cursor: string | null = null,
+  limit: number = DEFAULT_REFERRALS_PAGE_SIZE,
 ): ReferralsResponse {
   const qualifiedCount = referrals.filter((referral) =>
     isQualified(referral.aboveSince, now, qualifySeconds),
   ).length;
   const { band, nextBand } = bandForCount(qualifiedCount);
+  const { page, nextCursor } = paginateReferrals(referrals, cursor, limit);
 
   return {
     referralCode,
@@ -88,11 +144,20 @@ export function buildReferralsResponse(
       code: invite.code,
       redeemed: invite.uses >= invite.maxUses,
     })),
-    referrals: referrals.map((referral) => ({
-      wallet: maskWallet(referral.referee),
-      qualified: isQualified(referral.aboveSince, now, qualifySeconds),
-      daysToQualify: daysToQualify(referral.aboveSince, now, qualifySeconds),
-    })),
+    referrals: {
+      items: page.map((referral) => {
+        const status = referralStatus(referral.aboveSince, now, qualifySeconds);
+        return {
+          wallet: maskWallet(referral.referee),
+          status,
+          daysLeft:
+            status === "holding" ? daysToQualify(referral.aboveSince, now, qualifySeconds) : null,
+          bonusToday: referral.bonusToday,
+          joinedAt: referral.boundAt,
+        };
+      }),
+      nextCursor,
+    },
     qualifiedCount,
     band,
     nextBand,

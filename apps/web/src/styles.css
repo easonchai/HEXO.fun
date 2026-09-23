@@ -4823,6 +4823,140 @@ input::placeholder {
   background: rgba(54, 62, 75, 0.95);
 }
 
+/* ---------- Your Team (referral-page ticket 05; Figma 204:12548). Row
+   columns follow the Figma frame's own x-positions (wallet flush left, the
+   status pill at ~26% in, bonus tickets at ~45% in, JOINED flush right);
+   fluid fr/px widths stand in for Figma's literal 1005px-frame offsets so
+   the table still holds together at narrower widths. 44px rows with a 6px
+   gap, matching the frame's own row rhythm. The "→ View all draws" link in
+   the Figma frame is not rendered (spec.md). ---------- */
+
+.your-team-card {
+  background: var(--brand-slate);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.your-team-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.your-team-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--brand-white);
+  text-transform: lowercase;
+}
+
+.your-team-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.your-team-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px 110px 140px;
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+}
+
+.your-team-row-head {
+  min-height: 0;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.your-team-row-head .your-team-col-joined {
+  text-align: right;
+}
+
+.your-team-wallet {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--brand-white);
+  overflow-wrap: anywhere;
+}
+
+.your-team-pill {
+  justify-self: start;
+  padding: 4px 16px;
+  border-radius: 999px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.your-team-pill-qualified {
+  background: rgba(182, 255, 59, 0.25);
+  color: var(--brand-lime-text);
+}
+
+.your-team-pill-holding {
+  background: rgba(255, 201, 64, 0.25);
+  color: #ffc940;
+}
+
+.your-team-pill-below {
+  background: rgba(255, 65, 54, 0.25);
+  color: var(--brand-red);
+}
+
+.your-team-bonus {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.your-team-bonus-nonzero {
+  color: var(--brand-lime-text);
+}
+
+.your-team-joined {
+  font-family: "Roboto Mono", monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.your-team-col-joined {
+  text-align: right;
+}
+
+.your-team-empty {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+@media (max-width: 960px) {
+  .your-team-card {
+    padding: 20px;
+    gap: 16px;
+  }
+
+  .your-team-row {
+    grid-template-columns: minmax(0, 1fr) 130px 70px;
+    gap: 10px;
+  }
+
+  .your-team-col-joined {
+    display: none;
+  }
+}
+
 @media (max-width: 960px) {
   .referrals-content {
     padding: 24px 16px 48px;

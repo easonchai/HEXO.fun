@@ -38,7 +38,7 @@ const POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
 
 async function truncate(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE "Pool", "InviteCode", "Referral", "ReferralGrant", "ReferralCode", "Player"',
+    'TRUNCATE "Pool", "InviteCode", "Referral", "ReferralGrant", "ReferralGrantShare", "ReferralCode", "Player"',
   );
 }
 
@@ -144,6 +144,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     await prisma.pool.deleteMany();
     await prisma.inviteCode.deleteMany();
     await prisma.referral.deleteMany();
+    await prisma.referralGrantShare.deleteMany();
     await prisma.referralGrant.deleteMany();
     await prisma.referralCode.deleteMany();
     await prisma.player.deleteMany();
@@ -158,7 +159,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     expect(body).toEqual({
       referralCode: null,
       inviteCodes: [],
-      referrals: [],
+      referrals: { items: [], nextCursor: null },
       qualifiedCount: 0,
       band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
       nextBand: { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 },
@@ -200,9 +201,10 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     ]);
   });
 
-  it("masks referral wallets and reports qualified vs. days to qualify", async () => {
+  it("masks referral wallets and reports the qualified / holding / below status", async () => {
     const qualifiedReferee = Keypair.generate().publicKey.toBase58();
-    const pendingReferee = Keypair.generate().publicKey.toBase58();
+    const holdingReferee = Keypair.generate().publicKey.toBase58();
+    const belowReferee = Keypair.generate().publicKey.toBase58();
     const now = BigInt(Math.floor(Date.now() / 1000));
 
     await prisma.referral.create({
@@ -210,32 +212,130 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
         referee: qualifiedReferee,
         referrer: REFERRER,
         code: "ABCD2345",
-        boundAt: 0n,
+        boundAt: 3n,
         aboveSince: now - 604_800n, // exactly the default qualify window
         principal: 50_000_000n,
       },
     });
     await prisma.referral.create({
       data: {
-        referee: pendingReferee,
+        referee: holdingReferee,
         referrer: REFERRER,
         code: "ABCD2345",
-        boundAt: 0n,
+        boundAt: 2n,
         aboveSince: now - 100_000n,
         principal: 60_000_000n,
       },
     });
+    await prisma.referral.create({
+      data: {
+        referee: belowReferee,
+        referrer: REFERRER,
+        code: "ABCD2345",
+        boundAt: 1n,
+        aboveSince: null,
+        principal: 0n,
+      },
+    });
 
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
-    expect(body.referrals).toHaveLength(2);
-    for (const row of body.referrals as { wallet: string }[]) {
+    const items = body.referrals.items as {
+      wallet: string;
+      status: string;
+      daysLeft: number | null;
+      bonusToday: string;
+      joinedAt: string;
+    }[];
+    expect(items).toHaveLength(3);
+    for (const row of items) {
       expect(row.wallet).not.toBe(qualifiedReferee);
-      expect(row.wallet).not.toBe(pendingReferee);
+      expect(row.wallet).not.toBe(holdingReferee);
+      expect(row.wallet).not.toBe(belowReferee);
       expect(row.wallet).toMatch(/^.{4}….{4}$/);
+      expect(row.bonusToday).toBe("0"); // no grant recorded today
     }
+    // Newest boundAt first.
+    expect(items.map((row) => row.status)).toEqual(["qualified", "holding", "below"]);
+    expect(items[0]?.daysLeft).toBeNull();
+    expect(items[1]?.daysLeft).toBe(6);
+    expect(items[2]?.daysLeft).toBeNull();
+    expect(body.referrals.nextCursor).toBeNull();
     expect(body.qualifiedCount).toBe(1);
     expect(body.band).toEqual({ tier: 1, rateBps: 200, minCount: 1, maxCount: 2 });
     expect(body.nextBand).toEqual({ tier: 2, rateBps: 300, minCount: 3, maxCount: 5 });
+  });
+
+  it("reads each referral's own bonusToday off its ReferralGrantShare row", async () => {
+    await prisma.pool.create({ data: emptyPool({ currentEpochId: 5n }) });
+    const referee = Keypair.generate().publicKey.toBase58();
+    const otherReferee = Keypair.generate().publicKey.toBase58();
+    await prisma.referral.createMany({
+      data: [
+        {
+          referee,
+          referrer: REFERRER,
+          code: "ABCD2345",
+          boundAt: 2n,
+          aboveSince: 0n,
+          principal: 100_000_000n,
+        },
+        {
+          referee: otherReferee,
+          referrer: REFERRER,
+          code: "ABCD2345",
+          boundAt: 1n,
+          aboveSince: 0n,
+          principal: 100_000_000n,
+        },
+      ],
+    });
+    await prisma.referralGrant.create({
+      data: {
+        epochId: 5n,
+        referrer: REFERRER,
+        amount: 8_000_000n,
+        uncapped: 8_000_000n,
+        qualifiedCount: 2,
+        rateBps: 200,
+      },
+    });
+    await prisma.referralGrantShare.createMany({
+      data: [
+        { epochId: 5n, referrer: REFERRER, referee, amount: 6_000_000n },
+        { epochId: 5n, referrer: REFERRER, referee: otherReferee, amount: 2_000_000n },
+      ],
+    });
+
+    const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
+    const items = body.referrals.items as { wallet: string; bonusToday: string }[];
+    expect(items.map((row) => row.bonusToday)).toEqual(["6000000", "2000000"]);
+  });
+
+  it("paginates with a default page of 50 and honours ?cursor= / ?limit=", async () => {
+    await prisma.referral.createMany({
+      data: Array.from({ length: 5 }, (_, i) => ({
+        referee: Keypair.generate().publicKey.toBase58(),
+        referrer: REFERRER,
+        code: "ABCD2345",
+        boundAt: BigInt(i),
+        aboveSince: null,
+      })),
+    });
+
+    const firstPage = await http.get(`/referrals/${REFERRER}?limit=2`).expect(200);
+    expect(firstPage.body.referrals.items).toHaveLength(2);
+    expect(firstPage.body.referrals.items[0].joinedAt).toBe("4");
+    expect(firstPage.body.referrals.nextCursor).not.toBeNull();
+
+    const secondPage = await http
+      .get(`/referrals/${REFERRER}?limit=2&cursor=${firstPage.body.referrals.nextCursor}`)
+      .expect(200);
+    expect(secondPage.body.referrals.items).toHaveLength(2);
+    expect(secondPage.body.referrals.items[0].joinedAt).toBe("2");
+
+    const wholeDefault = await http.get(`/referrals/${REFERRER}`).expect(200);
+    expect(wholeDefault.body.referrals.items).toHaveLength(5); // well under the default 50
+    expect(wholeDefault.body.referrals.nextCursor).toBeNull();
   });
 
   it("reads today's bonus amount and uncapped off the pool's currentEpochId", async () => {

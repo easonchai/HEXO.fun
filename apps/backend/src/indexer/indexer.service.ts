@@ -19,8 +19,11 @@ import {
 } from "../api/referral";
 import {
   computeBonuses,
+  REFERRAL_BONUS_BASIS_CAP,
   remainingGrantCap,
+  splitShares,
   type ReferrerBonusInput,
+  type ShareWeight,
 } from "../api/referral-bonus";
 import { ChainService } from "../chain/chain.service";
 import { rpcStatus } from "../chain/rpc-fallback";
@@ -370,13 +373,16 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     if (!pool) return [];
 
     const referrals = await this.prisma.referral.findMany({
-      select: { referrer: true, principal: true, aboveSince: true },
+      select: { referee: true, referrer: true, principal: true, aboveSince: true },
     });
     if (referrals.length === 0) return [];
-    const byReferrer = new Map<string, { principal: bigint; aboveSince: bigint | null }[]>();
+    const byReferrer = new Map<
+      string,
+      { referee: string; principal: bigint; aboveSince: bigint | null }[]
+    >();
     for (const row of referrals) {
       const list = byReferrer.get(row.referrer) ?? [];
-      list.push({ principal: row.principal, aboveSince: row.aboveSince });
+      list.push({ referee: row.referee, principal: row.principal, aboveSince: row.aboveSince });
       byReferrer.set(row.referrer, list);
     }
 
@@ -393,35 +399,78 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     // lazy reset the program applies to bonus_granted: a stale bonusEpoch
     // means today's counter has not actually been touched yet, so it reads
     // as 0 rather than whatever a previous epoch left behind.
+    // referral-page ticket 05: each referrer's qualified referees, weighted
+    // by their own basis (the same min(Principal, REFERRAL_BONUS_BASIS_CAP)
+    // computeBonuses sums for the rate), for splitShares to divide their
+    // grant across below.
+    const qualifiedRefereesByReferrer = new Map<string, ShareWeight[]>();
     const inputs: ReferrerBonusInput[] = [...byReferrer].map(([referrer, refs]) => {
       const player = playerByOwner.get(referrer);
+      const qualified = refs.filter((ref) =>
+        isQualified(ref.aboveSince, now, this.referralQualifySeconds),
+      );
+      qualifiedRefereesByReferrer.set(
+        referrer,
+        qualified.map((ref) => ({
+          referee: ref.referee,
+          weight: ref.principal < REFERRAL_BONUS_BASIS_CAP ? ref.principal : REFERRAL_BONUS_BASIS_CAP,
+        })),
+      );
       return {
         referrer,
         principal: player?.principal ?? 0n,
         alreadyGrantedToday: player?.bonusEpoch === epochId ? player.bonusGranted : 0n,
-        qualifiedReferralPrincipals: refs
-          .filter((ref) => isQualified(ref.aboveSince, now, this.referralQualifySeconds))
-          .map((ref) => ref.principal),
+        qualifiedReferralPrincipals: qualified.map((ref) => ref.principal),
       };
     });
 
     const bonuses = computeBonuses(inputs, pool.totalPrincipal, pool.bonusCapBps);
     if (bonuses.length > 0) {
-      await this.prisma.referralGrant.createMany({
-        data: bonuses.map((bonus) => ({
-          epochId,
-          referrer: bonus.referrer,
-          amount: bonus.amount,
-          // referral-page ticket 04: written once here, like amount/
-          // qualifiedCount/rateBps, and never touched by the re-clamp loop
-          // below — it is defined as what the referrer would get without
-          // their own Principal moving, so a later Principal change has
-          // nothing to re-derive it from.
-          uncapped: bonus.uncapped,
-          qualifiedCount: bonus.qualifiedCount,
-          rateBps: bonus.rateBps,
-        })),
-        skipDuplicates: true,
+      await this.prisma.$transaction(async (tx) => {
+        // referral-page ticket 05: shares are written in the same
+        // transaction as the grant, with the same idempotency — only for a
+        // referrer whose ReferralGrant row is new this tick, so a referrer
+        // already recorded (whose amount is frozen the same way, see the
+        // comment on `uncapped` below) does not get its shares re-derived
+        // from qualified referees that may have changed since.
+        const already = await tx.referralGrant.findMany({
+          where: { epochId, referrer: { in: bonuses.map((bonus) => bonus.referrer) } },
+          select: { referrer: true },
+        });
+        const alreadyWritten = new Set(already.map((row) => row.referrer));
+
+        await tx.referralGrant.createMany({
+          data: bonuses.map((bonus) => ({
+            epochId,
+            referrer: bonus.referrer,
+            amount: bonus.amount,
+            // referral-page ticket 04: written once here, like amount/
+            // qualifiedCount/rateBps, and never touched by the re-clamp loop
+            // below — it is defined as what the referrer would get without
+            // their own Principal moving, so a later Principal change has
+            // nothing to re-derive it from.
+            uncapped: bonus.uncapped,
+            qualifiedCount: bonus.qualifiedCount,
+            rateBps: bonus.rateBps,
+          })),
+          skipDuplicates: true,
+        });
+
+        const shareRows = bonuses
+          .filter((bonus) => !alreadyWritten.has(bonus.referrer))
+          .flatMap((bonus) =>
+            splitShares(bonus.amount, qualifiedRefereesByReferrer.get(bonus.referrer) ?? []).map(
+              (share) => ({
+                epochId,
+                referrer: bonus.referrer,
+                referee: share.referee,
+                amount: share.amount,
+              }),
+            ),
+          );
+        if (shareRows.length > 0) {
+          await tx.referralGrantShare.createMany({ data: shareRows, skipDuplicates: true });
+        }
       });
     }
 
@@ -453,14 +502,41 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       due.push({ referrer: grant.referrer, amount });
     }
     if (changed.length > 0) {
-      await this.prisma.$transaction(
-        changed.map((grant) =>
-          this.prisma.referralGrant.update({
+      await this.prisma.$transaction(async (tx) => {
+        for (const grant of changed) {
+          await tx.referralGrant.update({
             where: { epochId_referrer: { epochId, referrer: grant.referrer } },
             data: { amount: grant.amount },
-          }),
-        ),
-      );
+          });
+          // referral-page ticket 05: rescale this referrer's shares off
+          // their own existing amounts as the weight (they already sum to
+          // the grant's old amount), so a shrink keeps the same proportions
+          // and the shares stay exactly summed to the re-clamped amount,
+          // without re-deriving them from referee Principal data that may
+          // have moved again since they were written.
+          const shares = await tx.referralGrantShare.findMany({
+            where: { epochId, referrer: grant.referrer },
+            select: { referee: true, amount: true },
+          });
+          if (shares.length === 0) continue;
+          const rescaled = splitShares(
+            grant.amount,
+            shares.map((share) => ({ referee: share.referee, weight: share.amount })),
+          );
+          for (const share of rescaled) {
+            await tx.referralGrantShare.update({
+              where: {
+                epochId_referrer_referee: {
+                  epochId,
+                  referrer: grant.referrer,
+                  referee: share.referee,
+                },
+              },
+              data: { amount: share.amount },
+            });
+          }
+        }
+      });
     }
     return due;
   }

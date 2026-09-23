@@ -436,13 +436,29 @@ export interface InviteCodeDto {
   redeemed: boolean;
 }
 
-/** One Referral row, wallet already masked server-side. */
-export interface ReferralRowDto {
+/** spec.md "Referrals API response": Active / N days left / Under $50. */
+export type ReferralStatus = "qualified" | "holding" | "below";
+
+/** One Your Team row (referral-page ticket 05, Figma 204:12548); wallet
+ *  already masked server-side. */
+export interface ReferralItemDto {
   wallet: string;
-  qualified: boolean;
-  /** Whole days left before qualifying; null while Principal has never
-   *  crossed the $50 threshold (nothing counting down yet). */
-  daysToQualify: number | null;
+  status: ReferralStatus;
+  /** Whole days left before qualifying; null except while `status` is
+   *  "holding". */
+  daysLeft: number | null;
+  /** Atomic Ticket decimal string: this referral's own share of the
+   *  Referrer's `bonusToday.amount` for today's draw. */
+  bonusToday: string;
+  /** Unix seconds (decimal string) the referral bound. */
+  joinedAt: string;
+}
+
+/** `referrals` (referral-page ticket 05): the web reads only the first page
+ *  (spec.md "no load-more control"), so nothing here paginates further. */
+export interface ReferralsPageDto {
+  items: ReferralItemDto[];
+  nextCursor: string | null;
 }
 
 /** A referral rate tier (referral-page ticket 03): tier 0 means no rate yet;
@@ -461,7 +477,7 @@ export interface ReferralsDto {
    *  event. */
   referralCode: string | null;
   inviteCodes: InviteCodeDto[];
-  referrals: ReferralRowDto[];
+  referrals: ReferralsPageDto;
   qualifiedCount: number;
   /** Current band (referral-page ticket 03). */
   band: ReferralBandDto;

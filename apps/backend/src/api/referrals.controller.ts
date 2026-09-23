@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  Query,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PublicKey } from "@solana/web3.js";
@@ -16,7 +17,7 @@ import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { isUniqueConstraintViolation } from "./access.controller";
 import { applyReferralMessage, normalizeInviteCode, verifyApplyReferralSignature } from "./invite-code";
-import { buildReferralsResponse } from "./referral-summary";
+import { buildReferralsResponse, type ReferralInput } from "./referral-summary";
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
 
@@ -27,6 +28,16 @@ const parseWallet = (raw: string): string => {
     throw new BadRequestException("That is not a valid Solana wallet address.");
   }
 };
+
+/** `?limit=` (spec.md "Referrals API response"): undefined for anything not
+ *  a positive integer, so `buildReferralsResponse`'s own default (50) picks
+ *  up rather than this route inventing a second default to keep in sync. */
+const MAX_REFERRALS_PAGE_SIZE = 200;
+function parseReferralsLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, MAX_REFERRALS_PAGE_SIZE) : undefined;
+}
 
 interface ApplyReferralBody {
   wallet: PublicKey;
@@ -84,11 +95,15 @@ export class ReferralsController {
   ) {}
 
   @Get(":wallet")
-  async getReferrals(@Param("wallet") walletRaw: string) {
+  async getReferrals(
+    @Param("wallet") walletRaw: string,
+    @Query("cursor") cursorRaw?: string,
+    @Query("limit") limitRaw?: string,
+  ) {
     const wallet = parseWallet(walletRaw);
     const qualifySeconds = this.config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
 
-    const [referralCode, inviteCodes, referrals, pool] = await Promise.all([
+    const [referralCode, inviteCodes, referralRows, pool] = await Promise.all([
       this.prisma.referralCode.findUnique({
         where: { owner: wallet },
         select: { code: true },
@@ -99,12 +114,21 @@ export class ReferralsController {
       }),
       this.prisma.referral.findMany({
         where: { referrer: wallet },
-        select: { referee: true, aboveSince: true },
+        select: { referee: true, aboveSince: true, boundAt: true },
       }),
       this.prisma.pool.findFirst(),
     ]);
 
-    const grantToday = await this.bonusGrant(pool?.currentEpochId, wallet);
+    const [grantToday, shares] = await Promise.all([
+      this.bonusGrant(pool?.currentEpochId, wallet),
+      this.referralShares(pool?.currentEpochId, wallet),
+    ]);
+    const referrals: ReferralInput[] = referralRows.map((row) => ({
+      referee: row.referee,
+      aboveSince: row.aboveSince,
+      boundAt: row.boundAt,
+      bonusToday: shares.get(row.referee) ?? 0n,
+    }));
 
     return buildReferralsResponse(
       referralCode?.code ?? null,
@@ -113,6 +137,8 @@ export class ReferralsController {
       nowSeconds(),
       qualifySeconds,
       { amount: grantToday?.amount ?? 0n, uncapped: grantToday?.uncapped ?? 0n },
+      cursorRaw ?? null,
+      parseReferralsLimit(limitRaw),
     );
   }
 
@@ -179,5 +205,21 @@ export class ReferralsController {
       where: { epochId_referrer: { epochId, referrer } },
       select: { amount: true, uncapped: true },
     });
+  }
+
+  /** Each referee's own share of this referrer's today's grant
+   *  (referral-page ticket 05), keyed by referee; a referral missing from
+   *  the map (not part of the basis, or no grant yet) reads as 0 in
+   *  `buildReferralsResponse`. */
+  private async referralShares(
+    epochId: bigint | undefined,
+    referrer: string,
+  ): Promise<Map<string, bigint>> {
+    if (epochId === undefined) return new Map();
+    const rows = await this.prisma.referralGrantShare.findMany({
+      where: { epochId, referrer },
+      select: { referee: true, amount: true },
+    });
+    return new Map(rows.map((row) => [row.referee, row.amount]));
   }
 }

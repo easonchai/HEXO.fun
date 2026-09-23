@@ -82,8 +82,10 @@ export interface DashboardScreenProps {
   onViewDraws: () => void;
 }
 
-/** Unix seconds (decimal string) → "Sun, Sep 6". */
-function shortDate(unixSeconds: string | null): string {
+/** Unix seconds (decimal string) → "Sun, Sep 6". Exported for referrals.ts's
+ *  Your Team JOINED column (referral-page ticket 05), which wants the exact
+ *  same format. */
+export function shortDate(unixSeconds: string | null): string {
   if (unixSeconds === null) return "—";
   const ms = Number(unixSeconds) * 1000;
   if (!Number.isFinite(ms) || ms <= 0) return "—";

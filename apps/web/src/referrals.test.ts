@@ -7,8 +7,9 @@ import {
   referralBonusCardState,
   referralHeroState,
   shareLink,
+  teamRowView,
 } from "./referrals.js";
-import type { ReferralBandDto, ReferralsDto } from "./api.js";
+import type { ReferralBandDto, ReferralItemDto, ReferralsDto } from "./api.js";
 
 const ZERO_BAND: ReferralBandDto = { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 };
 const TIER_1: ReferralBandDto = { tier: 1, rateBps: 200, minCount: 1, maxCount: 2 };
@@ -22,7 +23,7 @@ const dto = (
 ): ReferralsDto => ({
   referralCode,
   inviteCodes: [],
-  referrals: [],
+  referrals: { items: [], nextCursor: null },
   qualifiedCount: 0,
   band: ZERO_BAND,
   nextBand: TIER_1,
@@ -175,5 +176,43 @@ describe("referralBonusCardState", () => {
   it("truncates atomic amounts to whole Tickets", () => {
     const data = dto("ABCD2345", { amount: "10999999", uncapped: "10999999" });
     expect(referralBonusCardState(OWNER, data)).toEqual({ kind: "not-capped", amount: 10 });
+  });
+});
+
+describe("teamRowView", () => {
+  const item = (overrides: Partial<ReferralItemDto> = {}): ReferralItemDto => ({
+    wallet: "9xQe…VFin",
+    status: "qualified",
+    daysLeft: null,
+    bonusToday: "0",
+    joinedAt: "1788667200", // 2026-09-06 12:00 UTC, a Sunday.
+    ...overrides,
+  });
+
+  it("labels a qualified referral 'Active'", () => {
+    expect(teamRowView(item({ status: "qualified" })).statusLabel).toBe("Active");
+  });
+
+  it("labels a holding referral 'N days left', pluralized", () => {
+    expect(teamRowView(item({ status: "holding", daysLeft: 6 })).statusLabel).toBe("6 days left");
+    expect(teamRowView(item({ status: "holding", daysLeft: 1 })).statusLabel).toBe("1 day left");
+  });
+
+  it("labels a below-threshold referral 'Under $50'", () => {
+    expect(teamRowView(item({ status: "below", daysLeft: null })).statusLabel).toBe("Under $50");
+  });
+
+  it("truncates bonusToday to whole Tickets, matching referralBonusCardState", () => {
+    expect(teamRowView(item({ bonusToday: "10999999" })).bonus).toBe(10);
+    expect(teamRowView(item({ bonusToday: "0" })).bonus).toBe(0);
+  });
+
+  it("passes the already-masked wallet straight through", () => {
+    expect(teamRowView(item({ wallet: "abcd…wxyz" })).wallet).toBe("abcd…wxyz");
+    expect(teamRowView(item({ status: "below" })).status).toBe("below");
+  });
+
+  it("formats joinedAt as 'Sun, Sep 6' (spec.md user story 23)", () => {
+    expect(teamRowView(item({ joinedAt: "1788667200" })).joined).toBe("Sun, Sep 6");
   });
 });

@@ -8,10 +8,11 @@
  * 11) are gone with the placeholder screen they served; ticket 03 brings the
  * band view-model back below, now over the API's `band`/`nextBand` shape,
  * and ticket 04 adds `referralBonusCardState` for the Referral's Bonus card.
- * Ticket 05 brings the team rows back once the API grows the paginated
- * `referrals` shape (spec.md "Referrals API response").
+ * Ticket 05 adds `teamRowView` for Your Team, over the API's paginated
+ * `referrals.items` shape (spec.md "Referrals API response").
  */
-import type { ReferralBandDto, ReferralsDto } from "./api.js";
+import type { ReferralBandDto, ReferralItemDto, ReferralsDto } from "./api.js";
+import { shortDate } from "./screens/Dashboard.js";
 
 /** Hero card's code-field state (spec.md "Web page structure", user stories
  *  6-7): no wallet connected, connected but never deposited (no Referral
@@ -153,4 +154,40 @@ export function referralBonusCardState(
   // spec.md's own note; the API would need to expose the scale factor to
   // fix this precisely).
   return { kind: "capped", amount, uncapped, hintUsdc: uncapped - amount };
+}
+
+/** Your Team row view-model (referral-page ticket 05, Figma `204:12548`):
+ *  the status pill's label, this referral's own bonus in whole Tickets, and
+ *  JOINED as "Sun, Sep 6" local time. */
+export interface TeamRowView {
+  readonly wallet: string;
+  readonly status: ReferralItemDto["status"];
+  /** "Active" | "N days left" | "Under $50" (spec.md "Referrals API response"). */
+  readonly statusLabel: string;
+  readonly bonus: number;
+  readonly joined: string;
+}
+
+function teamStatusLabel(item: ReferralItemDto): string {
+  if (item.status === "qualified") return "Active";
+  if (item.status === "below") return "Under $50";
+  const days = item.daysLeft ?? 0;
+  return `${days} day${days === 1 ? "" : "s"} left`;
+}
+
+/** ticket 22: each row's bonus truncates to whole Tickets the same way
+ *  `referralBonusCardState`'s own `amount` does (`wholeTickets` above).
+ *  ponytail: each row truncates independently, so a handful of rows can sum
+ *  to one or two whole Tickets under the Referral's Bonus card's own
+ *  (likewise truncated) total when several fractional remainders each round
+ *  down — a largest-remainder pass over the whole-Ticket totals would close
+ *  that gap if it ever turns out to matter. */
+export function teamRowView(item: ReferralItemDto): TeamRowView {
+  return {
+    wallet: item.wallet,
+    status: item.status,
+    statusLabel: teamStatusLabel(item),
+    bonus: wholeTickets(item.bonusToday),
+    joined: shortDate(item.joinedAt),
+  };
 }

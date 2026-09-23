@@ -234,6 +234,27 @@ model ReferralGrant {
   @@unique([epochId, referrer])
 }
 
+// One referee's share of one referrer's ReferralGrant, epoch-scoped
+// (referral-page ticket 05). Written by the same referral job, in the same
+// transaction as the ReferralGrant row and with the same idempotency
+// (createMany({ skipDuplicates: true }) against the unique index below, only
+// for a referrer whose ReferralGrant row is new this tick). Split
+// proportional to each qualified referee's own basis (min(Principal,
+// REFERRAL_BONUS_BASIS_CAP)) at grant time, floored, with the leftover
+// atomic units handed out by largest remainder (referral-bonus.ts's
+// `splitShares`), so shares always sum exactly to the grant's `amount`. The
+// indexer's re-clamp loop rescales these the same way, off each row's own
+// existing amount as its weight, whenever a grant's `amount` shrinks after
+// Principal moves.
+model ReferralGrantShare {
+  epochId  BigInt
+  referrer String
+  referee  String
+  amount   BigInt
+
+  @@unique([epochId, referrer, referee])
+}
+
 // Single row (id = 1): what the operator last did, for GET /status.
 model OperatorState {
   id               Int     @id

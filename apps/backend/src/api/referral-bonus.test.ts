@@ -5,7 +5,9 @@ import {
   computeBonuses,
   REFERRAL_BONUS_BASIS_CAP,
   remainingGrantCap,
+  splitShares,
   type ReferrerBonusInput,
+  type ShareWeight,
 } from "./referral-bonus";
 
 const USDC = 1_000_000n;
@@ -258,6 +260,107 @@ describe("computeBonuses: uncapped", () => {
       100, // 1% of $4,000 = $40 pool cap
     );
     expect(bonus).toMatchObject({ amount: 40n * USDC, uncapped: 550n * USDC });
+  });
+});
+
+// referral-page ticket 05: the largest-remainder split behind
+// ReferralGrantShare. The property the ticket calls out by name: shares
+// always sum exactly to the grant.
+describe("splitShares", () => {
+  const sum = (shares: { amount: bigint }[]): bigint =>
+    shares.reduce((total, s) => total + s.amount, 0n);
+
+  it("splits proportionally to weight when it divides evenly", () => {
+    const weights: ShareWeight[] = [
+      { referee: "a", weight: 300n },
+      { referee: "b", weight: 100n },
+    ];
+    expect(splitShares(80n, weights)).toEqual([
+      { referee: "a", amount: 60n },
+      { referee: "b", amount: 20n },
+    ]);
+  });
+
+  it("floors then hands the leftover out one unit at a time by largest remainder", () => {
+    // 10 split three ways evenly: 3.33 each, floors to 3+3+3=9, one unit of
+    // leftover goes to whichever remainder is largest.
+    const weights: ShareWeight[] = [
+      { referee: "a", weight: 1n },
+      { referee: "b", weight: 1n },
+      { referee: "c", weight: 1n },
+    ];
+    const shares = splitShares(10n, weights);
+    expect(sum(shares)).toBe(10n);
+    expect(shares.filter((s) => s.amount === 4n)).toHaveLength(1);
+    expect(shares.filter((s) => s.amount === 3n)).toHaveLength(2);
+  });
+
+  it("always sums exactly to the grant across uneven weights and a tiny grant", () => {
+    // 1 atomic unit split five ways: four entries floor to 0, one gets it.
+    const weights: ShareWeight[] = Array.from({ length: 5 }, (_, i) => ({
+      referee: `r${i}`,
+      weight: BigInt(i + 1),
+    }));
+    const shares = splitShares(1n, weights);
+    expect(sum(shares)).toBe(1n);
+    expect(shares.filter((s) => s.amount === 1n)).toHaveLength(1);
+  });
+
+  it("ties break by referee ascending, for a deterministic order", () => {
+    const weights: ShareWeight[] = [
+      { referee: "z", weight: 1n },
+      { referee: "a", weight: 1n },
+    ];
+    // Both remainders tie; "a" sorts first and gets the leftover unit.
+    const shares = splitShares(1n, weights);
+    expect(shares).toEqual([
+      { referee: "z", amount: 0n },
+      { referee: "a", amount: 1n },
+    ]);
+  });
+
+  it("a single referee gets the whole grant", () => {
+    expect(splitShares(72n, [{ referee: "solo", weight: 1n }])).toEqual([
+      { referee: "solo", amount: 72n },
+    ]);
+  });
+
+  it("is 0 for every entry when the grant is 0", () => {
+    const weights: ShareWeight[] = [{ referee: "a", weight: 5n }];
+    expect(splitShares(0n, weights)).toEqual([{ referee: "a", amount: 0n }]);
+  });
+
+  it("is 0 for every entry when the total weight is 0", () => {
+    const weights: ShareWeight[] = [
+      { referee: "a", weight: 0n },
+      { referee: "b", weight: 0n },
+    ];
+    expect(splitShares(100n, weights)).toEqual([
+      { referee: "a", amount: 0n },
+      { referee: "b", amount: 0n },
+    ]);
+  });
+
+  it("is empty for no referees", () => {
+    expect(splitShares(100n, [])).toEqual([]);
+  });
+
+  it("re-clamp rescale: reusing existing shares as weights keeps the sum exact after the grant shrinks", () => {
+    // The original grant-time split, at 72.
+    const original = splitShares(72n, [
+      { referee: "a", weight: 300n },
+      { referee: "b", weight: 100n },
+      { referee: "c", weight: 37n }, // uneven, forces a remainder
+    ]);
+    expect(sum(original)).toBe(72n);
+
+    // Re-clamped down to 40 after the referrer's own Principal shrinks;
+    // rescale off the existing shares' own amounts, not the original basis.
+    const rescaled = splitShares(
+      40n,
+      original.map((s) => ({ referee: s.referee, weight: s.amount })),
+    );
+    expect(sum(rescaled)).toBe(40n);
   });
 });
 

@@ -1,11 +1,10 @@
 /**
  * REFERRALS tab (referral-page ticket 01): the Figma "Invite Page" (`204:12137`)
  * rebuilt one card per Figma frame. Ticket 01 built the hero (`204:12172`)
- * and the page shell; the row below it is where the Bonus Rate (`230:16970`,
- * ticket 03) and Referral's Bonus (`230:17196`, ticket 04) cards drop in
- * side by side, and Your Team (`204:12548`, ticket 05) drops in full width
- * below that — those containers and gaps are already here, the cards
- * themselves aren't. Ticket 06 built the FAQ (`204:12299` collapsed /
+ * and the page shell; the row below it holds the Bonus Rate (`230:16970`,
+ * ticket 03) and Referral's Bonus (`230:17196`, ticket 04) cards side by
+ * side. Ticket 05 built Your Team (`204:12548`, `YourTeamCard` below), full
+ * width beneath that row. Ticket 06 built the FAQ (`204:12299` collapsed /
  * `171:28875` open) that follows, shared with About.tsx via ../Faq.js.
  *
  * Logic lives in referrals.ts (the pure hero view-model) and useReferrals.ts
@@ -14,6 +13,7 @@
  */
 import type { PublicKey } from "@solana/web3.js";
 
+import type { ReferralItemDto } from "../api.js";
 import { BonusRateCard } from "../BonusRateCard.js";
 import { Faq, type FaqItem } from "../Faq.js";
 import { InfoTip } from "../InfoTip.js";
@@ -21,6 +21,7 @@ import {
   bonusRateView,
   referralBonusCardState,
   referralHeroState,
+  teamRowView,
   type ReferralBonusCardState,
   type ReferralHeroState,
 } from "../referrals.js";
@@ -114,6 +115,12 @@ const REFERRAL_BONUS_TIP = [
   "• You cannot earn more bonus tickets than your own deposit tickets.",
 ] as const;
 
+/** spec.md Copy, "Your Team tooltip". */
+const YOUR_TEAM_TIP = [
+  "Friends you've onboarded.",
+  "Once a member holds $50+ for 7 continuous days, they actively generate daily bonus tickets for your account (capped at $2,500 deposit per member).",
+] as const;
+
 export function Referrals({ owner, onConnect, onDeposit }: ReferralsScreenProps) {
   const walletKey = owner?.toBase58();
   const referrals = useReferrals(walletKey);
@@ -138,7 +145,7 @@ export function Referrals({ owner, onConnect, onDeposit }: ReferralsScreenProps)
           <BonusRateCard state={bonusRateView(walletKey, referrals.data)} />
           <ReferralBonusCard state={bonus} onDeposit={onDeposit} />
         </div>
-        {/* Your Team (Figma 204:12548, ticket referral-page/05) drops in here, full width. */}
+        <YourTeamCard items={referrals.data?.referrals.items ?? []} />
         <ReferralFaq />
 
         {/* Disconnected always polls to "no wallet connected" (useReferrals.ts);
@@ -249,6 +256,54 @@ function ReferralHero({
           )}
         </div>
       </div>
+    </section>
+  );
+}
+
+/**
+ * Your Team table (referral-page ticket 05; Figma `204:12548`). Full width,
+ * below `.referrals-row`. The "→ View all draws" link in the Figma frame is
+ * not rendered (spec.md). The phone breakpoint drops the JOINED column via
+ * `.your-team-col-joined` (styles.css).
+ */
+function YourTeamCard({ items }: { items: readonly ReferralItemDto[] }) {
+  const rows = items.map(teamRowView);
+
+  return (
+    <section className="your-team-card" aria-label="Your team" data-testid="your-team-card">
+      <div className="your-team-head">
+        <h2 className="your-team-title">Your team</h2>
+        <InfoTip id="your-team-tip" paragraphs={YOUR_TEAM_TIP} />
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="your-team-empty" data-testid="your-team-empty">
+          No referrals yet. Share your code above to start your team.
+        </p>
+      ) : (
+        <div className="your-team-table" data-testid="your-team-table">
+          <div className="your-team-row your-team-row-head" aria-hidden="true">
+            <span>REFERRALS</span>
+            <span>STATUS</span>
+            <span>BONUS TICKETS</span>
+            <span className="your-team-col-joined">JOINED</span>
+          </div>
+          {rows.map((row, index) => (
+            <div className="your-team-row" key={`${row.wallet}-${index}`}>
+              <span className="your-team-wallet">{row.wallet}</span>
+              <span className={`your-team-pill your-team-pill-${row.status}`}>
+                {row.statusLabel}
+              </span>
+              <span
+                className={`your-team-bonus${row.bonus > 0 ? " your-team-bonus-nonzero" : ""}`}
+              >
+                {row.bonus > 0 ? `+${row.bonus}` : "0"}
+              </span>
+              <span className="your-team-joined your-team-col-joined">{row.joined}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

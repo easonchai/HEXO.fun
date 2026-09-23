@@ -99,6 +99,7 @@ async function wipe(): Promise<void> {
     prisma.epoch.deleteMany(),
     prisma.pool.deleteMany(),
     prisma.referral.deleteMany(),
+    prisma.referralGrantShare.deleteMany(),
     prisma.referralGrant.deleteMany(),
     prisma.referralCode.deleteMany(),
     prisma.inviteCode.deleteMany(),
@@ -1439,6 +1440,133 @@ describe("referral bonus job (ticket 08)", () => {
     });
     expect(sent.txSig).toBe("sig-1");
     expect(unsent.txSig).toBeNull();
+  });
+
+  // referral-page ticket 05: ReferralGrantShare, written alongside
+  // ReferralGrant with the same idempotency, and rescaled by the same
+  // re-clamp loop.
+  it("writes a share row per qualified referee, proportional to their own basis, summing to the grant", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER) });
+    const big = Keypair.generate().publicKey.toBase58();
+    const small = Keypair.generate().publicKey.toBase58();
+    await prisma.referral.create({
+      data: {
+        referee: big,
+        referrer: REFERRER,
+        code: "ABCD9999",
+        boundAt: 0n,
+        aboveSince: WELL_PAST,
+        principal: 300_000_000n, // 300 USDC
+      },
+    });
+    await prisma.referral.create({
+      data: {
+        referee: small,
+        referrer: REFERRER,
+        code: "ABCD9999",
+        boundAt: 0n,
+        aboveSince: WELL_PAST,
+        principal: 100_000_000n, // 100 USDC
+      },
+    });
+
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    const grant = await prisma.referralGrant.findUniqueOrThrow({
+      where: { epochId_referrer: { epochId: EPOCH_ID, referrer: REFERRER } },
+    });
+    const shares = await prisma.referralGrantShare.findMany({
+      where: { epochId: EPOCH_ID, referrer: REFERRER },
+    });
+    expect(shares.reduce((sum, share) => sum + share.amount, 0n)).toBe(grant.amount);
+    // 300:100 basis -> 3:1 split, evenly (400 USDC basis, no remainder).
+    const bigShare = shares.find((share) => share.referee === big)!;
+    const smallShare = shares.find((share) => share.referee === small)!;
+    expect(bigShare.amount).toBe((grant.amount * 3n) / 4n);
+    expect(smallShare.amount).toBe(grant.amount - bigShare.amount);
+  });
+
+  it("share rows stay idempotent: a referee that only qualifies after the grant was first recorded gets no row", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER) });
+    const first = Keypair.generate().publicKey.toBase58();
+    await prisma.referral.create({
+      data: {
+        referee: first,
+        referrer: REFERRER,
+        code: "ABCD9999",
+        boundAt: 0n,
+        aboveSince: WELL_PAST,
+        principal: 100_000_000n,
+      },
+    });
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    const second = Keypair.generate().publicKey.toBase58();
+    await prisma.referral.create({
+      data: {
+        referee: second,
+        referrer: REFERRER,
+        code: "ABCD9999",
+        boundAt: 0n,
+        aboveSince: WELL_PAST,
+        principal: 500_000_000n,
+      },
+    });
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    const shares = await prisma.referralGrantShare.findMany({
+      where: { epochId: EPOCH_ID, referrer: REFERRER },
+    });
+    expect(shares).toHaveLength(1);
+    expect(shares[0]!.referee).toBe(first);
+  });
+
+  it("re-clamp rescales share rows to the new amount, still summing exactly", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER, { principal: 1_000_000_000n }) }); // $1,000
+    for (let i = 0; i < 11; i++) {
+      await prisma.referral.create({
+        data: {
+          referee: Keypair.generate().publicKey.toBase58(),
+          referrer: REFERRER,
+          code: "ABCD9999",
+          boundAt: 0n,
+          aboveSince: WELL_PAST,
+          principal: 2_500_000_000n, // $2,500 each, 11 -> 5% tier
+        },
+      });
+    }
+
+    await indexer.referralGrantsDue(EPOCH_ID); // capped at the $1,000 Principal
+
+    const before = await prisma.referralGrantShare.findMany({
+      where: { epochId: EPOCH_ID, referrer: REFERRER },
+    });
+    expect(before.reduce((sum, share) => sum + share.amount, 0n)).toBe(1_000_000_000n);
+
+    await prisma.player.update({ where: { owner: REFERRER }, data: { principal: 10_000_000n } }); // $10
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    const after = await prisma.referralGrantShare.findMany({
+      where: { epochId: EPOCH_ID, referrer: REFERRER },
+    });
+    // Still one row per referee: the re-clamp rescales, it doesn't drop rows.
+    expect(after).toHaveLength(11);
+    expect(after.reduce((sum, share) => sum + share.amount, 0n)).toBe(10_000_000n);
+  });
+
+  it("clamping all the way to 0 zeroes every share row too", async () => {
+    await prisma.player.create({ data: referrerPlayer(REFERRER, { principal: 100_000_000n }) });
+    await seedQualifiedReferral();
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    await prisma.player.update({ where: { owner: REFERRER }, data: { principal: 0n } });
+    await indexer.referralGrantsDue(EPOCH_ID);
+
+    const shares = await prisma.referralGrantShare.findMany({
+      where: { epochId: EPOCH_ID, referrer: REFERRER },
+    });
+    expect(shares.length).toBeGreaterThan(0);
+    expect(shares.every((share) => share.amount === 0n)).toBe(true);
   });
 });
 });
