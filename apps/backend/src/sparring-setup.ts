@@ -89,7 +89,8 @@ async function main(): Promise<void> {
     );
   }
   log(
-    `authority ${authority.publicKey.toBase58()} on ${connection.rpcEndpoint}`,
+    // Host only: a keyed RPC URL carries its api key in the query string.
+    `authority ${authority.publicKey.toBase58()} on ${new URL(connection.rpcEndpoint).host}`,
   );
 
   // The env-resolved program id wins over the checked-in IDL snapshot's

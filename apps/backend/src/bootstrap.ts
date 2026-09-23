@@ -138,20 +138,19 @@ async function ensureMint(
  * Treasury and buyback_reserve share (mint, owner), so they cannot both be
  * the ATA. `createWithSeed` gives each a deterministic address instead of the
  * random keypair the test helper uses, which is what makes a re-run a no-op.
+ * The seed carries the Pool PDA, not just POOL_ID: the same authority
+ * bootstrapping pool 1 on a second program ID would otherwise land on the
+ * first program's treasury, whose mint differs (MintMismatch in create_pool).
  */
 async function ensureSeededTokenAccount(
   connection: Connection,
   authority: Keypair,
   mint: PublicKey,
   label: string,
-  poolId: bigint,
+  pool: PublicKey,
 ): Promise<PublicKey> {
-  const seed = `hexvault-${label}-${poolId}`;
-  if (Buffer.byteLength(seed) > 32) {
-    throw new Error(
-      `POOL_ID ${poolId} makes the ${label} seed "${seed}" longer than 32 bytes`,
-    );
-  }
+  // Seeds cap at 32 bytes: "treasury-" plus 16 base58 chars of the pool.
+  const seed = `${label}-${pool.toBase58().slice(0, 16)}`;
   const address = await PublicKey.createWithSeed(
     authority.publicKey,
     seed,
@@ -282,7 +281,8 @@ async function main(): Promise<void> {
   const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
   const poolId = BigInt(process.env.POOL_ID ?? "1");
   log(
-    `signer ${authority.publicKey.toBase58()} on ${connection.rpcEndpoint}`,
+    // Host only: a keyed RPC URL carries its api key in the query string.
+    `signer ${authority.publicKey.toBase58()} on ${new URL(connection.rpcEndpoint).host}`,
   );
   log(
     `admin ${roles.admin.toBase58()}, operator ${roles.operator.toBase58()}`,
@@ -352,7 +352,7 @@ async function main(): Promise<void> {
           authority,
           mint,
           "treasury",
-          poolId,
+          pool,
         ),
       );
   const buybackReserve = existing
@@ -363,7 +363,7 @@ async function main(): Promise<void> {
           authority,
           mint,
           "buyback",
-          poolId,
+          pool,
         ),
       );
 
