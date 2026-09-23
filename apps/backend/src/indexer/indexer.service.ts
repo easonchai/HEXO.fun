@@ -23,6 +23,7 @@ import {
   type ReferrerBonusInput,
 } from "../api/referral-bonus";
 import { ChainService } from "../chain/chain.service";
+import { rpcStatus } from "../chain/rpc-fallback";
 import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -882,9 +883,28 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     if (!this.v2Unsupported) {
       const raw: RawProgramAccount[] = [];
       let paginationKey: string | undefined;
+      // Security review ticket 14: `withRpcFallback` fails over per call,
+      // with no stickiness, so a flaky primary can serve page 1 and the
+      // fallback page 2 of the same walk. The two endpoints can sit at
+      // different indexing lag, so the merged pages would not be one
+      // consistent snapshot — exactly what the full walk's absence-based
+      // Position delete and Round close (below) rely on. Pinning the whole
+      // walk to whichever endpoint served its first page, and aborting (no
+      // different than any other mid-walk failure: nothing has been written
+      // to Postgres yet) the moment a later page comes from the other one,
+      // keeps every page of one walk on one endpoint.
+      let servedBy: "primary" | "fallback" | undefined;
       try {
         do {
           const page = await this.programAccountsPage(paginationKey, changedSinceSlot);
+          const endpoint = rpcStatus(this.chain.connection).endpoint;
+          if (servedBy === undefined) {
+            servedBy = endpoint;
+          } else if (endpoint !== servedBy) {
+            throw new Error(
+              "getProgramAccountsV2 walk failed over to a different RPC endpoint mid-walk; aborting this sweep rather than mixing two providers' snapshots",
+            );
+          }
           if (slot === undefined) slot = BigInt(page.context.slot);
           raw.push(...page.value.accounts);
           // Null and absent both mean "that was the last page"; see the

@@ -14,6 +14,7 @@ import bs58 from "bs58";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { ChainService } from "../chain/chain.service";
+import { withRpcFallback } from "../chain/rpc-fallback";
 import type { HexVaultEnv } from "../config/env";
 import { loadIdl } from "../chain/idl";
 import { PrismaService } from "../prisma/prisma.service";
@@ -471,6 +472,66 @@ describe("account sync", () => {
     const cursor = await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } });
     expect(cursor.updatedAt).not.toBeNull();
     expect(Number(cursor.updatedAt)).toBeGreaterThan(Date.now() / 1000 - 60);
+  });
+});
+
+// Security review ticket 14: `withRpcFallback` fails over per call, with no
+// stickiness (rpc-fallback.ts), so a flaky primary can hand a paginated full
+// walk its first page and the fallback its second. Builds its own
+// ChainService/IndexerService over a wrapped pair of CountingConnections
+// (`connection`/`chain`/`indexer` above share one always-primary fake) so the
+// failover path actually engages.
+describe("full-walk RPC endpoint consistency (security review ticket 14)", () => {
+  it("aborts a paginated walk rather than mixing pages from two different RPC endpoints, writing nothing", async () => {
+    const primary = new CountingConnection();
+    const fallback = new CountingConnection();
+    primary.pageSize = 1;
+    fallback.pageSize = 1;
+    const wrapped = withRpcFallback(
+      primary as unknown as Connection,
+      fallback as unknown as Connection,
+      1_000,
+    );
+    const env: Partial<HexVaultEnv> = {
+      OPERATOR_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
+      POOL_ID: POOL_ID.toString(),
+      PROGRAM_ID: PROGRAM_ID.toBase58(),
+      RPC_URL: "http://127.0.0.1:1",
+      REFERRAL_QUALIFY_SECONDS: 604_800,
+    };
+    // SAFETY: same shape as the suite's own beforeAll config stub.
+    const config = {
+      get: (key: keyof HexVaultEnv) => env[key],
+    } as unknown as ConfigService<HexVaultEnv, true>;
+    const localChain = new ChainService(wrapped, config);
+    const localIndexer = new IndexerService(prisma, localChain, config);
+
+    // Two accounts on the primary so pageSize 1 needs a second page; the
+    // fallback holds none, standing in for a second provider whose index
+    // simply differs from the primary's.
+    const poolData = await localChain.program.coder.accounts.encode("pool", poolAccount());
+    primary.setAccount(localChain.poolAddress(), poolData);
+    primary.setAccount(Keypair.generate().publicKey, Buffer.alloc(8));
+
+    // The primary's *second* getProgramAccountsV2 call looks like a timeout
+    // (rpc-fallback.ts's isFailoverWorthy), so withRpcFallback retries it on
+    // the fallback mid-walk, exactly the race this test is proving is safe.
+    const realRpcRequest = primary._rpcRequest.bind(primary);
+    let primaryCalls = 0;
+    primary._rpcRequest = (method: string, params: unknown[]) => {
+      primaryCalls += 1;
+      if (method === "getProgramAccountsV2" && primaryCalls === 2) {
+        return Promise.reject(new Error("RPC getProgramAccountsV2 timed out after 10000ms"));
+      }
+      return realRpcRequest(method, params);
+    };
+
+    await expect(localIndexer.syncAccounts()).rejects.toThrow(/different RPC endpoint/);
+
+    // fetchAll threw before syncAccounts ever opened a Prisma transaction, so
+    // the Pool that page 1 alone did see never lands, and no earlier row's
+    // absence gets misread as "gone" either.
+    expect(await prisma.pool.count()).toBe(0);
   });
 });
 
