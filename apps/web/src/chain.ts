@@ -114,15 +114,20 @@ export function decodeEventLogs(
   return out;
 }
 
-const env = (key: string): string | undefined => {
-  const value = (import.meta.env as Record<string, string | undefined>)[key];
-  return value?.trim() || undefined;
-};
+/** Trims a static `import.meta.env.VITE_X` read; blank counts as unset. */
+const trimmed = (value: string | undefined): string | undefined =>
+  value?.trim() || undefined;
 
-/** The cluster this bundle was built for; `vite.config.ts` rejects a bad one. */
-export const CLUSTER = clusterFrom(
-  import.meta.env as Record<string, string | undefined>,
-);
+/**
+ * The cluster this bundle was built for; `vite.config.ts` rejects a bad one.
+ * Read as one static `import.meta.env.VITE_X` access per variable (ticket
+ * 07): Vite only inlines what a bundle statically references, so passing the
+ * whole `import.meta.env` object through, as this used to, ships every
+ * VITE_* value the build saw, used or not — including a keyed RPC URL.
+ */
+export const CLUSTER = clusterFrom({
+  VITE_CLUSTER: import.meta.env.VITE_CLUSTER,
+});
 
 /**
  * Wallet-standard chain id. Privy signs against it and registers the app's
@@ -155,18 +160,20 @@ export function programIdFrom(
 }
 
 export const PROGRAM_ID = programIdFrom(
-  env("VITE_PROGRAM_ID"),
+  trimmed(import.meta.env.VITE_PROGRAM_ID),
   idl.address,
   import.meta.env.PROD,
 );
 
 /** The single pool this build talks to; the demo runs pool 1. */
-export const POOL_ID = BigInt(env("VITE_POOL_ID") ?? "1");
+export const POOL_ID = BigInt(trimmed(import.meta.env.VITE_POOL_ID) ?? "1");
 
 /** The cluster's public endpoint unless overridden; .env.example pins the local validator. */
-export const RPC_URL = env("VITE_PUBLIC_RPC_URL") ?? clusterApiUrl(CLUSTER);
+export const RPC_URL =
+  trimmed(import.meta.env.VITE_PUBLIC_RPC_URL) ?? clusterApiUrl(CLUSTER);
 
-export const API_URL = env("VITE_API_URL") ?? "http://127.0.0.1:8080";
+export const API_URL =
+  trimmed(import.meta.env.VITE_API_URL) ?? "http://127.0.0.1:8080";
 
 export const bn = (value: bigint | number | string): BN =>
   new BN(value.toString());

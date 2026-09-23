@@ -300,13 +300,14 @@
   shows comes from the backend API, mostly one poll of GET /state; the wallet's own token balance is the only thing it still reads
   from the chain directly.
 
-  Check a local build for a leaked key:
+  Check a local build for a leaked key with the same scanner the web `check` script runs after every build
+  (apps/web/scripts/check-bundle-keys.mjs; production-hardening ticket 07):
 
     pnpm --filter @hexvault/web build
-    grep -r "api-key=" apps/web/dist
-    grep -r "helius-rpc.com" apps/web/dist
+    node apps/web/scripts/check-bundle-keys.mjs
 
-  Both greps should print nothing. Check a deployed site the same way, without a local build, by pulling down what the browser actually
+  It exits 1 and names the file on a hit, and 0 with nothing on stdout past its own "no provider key found" line otherwise.
+  Check a deployed site the same way, without a local build, by pulling down what the browser actually
   downloads:
 
     curl -s https://<deployed-host>/ | grep -oE '/assets/[^"]+\.js'
