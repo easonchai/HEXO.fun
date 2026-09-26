@@ -4569,7 +4569,7 @@ input::placeholder {
   font-weight: 700;
   font-size: 24px;
   color: var(--brand-white);
-  text-transform: lowercase;
+  text-transform: uppercase;
 }
 
 .referral-code-field {
@@ -4632,8 +4632,11 @@ input::placeholder {
   display: none;
 }
 
-/* ---------- Referral FAQ (spec.md "Shared FAQ"; Figma 204:12299 collapsed
-   / 171:28875 open, referral-page ticket 06) ---------- */
+/* ---------- Referral FAQ (spec.md "Shared FAQ"; Figma 272:12125 collapsed
+   / 171:28875 open, referral-page ticket 06). The title sits 4px below the
+   padding edge. A collapsed row is 22px + 23px question + 22px; an open one
+   is 20px above, 12px to the answer, 20px below. Dividers go between rows
+   only. ---------- */
 
 .referral-faq {
   background: var(--brand-slate);
@@ -4642,19 +4645,16 @@ input::placeholder {
 }
 
 .referral-faq-title {
-  margin: 0 0 17px;
+  margin: 4px 0 0;
   font-family: "Syncopate", sans-serif;
   font-weight: 700;
   font-size: 16px;
+  line-height: 17px;
   color: var(--brand-white);
 }
 
-.referral-faq-list {
+.referral-faq-item + .referral-faq-item {
   border-top: 1px solid var(--brand-white-15);
-}
-
-.referral-faq-item {
-  border-bottom: 1px solid var(--brand-white-15);
 }
 
 .referral-faq-item summary {
@@ -4683,7 +4683,6 @@ input::placeholder {
 }
 
 .referral-faq-item-num {
-  font-size: 15px;
   color: var(--brand-white-55);
 }
 
@@ -4694,11 +4693,18 @@ input::placeholder {
   color: rgba(255, 255, 255, 0.3);
 }
 
+/* Open: a 12px box holding an 8px drawn × at 30% white, not a glyph. */
 .referral-faq-item[open] summary::after {
-  content: "×";
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 12px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 2l8 8M10 2l-8 8' stroke='%23fff' stroke-opacity='.3' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")
+    center / 12px no-repeat;
 }
 
 .referral-faq-item[open] summary {
+  padding: 20px 0 12px;
   color: var(--brand-lime);
 }
 
@@ -4713,18 +4719,30 @@ input::placeholder {
   white-space: pre-line;
 }
 
-.referral-faq-item-body ul {
+.referral-faq-item-body p {
   margin: 0;
-  padding-left: 20px;
-  list-style: disc;
+}
+
+/* Figma's lettered list: "a." 24px in, its text 48px in. */
+.referral-faq-item-body ol {
+  margin: 0;
+  padding-left: 48px;
+  list-style: none;
 }
 
 .referral-faq-item-body li {
-  margin: 0;
+  position: relative;
 }
 
-.referral-faq-item-body ul + p {
-  margin-top: 22px;
+.referral-faq-item-body li::before {
+  content: counter(list-item, lower-alpha) ".";
+  position: absolute;
+  left: -24px;
+}
+
+/* One blank 22.5px line, as in Figma's text. */
+.referral-faq-item-body ol + p {
+  margin-top: 22.5px;
 }
 
 /* ---------- Referral's Bonus card (ticket 04; Figma 230:17196 / 230:17195).
@@ -5049,6 +5067,10 @@ input::placeholder {
   .referral-faq-item summary {
     padding: 16px 0;
     font-size: 14px;
+  }
+
+  .referral-faq-item[open] summary {
+    padding: 16px 0 10px;
   }
 
   .referral-faq-item-q {

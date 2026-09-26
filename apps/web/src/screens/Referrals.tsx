@@ -37,15 +37,16 @@ export interface ReferralsScreenProps {
 
 /** spec.md Copy, "Hero tooltip" (Figma tooltip `230:17717`). */
 const HERO_TIP = [
-  "Share this code to build your crew.",
+  "Share this code to build your team.",
   "When friends sign up and deposit $50+, you unlock daily bonus draw tickets and a 2% win-share whenever they win.",
 ] as const;
 
 /**
  * spec.md Copy, "FAQ answers": verbatim from Figma `171:28875`, except
- * answer 1's "plus 2% Win-Share" (the "2%" was missing in Figma). Answers 2
- * and 4 keep their lists; the rest use a literal blank line where Figma's
- * text had one, rendered by styles.css's `white-space: pre-line`.
+ * answer 1's "plus 2% Win-Share" (the "2%" was missing in Figma). Answer 2
+ * keeps its lettered list; the rest, answer 4's "•" tiers included, are
+ * plain text with a literal blank line where Figma's text had one, rendered
+ * by styles.css's `white-space: pre-line`.
  */
 const REFERRAL_FAQ: readonly FaqItem[] = [
   {
@@ -57,10 +58,10 @@ const REFERRAL_FAQ: readonly FaqItem[] = [
     a: (
       <>
         <p>To become qualified, your friend must:</p>
-        <ul>
+        <ol>
           <li>Deposit at least $50.</li>
           <li>Hold that balance continuously for 7 days.</li>
-        </ul>
+        </ol>
         <p>
           Once qualified, they count toward your bonus rate starting from the very next daily
           draw. As long as their balance stays above $50, they generate bonus tickets for you.
@@ -74,20 +75,7 @@ const REFERRAL_FAQ: readonly FaqItem[] = [
   },
   {
     q: "How are bonus rates calculated?",
-    a: (
-      <>
-        <p>
-          Referral bonus rates are awarded in tiers based on your number of qualified crew
-          members:
-        </p>
-        <ul>
-          <li>1–2 friends: 2%</li>
-          <li>3–5 friends: 3%</li>
-          <li>6–10 friends: 4%</li>
-          <li>11+ friends: 5%</li>
-        </ul>
-      </>
-    ),
+    a: "Referral bonus rates are awarded in tiers based on your number of qualified team members:\n\n• 1–2 friends: 2%\n• 3–5 friends: 3%\n• 6–10 friends: 4%\n• 11+ friends: 5%",
   },
   {
     q: "Do referral bonus tickets accumulate?",
@@ -173,7 +161,7 @@ function ReferralHero({
   onDeposit: () => void;
 }) {
   return (
-    <section className="referral-hero" aria-label="Invite your crew">
+    <section className="referral-hero" aria-label="Invite your team">
       {/* Clips the background image + glow to the card's rounded corners.
           Separate from the card itself (which stays overflow: visible) so
           the InfoTip bubble below can overflow the card, per spec.md. */}
@@ -207,7 +195,7 @@ function ReferralHero({
 
       <div className="referral-hero-invite">
         <div className="referral-hero-invite-head">
-          <h2 className="referral-hero-invite-title">Invite your crew</h2>
+          <h2 className="referral-hero-invite-title">Invite your team</h2>
           <InfoTip id="referral-hero-tip" paragraphs={HERO_TIP} />
         </div>
         <div className="referral-code-field" data-testid="referral-code-field">
