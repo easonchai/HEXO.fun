@@ -7,13 +7,12 @@
  */
 import { expect, test, type Page } from "playwright/test";
 
+import { passAccessGate } from "./gate.js";
+
 async function connectBurnerWallet(page: Page): Promise<void> {
   await page.goto("/");
-  await page.getByTestId("connect-button").click();
-  const burnerOption = page.getByRole("button", { name: /burner/i });
-  if (await burnerOption.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await burnerOption.click();
-  }
+  // The invite gate connects the burner on its way through (e2e/gate.ts).
+  await passAccessGate(page);
   await expect(page.getByTestId("connect-button")).toHaveAttribute(
     "title",
     /^Copy /,

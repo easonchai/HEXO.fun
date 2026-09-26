@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/check-bundle-keys.mjs",
     "preview": "vite preview",
     "sync-idl": "node scripts/sync-idl.mjs",
     "dither-video": "node scripts/dither-video.mjs",

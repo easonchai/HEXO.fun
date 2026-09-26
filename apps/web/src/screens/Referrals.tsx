@@ -227,6 +227,11 @@ function ReferralHero({
                 CONNECT
               </button>
             </>
+          ) : state.kind === "loading" ? (
+            // First poll still out: neither "deposit once" nor a code yet.
+            <span className="referral-code-placeholder" data-testid="referral-code-loading">
+              Loading your code…
+            </span>
           ) : state.kind === "no-code" ? (
             <>
               <span className="referral-code-placeholder">Deposit once to get your code</span>

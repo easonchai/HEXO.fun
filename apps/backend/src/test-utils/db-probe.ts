@@ -24,8 +24,28 @@ Promise.race([prisma.$connect(), timeout])
 
 const cache = new Map<string, boolean>();
 
-/** Probes `url` once per test run (cached) and reports whether it accepted a
- *  real connection within `timeoutMs`. Never throws. */
+/** `host:port` of a Postgres url, for the warning below; never the
+ *  credentials or the database name. */
+function hostAndPort(url: string): string {
+  try {
+    const { hostname, port } = new URL(url);
+    return `${hostname}:${port}`;
+  } catch {
+    return "<unparseable url>";
+  }
+}
+
+/**
+ * Probes `url` once per test run (cached) and reports whether it accepted a
+ * real connection within `timeoutMs`. Never throws.
+ *
+ * An unreachable server is reported on stderr, once per url per run
+ * (pre-mainnet review): the skip used to be silent, so `pnpm test` and the
+ * pre-push hook passed with every database suite skipped, which is how a
+ * failing leaderboard test reached the branch. Still a skip, not a
+ * failure: the point of the probe is that a laptop without Docker up can
+ * push, but only knowingly.
+ */
 export function isDatabaseReachableSync(url: string, timeoutMs = 1500): boolean {
   const cached = cache.get(url);
   if (cached !== undefined) return cached;
@@ -39,6 +59,10 @@ export function isDatabaseReachableSync(url: string, timeoutMs = 1500): boolean 
     reachable = true;
   } catch {
     reachable = false;
+    process.stderr.write(
+      `WARNING db-probe: Postgres at ${hostAndPort(url)} did not accept a connection within ${timeoutMs}ms; ` +
+        "the database suites in this file are SKIPPED, not passed. Start it (see src/test-setup.ts) to run them.\n",
+    );
   }
   cache.set(url, reachable);
   return reachable;

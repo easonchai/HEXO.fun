@@ -26,8 +26,8 @@ import {
   type ShareWeight,
 } from "../api/referral-bonus";
 import { ChainService } from "../chain/chain.service";
-import { rpcStatus } from "../chain/rpc-fallback";
-import type { HexVaultEnv } from "../config/env";
+import { callWithEndpoint, type EndpointResult } from "../chain/rpc-fallback";
+import { FULL_WALK_RPC_TIMEOUT_MULTIPLIER, type HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   closedRound,
@@ -174,6 +174,28 @@ export interface LogBatch {
   logs: string[];
 }
 
+/**
+ * Which ingest path is handing `persist` a batch (pre-mainnet review). Both
+ * store the same rows; they differ in which half of the Cursor they may
+ * move. The live `onLogs` socket ("live") advances only the status half
+ * (`lastSignature`/`lastSlot`). The ordered finalized catch-up walk
+ * ("walk") also advances the resume point (`resumeSignature`/`resumeSlot`)
+ * it stops at next time, because it is the only path that has seen every
+ * signature between the old resume point and the one it is storing: the
+ * socket can drop a message, or hand over a transaction whose finalized
+ * logs are not readable yet, and a resume point it moved past that
+ * transaction would slice it out of every future walk for good.
+ */
+type IngestPath = "live" | "walk";
+
+/** The unpaginated `getProgramAccounts` response, as far as `fetchAll`
+ *  reads it. Typed here rather than off `Connection`'s overloads so
+ *  `callWithEndpoint` has a concrete shape to answer with. */
+interface ProgramAccountsResponse {
+  context: { slot: number };
+  value: { pubkey: PublicKey; account: { data: Buffer } }[];
+}
+
 /** Decoded accounts of one type, from the paginated program-accounts walk. */
 interface AccountsByType {
   get<T>(name: string): { pubkey: PublicKey; account: T }[];
@@ -262,6 +284,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   /** Ticket 08's qualify hold period, read once at construction like every
    *  other env-derived constant this service uses. */
   private readonly referralQualifySeconds: number;
+  /** The unpaginated full walk's own timeout (pre-mainnet review): the
+   *  per-call `RPC_TIMEOUT_MS` is sized for one page, and this one call
+   *  answers every account the program owns. See `fetchAll`. */
+  private readonly fullWalkTimeoutMs: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -270,6 +296,8 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   ) {
     this.parser = new EventParser(this.chain.programId, this.chain.program.coder);
     this.referralQualifySeconds = config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
+    this.fullWalkTimeoutMs =
+      config.get("RPC_TIMEOUT_MS", { infer: true }) * FULL_WALK_RPC_TIMEOUT_MULTIPLIER;
   }
 
   onModuleInit(): void {
@@ -929,31 +957,33 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * shares the one client's commitment, headers and retry behaviour; the
    * fake the tests substitute for `ChainService`'s connection implements the
    * same method, so this stays testable behind that fake.
+   *
+   * Answers with the endpoint that served the page as well (pre-mainnet
+   * review, `callWithEndpoint`): `fetchAll` pins a walk to one endpoint,
+   * and the connection's shared `rpcStatus()` cannot say which endpoint
+   * served *this* call once any other caller shares the connection.
    */
   private async programAccountsPage(
     paginationKey: string | undefined,
     changedSinceSlot: bigint | undefined,
-  ): Promise<ProgramAccountsV2Response> {
+  ): Promise<EndpointResult<ProgramAccountsV2Response>> {
     // SAFETY: `_rpcRequest` is web3.js's own private JSON-RPC transport,
     // the same one every typed `Connection` method calls internally. It is
     // absent from the public types because it is meant to stay internal.
-    const connection = this.chain.connection as unknown as {
-      _rpcRequest(
-        method: string,
-        params: unknown[],
-      ): Promise<{
-        result?: ProgramAccountsV2Response;
-        error?: { code?: number; message: string };
-      }>;
-    };
-    const response = await connection._rpcRequest("getProgramAccountsV2", [
-      this.chain.programId.toBase58(),
-      {
-        encoding: "base64",
-        withContext: true,
-        ...(paginationKey !== undefined ? { paginationKey } : {}),
-        ...(changedSinceSlot !== undefined ? { changedSinceSlot: Number(changedSinceSlot) } : {}),
-      },
+    const { result: response, endpoint } = await callWithEndpoint<{
+      result?: ProgramAccountsV2Response;
+      error?: { code?: number; message: string };
+    }>(this.chain.connection, "_rpcRequest", [
+      "getProgramAccountsV2",
+      [
+        this.chain.programId.toBase58(),
+        {
+          encoding: "base64",
+          withContext: true,
+          ...(paginationKey !== undefined ? { paginationKey } : {}),
+          ...(changedSinceSlot !== undefined ? { changedSinceSlot: Number(changedSinceSlot) } : {}),
+        },
+      ],
     ]);
     if (response.error) {
       if (isMethodNotFound(response.error)) throw new MethodNotFound();
@@ -962,7 +992,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     if (!response.result) {
       throw new Error("getProgramAccountsV2 returned no result");
     }
-    return response.result;
+    return { result: response.result, endpoint };
   }
 
   /**
@@ -993,12 +1023,19 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       // walk to whichever endpoint served its first page, and aborting (no
       // different than any other mid-walk failure: nothing has been written
       // to Postgres yet) the moment a later page comes from the other one,
-      // keeps every page of one walk on one endpoint.
+      // keeps every page of one walk on one endpoint. The endpoint is the
+      // one that served each page itself (pre-mainnet review), not the
+      // connection's last-call `rpcStatus()`: the operator and the API
+      // share this connection, so that read could name a failover some
+      // unrelated call suffered between two pages, or hide a real one
+      // behind a later call that landed on the primary again.
       let servedBy: "primary" | "fallback" | undefined;
       try {
         do {
-          const page = await this.programAccountsPage(paginationKey, changedSinceSlot);
-          const endpoint = rpcStatus(this.chain.connection).endpoint;
+          const { result: page, endpoint } = await this.programAccountsPage(
+            paginationKey,
+            changedSinceSlot,
+          );
           if (servedBy === undefined) {
             servedBy = endpoint;
           } else if (endpoint !== servedBy) {
@@ -1029,9 +1066,16 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       // ponytail: no changedSinceSlot without V2, so a provider that lacks it
       // pays the full walk on every sweep. syncAccounts keeps absence-based
       // Position deletion in that mode, which a full walk can still see.
-      const { context, value } = await this.chain.connection.getProgramAccounts(
-        this.chain.programId,
-        { withContext: true },
+      // One call for every account the program owns, so it runs under its
+      // own budget (`fullWalkTimeoutMs`) rather than the per-page ceiling
+      // every other read gets (pre-mainnet review).
+      const {
+        result: { context, value },
+      } = await callWithEndpoint<ProgramAccountsResponse>(
+        this.chain.connection,
+        "getProgramAccounts",
+        [this.chain.programId, { withContext: true }],
+        { timeoutMs: this.fullWalkTimeoutMs },
       );
       slot = BigInt(context.slot);
       decoded = value.map(({ pubkey, account }) => ({ pubkey, data: account.data }));
@@ -1077,14 +1121,18 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * database transaction, so a crash never leaves the cursor ahead of the
    * rows. The composite primary key makes a replayed batch a no-op.
    *
+   * The catch-up walk's entry point (see `IngestPath`): it advances the
+   * walk's resume point as well as the status cursor, so a test feeding
+   * batches through it in order stands in for one sweep's ordered replay.
+   *
    * Returns the number of rows actually inserted.
    */
   async ingestLogs(batch: LogBatch): Promise<number> {
     const events = decodeEventLogs(this.parser, batch.logs);
-    return this.persist(batch, events);
+    return this.persist(batch, events, "walk");
   }
 
-  private persist(batch: LogBatch, events: DecodedEvent[]): Promise<number> {
+  private persist(batch: LogBatch, events: DecodedEvent[], path: IngestPath): Promise<number> {
     const rows = events.map((event, index) => ({
       slot: batch.slot,
       signature: batch.signature,
@@ -1180,35 +1228,52 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         }
       }
       const cursor = await tx.cursor.findUnique({ where: { id: CURSOR_ID } });
-      // The live socket and the catch-up poll both write; only the poll walks
-      // backwards, and it must not drag the resume point back with it.
-      const reached = cursor?.lastSlot ?? null;
-      if (reached === null || reached <= batch.slot) {
-        const at = { lastSignature: batch.signature, lastSlot: batch.slot, updatedAt: nowSeconds() };
-        await tx.cursor.upsert({
-          where: { id: CURSOR_ID },
-          create: { id: CURSOR_ID, ...at },
-          update: at,
-        });
+      // Both paths move the status half forward, never back: the walk
+      // replays a backlog the live socket may already have run ahead of.
+      // Only the walk moves the resume point (see `IngestPath`), and only
+      // forward for the same reason.
+      const advance: Prisma.CursorUncheckedCreateInput = { id: CURSOR_ID, updatedAt: nowSeconds() };
+      let moved = false;
+      if (cursor?.lastSlot == null || cursor.lastSlot <= batch.slot) {
+        advance.lastSignature = batch.signature;
+        advance.lastSlot = batch.slot;
+        moved = true;
+      }
+      if (path === "walk" && (cursor?.resumeSlot == null || cursor.resumeSlot <= batch.slot)) {
+        advance.resumeSignature = batch.signature;
+        advance.resumeSlot = batch.slot;
+        moved = true;
+      }
+      if (moved) {
+        const { id, ...update } = advance;
+        await tx.cursor.upsert({ where: { id }, create: advance, update });
       }
       return created.count;
     });
   }
 
   /**
-   * Replays every finalized signature the cursor has not seen. Runs on the
-   * sweep, not only at boot: it is what actually guarantees no event is lost
-   * when the websocket is down, and it costs one RPC call when nothing moved.
+   * Replays every finalized signature the walk's resume point has not seen.
+   * Runs on the sweep, not only at boot: it is what actually guarantees no
+   * event is lost when the websocket is down, and it costs one RPC call
+   * when nothing moved.
    *
    * Pages backwards with `before` rather than bounding one call with `until`:
    * `until` combined with `limit` only ever returns the newest `limit`
    * signatures, so a backlog longer than one page silently dropped whatever
    * sat between that page and the cursor (ticket 06). Paging keeps asking
-   * for the next page back until either the cursor's own signature turns up
-   * in one (the backlog ends there, exclusive) or a page comes back shorter
-   * than a full page, meaning there is nothing older left. A fresh cursor
-   * (first boot) walks all the way back to that address's first signature,
-   * which only happens once.
+   * for the next page back until either the resume point's own signature
+   * turns up in one (the backlog ends there, exclusive) or a page comes
+   * back shorter than a full page, meaning there is nothing older left. A
+   * fresh cursor (first boot) walks all the way back to that address's
+   * first signature, which only happens once.
+   *
+   * The stop is `resumeSignature`, which only this walk moves (pre-mainnet
+   * review, see `IngestPath`), never `lastSignature`: the live socket can
+   * skip a transaction, and stopping at a signature the socket stored
+   * would slice everything older, that transaction included, out of every
+   * future walk. Signatures the socket did store are re-listed here and
+   * cost a Postgres lookup each, not an RPC read (see `ingestSignature`).
    */
   private async catchUpEvents(): Promise<void> {
     const cursor = await this.prisma.cursor.findUnique({ where: { id: CURSOR_ID } });
@@ -1220,8 +1285,8 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         { ...(before !== undefined ? { before } : {}), limit: SIGNATURE_PAGE },
         "finalized",
       );
-      const reached = cursor?.lastSignature
-        ? page.findIndex((info) => info.signature === cursor.lastSignature)
+      const reached = cursor?.resumeSignature
+        ? page.findIndex((info) => info.signature === cursor.resumeSignature)
         : -1;
       backlog.push(...(reached === -1 ? page : page.slice(0, reached)));
       if (reached !== -1 || page.length < SIGNATURE_PAGE) break;
@@ -1251,9 +1316,19 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * False when the transaction's logs could not be read. The cursor then stays
-   * put and the rest of the page waits for the next tick, because skipping it
-   * would drop its events for good.
+   * False when the transaction's logs could not be read. The resume point
+   * then stays put and the rest of the page waits for the next tick,
+   * because skipping it would drop its events for good. Nothing the live
+   * socket stores in the meantime moves the resume point past it (see
+   * `IngestPath`), so "next tick" really is a retry.
+   *
+   * A signature the live socket already stored is not read again: its
+   * rows are in Postgres under this very (slot, signature), and the socket
+   * only stores a transaction whose finalized logs it decoded in full, so
+   * the walk just moves the resume point past it. Re-storing would be a
+   * no-op anyway (`createMany({ skipDuplicates })`, and `persist` applies
+   * the referral Principal deltas only when a row was actually new), but it
+   * would cost a `getTransaction` per live-stored signature per sweep.
    */
   private async ingestSignature(info: ConfirmedSignatureInfo): Promise<boolean> {
     const batch: LogBatch = {
@@ -1266,7 +1341,14 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     // A failed transaction committed nothing, so it has no events. The cursor
     // still moves past it, otherwise every tick re-lists it forever.
     if (info.err) {
-      await this.persist(batch, []);
+      await this.persist(batch, [], "walk");
+      return true;
+    }
+    const stored = await this.prisma.event.count({
+      where: { slot: batch.slot, signature: info.signature },
+    });
+    if (stored > 0) {
+      await this.persist(batch, [], "walk");
       return true;
     }
     const tx = await this.chain.connection.getTransaction(info.signature, {
@@ -1278,7 +1360,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       this.noteFailure(`no finalized logs yet for ${info.signature}`);
       return false;
     }
-    await this.persist({ ...batch, logs }, decodeEventLogs(this.parser, logs));
+    await this.persist({ ...batch, logs }, decodeEventLogs(this.parser, logs), "walk");
     return true;
   }
 
@@ -1289,6 +1371,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * `getBlockTime` call per event. Never wall time: a local validator's chain
    * clock runs faster than it. `undefined` (nothing has read the clock yet)
    * stores as null, same as a backfilled transaction with no block time.
+   *
+   * The "live" path (see `IngestPath`): it stores the rows and moves the
+   * status cursor, but never the catch-up walk's resume point, because a
+   * socket that delivered this transaction may have dropped the one before.
    */
   private subscribeToLogs(): void {
     this.subscriptionId = this.chain.connection.onLogs(
@@ -1306,6 +1392,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
               logs: logs.logs,
             },
             events,
+            "live",
           );
         }).catch((error: unknown) => this.noteFailure("live log ingest failed", error));
       },

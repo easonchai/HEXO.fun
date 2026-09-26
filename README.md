@@ -59,8 +59,9 @@ Devnet SOL for gas is a separate problem. The faucet mints hexUSDC only.
 
 ## Mainnet
 
-A private beta on real USDC, same binary and same program id as devnet, under a separate
-backend stack and a separate Vercel project. There is no audit and no legal review. The
+A private beta on real USDC, on its own program id (`EwqRKGqnH7dGwL5ERMGQc2tsLKwT3duzKWPcCDphyPCH`,
+built with `--features mainnet` through `solana-verify`; ADR 0013, `docs/ops/environments.md`),
+under a separate backend stack and a separate Vercel project. There is no audit and no legal review. The
 invite list is the only thing standing between the code and someone's money.
 
 What that means if you deposit:

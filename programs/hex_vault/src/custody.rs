@@ -297,9 +297,17 @@ pub fn set_pause(ctx: Context<SetPause>, paused: bool) -> Result<()> {
 }
 
 /// Admin-only, irreversible (spec "Shutdown"). Stops every inflow, the game
-/// and the draw, and lets `process_withdraw` skip the epoch lock. Modelled
+/// and new draws, and lets `process_withdraw` skip the epoch lock. Modelled
 /// on Marginfi/Kamino `ReduceOnly`: from here on, depositors pull their own
 /// money instead of the pool paying them out.
+///
+/// Refused once shut down: `deposit`, `buy_tickets`, `grant_tickets`,
+/// `fund_yield`, `create_round`, `buy_position`, `begin_epoch`,
+/// `close_registration`, `admin_withdraw` and `set_pause(false)`. Still
+/// allowed, so anything already in flight can finish: `draw` and `payout`
+/// of an epoch that closed registration before shutdown, `rollover_epoch`,
+/// `settle_round`, `void_round`, `settle_position`, `close_round`, and the
+/// withdrawal instructions.
 pub fn shutdown(ctx: Context<Shutdown>) -> Result<()> {
     let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
@@ -543,8 +551,16 @@ pub fn process_withdraw(ctx: Context<ProcessWithdraw>) -> Result<()> {
 /// claims do not change with where the USDC is sitting, and readers derive
 /// the deployed amount as `total_principal - vault.amount`. Bringing it back
 /// is a plain SPL transfer into the vault, with no instruction behind it.
+///
+/// Refused once shut down: from then on the vault exists only to pay
+/// depositors out through `emergency_withdraw`, which fails
+/// `InsufficientVaultLiquidity` on whatever this would have pulled. The
+/// pending-withdrawals floor below is not enough on its own, since after
+/// shutdown every depositor's whole principal is due, not just the part
+/// already requested.
 pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
     let pool = &ctx.accounts.pool;
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(amount > 0, HexVaultError::ZeroAmount);
 
     // Two different failures: the vault does not hold this much at all, and
@@ -679,7 +695,9 @@ pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
 /// vault's balance above `total_principal + pending_withdrawals` is exactly
 /// the unspent yield budget, unless principal was pulled out and not yet
 /// returned, in which case that surplus -- and what this sweeps -- shrinks
-/// with it, saturating at 0 rather than dipping into principal.
+/// with it, saturating at 0 rather than dipping into principal. The part of
+/// `yield_budget` that surplus could not cover stays on the pool, so a later
+/// sweep picks it up once the principal has been returned to the vault.
 pub fn sweep_house(ctx: Context<SweepHouse>) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
     require!(pool.shutdown, HexVaultError::PoolNotShutDown);
@@ -696,7 +714,10 @@ pub fn sweep_house(ctx: Context<SweepHouse>) -> Result<()> {
         .saturating_sub(pool.total_principal)
         .saturating_sub(pool.pending_withdrawals);
     let yield_swept = pool.yield_budget.min(surplus);
-    pool.yield_budget = 0;
+    pool.yield_budget = pool
+        .yield_budget
+        .checked_sub(yield_swept)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
 
     let pool_id_bytes = pool.pool_id.to_le_bytes();
     let pool_bump = [pool.bump];

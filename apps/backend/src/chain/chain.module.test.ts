@@ -23,8 +23,10 @@ import { ChainModule } from "./chain.module";
 import {
   CONFIRM_TIMEOUT_MS,
   ChainService,
+  PRIORITY_FEE_TTL_MS,
   REBROADCAST_INTERVAL_MS,
   SOLANA_CONNECTION,
+  TransactionPendingError,
 } from "./chain.service";
 import { poolAddress } from "./pda";
 
@@ -117,6 +119,31 @@ describe("ChainService.send", () => {
       // The bounded fallback: one status query, one block-height read.
       expect(connection.callsTo("getSignatureStatuses")).toBe(1);
       expect(connection.callsTo("getBlockHeight")).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Pre-mainnet review: the referral grant step must not resend a batch
+  // whose transaction may still land, so the pending error names it.
+  it("a pending timeout is a TransactionPendingError carrying the signature it waited on", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new CountingConnection();
+      connection.autoConfirmSignature = false;
+      connection.blockHeight = connection.slot;
+      const chain = chainWith(connection);
+
+      const failed = chain.send(noop).catch((cause: unknown) => cause);
+      await vi.advanceTimersByTimeAsync(CONFIRM_TIMEOUT_MS);
+      const error = await failed;
+
+      expect(error).toBeInstanceOf(TransactionPendingError);
+      expect((error as TransactionPendingError).signature).toBe(
+        connection.lastParams("onSignature")?.[0],
+      );
+      // `mapSendError` passed it through, so the message is still its own.
+      expect((error as Error).message).toMatch(/still pending/);
     } finally {
       vi.useRealTimers();
     }
@@ -288,6 +315,36 @@ describe("ChainService.send", () => {
       await chain.send(noop);
 
       expect(connection.callsTo("getRecentPrioritizationFees")).toBe(1);
+    });
+
+    // Pre-mainnet review: the key is the exact writable-account set, and
+    // every new Round/Epoch/Player PDA is a new set, so the map grew for the
+    // life of the process.
+    it("evicts expired entries on a miss, so the cache never holds more than the live sets", async () => {
+      vi.useFakeTimers();
+      try {
+        const connection = new CountingConnection();
+        const chain = chainWith(connection);
+        const cache = chain["priorityFeeCache"];
+        const [a, b, c] = [Keypair.generate(), Keypair.generate(), Keypair.generate()].map(
+          (keypair) => keypair.publicKey,
+        ) as [PublicKey, PublicKey, PublicKey];
+
+        await chain.priorityFeeMicroLamports([a]);
+        await chain.priorityFeeMicroLamports([b]);
+        expect(cache.size).toBe(2);
+
+        await vi.advanceTimersByTimeAsync(PRIORITY_FEE_TTL_MS + 1);
+        await chain.priorityFeeMicroLamports([c]);
+
+        expect([...cache.keys()]).toEqual([c.toBase58()]);
+        // A hit inside the TTL neither evicts nor re-reads.
+        await chain.priorityFeeMicroLamports([c]);
+        expect(cache.size).toBe(1);
+        expect(connection.callsTo("getRecentPrioritizationFees")).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("prefers the Helius estimate over the p75 fallback when it is available", async () => {

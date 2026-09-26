@@ -13,17 +13,20 @@ export function maskWallet(wallet: string): string {
   return wallet.length <= 10 ? wallet : `${wallet.slice(0, 4)}…${wallet.slice(-4)}`;
 }
 
-/** One owned InviteCode row, reduced to what the wallet's own-codes list
- *  needs (referral-page ticket 07). */
+/** One owned InviteCode row, reduced to what the counts below need
+ *  (referral-page ticket 07). Never the code itself: this route answers an
+ *  unsigned, unthrottled GET for any wallet, so listing a wallet's
+ *  unredeemed codes handed them to anyone who asked (pre-mainnet review). */
 export interface InviteCodeInput {
-  readonly code: string;
   readonly maxUses: number;
   readonly uses: number;
 }
 
-export interface InviteCodeDto {
-  readonly code: string;
-  readonly redeemed: boolean;
+/** How many Invite codes the wallet owns, and how many still have a use
+ *  left. Counts only; the codes themselves are never served here. */
+export interface InviteCodeCountsDto {
+  readonly total: number;
+  readonly unredeemed: number;
 }
 
 /** One Referral row, reduced to what the Your Team table needs
@@ -63,9 +66,9 @@ export interface ReferralsResponse {
   /** The wallet's own Referral code (ADR 0014); null before its first
    *  deposit, since the indexer creates it on that event. */
   readonly referralCode: string | null;
-  /** This wallet's own Invite codes, granted by redeeming one (ticket 07);
-   *  no web UI yet. */
-  readonly inviteCodes: InviteCodeDto[];
+  /** This wallet's own Invite codes, granted by redeeming one (ticket 07),
+   *  as counts (pre-mainnet review); no web UI yet. */
+  readonly inviteCodes: InviteCodeCountsDto;
   readonly referrals: ReferralsPageDto;
   readonly qualifiedCount: number;
   /** Current band (referral-page ticket 03); tier 0 means no rate yet. */
@@ -114,8 +117,8 @@ function paginateReferrals(
 /**
  * Builds GET /referrals/:wallet's response (ticket 11; `referralCode` added
  * by ADR 0014 / docs/plan/referral-page ticket 01; `inviteCodes` by ticket
- * 07) from already-fetched rows: this wallet's own ReferralCode, its owned
- * InviteCodes, its Referrals (each already carrying its own share of
+ * 07, reduced to counts by the pre-mainnet review) from already-fetched
+ * rows: this wallet's own ReferralCode, its owned InviteCodes, its Referrals (each already carrying its own share of
  * today's grant — ticket 05), and today's ReferralGrant `{amount, uncapped}`
  * (both 0n when the job has not granted today yet — referral-page ticket
  * 04). `band`/`nextBand` (referral-page ticket 03) and `qualifiedCount` are
@@ -140,10 +143,10 @@ export function buildReferralsResponse(
 
   return {
     referralCode,
-    inviteCodes: inviteCodes.map((invite) => ({
-      code: invite.code,
-      redeemed: invite.uses >= invite.maxUses,
-    })),
+    inviteCodes: {
+      total: inviteCodes.length,
+      unredeemed: inviteCodes.filter((invite) => invite.uses < invite.maxUses).length,
+    },
     referrals: {
       items: page.map((referral) => {
         const status = referralStatus(referral.aboveSince, now, qualifySeconds);

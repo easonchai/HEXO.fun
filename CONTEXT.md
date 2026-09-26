@@ -202,7 +202,7 @@ The backend component that mirrors program accounts and finalized events into Po
 _Avoid_: Cache, backend (too broad)
 
 **Shutdown**:
-An admin-only, irreversible pool state (`Pool.shutdown`) that stops every inflow, the game and the draw, and lets withdrawals skip the epoch lock. Set once, by `shutdown`. Modelled on Marginfi/Kamino's ReduceOnly.
+An admin-only, irreversible pool state (`Pool.shutdown`) that stops every inflow, the game and new draws (an epoch already Drawing is still drawn and paid, so its reserved prize is never locked), and lets withdrawals skip the epoch lock. Set once, by `shutdown`. Modelled on Marginfi/Kamino's ReduceOnly.
 _Avoid_: Pause (a separate, reversible state), wind-down, freeze
 
 **Emergency withdraw**:

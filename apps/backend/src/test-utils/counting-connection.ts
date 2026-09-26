@@ -168,6 +168,13 @@ export class CountingConnection {
     this.transactions.set(signature, { meta: { logMessages } });
   }
 
+  /** Forgets every `setTransaction`, so a test can drive the "no finalized
+   *  logs yet" path for a signature an earlier test in the same file had
+   *  made readable. */
+  clearTransactions(): void {
+    this.transactions.clear();
+  }
+
   getSignaturesForAddress(
     address: PublicKey,
     options?: { before?: string; until?: string; limit?: number },

@@ -425,11 +425,19 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
     Ok(())
 }
 
+/// Deliberately not refused after `shutdown`. `draw` only consumes randomness
+/// `close_registration` already requested before the shutdown landed, and
+/// `rollover_epoch`'s Drawing branch refuses a fulfilled request (so the
+/// operator cannot read a target it dislikes and wait out the timeout).
+/// Refusing here as well left a Drawing epoch whose VRF fulfilled after
+/// shutdown stuck forever, with its `jackpot_amount` locked in
+/// `jackpot_reserved` where `sweep_house` cannot reach it. `payout` is
+/// allowed post-shutdown for the same reason: a draw already in flight
+/// finishes.
 pub fn draw(ctx: Context<Draw>) -> Result<()> {
     let now = utils::now()?;
     let epoch = &mut ctx.accounts.epoch;
 
-    require!(!ctx.accounts.pool.shutdown, HexVaultError::PoolShutDown);
     require!(
         epoch.status == epoch_status::DRAWING,
         HexVaultError::EpochNotDrawing

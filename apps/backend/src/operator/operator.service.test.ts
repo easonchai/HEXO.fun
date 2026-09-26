@@ -206,6 +206,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService.duePendingWithdrawals", () => {
     boughtAmount: 0n,
     bonusEpoch: 0n,
     bonusGranted: 0n,
+    requestedAt: 0n,
     ...over,
   });
 

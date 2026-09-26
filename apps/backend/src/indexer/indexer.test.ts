@@ -15,8 +15,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from "../api/invite-code";
 import { ChainService } from "../chain/chain.service";
-import { withRpcFallback } from "../chain/rpc-fallback";
-import type { HexVaultEnv } from "../config/env";
+import { rpcStatus, withRpcFallback } from "../chain/rpc-fallback";
+import {
+  DEFAULT_RPC_TIMEOUT_MS,
+  FULL_WALK_RPC_TIMEOUT_MULTIPLIER,
+  type HexVaultEnv,
+} from "../config/env";
 import { loadIdl } from "../chain/idl";
 import { PrismaService } from "../prisma/prisma.service";
 import { CountingConnection } from "../test-utils/counting-connection";
@@ -56,10 +60,12 @@ beforeAll(async () => {
     POOL_ID: POOL_ID.toString(),
     PROGRAM_ID: PROGRAM_ID.toBase58(),
     RPC_URL: "http://127.0.0.1:1",
+    RPC_TIMEOUT_MS: DEFAULT_RPC_TIMEOUT_MS,
     REFERRAL_QUALIFY_SECONDS: 604_800,
   };
   // SAFETY: ChainService reads the first four keys above through `get`;
-  // IndexerService reads REFERRAL_QUALIFY_SECONDS the same way.
+  // IndexerService reads REFERRAL_QUALIFY_SECONDS and RPC_TIMEOUT_MS the
+  // same way.
   const config = {
     get: (key: keyof HexVaultEnv) => env[key],
   } as unknown as ConfigService<HexVaultEnv, true>;
@@ -76,6 +82,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   connection.clearAccounts();
+  connection.clearTransactions();
+  connection.signaturesForAddress = [];
   connection.pageSize = 1_000;
   connection.watched = [];
   connection.resetCalls();
@@ -203,6 +211,7 @@ const playerAccount = (owner: PublicKey, overrides: object = {}) => ({
   bump: 255,
   pendingWithdraw: bn(0),
   pendingEpoch: bn(0),
+  requestedAt: bn(0),
   ...overrides,
 });
 
@@ -251,6 +260,28 @@ describe("account sync", () => {
     expect(await prisma.position.findMany()).toMatchObject([
       { owner: OWNER.toBase58(), roundId: 1n, tiles: 11n, stakePerTile: 1_000n },
     ]);
+  });
+
+  // Pre-mainnet review: `requested_at` is the second way a withdrawal
+  // request matures on chain (custody.rs's `now > requested_at +
+  // epoch_seconds`), so the web can offer PAY OUT NOW once the operator has
+  // stopped opening epochs. It rides along with the pending pair.
+  it("mirrors requestedAt off the Player account alongside the pending withdrawal", async () => {
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put(
+      "player",
+      chain.playerAddress(OWNER),
+      playerAccount(OWNER, {
+        pendingWithdraw: bn(500_000),
+        pendingEpoch: bn(1),
+        requestedAt: bn(1_700_000_123),
+      }),
+    );
+
+    await indexer.syncAccounts();
+
+    expect(await prisma.player.findUniqueOrThrow({ where: { owner: OWNER.toBase58() } }))
+      .toMatchObject({ pendingWithdraw: 500_000n, pendingEpoch: 1n, requestedAt: 1_700_000_123n });
   });
 
   it("records the winning tile once the round is settled", async () => {
@@ -501,6 +532,7 @@ describe("full-walk RPC endpoint consistency (security review ticket 14)", () =>
       POOL_ID: POOL_ID.toString(),
       PROGRAM_ID: PROGRAM_ID.toBase58(),
       RPC_URL: "http://127.0.0.1:1",
+      RPC_TIMEOUT_MS: DEFAULT_RPC_TIMEOUT_MS,
       REFERRAL_QUALIFY_SECONDS: 604_800,
     };
     // SAFETY: same shape as the suite's own beforeAll config stub.
@@ -536,6 +568,109 @@ describe("full-walk RPC endpoint consistency (security review ticket 14)", () =>
     // the Pool that page 1 alone did see never lands, and no earlier row's
     // absence gets misread as "gone" either.
     expect(await prisma.pool.count()).toBe(0);
+  });
+
+  /** A ChainService/IndexerService pair over an already-wrapped connection,
+   *  same config stub as the test above. */
+  function indexerOver(
+    wrapped: Connection,
+    rpcTimeoutMs: number,
+  ): { localChain: ChainService; localIndexer: IndexerService } {
+    const env: Partial<HexVaultEnv> = {
+      OPERATOR_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
+      POOL_ID: POOL_ID.toString(),
+      PROGRAM_ID: PROGRAM_ID.toBase58(),
+      RPC_URL: "http://127.0.0.1:1",
+      RPC_TIMEOUT_MS: rpcTimeoutMs,
+      REFERRAL_QUALIFY_SECONDS: 604_800,
+    };
+    // SAFETY: same shape as the suite's own beforeAll config stub.
+    const config = {
+      get: (key: keyof HexVaultEnv) => env[key],
+    } as unknown as ConfigService<HexVaultEnv, true>;
+    const localChain = new ChainService(wrapped, config);
+    return { localChain, localIndexer: new IndexerService(prisma, localChain, config) };
+  }
+
+  // Pre-mainnet review: the walk used to read the connection's shared
+  // `rpcStatus().endpoint` after each page, which any other caller on the
+  // same connection (the operator, the API) could flip between two pages.
+  it("does not abort a walk because an unrelated call on the same connection failed over between its pages", async () => {
+    const primary = new CountingConnection();
+    const fallback = new CountingConnection();
+    primary.pageSize = 1;
+    fallback.pageSize = 1;
+    const wrapped = withRpcFallback(
+      primary as unknown as Connection,
+      fallback as unknown as Connection,
+      1_000,
+    );
+    const { localChain, localIndexer } = indexerOver(wrapped, DEFAULT_RPC_TIMEOUT_MS);
+
+    const poolData = await localChain.program.coder.accounts.encode("pool", poolAccount());
+    primary.setAccount(localChain.poolAddress(), poolData);
+    primary.setAccount(Keypair.generate().publicKey, Buffer.alloc(8));
+
+    // The unrelated call: `getSlot` times out on the primary and is served
+    // by the fallback, fired from inside the walk's first page so it lands
+    // while the walk is still between pages. Both pages themselves come
+    // off the primary.
+    const timedOut = () => Promise.reject(new Error("RPC getSlot timed out after 10000ms"));
+    (primary as unknown as { getSlot: () => Promise<number> }).getSlot = timedOut;
+    (fallback as unknown as { getSlot: () => Promise<number> }).getSlot = () => Promise.resolve(1);
+    const realRpcRequest = primary._rpcRequest.bind(primary);
+    let unrelated: Promise<number> | undefined;
+    primary._rpcRequest = (method: string, params: unknown[]) => {
+      if (method === "getProgramAccountsV2" && unrelated === undefined) {
+        unrelated = wrapped.getSlot();
+      }
+      return realRpcRequest(method, params);
+    };
+
+    await localIndexer.syncAccounts();
+    await expect(unrelated).resolves.toBe(1);
+
+    // The shared status did record a failover mid-walk (its last-call
+    // `endpoint` is back on "primary" only because page 2 landed after
+    // it); the walk, reading each page's own endpoint, was not fooled.
+    expect(rpcStatus(wrapped).fallbackAt).not.toBeNull();
+    expect(fallback.callsTo("getProgramAccountsV2")).toBe(0);
+    expect(primary.callsTo("getProgramAccountsV2")).toBe(2);
+    expect(await prisma.pool.count()).toBe(1);
+  });
+
+  // Pre-mainnet review: the unpaginated walk on an RPC without V2 is one
+  // call for every account the program owns, so it runs under
+  // RPC_TIMEOUT_MS × FULL_WALK_RPC_TIMEOUT_MULTIPLIER, not the per-page
+  // ceiling every other read gets.
+  it("gives the unpaginated getProgramAccounts walk a larger budget than the per-call timeout", async () => {
+    const primary = new CountingConnection();
+    primary.noProgramAccountsV2 = true;
+    const rpcTimeoutMs = 30;
+    const wrapped = withRpcFallback(primary as unknown as Connection, undefined, rpcTimeoutMs);
+    const { localChain, localIndexer } = indexerOver(wrapped, rpcTimeoutMs);
+    primary.setAccount(
+      localChain.poolAddress(),
+      await localChain.program.coder.accounts.encode("pool", poolAccount()),
+    );
+
+    // The full walk answers after 2× the per-call timeout: over the
+    // ceiling a plain call gets, well under the walk's own budget.
+    const realGetProgramAccounts = primary.getProgramAccounts.bind(primary);
+    primary.getProgramAccounts = (programId, config) =>
+      new Promise((resolve) =>
+        setTimeout(() => resolve(realGetProgramAccounts(programId, config)), rpcTimeoutMs * 2),
+      );
+
+    await expect(
+      wrapped.getProgramAccounts(localChain.programId, { withContext: true }),
+    ).rejects.toThrow(/timed out after 30ms/);
+
+    await localIndexer.syncAccounts();
+
+    expect(rpcTimeoutMs * FULL_WALK_RPC_TIMEOUT_MULTIPLIER).toBeGreaterThan(rpcTimeoutMs * 2);
+    expect(primary.callsTo("getProgramAccounts")).toBe(2); // the plain call above, then the walk's
+    expect(await prisma.pool.count()).toBe(1);
   });
 });
 
@@ -829,6 +964,156 @@ describe("event catch-up", () => {
     },
     120_000,
   );
+
+  // Pre-mainnet review: the live socket used to move the same cursor the
+  // walk stops at, so a transaction it skipped was sliced out of every later
+  // walk once a newer live one moved the cursor past it. Now only the walk
+  // moves its own resume point (`Cursor.resumeSignature`); the socket moves
+  // just the status half (`lastSignature`).
+  describe("resume point (pre-mainnet review)", () => {
+    const referee = OWNER.toBase58();
+    const signatureInfo = (signature: string, slot: number) => ({
+      signature,
+      slot,
+      err: null,
+      blockTime: 1_000 + slot,
+    });
+
+    /** One sweep that stores sig-1 and leaves both cursor halves on it. */
+    async function walkToSig1(): Promise<void> {
+      connection.signaturesForAddress = [signatureInfo("sig-1", 10)];
+      connection.setTransaction("sig-1", batch("sig-1", 10n, [roundOpened]).logs);
+      await indexer["catchUpEvents"]();
+      expect(await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+        lastSignature: "sig-1",
+        lastSlot: 10n,
+        resumeSignature: "sig-1",
+        resumeSlot: 10n,
+      });
+    }
+
+    /** The socket delivers sig-3 (slot 30): a yield credit on the referee,
+     *  whose Principal delta is the kind of thing a replay must not apply
+     *  twice. */
+    async function liveSig3(): Promise<void> {
+      indexer["subscribeToLogs"]();
+      chain.recordChainTime(1_200n);
+      connection.fireLogs(
+        chain.poolAddress(),
+        "finalized",
+        {
+          err: null,
+          signature: "sig-3",
+          logs: batch("sig-3", 30n, [yieldCreditedFor(OWNER, 5_000_000)]).logs,
+        },
+        30,
+      );
+      await indexer["queue"];
+    }
+
+    beforeEach(async () => {
+      await prisma.referral.create({
+        data: {
+          referee,
+          referrer: STRANGER.toBase58(),
+          code: "ABCD2345",
+          boundAt: 0n,
+          aboveSince: null,
+          principal: 40_000_000n,
+        },
+      });
+    });
+
+    it("a live transaction moves the status cursor but not the walk's resume point", async () => {
+      await walkToSig1();
+      await liveSig3();
+
+      expect(await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+        lastSignature: "sig-3",
+        lastSlot: 30n,
+        resumeSignature: "sig-1",
+        resumeSlot: 10n,
+      });
+      expect(await prisma.event.count({ where: { signature: "sig-3" } })).toBe(1);
+    });
+
+    it("replays a transaction the socket dropped, once a newer live one has already been stored (scenario A)", async () => {
+      await walkToSig1();
+      // The socket drops sig-2 and delivers sig-3.
+      await liveSig3();
+      expect((await prisma.referral.findUniqueOrThrow({ where: { referee } })).principal).toBe(
+        45_000_000n,
+      );
+
+      // The next sweep lists all three; the walk stops at sig-1, so sig-2
+      // and sig-3 are both in the backlog.
+      connection.signaturesForAddress = [
+        signatureInfo("sig-3", 30),
+        signatureInfo("sig-2", 20),
+        signatureInfo("sig-1", 10),
+      ];
+      connection.setTransaction("sig-2", batch("sig-2", 20n, [roundOpened]).logs);
+      connection.setTransaction("sig-3", batch("sig-3", 30n, [yieldCreditedFor(OWNER, 5_000_000)]).logs);
+      connection.resetCalls();
+
+      await indexer["catchUpEvents"]();
+
+      expect(await prisma.event.count({ where: { signature: "sig-2" } })).toBe(1);
+      expect(await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+        lastSignature: "sig-3",
+        lastSlot: 30n,
+        resumeSignature: "sig-3",
+        resumeSlot: 30n,
+      });
+      // sig-3 was already stored by the socket: no second row (the Event
+      // primary key), no second Principal delta, and no RPC read for it —
+      // only sig-2 was fetched.
+      expect(await prisma.event.count({ where: { signature: "sig-3" } })).toBe(1);
+      expect((await prisma.referral.findUniqueOrThrow({ where: { referee } })).principal).toBe(
+        45_000_000n,
+      );
+      expect(connection.callsTo("getTransaction")).toBe(1);
+    });
+
+    it("retries a transaction whose finalized logs were not readable yet, even after a newer live one arrived meanwhile (scenario B)", async () => {
+      await walkToSig1();
+
+      // sig-2 is listed but getTransaction has nothing for it yet: the walk
+      // stops there, intending to retry on the next tick.
+      connection.signaturesForAddress = [signatureInfo("sig-2", 20), signatureInfo("sig-1", 10)];
+      await indexer["catchUpEvents"]();
+      expect(await prisma.event.count({ where: { signature: "sig-2" } })).toBe(0);
+      expect(await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+        resumeSignature: "sig-1",
+      });
+
+      // Meanwhile the socket delivers sig-3, which used to move the cursor
+      // past sig-2 for good.
+      await liveSig3();
+      expect(await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+        lastSignature: "sig-3",
+        resumeSignature: "sig-1",
+      });
+
+      // Next tick: sig-2's logs are readable now.
+      connection.signaturesForAddress = [
+        signatureInfo("sig-3", 30),
+        signatureInfo("sig-2", 20),
+        signatureInfo("sig-1", 10),
+      ];
+      connection.setTransaction("sig-2", batch("sig-2", 20n, [roundOpened]).logs);
+      await indexer["catchUpEvents"]();
+
+      expect(await prisma.event.count({ where: { signature: "sig-2" } })).toBe(1);
+      expect(await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+        resumeSignature: "sig-3",
+        resumeSlot: 30n,
+      });
+      expect((await prisma.referral.findUniqueOrThrow({ where: { referee } })).principal).toBe(
+        45_000_000n,
+      );
+    });
+  });
 });
 
 // `getProgramAccountsV2`'s index runs 13 to 24 seconds behind the chain
@@ -866,6 +1151,29 @@ describe("live account refresh", () => {
     });
     expect(await prisma.player.findUniqueOrThrow({ where: { owner: OWNER.toBase58() } }))
       .toMatchObject({ principal: 3_000_000n });
+  });
+
+  it("follows requestedAt through the WithdrawRequested log path, without a sweep", async () => {
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("player", chain.playerAddress(OWNER), playerAccount(OWNER));
+    await indexer.syncAccounts();
+    expect((await prisma.player.findUniqueOrThrow({ where: { owner: OWNER.toBase58() } })).requestedAt)
+      .toBe(0n);
+
+    // request_withdraw landed: the account now carries the request's clock.
+    await put(
+      "player",
+      chain.playerAddress(OWNER),
+      playerAccount(OWNER, {
+        pendingWithdraw: bn(500_000),
+        pendingEpoch: bn(1),
+        requestedAt: bn(1_700_000_123),
+      }),
+    );
+    await fire([withdrawRequestedFor(OWNER, 500_000, 500_000)], 310);
+
+    expect(await prisma.player.findUniqueOrThrow({ where: { owner: OWNER.toBase58() } }))
+      .toMatchObject({ pendingWithdraw: 500_000n, requestedAt: 1_700_000_123n });
   });
 
   it("drops a Position the settle closed, without waiting for a full walk", async () => {
@@ -947,6 +1255,7 @@ describe("operator queries", () => {
     isHouse: false,
     pendingWithdraw: 0n,
     pendingEpoch: 0n,
+    requestedAt: 0n,
     principalAcc: "0",
     frozenPrincipalAcc: "0",
     yieldEpoch: 0n,
@@ -1252,6 +1561,7 @@ describe("referral bonus job (ticket 08)", () => {
     isHouse: false,
     pendingWithdraw: 0n,
     pendingEpoch: 0n,
+    requestedAt: 0n,
     principalAcc: "0",
     frozenPrincipalAcc: "0",
     yieldEpoch: 0n,

@@ -152,14 +152,51 @@ async function computeUnitLimit(
 }
 
 /**
+ * True for the two shapes a stale blockhash takes (pre-mainnet review):
+ * web3.js's own expiry class from `confirmTransaction`, and the RPC's
+ * "Blockhash not found" preflight rejection that `sendRawTransaction`
+ * throws as a `SendTransactionError` when the hash aged out between the
+ * wallet prompt and the send. Both mean "dropped, try again", never a
+ * program failure.
+ */
+export function isBlockhashExpiryError(error: unknown): boolean {
+  if (error instanceof TransactionExpiredBlockheightExceededError) return true;
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /blockhash not found/i.test(message);
+}
+
+/**
+ * What a confirmation that timed out should resolve to, given one
+ * `getSignatureStatuses` answer for the signature (pre-mainnet review): a
+ * missed websocket notification looks exactly like an expiry to
+ * `confirmTransaction`, and telling a depositor to retry a deposit that
+ * landed is the worst outcome here. A known status is the chain's verdict;
+ * null (or a failed lookup) keeps `expired`.
+ */
+export function resolveExpired(
+  signature: string,
+  status: { err: unknown } | null | undefined,
+): SendResult {
+  if (!status) return { kind: "expired" };
+  if (status.err) {
+    return { kind: "failed", code: customErrorCode(status.err), message: JSON.stringify(status.err) };
+  }
+  return { kind: "landed", signature };
+}
+
+/**
  * The one send helper every player transaction goes through (ticket 08,
- * production-hardening): fetches the blockhash and `lastValidBlockHeight`,
- * prepends compute-budget instructions (the capped priority fee from
- * `/state`, and a compute-unit limit sized above), signs through the wallet
- * adapter or Privy's own `sendTransaction`, then confirms with the blockhash
- * strategy at `confirmed` — never the deprecated signature-only confirm, and
- * never left to Anchor's `.rpc()`/`sendAndConfirm`, so an expired or
- * on-chain-failed send always resolves to a `SendResult` instead of hanging.
+ * production-hardening): sizes the compute-unit limit from a simulation,
+ * then fetches the blockhash and `lastValidBlockHeight` right before the
+ * wallet prompt (so a slow simulation never eats into the hash's ~60s
+ * life), prepends compute-budget instructions (the capped priority fee
+ * from `/state`, and the compute-unit limit), signs through the wallet
+ * adapter or Privy's own `sendTransaction`, then confirms with the
+ * blockhash strategy at `confirmed` — never the deprecated signature-only
+ * confirm, and never left to Anchor's `.rpc()`/`sendAndConfirm`, so an
+ * expired or on-chain-failed send always resolves to a `SendResult`
+ * instead of hanging. An expiry from confirmation is checked once against
+ * `getSignatureStatuses` before it is reported, see `resolveExpired`.
  */
 export async function sendMany(
   program: HexVaultProgram,
@@ -169,8 +206,8 @@ export async function sendMany(
 ): Promise<SendResult> {
   const provider = providerOf(program);
   const connection = provider.connection;
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(CONFIRMED);
   const computeUnits = await computeUnitLimit(connection, instructions, owner.publicKey);
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(CONFIRMED);
   const transaction = new Transaction({
     blockhash,
     lastValidBlockHeight,
@@ -182,12 +219,20 @@ export async function sendMany(
   );
 
   let signature: string;
-  if (owner.sendTransaction) {
-    signature = await owner.sendTransaction(transaction);
-  } else {
-    if (!provider.wallet) throw new Error("wallet cannot sign transactions");
-    const signed = await provider.wallet.signTransaction(transaction);
-    signature = await connection.sendRawTransaction(signed.serialize());
+  try {
+    if (owner.sendTransaction) {
+      signature = await owner.sendTransaction(transaction);
+    } else {
+      if (!provider.wallet) throw new Error("wallet cannot sign transactions");
+      const signed = await provider.wallet.signTransaction(transaction);
+      signature = await connection.sendRawTransaction(signed.serialize());
+    }
+  } catch (error) {
+    // A hash that aged out before the send is the same "try again" as one
+    // that aged out before confirmation; anything else (a rejected
+    // signature, a preflight program error) still throws to the caller.
+    if (isBlockhashExpiryError(error)) return { kind: "expired" };
+    throw error;
   }
 
   try {
@@ -200,7 +245,15 @@ export async function sendMany(
     }
     return { kind: "landed", signature };
   } catch (error) {
-    if (error instanceof TransactionExpiredBlockheightExceededError) return { kind: "expired" };
+    if (isBlockhashExpiryError(error)) {
+      let status: { err: unknown } | null | undefined;
+      try {
+        status = (await connection.getSignatureStatuses([signature])).value[0];
+      } catch {
+        status = null;
+      }
+      return resolveExpired(signature, status);
+    }
     return {
       kind: "failed",
       code: null,

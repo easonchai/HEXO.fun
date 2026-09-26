@@ -20,6 +20,10 @@ type Props = {
 export function InfoTip({ id, paragraphs }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
+  // Whether the pointer is over the tip (trigger or bubble): a click inside
+  // the bubble to select text blurs the trigger, and that blur must not
+  // close what the pointer is still on.
+  const hoveredRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -38,17 +42,32 @@ export function InfoTip({ id, paragraphs }: Props) {
   }, [open]);
 
   return (
-    <span className="info-tip" ref={rootRef}>
+    // Hover is handled on the wrapper, not the trigger, so moving the
+    // pointer from the icon into the bubble (a child of this span, bridged
+    // across the gap by `.info-tip-bubble::before`) keeps it open and the
+    // text selectable; it closes once the pointer leaves both.
+    <span
+      className="info-tip"
+      ref={rootRef}
+      onMouseEnter={() => {
+        hoveredRef.current = true;
+        setOpen(true);
+      }}
+      onMouseLeave={() => {
+        hoveredRef.current = false;
+        setOpen(false);
+      }}
+    >
       <button
         type="button"
         className="info-tip-trigger"
         aria-label="More info"
         aria-describedby={id}
         aria-expanded={open}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
         onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
+        onBlur={() => {
+          if (!hoveredRef.current) setOpen(false);
+        }}
         // Always opens, never toggles closed: a mouse click fires after
         // onMouseEnter already opened it, so a toggle would immediately flip
         // it shut again. Closing is Esc / blur / an outside tap, below.

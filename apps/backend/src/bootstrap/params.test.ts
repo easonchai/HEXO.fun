@@ -127,6 +127,40 @@ describe("parsePoolParams", () => {
     ).toThrow(/--operator must be a base58 pubkey/);
   });
 
+  it("takes the treasury and buyback reserve as base58 token accounts", () => {
+    const treasury = Keypair.generate().publicKey;
+    const buybackReserve = Keypair.generate().publicKey;
+    const params = parsePoolParams([
+      "--treasury",
+      treasury.toBase58(),
+      "--buyback-reserve",
+      buybackReserve.toBase58(),
+    ]);
+    expect(params.treasury?.equals(treasury)).toBe(true);
+    expect(params.buybackReserve?.equals(buybackReserve)).toBe(true);
+    // Either one on its own is allowed at parse time; bootstrap.ts decides
+    // whether the mint lets it seed the other.
+    expect(
+      parsePoolParams(["--treasury", treasury.toBase58()]).buybackReserve,
+    ).toBeUndefined();
+  });
+
+  it("leaves both token accounts unset when neither flag is given", () => {
+    // bootstrap.ts seeds signer-owned accounts only when these are absent, so
+    // "absent" has to stay absent rather than becoming the default pubkey.
+    expect(parsePoolParams([])).not.toHaveProperty("treasury");
+    expect(parsePoolParams([])).not.toHaveProperty("buybackReserve");
+  });
+
+  it("rejects a token account that is not a pubkey", () => {
+    expect(() => parsePoolParams(["--treasury", "not-a-pubkey"])).toThrow(
+      /--treasury must be a base58 pubkey/,
+    );
+    expect(() =>
+      parsePoolParams(["--buyback-reserve", "not-a-pubkey"]),
+    ).toThrow(/--buyback-reserve must be a base58 pubkey/);
+  });
+
   it("takes the anchor as an ISO 8601 time", () => {
     expect(
       parsePoolParams(["--epoch-anchor", "2026-09-13T16:00:00Z"]).epochAnchor,

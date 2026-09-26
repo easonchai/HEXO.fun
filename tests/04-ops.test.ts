@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { BN } from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, transfer } from "@solana/spl-token";
 import {
   DEVNET_VRF_NETWORK_STATE,
   DEVNET_VRF_TREASURY,
@@ -304,6 +304,21 @@ async function settleRound(pool: PoolCtx, roundId: bigint, randomness: PublicKey
     .rpc();
 }
 
+/** `seed` is the Round's own `vrfSeed`: the program checks the randomness
+ *  account against it and refuses to void a request that was fulfilled. */
+async function voidRound(pool: PoolCtx, roundId: bigint, seed: Uint8Array | number[]) {
+  return program.methods
+    .voidRound()
+    .accountsPartial({
+      operator: pool.operator.publicKey,
+      pool: pool.pool,
+      round: roundPda(pool.pool, roundId),
+      randomness: randomnessPda(Uint8Array.from(seed)),
+    })
+    .signers([pool.operator])
+    .rpc();
+}
+
 async function settlePosition(pool: PoolCtx, roundId: bigint, owner: PublicKey) {
   return program.methods
     .settlePosition()
@@ -367,6 +382,18 @@ async function adminWithdraw(pool: PoolCtx, adminToken: PublicKey, amount: bigin
     })
     .signers([pool.admin])
     .rpc();
+}
+
+/** Returning principal is a plain SPL transfer; the program has no part in it. */
+async function returnPrincipal(pool: PoolCtx, from: PublicKey, amount: bigint) {
+  return transfer(
+    program.provider.connection,
+    pool.admin,
+    from,
+    pool.principalVault,
+    pool.admin,
+    amount,
+  );
 }
 
 async function emergencyWithdraw(
@@ -486,6 +513,59 @@ describe("shutdown", () => {
   );
 
   it(
+    "draw of an epoch already Drawing before shutdown still runs once its randomness lands, and payout follows",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 6 });
+      await beginEpoch(pool, 0n);
+
+      const a = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, a, 4_000_000n);
+
+      const funder = await pool.fundedWallet(10_000_000n);
+      await fundJackpot(pool, funder, 2_000_000n);
+
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+      await register(pool, 1n, a.keypair.publicKey);
+      await closeRegistration(pool, 1n); // Drawing: the 2M is now in jackpot_reserved
+
+      await shutdown(pool);
+
+      // The oracle answers after the shutdown landed. Refusing `draw` here
+      // would leave epoch 1 Drawing forever: `rollover_epoch` refuses a
+      // fulfilled request, so the reserved 2M could neither pay nor be swept.
+      const drawing = await fetchEpoch(pool, 1n);
+      const randomness = await fulfillRandomness(Uint8Array.from(drawing.vrfSeed));
+      await draw(pool, 1n, randomness);
+      expect((await fetchEpoch(pool, 1n)).status).toBe(3); // Drawn
+
+      const before = await fetchPlayer(pool, a.keypair.publicKey);
+      await payout(pool, 1n, a.keypair.publicKey);
+      const after = await fetchPlayer(pool, a.keypair.publicKey);
+      expect(BigInt(after.principal.toString()) - BigInt(before.principal.toString())).toBe(
+        2_000_000n,
+      );
+      expect((await program.account.pool.fetch(pool.pool)).jackpotReserved.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "admin_withdraw is refused once shut down, so the vault stays whole for emergency_withdraw",
+    async () => {
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+      await shutdown(pool);
+
+      await expect(adminWithdraw(pool, await adminAta(pool), 1_000_000n)).rejects.toThrow(
+        /PoolShutDown/,
+      );
+      expect(await vaultBalance(pool.principalVault)).toBe(4_000_000n);
+    },
+    TIMEOUT,
+  );
+
+  it(
     "every shutdown-refused instruction fails once the pool is shut down",
     async () => {
       const pool = await setupPool();
@@ -514,8 +594,12 @@ describe("shutdown", () => {
       await expect(buyPosition(pool, owner, roundId, 1n, 1n)).rejects.toThrow(/PoolShutDown/);
       await expect(beginEpoch(pool, 1n)).rejects.toThrow(/PoolShutDown/);
       await expect(closeRegistration(pool, 1n)).rejects.toThrow(/PoolShutDown/);
-      await expect(draw(pool, 1n, pool.pool)).rejects.toThrow(/PoolShutDown/);
       await expect(fundYield(pool, owner, 1_000_000n)).rejects.toThrow(/PoolShutDown/);
+      await expect(adminWithdraw(pool, await adminAta(pool), 1_000_000n)).rejects.toThrow(
+        /PoolShutDown/,
+      );
+      // Not in this list on purpose: `draw` (and `payout`) of an epoch that
+      // closed registration before shutdown still run, see the test above.
     },
     TIMEOUT,
   );
@@ -593,8 +677,11 @@ describe("emergency_withdraw", () => {
       const pool = await setupPool();
       const owner = await pool.fundedWallet(10_000_000n);
       await deposit(pool, owner, 4_000_000n);
+      // Principal deployed before the shutdown and never returned: the vault
+      // is empty, and `admin_withdraw` is refused post-shutdown, so this is
+      // the only way a shut-down pool ends up short.
+      await adminWithdraw(pool, await adminAta(pool), 4_000_000n);
       await shutdown(pool);
-      await adminWithdraw(pool, await adminAta(pool), 4_000_000n); // vault now empty
 
       const walletBefore = await vaultBalance(owner.tokenAccount);
       await expect(
@@ -696,7 +783,7 @@ describe("sweep_house", () => {
   );
 
   it(
-    "with principal pulled out via admin_withdraw, the yield-budget sweep is capped at the real surplus",
+    "with principal pulled out via admin_withdraw, the yield-budget sweep is capped at the real surplus, and the rest waits for the principal to come back",
     async () => {
       const pool = await setupPool();
       const owner = await pool.fundedWallet(10_000_000n);
@@ -704,19 +791,34 @@ describe("sweep_house", () => {
 
       const funder = await pool.fundedWallet(10_000_000n);
       await fundYield(pool, funder, 500_000n);
-      // Vault now holds 4.5M (4M principal + 0.5M yield budget). Pulling all
-      // 4.5M out leaves the vault at exactly total_principal (4M is still
-      // owed once returned) -- no surplus above obligations remains.
-      await adminWithdraw(pool, await adminAta(pool), 4_500_000n);
+      // Vault now holds 4.5M (4M principal + 0.5M yield budget). Pulling
+      // 300k out leaves it at 4.2M: the surplus above total_principal is
+      // 200k, so only 200k of the 500k budget is really there to sweep.
+      const admin = await adminAta(pool);
+      await adminWithdraw(pool, admin, 300_000n);
       await shutdown(pool);
 
       const treasuryBefore = await vaultBalance(pool.treasury);
       const sig = await sweepHouse(pool);
 
-      expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore); // nothing to sweep
-      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
+      expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore + 200_000n);
+      expect(await vaultBalance(pool.principalVault)).toBe(4_000_000n); // exactly total_principal
+      // The 300k the surplus could not cover is still owed to the treasury,
+      // not written off: zeroing the budget here would strand it.
+      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("300000");
       const event = await findEvent<{ jackpot: BN; yieldBudget: BN }>(sig, "houseSwept");
-      expect(event?.yieldBudget.toString()).toBe("0");
+      expect(event?.yieldBudget.toString()).toBe("200000");
+
+      // Once the deployed principal is back, a second sweep picks up the
+      // remainder and leaves exactly total_principal behind again.
+      await returnPrincipal(pool, admin, 300_000n);
+      const again = await sweepHouse(pool);
+
+      expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore + 500_000n);
+      expect(await vaultBalance(pool.principalVault)).toBe(4_000_000n);
+      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
+      const secondEvent = await findEvent<{ jackpot: BN; yieldBudget: BN }>(again, "houseSwept");
+      expect(secondEvent?.yieldBudget.toString()).toBe("300000");
     },
     TIMEOUT,
   );
@@ -824,7 +926,9 @@ describe("close_round", () => {
   it(
     "closes a forfeited round with nothing staked, and a voided round",
     async () => {
-      const pool = await setupPool({ roundSeconds: 4, closeBuffer: 1 });
+      const pool = await setupPool({ roundSeconds: 4, closeBuffer: 1, vrfTimeout: 2 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 5_000_000n);
 
       const forfeitedId = 1n;
       const startsAt = await onChainNowSeconds();
@@ -839,6 +943,27 @@ describe("close_round", () => {
 
       await closeRound(pool, forfeitedId); // no positions were ever bought
       await expect(fetchRound(pool, forfeitedId)).rejects.toThrow();
+
+      // Voided: the randomness never arrives, so the operator voids the
+      // round past vrf_timeout (mirrors 02-rounds "voiding after the vrf
+      // timeout"). Its Position still has to settle before it can close.
+      const voidedId = 2n;
+      const voidedStartsAt = await onChainNowSeconds();
+      await createRound(pool, 0n, voidedId, voidedStartsAt, voidedStartsAt + 4);
+      await buyPosition(pool, owner, voidedId, 1n << 0n, 1_000_000n); // tile 0
+      await sleepUntilOnChain(voidedStartsAt + 3);
+      const requestedRound = await fetchRound(pool, voidedId);
+      const voidedSeed = Uint8Array.from(requestedRound.vrfSeed);
+      await requestRoundRandomness(pool, voidedId, voidedSeed);
+      const requested = await fetchRound(pool, voidedId);
+      await sleepUntilOnChain(Number(requested.requestedAt.toString()) + 2 + 1); // past vrf_timeout
+      await retryUntilOk(() => voidRound(pool, voidedId, voidedSeed));
+      expect((await fetchRound(pool, voidedId)).status).toBe(4); // Voided
+
+      await expect(closeRound(pool, voidedId)).rejects.toThrow(/RoundHasOpenPositions/);
+      await settlePosition(pool, voidedId, owner.keypair.publicKey); // zero reward, rent back
+      await closeRound(pool, voidedId);
+      await expect(fetchRound(pool, voidedId)).rejects.toThrow();
     },
     TIMEOUT,
   );

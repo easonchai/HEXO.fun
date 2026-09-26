@@ -32,7 +32,7 @@ describe("buildReferralsResponse", () => {
     const response = buildReferralsResponse(null, [], [], NOW, QUALIFY_SECONDS, NO_BONUS);
     expect(response).toEqual({
       referralCode: null,
-      inviteCodes: [],
+      inviteCodes: { total: 0, unredeemed: 0 },
       referrals: { items: [], nextCursor: null },
       qualifiedCount: 0,
       band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
@@ -49,24 +49,23 @@ describe("buildReferralsResponse", () => {
     expect(withoutCode.referralCode).toBeNull();
   });
 
-  it("reduces owned codes to code + redeemed", () => {
+  // Pre-mainnet review: counts only. The route is an unsigned read of any
+  // wallet, so the codes themselves (which anyone could then redeem) never
+  // appear in the response.
+  it("reduces owned codes to how many there are and how many still have a use left", () => {
     const response = buildReferralsResponse(
       null,
       [
-        { code: "ABCD2345", maxUses: 5, uses: 2 },
-        { code: "WXYZ6789", maxUses: 5, uses: 5 },
-        { code: "STUV2468", maxUses: 5, uses: 9 }, // drifted past maxUses somehow
+        { maxUses: 5, uses: 2 },
+        { maxUses: 5, uses: 5 },
+        { maxUses: 5, uses: 9 }, // drifted past maxUses somehow
       ],
       [],
       NOW,
       QUALIFY_SECONDS,
       NO_BONUS,
     );
-    expect(response.inviteCodes).toEqual([
-      { code: "ABCD2345", redeemed: false },
-      { code: "WXYZ6789", redeemed: true },
-      { code: "STUV2468", redeemed: true },
-    ]);
+    expect(response.inviteCodes).toEqual({ total: 3, unredeemed: 1 });
   });
 
   it("masks each referral's wallet and reports qualified / holding / below status with daysLeft", () => {

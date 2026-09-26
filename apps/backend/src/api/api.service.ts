@@ -517,11 +517,23 @@ export class ApiService {
     };
   }
 
+  /**
+   * Highest odds at the draw first. Ties (every zero-weight player, most
+   * days) are broken the same way on every request: the House sorts after
+   * any depositor it ties with, then owners ascending. Without that, the
+   * order of tied rows was whatever heap order Postgres happened to return
+   * `findMany()` in, which an update to any Player row reshuffles
+   * (pre-mainnet review).
+   */
   async getLeaderboard(limit: number) {
     const { weights, total } = await this.liveWeights();
     return weights
       .slice()
-      .sort((a, b) => (b.drawWeight === a.drawWeight ? 0 : b.drawWeight > a.drawWeight ? 1 : -1))
+      .sort((a, b) => {
+        if (a.drawWeight !== b.drawWeight) return b.drawWeight > a.drawWeight ? 1 : -1;
+        if (a.player.isHouse !== b.player.isHouse) return a.player.isHouse ? 1 : -1;
+        return a.player.owner < b.player.owner ? -1 : a.player.owner > b.player.owner ? 1 : 0;
+      })
       .slice(0, limit)
       .map(({ player, liveWeight, drawWeight }) => ({
         owner: player.owner,
@@ -689,7 +701,8 @@ export class ApiService {
       );
     }
     const at = await this.chainNow();
-    const players = await this.prisma.player.findMany();
+    // Ordered so `getLeaderboard`'s tie-break has a stable input; see there.
+    const players = await this.prisma.player.findMany({ orderBy: { owner: "asc" } });
     return weightsFrom(players, epoch, at);
   }
 

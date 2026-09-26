@@ -59,7 +59,7 @@ solana transfer <operator-pubkey> 1 --url <cluster>
 
 ## Shutdown and the emergency exits
 
-`shutdown` is admin-only and irreversible: it stops every inflow, the game and the draw, and lets
+`shutdown` is admin-only and irreversible: it stops every inflow, the game and new draws, and lets
 withdrawals skip the epoch lock (`Pool.shutdown = true`, modelled on Marginfi/Kamino
 `ReduceOnly`). Run it only when the pool is being wound down for good.
 
@@ -75,8 +75,9 @@ Run these in this order, and only after every winner who can still be paid has b
    allows). Anything still deployed at shutdown is money `emergency-crank` and `sweep-house`
    cannot reach.
 2. **Let any already-drawn epoch pay out first.** `payout` of an epoch already in `Drawn` status
-   is still allowed after shutdown (an epoch that has not drawn yet can never reach `Drawn`
-   post-shutdown, since `draw` is refused). `sweep_house` only ever sweeps the jackpot vault's
+   is still allowed after shutdown, and so is `draw` of an epoch that was already `Drawing` (its
+   randomness was requested before shutdown; only `close_registration` is refused, so no new
+   epoch can start drawing). `sweep_house` only ever sweeps the jackpot vault's
    balance above `pool.jackpot_reserved`, precisely so it cannot stall a winner who has not
    claimed yet, but running `payout` before you sweep is still the safer order.
 3. **`shutdown --confirm <pool-id>`.**

@@ -5241,6 +5241,18 @@ input::placeholder {
   pointer-events: auto;
 }
 
+/* Bridges the 10px gap above the bubble so the pointer can travel from the
+   icon into the bubble without leaving `.info-tip` (whose mouseleave closes
+   it): an invisible strip that is hoverable only while open. */
+.info-tip-bubble::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  right: 0;
+  bottom: 100%;
+  height: 12px;
+}
+
 .info-tip-bubble p {
   margin: 0 0 12px;
 }
@@ -5503,6 +5515,54 @@ input::placeholder {
   cursor: not-allowed;
 }
 
+/* "Already have access? Connect wallet": the waitlist link's look on a
+   button, under SUBMIT, for a returning wallet with no code to type. */
+.invite-connect,
+.invite-link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--brand-lime);
+  font: inherit;
+  font-size: 14px;
+  line-height: 18.46px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.invite-connect {
+  align-self: center;
+  margin-top: 16px;
+}
+
+.invite-connect:hover,
+.invite-connect:focus-visible,
+.invite-link-btn:hover,
+.invite-link-btn:focus-visible {
+  color: var(--brand-lime-text);
+}
+
+/* The `?ref=` notice: one line pinned under the topbar's reach, above the
+   page but below the gate's own z-index, since it only shows once the gate
+   is hidden. */
+.referral-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 900;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 8px;
+  background: rgba(14, 27, 43, 0.95);
+  color: var(--brand-white);
+  font-family: "Roboto Mono", monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
 @media (max-width: 960px) {
   .invite-card {
     grid-template-columns: 1fr;
@@ -5601,5 +5661,9 @@ input::placeholder {
     margin-top: 24px;
     border-radius: 16.87px;
     letter-spacing: 0.69px;
+  }
+
+  .invite-connect {
+    margin-top: 12px;
   }
 }

@@ -10,6 +10,13 @@ export interface PoolParams {
   readonly admin?: PublicKey;
   /** Pool operator. Absent falls back to the signer. */
   readonly operator?: PublicKey;
+  /** An existing token account for the accepted mint to record as the
+   * Treasury (CONTEXT.md: the Admin multisig's ATA on mainnet). Absent has
+   * bootstrap seed a signer-owned account, which it refuses to do when the
+   * mint is not under the signer's authority. */
+  readonly treasury?: PublicKey;
+  /** Same as `treasury`, for the Buyback reserve. */
+  readonly buybackReserve?: PublicKey;
   readonly epochSeconds: number;
   /** Unix seconds. Fixes the phase of the `anchor + k * epochSeconds` grid. */
   readonly epochAnchor: number;
@@ -94,7 +101,7 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
 };
 
 export const USAGE =
-  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--admin PUBKEY] [--operator PUBKEY]";
+  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--admin PUBKEY] [--operator PUBKEY] [--treasury TOKEN_ACCOUNT] [--buyback-reserve TOKEN_ACCOUNT]";
 
 /** The accepted mint is 6 decimals on every cluster we run on (bootstrap.ts
  * rejects any other), so whole USDC scales by a constant. */
@@ -167,6 +174,8 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     "payout-timeout"?: string;
     admin?: string;
     operator?: string;
+    treasury?: string;
+    "buyback-reserve"?: string;
   };
   try {
     ({ values } = parseArgs({
@@ -181,6 +190,8 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
         "payout-timeout": { type: "string" },
         admin: { type: "string" },
         operator: { type: "string" },
+        treasury: { type: "string" },
+        "buyback-reserve": { type: "string" },
       },
       allowPositionals: false,
     }));
@@ -227,6 +238,14 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     ...(values.operator === undefined
       ? {}
       : { operator: pubkey("operator", values.operator) }),
+    ...(values.treasury === undefined
+      ? {}
+      : { treasury: pubkey("treasury", values.treasury) }),
+    ...(values["buyback-reserve"] === undefined
+      ? {}
+      : {
+          buybackReserve: pubkey("buyback-reserve", values["buyback-reserve"]),
+        }),
   };
 
   // create_pool requires close_buffer < round_seconds, so a too-fast demo

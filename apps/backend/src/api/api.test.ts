@@ -238,6 +238,7 @@ const emptyPlayer = (owner: string): Player => ({
   isHouse: false,
   pendingWithdraw: 0n,
   pendingEpoch: 0n,
+  requestedAt: 0n,
   principalAcc: new Prisma.Decimal(0),
   frozenPrincipalAcc: new Prisma.Decimal(0),
   yieldEpoch: 0n,
@@ -579,6 +580,32 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     }
   });
 
+  // Pre-mainnet review: the second way a request matures on chain
+  // (custody.rs's `now > requested_at + epoch_seconds`), so the web can
+  // offer PAY OUT NOW when the operator has stopped opening epochs.
+  it("GET /players/:owner and GET /state carry the pending request's requestedAt as a decimal string", async () => {
+    await prisma.player.update({
+      where: { owner: BOB },
+      data: { pendingWithdraw: 250_000n, pendingEpoch: CURRENT_EPOCH, requestedAt: BigInt(HUGE_U64) },
+    });
+    try {
+      const { body } = await http.get(`/players/${BOB}`).expect(200);
+      expect(body.pendingWithdraw).toBe("250000");
+      expect(body.pendingEpoch).toBe(CURRENT_EPOCH.toString());
+      expect(body.requestedAt).toBe(HUGE_U64);
+      assertNoLargeNumbers(body, "/players/:owner (requestedAt)");
+
+      const state = await http.get(`/state?owner=${BOB}`).expect(200);
+      expect(state.body.player.requestedAt).toBe(HUGE_U64);
+      assertNoLargeNumbers(state.body, "/state?owner (requestedAt)");
+    } finally {
+      await prisma.player.update({
+        where: { owner: BOB },
+        data: { pendingWithdraw: 0n, pendingEpoch: 0n, requestedAt: 0n },
+      });
+    }
+  });
+
   it("GET /players/:owner gives zero odds to a player with no entries", async () => {
     const { body } = await http.get(`/players/${BOB}`).expect(200);
     expect(body.liveWeight).toBe("0");
@@ -591,6 +618,9 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
   });
 
   it("GET /leaderboard ranks players by their odds at the draw", async () => {
+    // Bob and the House both hold no weight: a tie, which the House loses
+    // regardless of the (random) owners or of which row Postgres returns
+    // first after the update the test above made to Bob's row.
     const { body } = await http.get("/leaderboard").expect(200);
     expect(body.map((row: { owner: string }) => row.owner)).toEqual([
       ALICE,

@@ -141,4 +141,87 @@ describe("pending withdrawal row", () => {
       epoch: 7n,
     });
   });
+
+  // Pre-mainnet review: custody.rs also accepts `process_withdraw` once
+  // `now > requested_at + epoch_seconds`, the escape hatch for an operator
+  // that stopped opening epochs. Before this, the button never appeared on
+  // that path because only the epoch id was checked.
+  describe("dead-operator escape hatch", () => {
+    const DAY = 86_400n;
+
+    it("is due once a whole epoch's seconds have passed since the request, epoch id or not", () => {
+      expect(
+        pendingWithdrawal(5_000_000n, 7n, 7n, false, false, {
+          requestedAt: 1_000n,
+          chainNow: 1_000n + DAY + 1n,
+          epochSeconds: DAY,
+        }),
+      ).toEqual({ kind: "due", amount: 5_000_000n, epoch: 7n });
+      // Even with the current epoch unknown.
+      expect(
+        pendingWithdrawal(5_000_000n, 7n, null, false, false, {
+          requestedAt: 1_000n,
+          chainNow: 1_000n + DAY + 1n,
+          epochSeconds: DAY,
+        }).kind,
+      ).toBe("due");
+    });
+
+    it("mirrors the program's strict inequality: exactly the deadline is not yet due", () => {
+      expect(
+        pendingWithdrawal(5_000_000n, 7n, 7n, false, false, {
+          requestedAt: 1_000n,
+          chainNow: 1_000n + DAY,
+          epochSeconds: DAY,
+        }).kind,
+      ).toBe("pending");
+    });
+
+    it("stays pending while the request is fresh", () => {
+      expect(
+        pendingWithdrawal(5_000_000n, 7n, 7n, false, false, {
+          requestedAt: 1_000n,
+          chainNow: 2_000n,
+          epochSeconds: DAY,
+        }).kind,
+      ).toBe("pending");
+    });
+
+    it("keeps the hatch shut while requestedAt or chain time is unknown", () => {
+      // The API does not carry `requestedAt` yet.
+      expect(
+        pendingWithdrawal(5_000_000n, 7n, 7n, false, false, {
+          requestedAt: null,
+          chainNow: 10n * DAY,
+          epochSeconds: DAY,
+        }).kind,
+      ).toBe("pending");
+      // Backend unreachable: no chain clock.
+      expect(
+        pendingWithdrawal(5_000_000n, 7n, 7n, false, false, {
+          requestedAt: 1_000n,
+          chainNow: null,
+          epochSeconds: DAY,
+        }).kind,
+      ).toBe("pending");
+      // A zero requestedAt (a mirror that learned the column late) reads as unknown.
+      expect(
+        pendingWithdrawal(5_000_000n, 7n, 7n, false, false, {
+          requestedAt: 0n,
+          chainNow: 10n * DAY,
+          epochSeconds: DAY,
+        }).kind,
+      ).toBe("pending");
+    });
+
+    it("still shows processing over a due hatch while the payout is in flight", () => {
+      expect(
+        pendingWithdrawal(5_000_000n, 7n, 7n, true, false, {
+          requestedAt: 1_000n,
+          chainNow: 1_000n + DAY + 1n,
+          epochSeconds: DAY,
+        }).kind,
+      ).toBe("processing");
+    });
+  });
 });

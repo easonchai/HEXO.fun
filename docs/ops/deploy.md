@@ -1,7 +1,9 @@
 # Deploying and upgrading
 
-One script, `scripts/deploy.sh <dev|staging|mainnet> [--upgrade] [--dry-run]`, builds, checks and
-deploys or upgrades the `hex_vault` program for one environment. The same script also has two
+One script, `scripts/deploy.sh <dev|devnew|staging|mainnet> [--upgrade] [--dry-run]`, builds,
+checks and deploys or upgrades the `hex_vault` program for one environment (`devnew` is the
+fresh devnet program that carries the padded `Pool`/`Epoch`/`Player` layout, leaving the original
+`dev` program and its pools untouched; see [`environments.md`](environments.md)). The same script also has two
 opt-in actions, `--idl` (publish the on-chain IDL) and `verify` (reproducible-build
 verification); see "Publishing the IDL" and "Verifiable build" below. Run it from the repo root,
 same as `scripts/check-deployable.sh` and `tests/run-local.sh`. See
@@ -17,10 +19,15 @@ scripts/deploy.sh mainnet
 
 The script, in order:
 
-1. Maps the environment to a cargo feature, a keypair under `keys/`, and a cluster URL (devnet
-   for dev and staging, `.env.mainnet`'s `RPC_URL` for mainnet).
-2. Builds: `anchor build -- --features <feature>` for dev and staging, `solana-verify build --
-   --features mainnet` for mainnet (see "Verifiable build" below).
+1. Maps the environment to a cargo feature, a keypair under `keys/`, and a cluster URL (devnet,
+   or `DEPLOY_RPC_URL` when set, for dev, devnew and staging; `.env.mainnet`'s `RPC_URL` for
+   mainnet).
+2. Builds: a plain `anchor build` for dev (the default feature is the dev ID), `anchor build --
+   --features <feature>` for devnew and staging, and `solana-verify build -- --features mainnet`
+   for mainnet (see "Verifiable build" below). `solana-verify` only produces the `.so`, so for
+   mainnet the script then regenerates the IDL with `anchor idl build -o target/idl/hex_vault.json
+   -- --features mainnet`; otherwise step 4, `--idl` and the post-deploy `sync-idl` would read
+   whatever IDL the last `anchor build` left behind.
 3. Runs `scripts/check-deployable.sh`, which refuses a `test-vrf` artifact.
 4. Asserts that the keypair's pubkey matches the built `declare_id!` (read from the built IDL's
    `address` field), so a mismatched keypair fails before anything is written on chain.
@@ -28,7 +35,12 @@ The script, in order:
    (`--with-compute-unit-price`, from `DEPLOY_CU_PRICE`, default `100000`) and
    `--max-sign-attempts 50` so a large program lands under congestion; mainnet also adds
    `--use-rpc`, since it only helps when the RPC is stake-weighted (Helius, Triton) and only
-   mainnet's RPC is.
+   mainnet's RPC is. On mainnet there is a step in between: the buffer is written under the
+   locally configured hot keypair, handed to the Ledger with `solana program
+   set-buffer-authority <buffer> --new-buffer-authority <ledger pubkey>` (one hot-key signature),
+   and only then deployed with `--upgrade-authority usb://ledger`. Writing the buffer under the
+   Ledger directly would have the device sign every write chunk, since the loader's `Write`
+   instruction needs the buffer authority as signer.
 6. After the deploy, asserts the on-chain upgrade authority (`solana program show
    <program-id>`) equals the authority expected for the env: the Ledger on mainnet, the locally
    configured keypair (`solana address`) elsewhere. Then checks `solana program show --buffers
@@ -36,19 +48,30 @@ The script, in order:
 7. Prints the program's `solana program show` output, then runs both apps' `sync-idl` scripts.
 
 `--dry-run` does steps 1 to 4 (and the ProgramData size read under `--upgrade`) but never calls
-`solana program write-buffer`, `extend`, `deploy` or `sync-idl`, and never checks buffers or the
-upgrade authority. It touches no network write, so it is safe to run against real keys and a real
+`solana program write-buffer`, `set-buffer-authority`, `extend`, `deploy` or `sync-idl`, and never
+checks buffers or the upgrade authority. It touches no network write, so it is safe to run against real keys and a real
 cluster to sanity-check a build.
 
 If a step after `write-buffer` fails, the script prints the exact `solana program close <buffer>
 --bypass-warning` command for the buffer it just wrote, so nothing is left stranded paying rent to
-nobody. The post-deploy buffer check catches the same thing for any other leftover buffer under
-the same authority (an interrupted previous run, for example).
+nobody. On mainnet the printed command carries `--buffer-authority usb://ledger` once
+`set-buffer-authority` has landed, since from then on only the Ledger can close it; before that
+point the hot key still owns the buffer and the plain command is right. The post-deploy buffer
+check catches the same thing for any other leftover buffer under the same authority (an
+interrupted previous run, for example), and counts buffers with `jq` when it is installed and a
+`grep` of `"address"` keys otherwise.
 
-Mainnet asks for a typed confirmation of the program ID before writing the buffer, and signs with
-`--upgrade-authority usb://ledger`. The fee payer defaults to the locally configured keypair
-(`solana config get`); set `FEE_PAYER_KEYPAIR` (a path, or another `usb://ledger[?key=N]`) to pay
-fees from somewhere else.
+Every printed command shows `--url "$RPC_URL"` (mainnet) or `--url "$DEPLOY_RPC_URL"` (a keyed
+devnet endpoint) instead of the URL itself, because a keyed RPC URL carries its api key; export
+the variable (`set -a; . ./.env.mainnet; set +a`) before pasting one.
+
+Mainnet asks for a typed confirmation of the program ID before writing the buffer, and signs the
+deploy with `--upgrade-authority usb://ledger`. The fee payer for `write-buffer` and `deploy`
+defaults to the locally configured keypair (`solana config get`); set `FEE_PAYER_KEYPAIR` (a
+keypair file path) to pay those two from somewhere else. Keep it a file: a `usb://ledger` fee
+payer would put the device back on every write chunk. `set-buffer-authority` is always signed
+and paid by the locally configured keypair, since that key is the buffer's authority at that
+point.
 
 ### The cosmetic "Program ID mismatch" warning
 
@@ -116,6 +139,10 @@ particular:
 solana program show --buffers --url <cluster>
 solana program close <buffer-pubkey> --url <cluster>
 ```
+
+On mainnet, a buffer that `deploy.sh` had already handed to the Ledger is listed and closed with
+`--buffer-authority usb://ledger` on both commands; one from before `set-buffer-authority` is
+still the hot key's and needs no flag.
 
 `target/deploy/hex_vault-keypair.old.json` and `target/deploy/hex_vault-upgrade-buffer.json` in
 this repo are exactly that: leftovers from before the per-environment keypairs (`keys/`) and
@@ -244,12 +271,16 @@ solana-verify verify-from-repo \
   <repo-url> --commit-hash <deployed sha> -- --features mainnet
 
 solana-verify remote submit-job \
-  --program-id <program id for the env> [--uploader <key>] -- --features mainnet
+  --program-id <program id for the env> [--uploader <pubkey>]
 ```
 
-`<repo-url>` is `git remote get-url origin`, converted from SSH to HTTPS if needed; set
-`VERIFY_REPO_URL` to override it. `--uploader` is only added when `VERIFY_UPLOADER_KEYPAIR` is
-set; left unset, `solana-verify` falls back to its own default (the locally configured keypair).
+The `-- --features mainnet` cargo args go only to `verify-from-repo`, which rebuilds;
+`submit-job` records the job and takes no build flags. `<repo-url>` is `git remote get-url
+origin`, converted from SSH to HTTPS if needed; set `VERIFY_REPO_URL` to override it.
+`--uploader` expects a base58 pubkey (the address recorded as the job's uploader) and is only
+added when `VERIFY_UPLOADER` is set to one; left unset, `solana-verify` falls back to its own
+default (the locally configured keypair's pubkey). To use a keypair file's address, pass
+`VERIFY_UPLOADER=$(solana-keygen pubkey <path>)`.
 `verify` works for any env, not only mainnet, but only mainnet is built with `solana-verify build`
 (dev and staging use a plain `anchor build`), so it is the one whose deployed bytecode is actually
 reproducible this way.

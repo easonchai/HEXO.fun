@@ -19,6 +19,7 @@ import {
 } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
+import { TransactionPendingError } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import { poolAddress } from "../chain/pda";
 import {
@@ -528,6 +529,26 @@ describe("runTick", () => {
     expect(warned[0]).toContain(`${referrer}:1000000`);
   });
 
+  // Pre-mainnet review: a send whose bounded confirmation wait ran out
+  // with the blockhash still live may land in the next minute, and
+  // grant_tickets is not idempotent on chain, so the batch is recorded as
+  // sent under that signature before the tick fails, and referralGrantsDue
+  // (which hands back only rows with no txSig) does not re-issue it.
+  it("3b. records the signature when the send times out still pending, so the next tick does not grant twice", async () => {
+    const referrer = Keypair.generate().publicKey.toBase58();
+    const { ctx, markedSent, warned } = context({
+      referralGrantsDue: async () => [{ referrer, amount: 1_000_000n }],
+      send: async () => {
+        throw new TransactionPendingError("sig-pending");
+      },
+    });
+
+    // Still a failed tick, like any other send failure: lastError says so.
+    await expect(runTick(ctx)).rejects.toBeInstanceOf(TransactionPendingError);
+    expect(markedSent).toEqual([{ epochId: 2n, referrers: [referrer], txSig: "sig-pending" }]);
+    expect(warned).toHaveLength(0);
+  });
+
   it("3b. does not grant tickets once the pool is shut down: grant_tickets is refused", async () => {
     const result = await tickLabels({
       pool: pool({ shutdown: true }),
@@ -1028,6 +1049,15 @@ describe("runTick", () => {
     // The epoch end is the closest candidate: sooner than the 60 s safety
     // interval, and there is no open round to bound it further.
     expect(result.nextWakeAt).toBe(NOW + 59n);
+  });
+
+  it("7. does not create a round when shut down: create_round is refused", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n, shutdown: true }),
+      openRound: null,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
   });
 
   it("7. does not open a round while the pool is paused", async () => {

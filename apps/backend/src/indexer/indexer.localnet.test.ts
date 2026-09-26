@@ -36,7 +36,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
-import type { HexVaultEnv } from "../config/env";
+import { DEFAULT_RPC_TIMEOUT_MS, type HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { IndexerService } from "./indexer.service";
 
@@ -146,8 +146,10 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
       // deploys, so the two cannot drift apart within a run.
       PROGRAM_ID: loadIdl().address,
       RPC_URL: rpcUrl,
+      RPC_TIMEOUT_MS: DEFAULT_RPC_TIMEOUT_MS,
     };
-    // SAFETY: ChainService reads only those four keys through `get`.
+    // SAFETY: ChainService reads only the first four keys through `get`;
+    // IndexerService reads RPC_TIMEOUT_MS the same way.
     const config = {
       get: (key: keyof HexVaultEnv) => env[key],
     } as unknown as ConfigService<HexVaultEnv, true>;

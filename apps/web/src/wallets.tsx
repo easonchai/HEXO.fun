@@ -330,19 +330,27 @@ function usePrivySigner(): GameSigner {
   };
 }
 
+interface StandardAdapterSlice {
+  signTransaction?: <T extends Transaction | VersionedTransaction>(tx: T) => Promise<T>;
+  signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
+  disconnect?: () => Promise<void>;
+}
+
 function useStandardSigner(): GameSigner {
   const { publicKey, wallet, connected, select } = useWallet();
   const { setVisible } = useWalletModal();
 
-  const adapter = wallet?.adapter as unknown as
-    | {
-        signTransaction?: <T extends Transaction | VersionedTransaction>(
-          tx: T,
-        ) => Promise<T>;
-        signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
-        disconnect?: () => Promise<void>;
-      }
-    | undefined;
+  const adapter = wallet?.adapter as unknown as StandardAdapterSlice | undefined;
+
+  // Bound once per adapter, not per render (pre-mainnet review): a fresh
+  // `.bind` each render gave `signMessage` a new identity every time, so
+  // an effect keyed on it (useAccessGate's `?ref=` auto-apply) could fire
+  // again within a session.
+  const signTransaction = useMemo(
+    () => adapter?.signTransaction?.bind(adapter),
+    [adapter],
+  );
+  const signMessage = useMemo(() => adapter?.signMessage?.bind(adapter), [adapter]);
 
   return {
     mode: "standard",
@@ -353,8 +361,8 @@ function useStandardSigner(): GameSigner {
       void adapter?.disconnect?.();
       select(null as never);
     },
-    signTransaction: adapter?.signTransaction?.bind(wallet!.adapter),
-    signMessage: adapter?.signMessage?.bind(wallet!.adapter),
+    signTransaction,
+    signMessage,
   };
 }
 

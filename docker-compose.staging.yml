@@ -1,9 +1,10 @@
-# Staging: same backend stack as docker-compose.yml, run directly by name so
-# the user does not have to remember a --env-file flag pointed at the right
-# compose file the way the mainnet second stack does (see docker-compose.yml's
-# header and runbook.md's "Mainnet stack"). This file only includes
-# docker-compose.yml; there is nothing staging-specific to the stack itself,
-# only to the env file, so a separate copy of the services would just drift.
+# Staging: same backend stack as docker-compose.yml, included by name. This
+# file only includes docker-compose.yml; there is nothing staging-specific to
+# the stack itself, only to the env file, so a separate copy of the services
+# would just drift.
+#
+# The --env-file flag is REQUIRED, same as for the mainnet second stack (see
+# docker-compose.yml's header and runbook.md's "Mainnet stack"):
 #
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d --build
 #
@@ -13,5 +14,15 @@
 # ENV_FILE=.env.staging (the backend container's own environment). --env-file
 # is what makes them take effect: compose interpolates ${...} only from the
 # shell and from the file --env-file names, never from env_file: below.
+#
+# `include:`'s own env_file cannot replace the flag: it only fills variables
+# the root project's .env does not already set, so without --env-file every
+# value both files define (API_HOST, POSTGRES_DB, RPC_URL, ...) comes from the
+# devnet .env, and the staging router would claim the live devnet host. The
+# `name:` below is only a guard for that mistake: it keeps the containers,
+# network and postgres volume apart from the devnet stack even when the flag
+# is forgotten. It does not make the run correct.
+name: hexvault-staging
+
 include:
   - docker-compose.yml

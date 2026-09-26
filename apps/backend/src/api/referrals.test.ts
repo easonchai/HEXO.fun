@@ -69,6 +69,7 @@ const emptyPlayer = (owner: string): Player => ({
   isHouse: false,
   pendingWithdraw: 0n,
   pendingEpoch: 0n,
+  requestedAt: 0n,
   principalAcc: new Prisma.Decimal(0),
   frozenPrincipalAcc: new Prisma.Decimal(0),
   yieldEpoch: 0n,
@@ -158,7 +159,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
     expect(body).toEqual({
       referralCode: null,
-      inviteCodes: [],
+      inviteCodes: { total: 0, unredeemed: 0 },
       referrals: { items: [], nextCursor: null },
       qualifiedCount: 0,
       band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
@@ -176,7 +177,10 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     expect(body.referralCode).toBe("ABCD2345");
   });
 
-  it("lists owned invite codes with redeemed state", async () => {
+  // Pre-mainnet review: counts, never the codes. This is an unsigned,
+  // unthrottled read of any wallet, so a per-code list handed a wallet's
+  // unredeemed codes to anyone who asked, and codes are single use.
+  it("counts owned invite codes without ever serving the codes themselves", async () => {
     await prisma.inviteCode.create({
       data: { code: "ABCD2345", ownerWallet: REFERRER, maxUses: 5, uses: 2, createdAt: 0n },
     });
@@ -194,11 +198,10 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
       },
     });
 
-    const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
-    expect(body.inviteCodes).toEqual([
-      { code: "ABCD2345", redeemed: false },
-      { code: "WXYZ6789", redeemed: true },
-    ]);
+    const { body, text } = await http.get(`/referrals/${REFERRER}`).expect(200);
+    expect(body.inviteCodes).toEqual({ total: 2, unredeemed: 1 });
+    expect(text).not.toContain("ABCD2345");
+    expect(text).not.toContain("WXYZ6789");
   });
 
   it("masks referral wallets and reports the qualified / holding / below status", async () => {

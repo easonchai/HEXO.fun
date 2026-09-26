@@ -107,6 +107,11 @@ model Player {
   pendingWithdraw BigInt
   /// The epoch the request was made in. It pays once the pool has moved past it.
   pendingEpoch    BigInt
+  /// Unix seconds `request_withdraw` booked the pending amount, 0 when
+  /// nothing is pending. Mirrors the on-chain `Player.requested_at`: the
+  /// second way a request matures (`now > requested_at + epoch_seconds`,
+  /// custody.rs), so the web can offer the dead-operator payout hatch.
+  requestedAt     BigInt
   /// Σ principal × seconds within epochId. Mirrors weightAcc with Principal
   /// in place of Entries.
   principalAcc       Decimal @db.Decimal(40, 0)
@@ -145,14 +150,24 @@ model Event {
   @@id([slot, signature, index])
 }
 
-// Single row (id = 1): the indexer's signature-catch-up cursor. `updatedAt`
-// is unix seconds of the last successful sync, so GET /status can report a
-// cursor age without guessing from the newest event's block time.
+// Single row (id = 1): the indexer's event-ingest cursor. `lastSignature`/
+// `lastSlot` is the newest finalized transaction either ingest path (the
+// live `onLogs` socket or the catch-up walk) has stored, for GET /status.
+// `resumeSignature`/`resumeSlot` is where the ordered catch-up walk stops
+// listing signatures next time, and only that walk advances it: the live
+// path can skip a transaction (a dropped websocket message, or one whose
+// finalized logs were not readable yet), so a resume point it moved would
+// slice the walk past that transaction for good (pre-mainnet review). Both
+// pairs move only forward. `updatedAt` is unix seconds of the last
+// successful sync, so GET /status can report a cursor age without guessing
+// from the newest event's block time.
 model Cursor {
-  id            Int     @id
-  lastSignature String?
-  lastSlot      BigInt?
-  updatedAt     BigInt?
+  id              Int     @id
+  lastSignature   String?
+  lastSlot        BigInt?
+  resumeSignature String?
+  resumeSlot      BigInt?
+  updatedAt       BigInt?
 }
 
 model FaucetClaim {

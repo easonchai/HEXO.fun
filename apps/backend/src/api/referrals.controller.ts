@@ -76,8 +76,8 @@ function parseApplyReferralBody(body: unknown): ApplyReferralBody {
 
 /**
  * The referrals screen (docs/plan/hexo-referrals ticket 11): this wallet's
- * own Referral code (ADR 0014), its owned invite codes, its referrals with
- * qualification state, the current band and today's bonus `{amount,
+ * own Referral code (ADR 0014), how many invite codes it owns, its referrals
+ * with qualification state, the current band and today's bonus `{amount,
  * uncapped}` (referral-page ticket 04). The response shape lives in
  * referral-summary.ts's `buildReferralsResponse` so it is unit tested
  * without a database; this controller only fetches the rows it needs.
@@ -85,7 +85,10 @@ function parseApplyReferralBody(body: unknown): ApplyReferralBody {
  * Not throttled, like the rest of ApiController's read routes: api.module.ts
  * only throttles the faucet, access and `POST /referrals/apply` below, which
  * spend resources or are worth rate-limiting against script abuse. This is a
- * plain wallet-keyed read, the same shape as GET /players/:owner.
+ * plain wallet-keyed read, the same shape as GET /players/:owner. Which is
+ * also why the invite codes come back as counts, never the codes themselves
+ * (pre-mainnet review): an unsigned read of any wallet's unredeemed codes
+ * let anyone redeem them.
  */
 @Controller("referrals")
 export class ReferralsController {
@@ -108,9 +111,10 @@ export class ReferralsController {
         where: { owner: wallet },
         select: { code: true },
       }),
+      // `maxUses`/`uses` only: the codes never leave the database here.
       this.prisma.inviteCode.findMany({
         where: { ownerWallet: wallet },
-        select: { code: true, maxUses: true, uses: true },
+        select: { maxUses: true, uses: true },
       }),
       this.prisma.referral.findMany({
         where: { referrer: wallet },

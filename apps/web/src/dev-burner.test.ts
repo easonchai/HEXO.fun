@@ -1,6 +1,7 @@
+import { verifySignature } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { burnerEnabled, isLocalRpc } from "./dev-burner.js";
+import { burnerKeypair, burnerEnabled, isLocalRpc, signMessageWithKeypair } from "./dev-burner.js";
 
 /**
  * The burner is an in-page keypair, so its gate is a security boundary. It
@@ -35,5 +36,25 @@ describe("dev burner gate", () => {
         VITE_PUBLIC_RPC_URL: "https://api.devnet.solana.com",
       }),
     ).toBe(false);
+  });
+});
+
+describe("burner signMessage", () => {
+  it("signs a message the burner's own public key verifies", async () => {
+    // What the invite gate and the `?ref=` apply hand a wallet; without
+    // this the burner could not get past the gate in the Playwright specs.
+    const keypair = burnerKeypair();
+    const message = new TextEncoder().encode(`HEXO access: ${keypair.publicKey.toBase58()} ABCD2345`);
+    const signature = await signMessageWithKeypair(keypair, message);
+    expect(signature).toHaveLength(64);
+    const publicKey = await crypto.subtle.importKey(
+      "raw",
+      new Uint8Array(keypair.publicKey.toBytes()),
+      { name: "Ed25519" },
+      true,
+      ["verify"],
+    );
+    expect(await verifySignature(publicKey, signature as never, message)).toBe(true);
+    expect(await verifySignature(publicKey, signature as never, new Uint8Array([1]))).toBe(false);
   });
 });

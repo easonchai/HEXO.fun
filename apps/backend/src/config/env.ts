@@ -33,6 +33,17 @@ export const DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS = 50_000;
  *  open with no bound. */
 export const DEFAULT_RPC_TIMEOUT_MS = 10_000;
 
+/**
+ * The indexer's unpaginated `getProgramAccounts` walk (the fallback on an
+ * RPC without `getProgramAccountsV2`) is bounded by `RPC_TIMEOUT_MS` times
+ * this, not by `RPC_TIMEOUT_MS` itself (pre-mainnet review): that ceiling
+ * is sized for one page of a thousand accounts, and one call answering
+ * every account the program owns needs proportionally more. Not its own
+ * env var: one knob for "how slow is this RPC allowed to be" is enough, and
+ * this keeps the two in step when it is turned.
+ */
+export const FULL_WALK_RPC_TIMEOUT_MULTIPLIER = 6;
+
 /** `GET /alerts`' `OPERATOR_STALE` threshold (production-hardening ticket
  *  05): seconds since the operator's last tick before it counts as stuck. */
 export const DEFAULT_ALERT_TICK_STALE_S = 300;

@@ -192,8 +192,11 @@ export class AccessController {
    * precedence (ADR 0014, ticket 02): a valid `referralCode` wins — it
    * exists and is not owned by the redeemer itself — otherwise the invite
    * code's owner is used, provided that owner is not the redeemer either (no
-   * self-referral). It is never updated after that: a wallet redeems at most
-   * once, so this branch runs at most once per referee.
+   * self-referral). A Referral the wallet already has, from `POST
+   * /referrals/apply` on a `?ref=` link opened before the invite code was
+   * redeemed, is kept as it is (pre-mainnet review): the row is written
+   * once and never updated, and creating a second one here tripped the
+   * primary key and reported the whole redeem as "already redeemed".
    *
    * Finally, still in the same transaction, the redeemer is granted
    * `inviteGrantCount(circulation)` new single-use codes of its own
@@ -251,9 +254,12 @@ export class AccessController {
             bound = { referrer: invite.ownerWallet, code };
           }
           if (bound !== null) {
-            await tx.referral.create({
-              data: { referee: address, referrer: bound.referrer, code: bound.code, boundAt: nowSeconds() },
-            });
+            const existingReferral = await tx.referral.findUnique({ where: { referee: address } });
+            if (existingReferral === null) {
+              await tx.referral.create({
+                data: { referee: address, referrer: bound.referrer, code: bound.code, boundAt: nowSeconds() },
+              });
+            }
           }
         }
 

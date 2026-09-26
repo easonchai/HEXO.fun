@@ -155,8 +155,11 @@ stateDiagram-v2
     RolledOver --> [*]
 ```
 
-`payout` is refused for anything but a `Drawn` epoch, and `shutdown` refuses `draw`, so an epoch
-that has not drawn yet can never be paid after shutdown; one already `Drawn` still can.
+`payout` is refused for anything but a `Drawn` epoch. `shutdown` refuses `close_registration` and
+`begin_epoch` but not `draw`, so an epoch already `Drawing` when the pool shuts down can still be
+drawn and paid (its randomness was requested before shutdown, and refusing the draw would leave
+its `jackpot_reserved` locked for good); an epoch that had not closed registration yet never
+draws, and an already `Drawn` one still pays.
 
 ## Round lifecycle
 
@@ -194,10 +197,12 @@ step:
 9. Pay out matured withdrawal requests (`process_withdraw`), batched.
 10. Open the next `Round`, if a whole one still fits before the epoch ends.
 
-Steps 4 through 7 and 10 stop once `pool.shutdown` is true, mirroring which instructions the
-program itself refuses (`begin_epoch`, `close_registration`, `draw`, `create_round`). Steps 1
-through 3, 8 and 9 keep running: settling, closing and sweeping an already-open `Round`,
-`payout` of an epoch already `Drawn`, and matured withdrawals are all still allowed post-shutdown
+Steps 4 through 6 and 10 stop once `pool.shutdown` is true, mirroring which instructions the
+program itself refuses (`begin_epoch`, `close_registration`, `create_round`, and every inflow:
+`deposit`, `buy_tickets`, `grant_tickets`, `fund_yield`, `buy_position`, `admin_withdraw`,
+`set_pause(false)`). Steps 1 through 3, 7, 8 and 9 keep running: settling, closing and sweeping
+an already-open `Round`, `draw` of an epoch already `Drawing` (or its `rollover_epoch` on
+timeout), `payout` of an epoch already `Drawn`, and matured withdrawals are all still allowed post-shutdown
 (`docs/ops/funds.md` covers what to do about the ones that were not). Every operator transaction
 carries a priority fee: the 75th percentile of `getRecentPrioritizationFees` over the
 transaction's writable accounts, capped at `PRIORITY_FEE_MAX_MICROLAMPORTS` (default 50,000).

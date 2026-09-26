@@ -106,6 +106,7 @@ interface RawPlayer {
   isHouse: boolean;
   pendingWithdraw: BN;
   pendingEpoch: BN;
+  requestedAt: BN;
   principalAcc: BN;
   frozenPrincipalAcc: BN;
   yieldEpoch: BN;
@@ -552,6 +553,7 @@ async function mirrorPlayers(
       isHouse: player.isHouse,
       pendingWithdraw: BigInt(player.pendingWithdraw.toString()),
       pendingEpoch: BigInt(player.pendingEpoch.toString()),
+      requestedAt: BigInt(player.requestedAt.toString()),
       principalAcc: player.principalAcc.toString(),
       frozenPrincipalAcc: player.frozenPrincipalAcc.toString(),
       yieldEpoch: BigInt(player.yieldEpoch.toString()),

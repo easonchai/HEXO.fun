@@ -24,7 +24,8 @@ Starts with `OPERATOR_STALE`, sometimes alongside `INDEXER_STALE`.
 4. If the tick is genuinely stuck rather than waiting, check the backend logs
    (`docker compose -f <env's compose file> logs -f backend`) for the operator's own error, and
    check `/alerts` for `RPC_DOWN` alongside: a hung RPC read stalls the tick with nothing else to
-   show for it, until production-hardening ticket 03's per-call timeout lands.
+   show for it, for at most `RPC_TIMEOUT_MS`, since the per-call timeout bounds every chain read
+   and send. Check `GET /status`'s `rpcEndpoint` to see whether the fallback is serving.
 5. Restart the backend for the affected environment if the process looks hung, not just waiting:
    `docker compose -f docker-compose.dev.yml restart backend` (swap the compose file for the
    environment, see [`docs/ops/environments.md`](environments.md)).

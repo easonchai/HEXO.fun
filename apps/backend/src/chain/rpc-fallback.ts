@@ -20,6 +20,30 @@ interface RpcStatusState {
   fallbackAt: number | null;
 }
 
+/** One call's own outcome, as `callWithEndpoint` reports it: which endpoint
+ *  actually answered it, not which one answered the connection's most
+ *  recent call. */
+export interface EndpointResult<T> {
+  result: T;
+  endpoint: "primary" | "fallback";
+}
+
+/** Per-call knobs for `callWithEndpoint`. */
+export interface CallOptions {
+  /** Replaces the wrapper's configured per-call timeout for this one call
+   *  (pre-mainnet review): a read known to be far larger than a page, such
+   *  as the unpaginated `getProgramAccounts` walk, gets its own budget
+   *  instead of the ceiling sized for a single page. */
+  timeoutMs?: number;
+}
+
+/** What `withRpcFallback` registers per wrapped connection: the status
+ *  `rpcStatus` reads, and the call path `callWithEndpoint` goes through. */
+interface Wrapped {
+  state: RpcStatusState;
+  call<T>(method: string, args: unknown[], options: CallOptions): Promise<EndpointResult<T>>;
+}
+
 /** Subscription methods stay pinned to the primary, unwrapped (spec.md
  *  "Websockets lie"): web3.js owns reconnecting and re-subscribing them
  *  itself, and a stale subscription is covered by the operator's and
@@ -33,7 +57,7 @@ const SUBSCRIPTION_METHODS = new Set<string>([
   "removeSignatureListener",
 ]);
 
-const statuses = new WeakMap<Connection, RpcStatusState>();
+const wrapped = new WeakMap<Connection, Wrapped>();
 
 /**
  * Wraps `primary` so every non-subscription call is bounded by `timeoutMs`
@@ -51,6 +75,16 @@ export function withRpcFallback(
   const urls = [primary.rpcEndpoint, fallback?.rpcEndpoint].filter(
     (url): url is string => Boolean(url),
   );
+  const call = <T>(method: string, args: unknown[], options: CallOptions) =>
+    callWithFallback<T>(
+      method,
+      args,
+      primary,
+      fallback,
+      options.timeoutMs ?? timeoutMs,
+      state,
+      urls,
+    );
   const proxy = new Proxy(primary, {
     get(target, prop) {
       // Reflect.get with no receiver: a getter (e.g. `rpcEndpoint`) runs
@@ -59,11 +93,10 @@ export function withRpcFallback(
       const value = Reflect.get(target, prop);
       if (typeof prop !== "string" || typeof value !== "function") return value;
       if (SUBSCRIPTION_METHODS.has(prop)) return value.bind(target);
-      return (...args: unknown[]) =>
-        callWithFallback(prop, args, primary, fallback, timeoutMs, state, urls);
+      return async (...args: unknown[]) => (await call(prop, args, {})).result;
     },
   });
-  statuses.set(proxy, state);
+  wrapped.set(proxy, { state, call });
   return proxy;
 }
 
@@ -71,11 +104,39 @@ export function withRpcFallback(
  *  primary, never failed over" default for a plain `Connection` nothing
  *  wrapped (every test that builds `ChainService` on a bare fake). */
 export function rpcStatus(connection: Connection): RpcStatus {
-  const state = statuses.get(connection);
+  const state = wrapped.get(connection)?.state;
   return state ? { ...state } : { endpoint: "primary", fallbackAt: null };
 }
 
-async function callWithFallback(
+/**
+ * `connection[method](...args)` through the same timeout-and-fallback path
+ * the proxy uses, answering with which endpoint served this very call
+ * (pre-mainnet review). `rpcStatus().endpoint` is the connection's shared
+ * last-call state, so a caller that reads it after its own call to learn
+ * who answered is racing every other caller on the connection: the
+ * indexer's paginated walk both aborted on a failover some unrelated read
+ * suffered between two of its pages, and missed a real mixed snapshot when
+ * another read landed on the primary right after its page came off the
+ * fallback. `options.timeoutMs` overrides the wrapper's per-call ceiling
+ * for this call alone.
+ *
+ * A bare `Connection` nothing wrapped (every test on a plain fake, and a
+ * deployment with no `RPC_FALLBACK_URL` still goes through the wrapper) is
+ * invoked directly and reported as the primary, with no timeout: the
+ * wrapper is where timeouts live, so there is none to override here.
+ */
+export async function callWithEndpoint<T>(
+  connection: Connection,
+  method: string,
+  args: unknown[],
+  options: CallOptions = {},
+): Promise<EndpointResult<T>> {
+  const target = wrapped.get(connection);
+  if (target) return target.call<T>(method, args, options);
+  return { result: (await invoke(connection, method, args)) as T, endpoint: "primary" };
+}
+
+async function callWithFallback<T>(
   method: string,
   args: unknown[],
   primary: Connection,
@@ -83,11 +144,11 @@ async function callWithFallback(
   timeoutMs: number,
   state: RpcStatusState,
   urls: readonly string[],
-): Promise<unknown> {
+): Promise<EndpointResult<T>> {
   try {
     const result = await withTimeout(invoke(primary, method, args), timeoutMs, `RPC ${method}`);
     state.endpoint = "primary";
-    return result;
+    return { result: result as T, endpoint: "primary" };
   } catch (primaryError) {
     if (!fallback || !isFailoverWorthy(primaryError)) throw redact(primaryError, urls);
     try {
@@ -98,7 +159,7 @@ async function callWithFallback(
       );
       state.endpoint = "fallback";
       state.fallbackAt = Date.now();
-      return result;
+      return { result: result as T, endpoint: "fallback" };
     } catch (fallbackError) {
       throw redact(
         new Error(`RPC ${method} failed on both endpoints`, { cause: fallbackError }),
@@ -108,14 +169,18 @@ async function callWithFallback(
   }
 }
 
-// SAFETY: every call site in this module reads `prop` off `Reflect.get` on
-// the same connection first and only wraps it when it is already a
-// function, so invoking it here with the connection as `this` is calling a
-// real method with its normal receiver.
+// SAFETY: the proxy reads `prop` off `Reflect.get` on the same connection
+// first and only wraps it when it is already a function, so invoking it
+// here with the connection as `this` is calling a real method with its
+// normal receiver. `callWithEndpoint` names its method by string instead,
+// so a name the connection lacks is caught here rather than read as
+// `undefined(...)` further down.
 function invoke(connection: Connection, method: string, args: unknown[]): Promise<unknown> {
-  return (connection as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[
-    method
-  ]!(...args);
+  const fn = (connection as unknown as Record<string, unknown>)[method];
+  if (typeof fn !== "function") {
+    return Promise.reject(new Error(`RPC connection has no method ${method}`));
+  }
+  return (fn as (...a: unknown[]) => Promise<unknown>).apply(connection, args);
 }
 
 /** A timeout, a 5xx or a 429 (ticket 03): the failures worth spending a

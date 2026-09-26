@@ -117,9 +117,33 @@ export type PendingWithdrawal =
   | { kind: "pending" | "due" | "processing"; amount: bigint; epoch: bigint };
 
 /**
+ * The dead-operator escape hatch's inputs (pre-mainnet review): custody.rs
+ * also lets `process_withdraw` through once `now > requested_at +
+ * epoch_seconds`, whether or not a new epoch ever opened. `requestedAt` is
+ * null while the API does not carry it (see `PlayerDto.requestedAt`) and
+ * `chainNow` null while the backend is unreachable; either leaves the hatch
+ * closed, since offering the button would only earn a `WithdrawalNotDue`.
+ */
+export interface WithdrawHatch {
+  requestedAt: bigint | null;
+  chainNow: bigint | null;
+  epochSeconds: bigint;
+}
+
+/** Pure form of custody.rs's second clause. A zero `requestedAt` reads as
+ *  unknown: a mirror that only learned the column after the request was
+ *  made would otherwise show every old request as due. */
+export function hatchDue(hatch: WithdrawHatch | undefined): boolean {
+  if (!hatch || hatch.requestedAt === null || hatch.chainNow === null) return false;
+  if (hatch.requestedAt <= 0n) return false;
+  return hatch.chainNow > hatch.requestedAt + hatch.epochSeconds;
+}
+
+/**
  * `shutdown` (ticket 11): `process_withdraw` skips the epoch-lock check
  * while the pool is shut down (custody.rs), so a pending amount is due the
- * moment it exists, whatever epoch it was requested in.
+ * moment it exists, whatever epoch it was requested in. `hatch` is the
+ * dead-operator clause above; without it only the epoch id decides.
  */
 export function pendingWithdrawal(
   amount: bigint,
@@ -127,11 +151,13 @@ export function pendingWithdrawal(
   currentEpoch: bigint | null,
   payoutSent: boolean,
   shutdown: boolean,
+  hatch?: WithdrawHatch,
 ): PendingWithdrawal {
   if (amount <= 0n) return { kind: "none" };
   if (payoutSent) return { kind: "processing", amount, epoch: pendingEpoch };
   // An unknown current epoch (backend unreachable) reads as not yet due: the
   // button would only fail with WithdrawalNotDue.
-  const due = shutdown || (currentEpoch !== null && currentEpoch > pendingEpoch);
+  const due =
+    shutdown || (currentEpoch !== null && currentEpoch > pendingEpoch) || hatchDue(hatch);
   return { kind: due ? "due" : "pending", amount, epoch: pendingEpoch };
 }

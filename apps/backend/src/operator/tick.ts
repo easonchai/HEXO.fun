@@ -9,6 +9,7 @@
 // left with nothing but plumbing.
 import { PublicKey, type TransactionInstruction } from "@solana/web3.js";
 
+import { TransactionPendingError } from "../chain/chain.service";
 import {
   EPOCH_STATUS,
   ROUND_STATUS,
@@ -369,15 +370,27 @@ async function decide(ctx: TickContext): Promise<Decision> {
     const grants = await ctx.referralGrantsDue(currentEpoch.epochId);
     if (grants.length > 0) {
       const batch = grants.slice(0, BATCH_SIZE);
+      const referrers = batch.map((grant) => grant.referrer);
       try {
         const signature = await ctx.send(await ctx.ix.grantTickets(pool, batch));
-        await ctx.markReferralGrantsSent(
-          currentEpoch.epochId,
-          batch.map((grant) => grant.referrer),
-          signature,
-        );
+        await ctx.markReferralGrantsSent(currentEpoch.epochId, referrers, signature);
         return { action: "grant_tickets" };
       } catch (cause) {
+        if (cause instanceof TransactionPendingError) {
+          // The send's bounded wait ran out with the blockhash still live
+          // (pre-mainnet review): the grant may land in the next minute,
+          // and `grant_tickets` is not idempotent on chain, so the batch is
+          // recorded as sent under that signature before the tick fails.
+          // Otherwise `referralGrantsDue` hands the same referrers back
+          // next tick and they are granted twice; the Player mirror's
+          // `bonusEpoch` check there stays the backstop for a crash between
+          // this write and the send landing. If the transaction never lands
+          // after all, these referrers miss the day's bonus rather than
+          // risk a double grant. Rethrown, like every other send failure:
+          // the tick still reports it in `lastError`.
+          await ctx.markReferralGrantsSent(currentEpoch.epochId, referrers, cause.signature);
+          throw cause;
+        }
         if (!capExceeded(cause)) throw cause;
         // referralGrantsDue re-clamps every grant against the freshest
         // Player data it has before handing it back, so this should now
@@ -531,13 +544,17 @@ async function decide(ctx: TickContext): Promise<Decision> {
 
   // 7. Open the next round, if a whole one still fits in this epoch, and the
   // previous Round's reveal has had time to play: no viewer should see a new
-  // countdown while the last Round's laser is still landing.
+  // countdown while the last Round's laser is still landing. `create_round`
+  // is refused in shutdown like every other inflow (spec.md "Shutdown"), so
+  // the gate here keeps a shut-down pool from paying a refused send's fee
+  // every tick (pre-mainnet review).
   const lastRound = ctx.lastRound;
   const revealDone =
     lastRound === null ||
     lastRound.status === ROUND_STATUS.VOIDED ||
     now >= lastRound.endsAt + REVEAL_SECONDS;
   if (
+    !pool.shutdown &&
     pool.openRoundId === 0n &&
     !pool.paused &&
     currentEpoch &&

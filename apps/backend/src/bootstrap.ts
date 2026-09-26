@@ -14,11 +14,13 @@ import { existsSync } from "node:fs";
 import { AnchorProvider, BN, Program, Wallet, Idl } from "@anchor-lang/core";
 import {
   ACCOUNT_SIZE,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   createInitializeAccount3Instruction,
   createMint,
   getMint,
   getOrCreateAssociatedTokenAccount,
+  unpackAccount,
 } from "@solana/spl-token";
 import {
   Connection,
@@ -187,6 +189,48 @@ async function ensureSeededTokenAccount(
   return address;
 }
 
+/**
+ * A token account the caller already holds, passed as `--treasury` or
+ * `--buyback-reserve`: on mainnet the Admin multisig's own accounts
+ * (CONTEXT.md "Treasury"), which nothing here can or should create. Checked
+ * against the same rule `create_pool` applies (the mint must match) plus the
+ * one it cannot apply for us, that the account exists at all, so a typo
+ * fails here instead of as MintMismatch after the House Player is funded.
+ * The owner is only logged: the program never checks it, and this is the
+ * one place a human sees which key will hold the House's prize share.
+ */
+async function resolveTokenAccount(
+  connection: Connection,
+  mint: PublicKey,
+  label: string,
+  address: PublicKey,
+): Promise<PublicKey> {
+  const info = await connection.getAccountInfo(address);
+  if (!info) {
+    throw new Error(
+      `--${label} ${address.toBase58()} does not exist on this cluster`,
+    );
+  }
+  if (
+    !info.owner.equals(TOKEN_PROGRAM_ID) &&
+    !info.owner.equals(TOKEN_2022_PROGRAM_ID)
+  ) {
+    throw new Error(
+      `--${label} ${address.toBase58()} is not a token account (owned by ${info.owner.toBase58()})`,
+    );
+  }
+  const account = unpackAccount(address, info, info.owner);
+  if (!account.mint.equals(mint)) {
+    throw new Error(
+      `--${label} ${address.toBase58()} holds ${account.mint.toBase58()}, not the accepted mint ${mint.toBase58()}`,
+    );
+  }
+  log(
+    `${label} ${address.toBase58()} exists, owned by ${account.owner.toBase58()}`,
+  );
+  return address;
+}
+
 async function createPool(
   program: Program<Idl>,
   payer: Keypair,
@@ -344,28 +388,87 @@ async function main(): Promise<void> {
       ).address,
   );
 
+  // Read once, here: it decides below whether this key may seed the two
+  // protocol token accounts, and it is printed again at the end.
+  const mintAuthority = await step(
+    "reading the mint authority",
+    async () => (await getMint(connection, mint)).mintAuthority,
+  );
+  const signerControlsMint = mintAuthority?.equals(authority.publicKey) ?? false;
+
+  // The pool records which token accounts it pays the House's prize share
+  // into, so an existing pool's win over the flags, and a flag that names a
+  // different account is a mistake worth stopping on, same as ACCEPTED_MINT.
+  for (const [label, given, recorded] of [
+    ["treasury", params.treasury, existing?.treasury],
+    ["buyback-reserve", params.buybackReserve, existing?.buybackReserve],
+  ] as const) {
+    if (existing && given && recorded && !given.equals(recorded)) {
+      throw new Error(
+        `pool ${pool.toBase58()} already records ${label} ${recorded.toBase58()}, but --${label} is ${given.toBase58()}`,
+      );
+    }
+  }
+  // Seeding creates accounts owned by this hot key. That is right for a test
+  // mint this key controls (devnet, staging, localnet) and wrong for real
+  // USDC: the accounts then must be the Admin multisig's (CONTEXT.md
+  // "Treasury", docs/architecture.md), which only --treasury and
+  // --buyback-reserve can name. So an external mint requires both flags
+  // rather than quietly parking the prize share under the operator key.
+  if (
+    !existing &&
+    !signerControlsMint &&
+    (params.treasury === undefined || params.buybackReserve === undefined)
+  ) {
+    throw new Error(
+      `mint ${mint.toBase58()} is controlled by ${mintAuthority?.toBase58() ?? "nobody"}, not by this key, so bootstrap will not seed hot-key-owned token accounts for it; pass --treasury and --buyback-reserve (token accounts for that mint, on mainnet the Admin multisig's)`,
+    );
+  }
+
+  const givenTreasury = params.treasury;
+  const givenBuyback = params.buybackReserve;
   const treasury = existing
     ? existing.treasury
-    : await step("creating the treasury", () =>
-        ensureSeededTokenAccount(
-          connection,
-          authority,
-          mint,
-          "treasury",
-          pool,
-        ),
-      );
+    : givenTreasury !== undefined
+      ? await step("checking the treasury", () =>
+          resolveTokenAccount(connection, mint, "treasury", givenTreasury),
+        )
+      : await step("creating the treasury", () =>
+          ensureSeededTokenAccount(
+            connection,
+            authority,
+            mint,
+            "treasury",
+            pool,
+          ),
+        );
   const buybackReserve = existing
     ? existing.buybackReserve
-    : await step("creating the buyback reserve", () =>
-        ensureSeededTokenAccount(
-          connection,
-          authority,
-          mint,
-          "buyback",
-          pool,
-        ),
-      );
+    : givenBuyback !== undefined
+      ? await step("checking the buyback reserve", () =>
+          resolveTokenAccount(
+            connection,
+            mint,
+            "buyback-reserve",
+            givenBuyback,
+          ),
+        )
+      : await step("creating the buyback reserve", () =>
+          ensureSeededTokenAccount(
+            connection,
+            authority,
+            mint,
+            "buyback",
+            pool,
+          ),
+        );
+  if (!existing && treasury.equals(buybackReserve)) {
+    // The program allows it (two transfers to one account), but the 20/50
+    // split then lands in one balance and the buyback earmark is lost.
+    log(
+      `warning: treasury and buyback reserve are the same account ${treasury.toBase58()}`,
+    );
+  }
 
   if (existing) {
     log(`pool ${pool.toBase58()} already exists`);
@@ -384,14 +487,6 @@ async function main(): Promise<void> {
       ),
     );
   }
-
-  // The inline line above scrolls away behind create_pool's output, and a
-  // wrong ACCEPTED_MINT on devnet costs a faucet and every mint call, so the
-  // authority is repeated once more at the end where it is read.
-  const mintAuthority = await step(
-    "reading the mint authority",
-    async () => (await getMint(connection, mint)).mintAuthority,
-  );
 
   process.stdout.write(
     [

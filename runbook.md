@@ -202,6 +202,12 @@
        defaults from src/bootstrap/params.ts (close_buffer 5, vrf_timeout 120, min_deposit 1
        hexUSDC). Only set-params changes them, which is why 12 is a second command. --house-cut-bps 600
 
+       On a test mint this key controls, bootstrap also seeds the Treasury and Buyback reserve as
+       token accounts owned by the operator key, which is fine here. On a mint it does not control
+       (real USDC on mainnet) it refuses to and needs --treasury and --buyback-reserve, the Admin
+       multisig's own USDC accounts; see docs/ops/environments.md "Adding a pool" and
+       .env.mainnet.example.
+
        600 bps is the default, so pass the flag only for a different rate. stdout is a pasteable
        KEY=value block and progress goes to stderr, so `bootstrap > pool.env` gives a clean file.
        Paste ACCEPTED_MINT back into .env if the block names a mint you did not already have.

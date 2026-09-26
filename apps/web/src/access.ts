@@ -30,16 +30,37 @@ export function inviteCodeFromSearch(search: string): string {
   return new URLSearchParams(search).get("invite")?.trim() ?? "";
 }
 
-/** What the gate overlay shows. "hidden" once access is confirmed allowed. */
-export type GateStatus = "hidden" | "connect" | "checking" | "redeem";
+/** What the gate overlay shows. "hidden" once access is confirmed allowed;
+ *  "failed" when `GET /access` itself could not be reached (pre-mainnet
+ *  review): the gate names the error and retries instead of sitting on
+ *  "Checking…" with SUBMIT disabled and no way out. */
+export type GateStatus = "hidden" | "connect" | "checking" | "failed" | "redeem";
 
+/** `checkError` is the `fetchAccess` failure reason while no answer has
+ *  landed; it only matters before `access` is known, since a later failed
+ *  re-check never discards an answer already in hand. */
 export function gateDecision(
   connected: boolean,
   access: AccessDto | null,
+  checkError: string | null = null,
 ): GateStatus {
   if (!connected) return "connect";
-  if (access === null) return "checking";
+  if (access === null) return checkError === null ? "checking" : "failed";
   return access.allowed ? "hidden" : "redeem";
+}
+
+/** The gate's line for a failed access check; the Retry button sits next
+ *  to it, and the automatic re-check runs regardless. */
+export function checkErrorMessage(reason: string): string {
+  return `Could not check this wallet's access (${reason || "server unreachable"}). Retrying…`;
+}
+
+/** Automatic re-check backoff after the n-th consecutive `fetchAccess`
+ *  failure (0-based): 2s, 4s, 8s, then 15s for good, so a backend that is
+ *  merely restarting clears the gate within seconds while one that is down
+ *  is not hammered. */
+export function accessRetryDelayMs(attempt: number): number {
+  return Math.min(2_000 * 2 ** Math.max(0, attempt), 15_000);
 }
 
 /**

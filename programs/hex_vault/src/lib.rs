@@ -67,7 +67,7 @@ solana_security_txt::security_txt! {
     // TODO(user): replace with a real, monitored contact before mainnet.
     contacts: "email:TODO@hexvault.example",
     policy: "We do not currently pay a bug bounty. Report vulnerabilities responsibly to the contact above; do not disclose or exploit before we confirm a fix.",
-    source_code: "https://github.com/easonchai/HexVault"
+    source_code: "https://github.com/easonchai/HEXO.fun"
 }
 
 #[program]
@@ -89,8 +89,9 @@ pub mod hex_vault {
     }
 
     /// Admin-only and irreversible (ops-and-envs ticket 02, spec
-    /// "Shutdown"). Stops every inflow, the game and the draw, and lets
-    /// withdrawals skip the epoch lock.
+    /// "Shutdown"). Stops every inflow, the game and new draws, and lets
+    /// withdrawals skip the epoch lock. `custody::shutdown` lists what is
+    /// refused and what still runs.
     pub fn shutdown(ctx: Context<Shutdown>) -> Result<()> {
         custody::shutdown(ctx)
     }

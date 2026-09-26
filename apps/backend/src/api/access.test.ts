@@ -66,6 +66,7 @@ const emptyPlayer = (owner: string): Player => ({
   isHouse: false,
   pendingWithdraw: 0n,
   pendingEpoch: 0n,
+  requestedAt: 0n,
   principalAcc: new Prisma.Decimal(0),
   frozenPrincipalAcc: new Prisma.Decimal(0),
   yieldEpoch: 0n,
@@ -415,6 +416,39 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       } finally {
         await prisma.player.delete({ where: { owner: existingDepositor.publicKey.toBase58() } });
       }
+    });
+  });
+
+  // Pre-mainnet review: a wallet that opened a `?ref=` link before the beta
+  // gate already has a Referral from `POST /referrals/apply`; the redeem's
+  // own bind used to create a second one, trip the primary key, and report
+  // the whole redeem as "already redeemed" (409).
+  describe("redeem with a Referral already applied (pre-mainnet review)", () => {
+    it("keeps the existing Referral and still redeems the invite code", async () => {
+      const redeemer = Keypair.generate();
+      const wallet = redeemer.publicKey.toBase58();
+      const inviteOwner = Keypair.generate().publicKey.toBase58();
+      const earlierReferrer = Keypair.generate().publicKey.toBase58();
+      await prisma.inviteCode.create({
+        data: { code: "KEEP2345", maxUses: 5, uses: 0, createdAt: 0n, ownerWallet: inviteOwner },
+      });
+      await prisma.referral.create({
+        data: { referee: wallet, referrer: earlierReferrer, code: "REFR2345", boundAt: 7n },
+      });
+
+      const { body } = await http
+        .post("/access/redeem")
+        .send({ wallet, code: "KEEP2345", signature: sign(redeemer, accessMessage(wallet, "KEEP2345")) })
+        .expect(201);
+      expect(body).toEqual({ allowed: true, reason: "invite code redeemed" });
+
+      // The invite's owner does not displace the Referrer already bound.
+      const referral = await prisma.referral.findUniqueOrThrow({ where: { referee: wallet } });
+      expect(referral).toMatchObject({ referrer: earlierReferrer, code: "REFR2345", boundAt: 7n });
+      expect(await prisma.inviteRedemption.findUnique({ where: { wallet } })).toMatchObject({
+        code: "KEEP2345",
+      });
+      expect((await prisma.inviteCode.findUniqueOrThrow({ where: { code: "KEEP2345" } })).uses).toBe(1);
     });
   });
 

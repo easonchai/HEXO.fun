@@ -214,6 +214,11 @@ export interface DecodedPlayer {
   isHouse: boolean;
   pendingWithdraw: BN;
   pendingEpoch: BN;
+  /** Unix seconds `request_withdraw` booked the pending amount, 0 when
+   *  nothing is pending: the second way a request matures, `now >
+   *  requestedAt + epochSeconds` (custody.rs), for the web's dead-operator
+   *  payout hatch. */
+  requestedAt: BN;
   /** Σ principal × seconds within `epochId`. Mirrors `weightAcc` with
    *  Principal in place of Entries. */
   principalAcc: BN;
@@ -324,6 +329,7 @@ export function playerRow(player: DecodedPlayer): Prisma.PlayerCreateInput {
     isHouse: player.isHouse,
     pendingWithdraw: big(player.pendingWithdraw),
     pendingEpoch: big(player.pendingEpoch),
+    requestedAt: big(player.requestedAt),
     principalAcc: player.principalAcc.toString(),
     frozenPrincipalAcc: player.frozenPrincipalAcc.toString(),
     yieldEpoch: big(player.yieldEpoch),

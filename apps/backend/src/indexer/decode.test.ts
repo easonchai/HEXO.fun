@@ -517,7 +517,7 @@ describe("playerRow", () => {
   // Ticket 03: `request_withdraw` parks the amount on the Player and the
   // vault screen reads it back off /players/:owner, so a field dropped here
   // is a depositor who cannot see their own pending money.
-  it("carries the pending withdrawal and the epoch it pays in", () => {
+  it("carries the pending withdrawal, the epoch it pays in and when it was requested", () => {
     const player: DecodedPlayer = {
       owner: new PublicKey(OWNER),
       principal: new BN(3_000_000),
@@ -533,6 +533,7 @@ describe("playerRow", () => {
       isHouse: false,
       pendingWithdraw: new BN(750_000),
       pendingEpoch: new BN(4),
+      requestedAt: new BN(1_700_000_000),
       principalAcc: new BN(0),
       frozenPrincipalAcc: new BN(0),
       yieldEpoch: new BN(0),
@@ -544,6 +545,10 @@ describe("playerRow", () => {
     expect(playerRow(player)).toMatchObject({
       pendingWithdraw: 750_000n,
       pendingEpoch: 4n,
+      // Pre-mainnet review: the second way a request matures (custody.rs's
+      // `now > requested_at + epoch_seconds`), so the web can offer the
+      // dead-operator payout hatch.
+      requestedAt: 1_700_000_000n,
     });
   });
 
@@ -565,6 +570,7 @@ describe("playerRow", () => {
       isHouse: false,
       pendingWithdraw: new BN(0),
       pendingEpoch: new BN(0),
+      requestedAt: new BN(0),
       // A u128 past 2^64, like `Registered`'s weight fixture: proves this
       // takes the same BN -> Decimal(40,0) string path as weightAcc, not a
       // truncating BN -> Number one.

@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EXISTING_DEPOSITOR_REASON,
   applyReferralMessage,
   bonusRateView,
+  classifyApplyResponse,
   refCodeFromSearch,
+  referralApplyPlan,
+  referralAttemptKey,
   referralBonusCardState,
   referralHeroState,
   shareLink,
@@ -22,7 +26,7 @@ const dto = (
   bonusToday: { amount: string; uncapped: string } = { amount: "0", uncapped: "0" },
 ): ReferralsDto => ({
   referralCode,
-  inviteCodes: [],
+  inviteCodes: { total: 0, unredeemed: 0 },
   referrals: { items: [], nextCursor: null },
   qualifiedCount: 0,
   band: ZERO_BAND,
@@ -36,9 +40,11 @@ describe("referralHeroState", () => {
     expect(referralHeroState(undefined, dto("ABCD2345"))).toEqual({ kind: "disconnected" });
   });
 
-  it("is no-code once connected before the poll has landed", () => {
+  it("is loading once connected before the poll has landed", () => {
+    // Pre-mainnet review: a depositor must not see "Deposit once to get
+    // your code" flash for the half-second before the first poll lands.
     expect(referralHeroState("11111111111111111111111111111111", null)).toEqual({
-      kind: "no-code",
+      kind: "loading",
     });
   });
 
@@ -53,6 +59,85 @@ describe("referralHeroState", () => {
       kind: "has-code",
       code: "ABCD2345",
     });
+  });
+});
+
+describe("referralApplyPlan", () => {
+  const OWNER = "11111111111111111111111111111111";
+  const allowed = { allowed: true, reason: "invite code redeemed" };
+  const never = () => false;
+
+  it("waits with no code, no wallet, or no access answer yet", () => {
+    expect(referralApplyPlan({ owner: OWNER, refCode: "", access: allowed, attempted: never })).toEqual({ kind: "wait" });
+    expect(referralApplyPlan({ owner: undefined, refCode: "ABCD2345", access: allowed, attempted: never })).toEqual({ kind: "wait" });
+    expect(referralApplyPlan({ owner: OWNER, refCode: "ABCD2345", access: null, attempted: never })).toEqual({ kind: "wait" });
+  });
+
+  it("waits while the wallet is not past the gate", () => {
+    expect(
+      referralApplyPlan({
+        owner: OWNER,
+        refCode: "ABCD2345",
+        access: { allowed: false, reason: "no invite code redeemed" },
+        attempted: never,
+      }),
+    ).toEqual({ kind: "wait" });
+  });
+
+  it("applies once for a wallet past the gate", () => {
+    expect(referralApplyPlan({ owner: OWNER, refCode: "ABCD2345", access: allowed, attempted: never })).toEqual({
+      kind: "apply",
+      key: `${OWNER}:ABCD2345`,
+    });
+  });
+
+  it("never prompts an existing depositor, whom the backend would refuse", () => {
+    expect(
+      referralApplyPlan({
+        owner: OWNER,
+        refCode: "ABCD2345",
+        access: { allowed: true, reason: EXISTING_DEPOSITOR_REASON },
+        attempted: never,
+      }),
+    ).toEqual({ kind: "skip", why: "existing-depositor" });
+  });
+
+  it("prompts at most once per session per wallet+code", () => {
+    const tried = new Set([referralAttemptKey(OWNER, "ABCD2345")]);
+    const attempted = (key: string) => tried.has(key);
+    expect(referralApplyPlan({ owner: OWNER, refCode: "ABCD2345", access: allowed, attempted })).toEqual({
+      kind: "skip",
+      why: "already-attempted",
+    });
+    // Another code on the same wallet, or the same code on another wallet,
+    // is a fresh attempt.
+    expect(referralApplyPlan({ owner: OWNER, refCode: "WXYZ2345", access: allowed, attempted }).kind).toBe("apply");
+    expect(referralApplyPlan({ owner: "22222222222222222222222222222222", refCode: "ABCD2345", access: allowed, attempted }).kind).toBe("apply");
+  });
+});
+
+describe("classifyApplyResponse", () => {
+  it("is applied on success", () => {
+    expect(classifyApplyResponse({ ok: true, data: { applied: true, reason: "referral applied" } })).toBe("applied");
+  });
+
+  it("drops the code on each of the backend's four final refusals", () => {
+    for (const reason of [
+      "This wallet already has a Referrer.",
+      "This wallet has already deposited.",
+      "That referral code does not exist.",
+      "You cannot apply your own referral code.",
+    ]) {
+      expect(classifyApplyResponse({ ok: true, data: { applied: false, reason } })).toBe("permanent");
+    }
+  });
+
+  it("keeps the code when the request never reached the server", () => {
+    expect(classifyApplyResponse({ ok: false, reason: "indexer offline" })).toBe("transient");
+  });
+
+  it("keeps the code on a refusal it does not recognise", () => {
+    expect(classifyApplyResponse({ ok: true, data: { applied: false, reason: "try later" } })).toBe("transient");
   });
 });
 

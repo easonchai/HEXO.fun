@@ -43,7 +43,7 @@ import { snapshot, useStatePoll } from "./useStatePoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
-import { TABS, hashForTab, tabFromHash, type Tab } from "./tabs.js";
+import { TABS, hashSyncAction, tabFromHash, type Tab } from "./tabs.js";
 
 /** `GET /state`'s tracked Round (any status) → the engine's `RoundLike`. */
 function roundLikeFrom(dto: RoundDto): RoundLike {
@@ -201,6 +201,8 @@ export function App() {
   const entries = player ? BigInt(player.entries) : 0n;
   const pendingWithdraw = player ? BigInt(player.pendingWithdraw) : 0n;
   const pendingEpoch = player ? BigInt(player.pendingEpoch) : 0n;
+  // Optional on the DTO until the backend mirrors `Player.requested_at`.
+  const requestedAt = player?.requestedAt !== undefined ? BigInt(player.requestedAt) : null;
   const fmt = useCallback((value: bigint) => formatAtomic2(value, DECIMALS), []);
 
   // Header chip copies the full address; the truncated form is unusable for
@@ -347,9 +349,16 @@ export function App() {
   // a same-value check so setting the hash never fires a redundant
   // `hashchange` (window.location.hash assignment is a no-op history entry
   // when unchanged, but browsers differ on firing the event).
+  // `hashSyncAction` (tabs.ts) says which write: an empty or unknown hash
+  // on load is replaced in place, so the first Back press leaves the app
+  // instead of bouncing `/` → `/#home`; only a real tab change pushes.
   useEffect(() => {
-    const hash = hashForTab(tab);
-    if (window.location.hash !== hash) window.location.hash = hash;
+    const action = hashSyncAction(window.location.hash, tab);
+    if (action.kind === "replace") {
+      window.history.replaceState(window.history.state, "", action.hash);
+    } else if (action.kind === "push") {
+      window.location.hash = action.hash;
+    }
   }, [tab]);
   useEffect(() => {
     const onHashChange = () => setTab(tabFromHash(window.location.hash));
@@ -656,6 +665,7 @@ export function App() {
             now={now}
             pendingWithdraw={pendingWithdraw}
             pendingEpoch={pendingEpoch}
+            requestedAt={requestedAt}
             initialMode={vaultMode}
             onConnect={() => signer.connect()}
             onDone={statePoll.kick}

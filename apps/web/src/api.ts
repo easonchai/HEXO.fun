@@ -120,6 +120,16 @@ export interface PlayerDto {
   pendingWithdraw: string;
   /** Epoch the pending amount was requested in; it pays out after that one ends. */
   pendingEpoch: string;
+  /**
+   * Unix seconds (decimal string) the pending amount was requested at,
+   * mirroring the program's `Player.requested_at`. `process_withdraw` also
+   * accepts once `now > requestedAt + epochSeconds` (custody.rs), the
+   * escape hatch for an operator that stopped opening epochs; the Vault's
+   * "pay out now" reads this to offer it. Optional until the backend's
+   * Player mirror carries it (pre-mainnet review): absent, the hatch is
+   * simply never offered and the epoch-id rule stands alone.
+   */
+  requestedAt?: string;
   /** weightAcc + entries × (now − lastUpdate). */
   liveWeight: string;
   /** Share of the epoch's live weight as a percentage, two decimals: "12.34". */
@@ -429,11 +439,12 @@ export async function applyReferral(
   }
 }
 
-/** One of the wallet's own Invite codes (ticket 07); no web UI shows these
- *  yet. */
-export interface InviteCodeDto {
-  code: string;
-  redeemed: boolean;
+/** The wallet's own Invite codes, as counts only (pre-mainnet review): the
+ *  route is unsigned, so the backend no longer lists the codes themselves.
+ *  `unredeemed` is how many still have a use left. */
+export interface InviteCodeCountsDto {
+  total: number;
+  unredeemed: number;
 }
 
 /** spec.md "Referrals API response": Active / N days left / Under $50. */
@@ -476,7 +487,7 @@ export interface ReferralsDto {
    *  its first deposit, since the indexer mints one on the first Deposited
    *  event. */
   referralCode: string | null;
-  inviteCodes: InviteCodeDto[];
+  inviteCodes: InviteCodeCountsDto;
   referrals: ReferralsPageDto;
   qualifiedCount: number;
   /** Current band (referral-page ticket 03). */

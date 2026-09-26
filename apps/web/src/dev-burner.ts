@@ -4,6 +4,7 @@
  * VITE_BURNER_WALLET=1, refuses any RPC endpoint that is not a local
  * validator, and its keypair lives only in page memory for the session.
  */
+import { createKeyPairFromPrivateKeyBytes, signBytes } from "@solana/kit";
 import {
   BaseWalletAdapter,
   WalletReadyState,
@@ -101,6 +102,31 @@ export class BurnerWalletAdapter extends BaseWalletAdapter {
       await this.signTransaction(transaction);
     return transactions;
   }
+
+  /**
+   * Plain ed25519 over `message`, the way a wallet-standard wallet answers
+   * `signMessage`, so the invite gate's redeem (useAccessGate.ts) and the
+   * `?ref=` apply can run against the burner in the Playwright specs
+   * (e2e/gate.ts). Signs through `@solana/kit`'s WebCrypto path with the
+   * keypair's 32-byte seed; web3.js's own `Keypair` never exposes signing.
+   */
+  async signMessage(message: Uint8Array): Promise<Uint8Array> {
+    if (!this.keypair) throw new Error("burner wallet not connected");
+    return signMessageWithKeypair(this.keypair, message);
+  }
+}
+
+/** Exported for dev-burner.test.ts; the adapter above is the only other
+ *  caller. */
+export async function signMessageWithKeypair(
+  keypair: Keypair,
+  message: Uint8Array,
+): Promise<Uint8Array> {
+  const { privateKey } = await createKeyPairFromPrivateKeyBytes(
+    keypair.secretKey.slice(0, 32),
+    true,
+  );
+  return new Uint8Array(await signBytes(privateKey, message));
 }
 
 /** True when the RPC endpoint is a local validator, not devnet or mainnet. */

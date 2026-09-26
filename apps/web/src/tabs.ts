@@ -49,3 +49,32 @@ const TAB_HASHES: Record<Tab, string> = Object.fromEntries(
 export function hashForTab(tab: Tab): string {
   return `#${TAB_HASHES[tab]}`;
 }
+
+/** Whether `hash` names a tab at all (any case), as opposed to being empty
+ *  or something `tabFromHash` only falls back from. */
+function isKnownHash(hash: string): boolean {
+  return Object.hasOwn(HASH_TABS, hash.replace(/^#/, "").toLowerCase());
+}
+
+/** What App's hash-sync effect writes for `tab` given the URL's current
+ *  hash: nothing, an in-place `replaceState`, or a `location.hash`
+ *  assignment that pushes a history entry. */
+export type HashSyncAction =
+  | { kind: "none" }
+  | { kind: "replace"; hash: string }
+  | { kind: "push"; hash: string };
+
+/**
+ * Pre-mainnet review: assigning `location.hash` on the initial sync pushed
+ * a spurious entry, so a visitor landing on `/` had `/` → `/#home` in their
+ * history and Back went nowhere. An empty or unknown hash is the initial
+ * sync (or a typo'd link), replaced in place; a known hash that already
+ * names `tab` (any case) needs nothing; only a known hash naming another
+ * tab is a real change worth a history entry.
+ */
+export function hashSyncAction(currentHash: string, tab: Tab): HashSyncAction {
+  const hash = hashForTab(tab);
+  if (!isKnownHash(currentHash)) return { kind: "replace", hash };
+  if (tabFromHash(currentHash) === tab) return { kind: "none" };
+  return { kind: "push", hash };
+}

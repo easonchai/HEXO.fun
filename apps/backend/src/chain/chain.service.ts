@@ -71,6 +71,23 @@ const COMPUTE_UNIT_MARGIN = 1.1;
 export const PRIORITY_FEE_TTL_MS = 10_000;
 
 /**
+ * `send`'s bounded confirmation wait ran out with the transaction neither
+ * seen nor expired (pre-mainnet review): the blockhash is still live, so it
+ * may yet land. Carries the signature so a caller that must not resend
+ * (the referral grant step, whose transaction is not idempotent on chain)
+ * can record it as sent and let the chain's own state settle the rest,
+ * instead of reading the timeout as "never sent" and issuing it twice.
+ */
+export class TransactionPendingError extends Error {
+  constructor(readonly signature: string) {
+    super(
+      `transaction ${signature} still pending after ${CONFIRM_TIMEOUT_MS}ms; the blockhash has not expired yet`,
+    );
+    this.name = "TransactionPendingError";
+  }
+}
+
+/**
  * Connection, Program, operator keypair, PDA helpers and a signed-send
  * helper. No business logic (deposit/withdraw/etc calls) — that lands with
  * the operator and API tickets.
@@ -360,9 +377,7 @@ export class ChainService {
         `transaction ${signature} expired: block height ${blockHeight} passed the blockhash's last valid height ${lastValidBlockHeight}`,
       );
     }
-    throw new Error(
-      `transaction ${signature} still pending after ${CONFIRM_TIMEOUT_MS}ms; the blockhash has not expired yet`,
-    );
+    throw new TransactionPendingError(signature);
   }
 
   /** One-shot wait for `signature` to reach "confirmed", or `"timeout"` past
@@ -393,8 +408,11 @@ export class ChainService {
     return { result, cancel: stop };
   }
 
-  /** Anchor's own logs already name the error; fall back to the IDL's error table. */
+  /** Anchor's own logs already name the error; fall back to the IDL's error
+   *  table. A `TransactionPendingError` is this service's own and carries
+   *  the signature its caller needs, so it passes through untouched. */
   mapSendError(cause: unknown): Error {
+    if (cause instanceof TransactionPendingError) return cause;
     const translated = translateError(cause, this.idlErrorMessages);
     if (translated instanceof AnchorError) {
       return new Error(translated.error.errorCode.code, { cause });
@@ -420,13 +438,23 @@ export class ChainService {
    * (ticket 08 needs this for the pool's hot accounts, over `/state`), and a
    * failed read still falls back to 0 rather than blocking or failing the
    * send; congestion pricing is best-effort, landing the transaction is not.
+   *
+   * Every miss first drops the entries whose TTL has passed (pre-mainnet
+   * review): the key is the exact account set, and every new Round, Epoch
+   * and Player PDA the operator touches is a new set, so without eviction
+   * the map grew by one entry per distinct transaction shape for the life
+   * of the process.
    */
   priorityFeeMicroLamports(writable: PublicKey[]): Promise<number> {
     const key = writable.map((pubkey) => pubkey.toBase58()).sort().join(",");
+    const now = Date.now();
     const cached = this.priorityFeeCache.get(key);
-    if (cached && Date.now() - cached.at <= PRIORITY_FEE_TTL_MS) return cached.result;
+    if (cached && now - cached.at <= PRIORITY_FEE_TTL_MS) return cached.result;
+    for (const [staleKey, entry] of this.priorityFeeCache) {
+      if (now - entry.at > PRIORITY_FEE_TTL_MS) this.priorityFeeCache.delete(staleKey);
+    }
     const result = this.estimatePriorityFee(writable);
-    this.priorityFeeCache.set(key, { at: Date.now(), result });
+    this.priorityFeeCache.set(key, { at: now, result });
     return result;
   }
 

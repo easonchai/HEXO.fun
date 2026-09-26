@@ -97,6 +97,9 @@ export interface VaultScreenProps {
   pendingWithdraw: bigint;
   /** The epoch that pending amount was requested in, so the day it pays after. */
   pendingEpoch: bigint;
+  /** Unix seconds it was requested at (`PlayerDto.requestedAt`); null while
+   *  the API does not carry it. Opens the dead-operator escape hatch. */
+  requestedAt: bigint | null;
   /**
    * Which tab the widget opens on. The dashboard's two buttons are the only
    * way in, and they arrive with an intent already; App unmounts the screen on
@@ -124,6 +127,7 @@ export function Vault(props: VaultScreenProps) {
     now,
     pendingWithdraw,
     pendingEpoch,
+    requestedAt,
     initialMode,
     onConnect,
     onDone,
@@ -197,6 +201,7 @@ export function Vault(props: VaultScreenProps) {
     currentEpoch ? BigInt(currentEpoch.id) : null,
     payoutSent !== null && payoutSent === pendingWithdraw,
     shutdown,
+    pool ? { requestedAt, chainNow: now, epochSeconds: pool.epochSeconds } : undefined,
   );
 
   const switchMode = (next: Mode) => {

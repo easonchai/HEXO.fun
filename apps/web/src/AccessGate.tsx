@@ -28,10 +28,21 @@ export function AccessGate({ children }: { children: ReactNode }) {
 
   const checking = gate.status === "checking";
   const busy = gate.busy || checking;
+  const notice = gate.referralNotice;
 
   return (
     <>
       {children}
+      {notice ? (
+        // Explains the `?ref=` signature prompt (pre-mainnet review); lives
+        // outside the overlay because it only ever shows once the gate is
+        // hidden.
+        <div className="referral-notice" role="status" data-testid="referral-notice">
+          {notice.kind === "applying"
+            ? `Applying referral code ${notice.code}… sign in your wallet to confirm.`
+            : `Referral code ${notice.code} applied.`}
+        </div>
+      ) : null}
       {gate.status === "hidden" ? null : (
         <div className="invite-gate" data-testid="access-gate">
           <div className="invite-card" role="dialog" aria-modal="true" aria-labelledby="invite-title">
@@ -89,6 +100,22 @@ export function AccessGate({ children }: { children: ReactNode }) {
                       {gate.error}
                     </p>
                   ) : null}
+                  {gate.status === "failed" && gate.checkError ? (
+                    // The access check itself failed (pre-mainnet review):
+                    // say so and offer a retry instead of a silent
+                    // "Checking…" that never ends.
+                    <p className="invite-error" role="alert" data-testid="access-gate-check-error">
+                      {gate.checkError}{" "}
+                      <button
+                        type="button"
+                        className="invite-link-btn"
+                        onClick={gate.retryCheck}
+                        data-testid="access-gate-retry"
+                      >
+                        Retry now
+                      </button>
+                    </p>
+                  ) : null}
                   <a className="invite-waitlist" href={WAITLIST_URL} target="_blank" rel="noopener noreferrer">
                     Don’t have an access code?
                   </a>
@@ -101,6 +128,19 @@ export function AccessGate({ children }: { children: ReactNode }) {
                 >
                   {busy ? "Checking…" : "Submit"}
                 </button>
+                {gate.status === "connect" ? (
+                  // A returning wallet has no code to type (pre-mainnet
+                  // review): connecting alone runs the access check, and a
+                  // wallet that already redeemed or deposited closes the gate.
+                  <button
+                    type="button"
+                    className="invite-connect"
+                    onClick={gate.connect}
+                    data-testid="access-gate-connect"
+                  >
+                    Already have access? Connect wallet
+                  </button>
+                ) : null}
               </form>
             </div>
           </div>

@@ -13,6 +13,18 @@
  * no live URL to default to. Point E2E_BASE_URL at the Vercel URL the
  * moment it exists; nothing else in this file changes.
  *
+ * Invite gate (pre-mainnet review): the app opens under a full-page gate
+ * (src/AccessGate.tsx) that covers the topbar's connect button, so
+ * `passAccessGate` (e2e/gate.ts) runs first on every load. Environment:
+ * - E2E_INVITE_ADMIN_KEY: the backend's INVITE_ADMIN_KEY. Set, the helper
+ *   mints a single-use code through `POST /access/invites` and redeems it
+ *   with the burner's signature. Unset, it uses the gate's "Already have
+ *   access? Connect wallet" path, which only passes a wallet the backend
+ *   already knows (redeemed once, or deposited: any earlier run of this
+ *   spec against the same database).
+ * - E2E_API_URL: where that backend answers; default http://127.0.0.1:8080,
+ *   the app's own VITE_API_URL default.
+ *
  * Wallet: this drives the app's dev burner wallet (src/dev-burner.ts),
  * `VITE_BURNER_WALLET=1` against a local RPC. That path exists specifically
  * for "automated browser testing" per its own doc comment. It requires a
@@ -38,6 +50,8 @@
  */
 import { expect, test, type Page } from "playwright/test";
 
+import { passAccessGate } from "./gate.js";
+
 /** Round length the target pool is running, for the settle-wait budget. Matches spec.md §7's 90s default; override for a faster demo pool (see the runbook's "changing epoch length" recipe, which also covers --round-seconds). */
 const ROUND_SECONDS = Number(process.env.E2E_ROUND_SECONDS ?? 90);
 const VRF_TIMEOUT_SECONDS = Number(process.env.E2E_VRF_TIMEOUT_SECONDS ?? 120);
@@ -46,15 +60,12 @@ const SETTLE_TIMEOUT_MS = (ROUND_SECONDS + VRF_TIMEOUT_SECONDS + 60) * 1000;
 
 async function connectBurnerWallet(page: Page): Promise<void> {
   await page.goto("/#play");
-  await page.getByTestId("connect-button").click();
-  // Standard wallet-adapter-react-ui modal. With VITE_BURNER_WALLET=1 and a
-  // local RPC (see src/dev-burner.ts's isLocalRpc gate), the burner is the
-  // only entry in the list.
-  const burnerOption = page.getByRole("button", { name: /burner/i });
-  if (await burnerOption.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await burnerOption.click();
-  }
-  // Connected: the pill carries `Copy <address>` and opens the wallet menu.
+  // The gate connects the wallet on its way through: the standard
+  // wallet-adapter-react-ui modal, where with VITE_BURNER_WALLET=1 and a
+  // local RPC (see src/dev-burner.ts's isLocalRpc gate) the burner is the
+  // only entry. Once it is down the pill carries `Copy <address>` and
+  // opens the wallet menu.
+  await passAccessGate(page);
   await expect(page.getByTestId("connect-button")).toHaveAttribute(
     "title",
     /^Copy /,

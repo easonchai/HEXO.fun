@@ -11,14 +11,17 @@
  * Ticket 05 adds `teamRowView` for Your Team, over the API's paginated
  * `referrals.items` shape (spec.md "Referrals API response").
  */
-import type { ReferralBandDto, ReferralItemDto, ReferralsDto } from "./api.js";
+import type { AccessDto, ApiResult, ReferralBandDto, ReferralItemDto, ReferralsDto } from "./api.js";
 import { shortDate } from "./screens/Dashboard.js";
 
 /** Hero card's code-field state (spec.md "Web page structure", user stories
- *  6-7): no wallet connected, connected but never deposited (no Referral
+ *  6-7): no wallet connected, connected with the first poll still out
+ *  (pre-mainnet review: a depositor must not flash "Deposit once" for the
+ *  half-second before it lands), connected but never deposited (no Referral
  *  code minted yet), or connected with a code to show and share. */
 export type ReferralHeroState =
   | { kind: "disconnected" }
+  | { kind: "loading" }
   | { kind: "no-code" }
   | { kind: "has-code"; code: string };
 
@@ -27,8 +30,79 @@ export function referralHeroState(
   data: ReferralsDto | null,
 ): ReferralHeroState {
   if (!owner) return { kind: "disconnected" };
-  if (!data?.referralCode) return { kind: "no-code" };
+  if (data === null) return { kind: "loading" };
+  if (!data.referralCode) return { kind: "no-code" };
   return { kind: "has-code", code: data.referralCode };
+}
+
+/** `GET /access`'s reason for a wallet that is past the gate only because
+ *  it has a Player (access.controller.ts). `POST /referrals/apply` refuses
+ *  such a wallet ("already deposited"), so asking it to sign is pointless. */
+export const EXISTING_DEPOSITOR_REASON = "existing depositor";
+
+/** One auto-apply attempt's identity for the per-session memory: the same
+ *  code on another wallet, or another code on the same wallet, is a fresh
+ *  attempt. */
+export function referralAttemptKey(owner: string, code: string): string {
+  return `${owner}:${code}`;
+}
+
+/** What the `?ref=` auto-apply effect (useAccessGate.ts) should do this
+ *  render. "wait" is nothing to do yet or ever (no code, no wallet, gate not
+ *  passed); "skip" keeps the stored code for a later wallet or session
+ *  without prompting now; "apply" signs. */
+export type ReferralApplyPlan =
+  | { kind: "wait" }
+  | { kind: "skip"; why: "existing-depositor" | "already-attempted" }
+  | { kind: "apply"; key: string };
+
+/**
+ * Pre-mainnet review: the old effect prompted for a signature on every load
+ * until it was signed, and even for wallets the backend would refuse. It
+ * now prompts at most once per session per wallet+code (`attempted` is the
+ * session's memory of keys already tried, signed or declined) and never for
+ * a wallet whose access reason is "existing depositor".
+ */
+export function referralApplyPlan(input: {
+  owner: string | undefined;
+  refCode: string;
+  access: AccessDto | null;
+  attempted: (key: string) => boolean;
+}): ReferralApplyPlan {
+  const { owner, refCode, access, attempted } = input;
+  if (!owner || !refCode || access === null || !access.allowed) return { kind: "wait" };
+  if (access.reason === EXISTING_DEPOSITOR_REASON) {
+    return { kind: "skip", why: "existing-depositor" };
+  }
+  const key = referralAttemptKey(owner, refCode);
+  if (attempted(key)) return { kind: "skip", why: "already-attempted" };
+  return { kind: "apply", key };
+}
+
+/** What to do with `POST /referrals/apply`'s answer: "applied" and
+ *  "permanent" both clear the stored code (it has done its job, or it never
+ *  can for this wallet); "transient" keeps it for another session. */
+export type ReferralApplyOutcome = "applied" | "permanent" | "transient";
+
+/** The four `applied: false` reasons referrals.controller.ts sends. Every
+ *  one is final for this wallet+code, so the code is dropped rather than
+ *  re-prompted next session; matched by phrase so a reworded sentence still
+ *  lands, and anything unrecognised is treated as transient. */
+const PERMANENT_APPLY_REASONS = [
+  /already has a referrer/i,
+  /already deposited/i,
+  /does not exist/i,
+  /own referral code/i,
+];
+
+export function classifyApplyResponse(
+  result: ApiResult<{ applied: boolean; reason: string }>,
+): ReferralApplyOutcome {
+  if (!result.ok) return "transient";
+  if (result.data.applied) return "applied";
+  return PERMANENT_APPLY_REASONS.some((re) => re.test(result.data.reason))
+    ? "permanent"
+    : "transient";
 }
 
 /** spec.md Copy: "COPY copies `${origin}/?ref=CODE`", using the app's own origin. */
