@@ -2937,6 +2937,32 @@ input::placeholder {
   margin: 0;
 }
 
+.vault-line-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The 414px bubble would overrun the widget from the icon's x, so it spans
+   the row instead (the row is the positioning box, not the tip), and opens
+   upward because .vault-widget clips below the CTA. */
+.vault-line:has(.info-tip) {
+  position: relative;
+}
+
+.vault-line .info-tip {
+  position: static;
+}
+
+.vault-line .info-tip-bubble {
+  top: auto;
+  bottom: calc(100% + 10px);
+  left: 0;
+  width: 100%;
+  font-weight: 400;
+  text-transform: none;
+}
+
 /* Pending withdrawal row: state text, and the payout button when it is due. */
 .vault-pending-state {
   display: flex;

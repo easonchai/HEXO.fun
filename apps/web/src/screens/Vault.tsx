@@ -35,6 +35,7 @@ import {
 import { apiBaseUrl, fetchPlayer, type CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
 import { apyFromBaseRateBps } from "../buyTickets.js";
+import { InfoTip } from "../InfoTip.js";
 import type { HexVaultProgram } from "../chain.js";
 import {
   addCapped,
@@ -66,6 +67,15 @@ const ONE = 10n ** BigInt(DECIMALS);
 const INPUT_DECIMALS = 2;
 /** The Figma quick pills: each adds this many whole USDC. */
 const QUICK_ADDS = [50n, 100n, 500n] as const;
+
+const YIELD_TIP = [
+  "Base yield is paid into your deposit once a day, so it compounds. The estimate is a year at today's rate.",
+];
+
+/** A year of compounded Base yield on `amount` at `apy` percent, in atomic
+ *  units. Display only: floats are fine at these magnitudes. */
+const yearlyYield = (amount: bigint, apy: number): bigint =>
+  BigInt(Math.floor((Number(amount) * apy) / 100));
 
 /**
  * `NothingPending` (playerErrors.ts, ticket 09 — this used to be this file's
@@ -222,6 +232,7 @@ export function Vault(props: VaultScreenProps) {
   };
 
   const overCap = connected && amount !== null && amount > cap;
+  const apy = pool ? apyFromBaseRateBps(pool.baseRateBps) : null;
   const underMin =
     mode === "deposit" && pool !== null && amount !== null && amount < pool.minDeposit;
   const withdrawPreview =
@@ -368,10 +379,23 @@ export function Vault(props: VaultScreenProps) {
 
             <dl className="vault-rows">
               {mode === "deposit" ? (
-                <div className="vault-line">
-                  <dt>Tickets</dt>
-                  <dd>{fmt2(amount ?? 0n)}</dd>
-                </div>
+                <>
+                  <div className="vault-line">
+                    <dt>Tickets</dt>
+                    <dd>{fmt2(amount ?? 0n)}</dd>
+                  </div>
+                  <div className="vault-line" data-testid="estimated-yield">
+                    <dt className="vault-line-label">
+                      Estimated yield
+                      <InfoTip id="estimated-yield-tip" paragraphs={YIELD_TIP} />
+                    </dt>
+                    <dd>
+                      {apy === null
+                        ? "—"
+                        : `$${fmt2(yearlyYield(amount ?? 0n, apy))} (${Number(apy.toFixed(2))}% APY)`}
+                    </dd>
+                  </div>
+                </>
               ) : (
                 <>
                   <div className="vault-line">
