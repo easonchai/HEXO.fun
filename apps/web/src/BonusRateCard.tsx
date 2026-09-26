@@ -8,17 +8,12 @@
 import { InfoTip } from "./InfoTip.js";
 import type { BonusRateView } from "./referrals.js";
 
-/** spec.md Copy, "Bonus Rate tooltip" (Figma tooltip `230:17717`, text node
- *  under `204:15702`). The four tiers render as their own paragraphs: the
- *  source groups them tighter than the intro line, which InfoTip's
- *  one-`<p>`-per-paragraph layout doesn't distinguish — a minor spacing
- *  difference from Figma, not a content one. */
+/** spec.md Copy, "Bonus Rate tooltip" (Figma tooltip `230:17720`). The
+ *  tiers are one paragraph of "\n"-separated lines, packed tight under the
+ *  intro as in Figma. */
 const BONUS_RATE_TIP = [
   "The percentage of daily tickets you earn based on your active friend’s deposits.",
-  "• 1–2 friends: 2%",
-  "• 3–5 friends: 3%",
-  "• 6–10 friends: 4%",
-  "• 11+ friends: 5%",
+  "• 1–2 friends: 2%\n• 3–5 friends: 3%\n• 6–10 friends: 4%\n• 11+ friends: 5%",
 ] as const;
 
 export function BonusRateCard({ state }: { state: BonusRateView }) {

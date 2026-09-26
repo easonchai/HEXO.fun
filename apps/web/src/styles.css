@@ -4469,28 +4469,26 @@ input::placeholder {
   pointer-events: none;
 }
 
-/* image169 (610, -147) 562² @ 50%, pulled out of the Figma SVG export as a
-   2x WebP; anchored to the card's right edge (not a literal `left`) so it
-   holds its position if the card's width ever differs from the 1054px
-   Figma frame. */
+/* image169 and Ellipse 15 carry Figma's Dither shader (gift: Bayer 8x8,
+   size 2, levels 3; glow: Bayer 16x16, size 4, levels 4, brightness 72%,
+   contrast 1.08). Both are Figma's own 2x exports, already clipped to the
+   card with their 50% / 45% fill opacity baked into the alpha, so no CSS
+   opacity or gradient here. The gift is anchored to the card's right edge
+   so it holds its place if the card is wider than the 1054px frame. */
 .referral-hero-bg {
   position: absolute;
-  top: -147px;
-  right: -118px;
-  width: 562px;
-  height: 562px;
-  opacity: 0.5;
+  top: 0;
+  right: 0;
+  width: 444px;
+  height: 415px;
 }
 
-/* Ellipse 15: a radial lime glow, (-170,-170) 353x354 @ 45%. */
 .referral-hero-glow {
   position: absolute;
-  top: -170px;
-  left: -170px;
-  width: 353px;
-  height: 354px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(182, 255, 59, 0.45) 0%, rgba(14, 27, 43, 0) 100%);
+  top: 0;
+  left: 0;
+  width: 183px;
+  height: 184px;
 }
 
 .referral-hero-copy,
@@ -4991,19 +4989,17 @@ input::placeholder {
     gap: 24px;
   }
 
+  /* Same scale as the old 300px crop (0.534); 0.7 of the baked-in 50% alpha
+     keeps the old 35% on mobile. */
   .referral-hero-bg {
-    width: 300px;
-    height: 300px;
-    top: -70px;
-    right: -70px;
-    opacity: 0.35;
+    width: 237px;
+    height: 222px;
+    opacity: 0.7;
   }
 
   .referral-hero-glow {
-    width: 200px;
-    height: 200px;
-    top: -100px;
-    left: -100px;
+    width: 104px;
+    height: 104px;
   }
 
   .referral-hero-title {
@@ -5226,10 +5222,11 @@ input::placeholder {
   background: rgba(14, 27, 43, 0.9);
   font-family: "Roboto Mono", monospace;
   font-size: 14px;
-  /* Figma's node measures 16px (its own font metrics allow it); Roboto Mono
-     via a browser clips descenders at that value, so this is 1.4 instead. */
-  line-height: 1.4;
+  line-height: 16px;
   letter-spacing: 0.36px;
+  /* A "\n" inside one paragraph is a line break with no gap (the bullet
+     lists in Figma 230:17720). */
+  white-space: pre-line;
   color: var(--brand-white);
   opacity: 0;
   pointer-events: none;
@@ -5241,8 +5238,9 @@ input::placeholder {
   pointer-events: auto;
 }
 
+/* Figma separates paragraphs with one blank 16px line. */
 .info-tip-bubble p {
-  margin: 0 0 12px;
+  margin: 0 0 16px;
 }
 
 .info-tip-bubble p:last-child {

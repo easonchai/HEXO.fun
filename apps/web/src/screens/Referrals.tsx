@@ -110,9 +110,7 @@ const REFERRAL_FAQ: readonly FaqItem[] = [
 /** spec.md Copy, "Referral's Bonus tooltip". */
 const REFERRAL_BONUS_TIP = [
   "Bonus tickets earned for today's draw.",
-  "• Calculated from qualified referral deposit tickets (capped at $2,500 per friend).",
-  "• Expire after each 24h draw and do not roll over.",
-  "• You cannot earn more bonus tickets than your own deposit tickets.",
+  "• Calculated from qualified referral deposit tickets (capped at $2,500 per friend).\n• Expire after each 24h draw and do not roll over.\n• You cannot earn more bonus tickets than your own deposit tickets.",
 ] as const;
 
 /** spec.md Copy, "Your Team tooltip". */
@@ -180,8 +178,8 @@ function ReferralHero({
           Separate from the card itself (which stays overflow: visible) so
           the InfoTip bubble below can overflow the card, per spec.md. */}
       <div className="referral-hero-bgclip" aria-hidden="true">
-        <img className="referral-hero-bg" src="/referrals/hero-gift.webp" alt="" width={562} height={562} />
-        <span className="referral-hero-glow" />
+        <img className="referral-hero-bg" src="/referrals/hero-gift.webp" alt="" width={444} height={415} />
+        <img className="referral-hero-glow" src="/referrals/hero-glow.webp" alt="" width={183} height={184} />
       </div>
 
       <div className="referral-hero-copy">
