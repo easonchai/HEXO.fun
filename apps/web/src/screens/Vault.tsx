@@ -11,9 +11,10 @@
  * of a duplicate `/epochs/current` poll of its own; `onDone` tightens that
  * poll (see `useStatePoll.ts` `kick`) instead of triggering a chain re-read.
  *
- * Ticket 10: base yield and Buy Tickets are placeholder UI (plain elements,
- * no Figma styling yet), unlike the deposit/withdraw widget above them. Their
- * math lives in buyTickets.ts and useBuyTickets.ts, mirroring how ticket 09
+ * Ticket 10: base yield is placeholder UI (plain elements, no Figma styling
+ * yet), unlike the deposit/withdraw widget above it. Buy Tickets is hidden for
+ * now; its markup was removed but buyTickets.ts and useBuyTickets.ts stay, so
+ * bringing it back is markup only. The math split mirrors how ticket 09
  * split access.ts / useAccessGate.ts / AccessGate.tsx, so the designer's
  * restyle only touches this file's markup. `buyAllowanceLeft`/yield figures
  * are not on `GET /state`'s embedded Player, so this screen polls
@@ -52,7 +53,6 @@ import {
 import type { PoolLike } from "../read.js";
 import { SHUTDOWN_BANNER } from "../shutdown.js";
 import { useApiPoll } from "../useApiPoll.js";
-import { useBuyTickets } from "../useBuyTickets.js";
 import { GlyphRow } from "./Home.js";
 
 const DECIMALS = 6;
@@ -166,24 +166,6 @@ export function Vault(props: VaultScreenProps) {
     [ownerBase58],
   );
   const playerExtras = useApiPoll(loadPlayerExtras, 10_000);
-  const allowanceLeft = playerExtras.data
-    ? BigInt(playerExtras.data.buyAllowanceLeft)
-    : null;
-  const secondsLeft =
-    currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : 0n;
-  const buy = useBuyTickets({
-    program,
-    owner,
-    sendTransaction,
-    pool,
-    paused,
-    shutdown,
-    principal,
-    allowanceLeft,
-    secondsLeft,
-    epochSeconds: pool?.epochSeconds ?? 0n,
-    onDone,
-  });
 
   // The payout landed (or the request was never there): drop the flag, so a
   // later request for the same amount does not inherit this one's state.
@@ -487,72 +469,33 @@ export function Vault(props: VaultScreenProps) {
 
       {/* Ticket 10: placeholder UI. Plain elements, no Figma styling yet;
           see this file's header comment for where the math lives. */}
-      <section data-testid="vault-yield" aria-label="Base yield">
-        <h2>Base yield</h2>
-        <dl>
-          <div>
-            <dt>Rate</dt>
-            <dd data-testid="yield-apy">
-              {pool ? `${apyFromBaseRateBps(pool.baseRateBps).toFixed(2)}% APY` : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>Yield yesterday</dt>
-            <dd data-testid="yield-yesterday">
-              {playerExtras.data
-                ? `${fmt2(BigInt(playerExtras.data.yieldLastEpoch))} ${SYMBOL}`
-                : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt>Yield to date</dt>
-            <dd data-testid="yield-to-date">
-              {playerExtras.data
-                ? `${fmt2(BigInt(playerExtras.data.yieldToDate))} ${SYMBOL}`
-                : "—"}
-            </dd>
-          </div>
-        </dl>
-      </section>
-
-      <section data-testid="buy-tickets" aria-label="Buy tickets">
-        <h2>Buy tickets</h2>
-        <label>
-          Amount
-          <input
-            value={buy.amountText}
-            placeholder="0"
-            onChange={(event) =>
-              buy.setAmountText(clampDecimals(event.target.value, INPUT_DECIMALS))
-            }
-            inputMode="decimal"
-            data-testid="buy-tickets-input"
-          />
-          {SYMBOL}
-        </label>
-        <p data-testid="buy-tickets-received">
-          Tickets received: {fmt2(buy.tickets)}
-        </p>
-        <p data-testid="buy-tickets-allowance">
-          Allowance left today:{" "}
-          {buy.allowanceLeft !== null ? `${fmt2(buy.allowanceLeft)} ${SYMBOL}` : "—"}
-        </p>
-        <p data-testid="buy-tickets-draw-value">
-          Worth {fmt2(buy.drawValueTickets)} full-day tickets in tonight's draw
-        </p>
-        <button
-          type="button"
-          disabled={!buy.canSubmit}
-          data-testid="buy-tickets-submit"
-          onClick={buy.submit}
-        >
-          {buy.busy ? "SIGNING…" : "BUY TICKETS"}
-        </button>
-        {buy.disabledReason ? (
-          <p data-testid="buy-tickets-disabled-reason">{buy.disabledReason}</p>
-        ) : null}
-        {buy.error ? <p data-testid="buy-tickets-error">{buy.error}</p> : null}
-      </section>
+      {/* <section data-testid="vault-yield" aria-label="Base yield"> */}
+      {/*   <h2>Base yield</h2> */}
+      {/*   <dl> */}
+      {/*     <div> */}
+      {/*       <dt>Rate</dt> */}
+      {/*       <dd data-testid="yield-apy"> */}
+      {/*         {pool ? `${apyFromBaseRateBps(pool.baseRateBps).toFixed(2)}% APY` : "—"} */}
+      {/*       </dd> */}
+      {/*     </div> */}
+      {/*     <div> */}
+      {/*       <dt>Yield yesterday</dt> */}
+      {/*       <dd data-testid="yield-yesterday"> */}
+      {/*         {playerExtras.data */}
+      {/*           ? `${fmt2(BigInt(playerExtras.data.yieldLastEpoch))} ${SYMBOL}` */}
+      {/*           : "—"} */}
+      {/*       </dd> */}
+      {/*     </div> */}
+      {/*     <div> */}
+      {/*       <dt>Yield to date</dt> */}
+      {/*       <dd data-testid="yield-to-date"> */}
+      {/*         {playerExtras.data */}
+      {/*           ? `${fmt2(BigInt(playerExtras.data.yieldToDate))} ${SYMBOL}` */}
+      {/*           : "—"} */}
+      {/*       </dd> */}
+      {/*     </div> */}
+      {/*   </dl> */}
+      {/* </section> */}
 
       {confirmed !== null ? (
         <DepositConfirmed

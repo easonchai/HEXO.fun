@@ -1,5 +1,10 @@
 # Deploy runbook
 
+> **Superseded.** Deploying and upgrading now goes through `scripts/deploy.sh`, and the
+> per-environment procedure lives in `docs/ops/deploy.md` and `docs/ops/environments.md`. This
+> file stays as the tracked worked example of how that tooling came to be; follow the current
+> docs for an actual deploy.
+
 Devnet program, backend on the Contabo VPS behind the running Traefik, frontend
 on Vercel. Steps 1 to 3 are human work and need the deploy key, the VPS and the
 Vercel account.
