@@ -41,23 +41,45 @@ describe("inviteCodeFromSearch", () => {
 });
 
 describe("gateDecision", () => {
-  it("asks to connect first, even before any access check has run", () => {
-    expect(gateDecision(false, null)).toBe("connect");
-    expect(gateDecision(false, { allowed: true, reason: "x" })).toBe("connect");
-  });
+  const WALLET = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+  const base = { ready: true, connected: true, owner: WALLET, access: null, rememberedOwner: "" };
 
-  it("shows checking while GET /access is in flight", () => {
-    expect(gateDecision(true, null)).toBe("checking");
-  });
-
-  it("blocks with the code input until access is allowed", () => {
-    expect(gateDecision(true, { allowed: false, reason: "no invite code redeemed" })).toBe(
-      "redeem",
+  it("paints nothing while the wallet layer is still restoring a session", () => {
+    expect(gateDecision({ ...base, ready: false, connected: false, owner: undefined })).toBe(
+      "loading",
     );
+    expect(gateDecision({ ...base, ready: false, rememberedOwner: WALLET })).toBe("loading");
+  });
+
+  it("asks to connect first, even before any access check has run", () => {
+    expect(gateDecision({ ...base, connected: false, owner: undefined })).toBe("connect");
+    expect(
+      gateDecision({ ...base, connected: false, access: { allowed: true, reason: "x" } }),
+    ).toBe("connect");
+    expect(
+      gateDecision({ ...base, connected: false, owner: undefined, rememberedOwner: WALLET }),
+    ).toBe("connect");
+  });
+
+  it("shows checking while GET /access is in flight for a wallet it has not seen pass", () => {
+    expect(gateDecision(base)).toBe("checking");
+    expect(gateDecision({ ...base, rememberedOwner: "someone-else" })).toBe("checking");
+  });
+
+  it("stays hidden while GET /access re-confirms the wallet that passed last time", () => {
+    expect(gateDecision({ ...base, rememberedOwner: WALLET })).toBe("hidden");
+  });
+
+  it("blocks with the code input until access is allowed, even for a remembered wallet", () => {
+    const access = { allowed: false, reason: "no invite code redeemed" };
+    expect(gateDecision({ ...base, access })).toBe("redeem");
+    expect(gateDecision({ ...base, access, rememberedOwner: WALLET })).toBe("redeem");
   });
 
   it("hides once access is allowed", () => {
-    expect(gateDecision(true, { allowed: true, reason: "invite code redeemed" })).toBe("hidden");
+    expect(
+      gateDecision({ ...base, access: { allowed: true, reason: "invite code redeemed" } }),
+    ).toBe("hidden");
   });
 });
 

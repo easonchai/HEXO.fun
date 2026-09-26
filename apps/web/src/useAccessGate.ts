@@ -31,12 +31,33 @@ export interface AccessGateOptions {
   baseUrl: string;
   /** Connected wallet's base58 address; undefined until one connects. */
   owner: string | undefined;
+  /** False while the wallet layer is still restoring last session's wallet. */
+  ready: boolean;
   connected: boolean;
   connect: () => void;
   signMessage: ((message: Uint8Array) => Promise<Uint8Array>) | undefined;
 }
 
 const REF_CODE_STORAGE_KEY = "hexo-ref-code";
+/** The wallet that last passed the gate, so a reload does not flash the
+ *  card while `GET /access` confirms it again. */
+const ACCESS_OWNER_STORAGE_KEY = "hexo-access-owner";
+
+function readRememberedOwner(): string {
+  try {
+    return window.localStorage.getItem(ACCESS_OWNER_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberOwner(owner: string): void {
+  try {
+    window.localStorage.setItem(ACCESS_OWNER_STORAGE_KEY, owner);
+  } catch {
+    // Storage blocked: the next reload shows the card once more, nothing worse.
+  }
+}
 
 /** `?ref=CODE` (spec.md "?ref= capture"), captured into localStorage the
  *  moment it's seen so it survives the gate flow, a wallet connect and a
@@ -75,8 +96,14 @@ function clearStoredRefCode(): void {
 }
 
 export function useAccessGate(options: AccessGateOptions): AccessGateState {
-  const { baseUrl, owner, connected, connect, signMessage } = options;
+  const { baseUrl, owner, ready, connected, connect, signMessage } = options;
   const [access, setAccess] = useState<AccessDto | null>(null);
+  const [rememberedOwner, setRememberedOwner] = useState(() => readRememberedOwner());
+  useEffect(() => {
+    if (!owner || !access?.allowed || owner === rememberedOwner) return;
+    rememberOwner(owner);
+    setRememberedOwner(owner);
+  }, [owner, access, rememberedOwner]);
   // Read once at mount so it survives the connect flow (this component stays
   // mounted for the app's whole session; connecting never remounts it).
   const [code, setCode] = useState(() => inviteCodeFromSearch(window.location.search));
@@ -133,9 +160,10 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   // redeems once the access check says this wallet still needs a code. A
   // wallet that already has access skips the redeem and the gate just closes.
   const [pending, setPending] = useState(false);
-  const status = gateDecision(connected, access);
+  const status = gateDecision({ ready, connected, owner, access, rememberedOwner });
   useEffect(() => {
-    if (!pending || status === "connect" || status === "checking") return;
+    if (!pending || status === "loading" || status === "connect" || status === "checking")
+      return;
     setPending(false);
     if (status === "redeem") redeem();
   }, [pending, status, redeem]);
@@ -148,7 +176,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   // error — the web quietly ignores `applied: false` the same way.
   const applyingRef = useRef(false);
   useEffect(() => {
-    if (status !== "hidden" || !owner || !signMessage || !refCode) return;
+    if (!access?.allowed || !owner || !signMessage || !refCode) return;
     if (applyingRef.current) return;
     applyingRef.current = true;
     void (async () => {
@@ -169,7 +197,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
         applyingRef.current = false;
       }
     })();
-  }, [status, owner, signMessage, refCode, baseUrl]);
+  }, [access, owner, signMessage, refCode, baseUrl]);
 
   const submit = useCallback(() => {
     if (normalizeInviteCode(code) === "") return;

@@ -30,15 +30,32 @@ export function inviteCodeFromSearch(search: string): string {
   return new URLSearchParams(search).get("invite")?.trim() ?? "";
 }
 
-/** What the gate overlay shows. "hidden" once access is confirmed allowed. */
-export type GateStatus = "hidden" | "connect" | "checking" | "redeem";
+/** What the gate overlay shows. "hidden" once access is confirmed allowed;
+ *  "loading" while the wallet layer is still restoring a session, when
+ *  nothing should paint at all. */
+export type GateStatus = "loading" | "hidden" | "connect" | "checking" | "redeem";
 
-export function gateDecision(
-  connected: boolean,
-  access: AccessDto | null,
-): GateStatus {
+export interface GateInputs {
+  /** False while Privy or wallet-adapter is still restoring last session's wallet. */
+  ready: boolean;
+  connected: boolean;
+  owner: string | undefined;
+  access: AccessDto | null;
+  /** The wallet that last passed the gate, from localStorage; "" when none. */
+  rememberedOwner: string;
+}
+
+/** A returning wallet that passed the gate before stays hidden while
+ *  `GET /access` is in flight instead of flashing the card. Access is never
+ *  revoked once redeemed, so a stale answer can only be wrong for a wallet
+ *  that never had it, and the fetch result still shows the card then. */
+export function gateDecision(inputs: GateInputs): GateStatus {
+  const { ready, connected, owner, access, rememberedOwner } = inputs;
+  if (!ready) return "loading";
   if (!connected) return "connect";
-  if (access === null) return "checking";
+  if (access === null) {
+    return owner !== undefined && owner === rememberedOwner ? "hidden" : "checking";
+  }
   return access.allowed ? "hidden" : "redeem";
 }
 

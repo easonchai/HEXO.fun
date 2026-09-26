@@ -37,6 +37,13 @@ export type WalletMode = "privy" | "standard";
 export interface GameSigner {
   mode: WalletMode;
   publicKey: PubkeyType | undefined;
+  /**
+   * False while last session's wallet is still being restored (Privy's
+   * `ready`, wallet-adapter's `connecting`). `connected` is false during that
+   * window too, so anything that reacts to "not connected" (the invite gate)
+   * waits on this instead of flashing.
+   */
+  ready: boolean;
   connected: boolean;
   connect: () => void;
   disconnect: () => void;
@@ -315,6 +322,7 @@ function usePrivySigner(): GameSigner {
   return {
     mode: "privy",
     publicKey: wallet ? safePubkey(wallet.address) : undefined,
+    ready,
     connected: ready && Boolean(wallet),
     connect: () => login(),
     // `logout()` only ends the Privy session. An external wallet Privy
@@ -331,7 +339,7 @@ function usePrivySigner(): GameSigner {
 }
 
 function useStandardSigner(): GameSigner {
-  const { publicKey, wallet, connected, select } = useWallet();
+  const { publicKey, wallet, connected, connecting, select } = useWallet();
   const { setVisible } = useWalletModal();
 
   const adapter = wallet?.adapter as unknown as
@@ -347,6 +355,10 @@ function useStandardSigner(): GameSigner {
   return {
     mode: "standard",
     publicKey: publicKey ?? undefined,
+    // autoConnect selects the stored wallet in a mount effect, so the very
+    // first render can still say "not connecting". Good enough for the dev
+    // fallback; Privy is the production path.
+    ready: !connecting,
     connected,
     connect: () => setVisible(true),
     disconnect: () => {

@@ -21,6 +21,7 @@ export function AccessGate({ children }: { children: ReactNode }) {
   const gate = useAccessGate({
     baseUrl: apiBaseUrl(),
     owner: signer.publicKey?.toBase58(),
+    ready: signer.ready,
     connected: signer.connected,
     connect: signer.connect,
     signMessage: signer.signMessage,
@@ -28,11 +29,14 @@ export function AccessGate({ children }: { children: ReactNode }) {
 
   const checking = gate.status === "checking";
   const busy = gate.busy || checking;
+  // "loading": the wallet layer is still restoring last session, so painting
+  // the card now would flash it at everyone who is already past the gate.
+  const showCard = gate.status !== "hidden" && gate.status !== "loading";
 
   return (
     <>
       {children}
-      {gate.status === "hidden" ? null : (
+      {!showCard ? null : (
         <div className="invite-gate" data-testid="access-gate">
           <div className="invite-card" role="dialog" aria-modal="true" aria-labelledby="invite-title">
             <div className="invite-hero" aria-hidden="true">
