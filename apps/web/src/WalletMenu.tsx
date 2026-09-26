@@ -14,6 +14,8 @@ type Props = {
   /** Called after the faucet lands so the balance row re-reads the chain. */
   onFunded: () => void;
   onDisconnect: () => void;
+  /** INVITE / ABOUT, shown in the menu on phones where the navbar drops them. */
+  onNavigate: (tab: "REFERRALS" | "ABOUT") => void;
 };
 
 /** Faucet button label state. `wait` counts down the per-owner cooldown. */
@@ -42,6 +44,7 @@ export function WalletMenu({
   onCopy,
   onFunded,
   onDisconnect,
+  onNavigate,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [faucet, setFaucet] = useState<Faucet>({ kind: "idle" });
@@ -151,6 +154,26 @@ export function WalletMenu({
               <span className="wallet-menu-item-label">{faucetLabel}</span>
             </button>
           ) : null}
+          {(
+            [
+              ["REFERRALS", "Invite"],
+              ["ABOUT", "About"],
+            ] as const
+          ).map(([tab, label]) => (
+            <button
+              key={tab}
+              type="button"
+              role="menuitem"
+              className="wallet-menu-item wallet-menu-nav"
+              data-testid={`wallet-menu-${tab.toLowerCase()}`}
+              onClick={() => {
+                setOpen(false);
+                onNavigate(tab);
+              }}
+            >
+              <span className="wallet-menu-item-label">{label}</span>
+            </button>
+          ))}
           <button
             type="button"
             role="menuitem"

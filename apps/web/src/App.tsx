@@ -442,7 +442,10 @@ export function App() {
               <button
                 key={candidate.id}
                 type="button"
-                className={`nav-item${tab === candidate.id ? " active" : ""}`}
+                // INVITE / ABOUT move into the wallet menu on phones (styles.css).
+                className={`nav-item${tab === candidate.id ? " active" : ""}${
+                  candidate.id === "REFERRALS" || candidate.id === "ABOUT" ? " nav-item-menu" : ""
+                }`}
                 data-testid={`tab-${candidate.id.toLowerCase()}`}
                 aria-disabled={locked}
                 data-tip={locked ? "Deposit first to play" : undefined}
@@ -492,6 +495,7 @@ export function App() {
               // good. The balance is what moved, so reload just that.
               onFunded={() => setBalanceNonce((value) => value + 1)}
               onDisconnect={() => signer.disconnect()}
+              onNavigate={setTab}
             />
           ) : (
             <span data-testid="wallet-connector">

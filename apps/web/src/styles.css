@@ -872,6 +872,22 @@ input::placeholder {
   color: var(--accent-text);
 }
 
+/* Phone-only copies of the INVITE / ABOUT tabs; the navbar hides its own
+   once a wallet is connected (the pill leaves no room for four tabs). */
+.wallet-menu-nav {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .wallet-menu-nav {
+    display: flex;
+  }
+
+  .topbar:has(.wallet-menu-root) .nav-item-menu {
+    display: none;
+  }
+}
+
 /* ---------- layout ---------- */
 
 .app {
@@ -4983,8 +4999,14 @@ input::placeholder {
 
   .your-team-row,
   .your-team-row-head {
-    grid-template-columns: minmax(0, 1fr) 142px 48px;
+    grid-template-columns: minmax(0, 1fr) 92px 48px;
     gap: 10px;
+  }
+
+  /* Fits "6 days left", the longest label, without the desktop 142px floor. */
+  .your-team-pill {
+    min-width: 0;
+    width: 100%;
   }
 
   .your-team-row {
