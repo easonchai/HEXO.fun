@@ -110,3 +110,75 @@ Starts with `OPERATOR_SOL_LOW`.
    ([`docs/ops/funds.md`](funds.md#operator-sol)).
 3. No restart needed. The same hot key just needed more lamports; the next tick's transactions go
    through once the balance lands.
+
+## Operator SOL balance unreadable
+
+Starts with `OPERATOR_SOL_READ_FAILED`.
+
+1. First check: the RPC used for the balance read, same endpoint as everything else. Check
+   `/alerts` for `RPC_DOWN` or `RPC_FALLBACK_ACTIVE` alongside it; a bad RPC read is the usual
+   cause, not an actually-empty wallet.
+2. If the RPC looks healthy, check the backend logs for the read's own error (a malformed
+   `OPERATOR_KEYPAIR`, wrong network). This alert never means "the balance is fine"; it means it
+   could not be checked, so treat it as `OPERATOR_SOL_LOW` until it clears.
+
+## Operator failing silently
+
+Starts with `OPERATOR_FAILING`.
+
+1. First check: `GET /status`'s `operator.lastError` code and the backend logs for the same tick's
+   full error text (the log line the code was derived from). `lastTickAt` is still advancing here,
+   which is what separates this from `OPERATOR_STALE`; every tick runs, every one errors.
+2. Work the error like "Chain stall mid-round" above once the cause is in hand: an RPC problem, an
+   Anchor error naming a bad account or balance, or a bug in the tick itself.
+
+## Epoch stuck without progress
+
+Starts with `EPOCH_NO_PROGRESS`.
+
+1. First check: `GET /epochs/current`'s `status` against `endsAt`, `registrationWindow` and
+   `vrfTimeout`. This fires only once an epoch has run well past the point every self-healing
+   timeout (void, rollover) should already have moved it on, so treat it as "the backstop itself
+   didn't fire" and check the operator logs for why: `OPERATOR_STALE`, a stuck RPC, or a bug in the
+   void/rollover path.
+
+## Drawn epoch sitting unpaid
+
+Starts with `DRAWN_UNPAID`.
+
+1. First check: `GET /epochs/current`'s `winner` and `status`. A human winner must never roll over
+   quietly; if `payout` keeps failing, check the backend logs for the send error before
+   `payout_timeout` passes and a real winner loses their prize to a rollover.
+
+## Yield budget running low
+
+Starts with `YIELD_BUDGET_LOW`.
+
+1. First check: `GET /status`'s `yieldBudget` against `yieldShortfall`. Top up the yield budget
+   account before Base yield stops crediting; see [`docs/ops/funds.md`](funds.md) for the funding
+   command.
+
+## Sparring player out of SOL
+
+Starts with `SPARRING_SOL_LOW`.
+
+1. First check: the sparring player's balance the same way as the operator's, via
+   `SPARRING_KEYPAIR`'s pubkey. Top up with a plain transfer, same as "Operator out of SOL" above;
+   a lone human otherwise has no one to play against.
+
+## Jackpot or principal short before close
+
+Starts with `JACKPOT_LOW_NEAR_CLOSE` or `PRINCIPAL_OUT_NEAR_CLOSE`.
+
+1. First check: `GET /status`'s `jackpotAmount` against `minJackpot`, and `principalOut`, all
+   against `epochEndsAt`. Both only fire inside the last hour before an epoch's registration
+   closes, so there is a real window to fund the jackpot vault or return outstanding principal
+   before `payout` or a withdrawal needs it.
+
+## Withdrawals outrunning vault liquidity
+
+Starts with `WITHDRAW_FORECAST_SHORT`.
+
+1. First check: `GET /status`'s `pendingWithdrawals` against `vaultLiquidity`. Return principal
+   before the next `payout` attempt, rather than after it fails
+   ([`docs/ops/funds.md`](funds.md#shutdown-and-the-emergency-exits)).
