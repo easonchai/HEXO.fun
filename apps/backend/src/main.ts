@@ -7,7 +7,10 @@ import { ConfigService } from "@nestjs/config";
 import helmet from "@fastify/helmet";
 
 import { AppModule } from "./app.module";
+import { runBootGuards } from "./boot-guard";
+import { ChainService } from "./chain/chain.service";
 import type { HexVaultEnv } from "./config/env";
+import { PrismaService } from "./prisma/prisma.service";
 
 async function bootstrap(): Promise<void> {
   // trustProxy: the API sits behind Traefik, so every request's remote
@@ -24,6 +27,21 @@ async function bootstrap(): Promise<void> {
   // what is, at runtime, the same fastify 5.x plugin API.
   await app.register(helmet as unknown as Parameters<typeof app.register>[0]);
   const config = app.get<ConfigService<HexVaultEnv, true>>(ConfigService);
+
+  // ticket 10: refuses to start against the wrong network, Pool or mint,
+  // and refuses a database mirroring some other pool's rows.
+  const chain = app.get(ChainService);
+  const prisma = app.get(PrismaService);
+  await runBootGuards({
+    connection: chain.connection,
+    program: chain.program,
+    poolAddress: chain.poolAddress(),
+    acceptedMint: config.get("ACCEPTED_MINT", { infer: true }),
+    cluster: config.get("CLUSTER", { infer: true }),
+    mirroredPoolAddresses: async () =>
+      (await prisma.pool.findMany({ select: { address: true } })).map((row) => row.address),
+  });
+
   // Comma-separated list, e.g. "https://app.vercel.app,http://localhost:5173".
   app.enableCors({
     origin: config
@@ -32,6 +50,9 @@ async function bootstrap(): Promise<void> {
       .map((origin) => origin.trim())
       .filter(Boolean),
   });
+  // ticket 10: onModuleDestroy hooks (OperatorService awaits its in-flight
+  // tick) only run on SIGTERM/SIGINT when this is enabled.
+  app.enableShutdownHooks();
   const port = Number(config.get("PORT", { infer: true }));
   await app.listen(port, "0.0.0.0");
 }

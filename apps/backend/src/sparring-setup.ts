@@ -30,7 +30,6 @@ import bs58 from "bs58";
 
 import { loadIdl } from "./chain/idl";
 import { playerAddress, poolAddress, principalVaultAddress } from "./chain/pda";
-import { DEFAULT_PROGRAM_ID } from "./config/env";
 
 /** 1000 hexUSDC. The mint has 6 decimals (spec.md §3.6, bootstrap.ts). */
 const DEPOSIT = 1_000_000_000n;
@@ -69,8 +68,8 @@ async function main(): Promise<void> {
   const mint = new PublicKey(
     process.env.ACCEPTED_MINT ?? requireEnv("HEXUSDC_MINT"),
   );
-  const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
-  const poolId = BigInt(process.env.POOL_ID ?? "1");
+  const programId = new PublicKey(requireEnv("PROGRAM_ID"));
+  const poolId = BigInt(requireEnv("POOL_ID"));
 
   // Step 1. An absent SPARRING_KEYPAIR means the wallet does not exist yet;
   // the generated secret is printed once and never written to disk here.

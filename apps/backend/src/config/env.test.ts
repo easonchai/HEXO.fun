@@ -20,6 +20,9 @@ const base = {
   RPC_URL: "http://127.0.0.1:8899",
   OPERATOR_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
   CORS_ORIGIN: "http://localhost:5173",
+  PROGRAM_ID: "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6",
+  POOL_ID: "1",
+  CLUSTER: "devnet",
 };
 
 describe("validateEnv", () => {
@@ -144,5 +147,37 @@ describe("validateEnv", () => {
     expect(() =>
       validateEnv({ ...base, ACCEPTED_MINT: MINT, ALERT_INDEXER_STALE_S: "1.5" }),
     ).toThrow(/ALERT_INDEXER_STALE_S/);
+  });
+
+  // ticket 10: a mainnet stack must never crank a devnet Pool because
+  // PROGRAM_ID or POOL_ID were silently defaulted.
+  it("fails the boot when PROGRAM_ID is missing", () => {
+    const { PROGRAM_ID, ...rest } = { ...base, ACCEPTED_MINT: MINT };
+    expect(() => validateEnv(rest)).toThrow(/PROGRAM_ID/);
+  });
+
+  it("fails the boot when POOL_ID is missing", () => {
+    const { POOL_ID, ...rest } = { ...base, ACCEPTED_MINT: MINT };
+    expect(() => validateEnv(rest)).toThrow(/POOL_ID/);
+  });
+
+  it("takes PROGRAM_ID and POOL_ID when given", () => {
+    const env = validateEnv({ ...base, ACCEPTED_MINT: MINT });
+    expect(env.PROGRAM_ID).toBe(base.PROGRAM_ID);
+    expect(env.POOL_ID).toBe("1");
+  });
+
+  it("fails the boot when CLUSTER is missing or not a known cluster", () => {
+    const { CLUSTER, ...rest } = { ...base, ACCEPTED_MINT: MINT };
+    expect(() => validateEnv(rest)).toThrow(/CLUSTER/);
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, CLUSTER: "mainnet" }),
+    ).toThrow(/CLUSTER/);
+  });
+
+  it("takes CLUSTER=devnet or mainnet-beta", () => {
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, CLUSTER: "mainnet-beta" }).CLUSTER,
+    ).toBe("mainnet-beta");
   });
 });

@@ -43,7 +43,6 @@ import {
   poolAddress,
   principalVaultAddress,
 } from "./chain/pda";
-import { DEFAULT_PROGRAM_ID } from "./config/env";
 
 /** spec.md §2.5. Pinned on the Pool; the localnet test-vrf build ignores it. */
 const DEVNET_VRF_NETWORK_STATE = new PublicKey(
@@ -312,8 +311,8 @@ async function main(): Promise<void> {
     admin: explicitAdmin ?? authority.publicKey,
     operator: params.operator ?? authority.publicKey,
   };
-  const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
-  const poolId = BigInt(process.env.POOL_ID ?? "1");
+  const programId = new PublicKey(requireEnv("PROGRAM_ID"));
+  const poolId = BigInt(requireEnv("POOL_ID"));
   log(
     // Host only: a keyed RPC URL carries its api key in the query string.
     `signer ${authority.publicKey.toBase58()} on ${new URL(connection.rpcEndpoint).host}`,

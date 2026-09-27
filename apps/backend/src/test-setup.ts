@@ -15,3 +15,8 @@ process.env.OPERATOR_KEYPAIR ??= bs58.encode(Keypair.generate().secretKey);
 process.env.ACCEPTED_MINT ??= Keypair.generate().publicKey.toBase58();
 process.env.CORS_ORIGIN ??= "http://localhost:5173";
 process.env.POOL_ID ??= "1";
+// PROGRAM_ID and CLUSTER have no default in validateEnv any more (ticket 10);
+// these two just satisfy that requirement for every suite that imports the
+// real ConfigModule. None of them run boot-guard.ts's genesis-hash check.
+process.env.PROGRAM_ID ??= "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6";
+process.env.CLUSTER ??= "devnet";

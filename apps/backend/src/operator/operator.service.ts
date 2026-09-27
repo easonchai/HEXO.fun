@@ -59,6 +59,9 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   private readonly testVrf: boolean;
   /** Single-flight: an overrunning tick skips the one that would overlap it. */
   private running = false;
+  /** The in-flight tick, if any (ticket 10): `onModuleDestroy` awaits this
+   *  so a restart does not cut a send in half. */
+  private currentTick: Promise<OperatorTickResult> | null = null;
   /** The self-rescheduling deadline sleep; cleared and replaced on every
    *  tick, on `wake()`, and on shutdown. */
   private deadlineTimer: NodeJS.Timeout | null = null;
@@ -118,11 +121,22 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    void this.runAndScheduleNext();
+    this.runAndScheduleNext().catch((cause) =>
+      this.logger.error("scheduling failed", cause as Error),
+    );
   }
 
+  /** Ticket 10: awaits the in-flight tick, so a deploy or restart does not
+   *  cut a send in half. Nest only calls this when `enableShutdownHooks()`
+   *  has been called (main.ts). */
   async onModuleDestroy(): Promise<void> {
     this.clearDeadlineTimer();
+    if (this.currentTick) {
+      await this.currentTick.catch(() => {
+        // runOnce() never rejects (see tick()'s comment); this is just in
+        // case a future change makes it, so shutdown still proceeds.
+      });
+    }
     if (this.randomnessWatch) {
       await this.chain.connection.removeAccountChangeListener(
         this.randomnessWatch.subscriptionId,
@@ -136,7 +150,11 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    *  degrades to a delay rather than a stall. */
   @Interval(SAFETY_INTERVAL_MS)
   async safetyTick(): Promise<void> {
-    await this.runAndScheduleNext();
+    try {
+      await this.runAndScheduleNext();
+    } catch (cause) {
+      this.logger.error("safety tick failed", cause as Error);
+    }
   }
 
   /** For a subscription (ticket 04) to call once it notices something the
@@ -144,7 +162,9 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    *  and looks now instead of waiting for it. */
   wake(): void {
     this.clearDeadlineTimer();
-    void this.runAndScheduleNext();
+    this.runAndScheduleNext().catch((cause) =>
+      this.logger.error("scheduling failed", cause as Error),
+    );
   }
 
   private clearDeadlineTimer(): void {
@@ -163,10 +183,11 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     // null: another caller already owns `running` and will reschedule once
     // it finishes, so scheduling here too would double the pending sleep.
     if (result === null) return;
-    this.deadlineTimer = setTimeout(
-      () => void this.runAndScheduleNext(),
-      result.waitMs,
-    );
+    this.deadlineTimer = setTimeout(() => {
+      this.runAndScheduleNext().catch((cause) =>
+        this.logger.error("scheduling failed", cause as Error),
+      );
+    }, result.waitMs);
   }
 
   /** Single-flight: an overrunning tick is skipped rather than queued behind
@@ -174,10 +195,13 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   async tick(): Promise<OperatorTickResult | null> {
     if (this.running) return null;
     this.running = true;
+    const inFlight = this.runOnce();
+    this.currentTick = inFlight;
     try {
-      return await this.runOnce();
+      return await inFlight;
     } finally {
       this.running = false;
+      if (this.currentTick === inFlight) this.currentTick = null;
     }
   }
 
@@ -214,7 +238,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
         // Lost a race with someone else's transaction (or our own, confirmed
         // after we read). The next tick reads the newer state and moves on.
         this.logger.debug(`skipped: ${error.message}`);
-        await this.writeState({ action: null }, null, waitMs);
+        await this.safeWriteState({ action: null }, null, waitMs);
         return { action: null, nextWakeAt, waitMs };
       }
       // Anchor and web3 hang the program logs off the cause; they name the
@@ -224,8 +248,27 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
         `tick failed: ${error.message}${logs ? `\n${logs.join("\n")}` : ""}`,
         error.stack,
       );
-      await this.writeState({ action: null }, error.message, waitMs);
+      await this.safeWriteState({ action: null }, error.message, waitMs);
       return { action: null, nextWakeAt, waitMs };
+    }
+  }
+
+  /**
+   * `writeState` wrapped so a Postgres blip on the catch path (a failing
+   * tick, of all times) cannot reject out of `runOnce` and crash the process
+   * (ticket 10). The success path's own `writeState` call is left as is:
+   * failing to record a *successful* tick's outcome is a real bug worth
+   * surfacing, not something to swallow silently.
+   */
+  private async safeWriteState(
+    outcome: Pick<TickOutcome, "action" | "progress" | "withdrawShortfall">,
+    error: string | null,
+    waitMs: number,
+  ): Promise<void> {
+    try {
+      await this.writeState(outcome, error, waitMs);
+    } catch (cause) {
+      this.logger.error("failed to record tick state", cause as Error);
     }
   }
 

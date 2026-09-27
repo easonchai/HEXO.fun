@@ -178,6 +178,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         RPC_TIMEOUT_MS: DEFAULT_RPC_TIMEOUT_MS,
         PROGRAM_ID: programId,
         POOL_ID: poolId.toString(),
+        CLUSTER: "devnet",
         OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
         ACCEPTED_MINT: mint.toBase58(),
         OPERATOR_SOL_WARN: 0.3,

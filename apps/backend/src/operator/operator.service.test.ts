@@ -177,6 +177,102 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
   });
 });
 
+// Ticket 10: a database blip during a failing tick must not itself crash the
+// process. No DB needed here — both the RPC read and the state write are
+// fakes, so this covers the catch-path write in isolation.
+describe("OperatorService catch-path state write", () => {
+  it("does not reject when recording the tick's own error also fails", async () => {
+    const fakeChain = {
+      program,
+      programId: PROGRAM_ID,
+      keypair: Keypair.generate(),
+      connection: {
+        getMultipleAccountsInfo: async () => {
+          throw new Error("boom: rpc down");
+        },
+      },
+      poolAddress: () => POOL,
+      recordChainTime: () => {},
+    };
+    const failingPrisma = {
+      operatorState: {
+        upsert: async () => {
+          throw new Error("db blip");
+        },
+      },
+    };
+    const indexer: IndexerQueries = {
+      playersToRegister: async () => [],
+      unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
+    };
+    const operator = new OperatorService(
+      fakeChain as unknown as ChainService,
+      failingPrisma as unknown as PrismaService,
+      indexer,
+      noopSparring,
+    );
+
+    const outcome = await operator.runOnce();
+    expect(outcome.action).toBeNull();
+  });
+});
+
+// Ticket 10: Nest only calls onModuleDestroy when enableShutdownHooks() is
+// on (main.ts); this covers that it actually waits for the tick in flight
+// rather than tearing down underneath it.
+describe("OperatorService.onModuleDestroy", () => {
+  it("awaits the in-flight tick before resolving", async () => {
+    let releaseTick: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseTick = resolve;
+    });
+    const fakeChain = {
+      program,
+      programId: PROGRAM_ID,
+      keypair: Keypair.generate(),
+      connection: {
+        getMultipleAccountsInfo: async () => {
+          await gate;
+          throw new Error("boom: rpc down");
+        },
+        removeAccountChangeListener: async () => {},
+      },
+      poolAddress: () => POOL,
+      recordChainTime: () => {},
+    };
+    const prisma = { operatorState: { upsert: async () => {} } };
+    const indexer: IndexerQueries = {
+      playersToRegister: async () => [],
+      unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
+    };
+    const operator = new OperatorService(
+      fakeChain as unknown as ChainService,
+      prisma as unknown as PrismaService,
+      indexer,
+      noopSparring,
+    );
+
+    const tickPromise = operator.tick();
+    let destroyed = false;
+    const destroyPromise = operator.onModuleDestroy().then(() => {
+      destroyed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(destroyed).toBe(false);
+
+    releaseTick();
+    await tickPromise;
+    await destroyPromise;
+    expect(destroyed).toBe(true);
+  });
+});
+
 // Step 6b's queue comes straight out of Postgres, so the predicate is the
 // query, not any JS the tick runs afterwards: a wrong `lt`/`lte` here either
 // pays a withdrawal a whole epoch early or never pays it at all.

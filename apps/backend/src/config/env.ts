@@ -11,12 +11,21 @@ const REQUIRED_KEYS = [
   "OPERATOR_KEYPAIR",
   "ACCEPTED_MINT",
   "CORS_ORIGIN",
+  "PROGRAM_ID",
+  "POOL_ID",
+  "CLUSTER",
 ] as const;
 
-// The program is mid-rewrite under this ID (see ticket 05). PROGRAM_ID isn't
-// in spec's "no default" column, so an unset value falls back to it rather
-// than failing boot.
+// Used only as an explicit, concrete program id in tests and scripts now
+// (beta-launch-fixes ticket 10): PROGRAM_ID itself has no default any more, a
+// mainnet stack must never be able to crank a devnet Pool by omission.
 export const DEFAULT_PROGRAM_ID = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6";
+
+/** The clusters `CLUSTER` may name (beta-launch-fixes ticket 10); checked
+ *  against the RPC's genesis hash at boot in boot-guard.ts. Same two values
+ *  as the web's VITE_CLUSTER (apps/web/src/cluster.ts). */
+export const CLUSTERS = ["devnet", "mainnet-beta"] as const;
+export type Cluster = (typeof CLUSTERS)[number];
 
 /** SOL the operator is warned about falling below, in `/status` and `/healthz`. */
 export const DEFAULT_OPERATOR_SOL_WARN = 0.5;
@@ -52,6 +61,9 @@ export interface HexVaultEnv {
   RPC_TIMEOUT_MS: number;
   PROGRAM_ID: string;
   POOL_ID: string;
+  /** Checked against the RPC's genesis hash at boot (boot-guard.ts), so a
+   *  wrong RPC_URL fails fast instead of cranking the wrong network. */
+  CLUSTER: Cluster;
   /** The hot crank key. The admin's key is never in this env. */
   OPERATOR_KEYPAIR: string;
   /** Pool admin, base58 pubkey. Read for CLI targeting only; absent means
@@ -187,6 +199,13 @@ function alertIndexerStaleSeconds(raw: unknown): number {
   return value;
 }
 
+/** `CLUSTER` must be one of `CLUSTERS`; there is no default, since a wrong
+ *  guess is worse than a boot failure. */
+function cluster(raw: unknown): Cluster {
+  if (CLUSTERS.includes(raw as Cluster)) return raw as Cluster;
+  throw new Error(`CLUSTER must be one of ${CLUSTERS.join(", ")}, got "${String(raw)}"`);
+}
+
 /** @nestjs/config `validate` hook: runs once at boot, on the raw process.env. */
 export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   if (!env.ACCEPTED_MINT && env.HEXUSDC_MINT) {
@@ -206,8 +225,9 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     DATABASE_URL: String(env.DATABASE_URL),
     RPC_URL: String(env.RPC_URL),
     RPC_TIMEOUT_MS: rpcTimeoutMs(env.RPC_TIMEOUT_MS),
-    PROGRAM_ID: String(env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID),
-    POOL_ID: String(env.POOL_ID ?? "1"),
+    PROGRAM_ID: String(env.PROGRAM_ID),
+    POOL_ID: String(env.POOL_ID),
+    CLUSTER: cluster(env.CLUSTER),
     OPERATOR_KEYPAIR: String(env.OPERATOR_KEYPAIR),
     ACCEPTED_MINT: String(acceptedMint),
     OPERATOR_SOL_WARN: solWarn(env.OPERATOR_SOL_WARN),
