@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   accessMessage,
+  canSubmitAccess,
   classifyRedeemError,
   gateDecision,
   inviteCodeFromSearch,
@@ -89,6 +90,23 @@ describe("gateDecision", () => {
     expect(
       gateDecision({ ...base, access: { allowed: true, reason: "invite code redeemed" } }),
     ).toBe("hidden");
+  });
+});
+
+describe("canSubmitAccess", () => {
+  // beta-launch-fixes ticket 17: the one-time terms/risk/privacy
+  // acknowledgement gates submit exactly like the backend gates redeem.
+  it("refuses without the acknowledgement, even with a code", () => {
+    expect(canSubmitAccess("ABC123XY", false)).toBe(false);
+  });
+
+  it("refuses without a code, even acknowledged", () => {
+    expect(canSubmitAccess("", true)).toBe(false);
+    expect(canSubmitAccess("   ", true)).toBe(false);
+  });
+
+  it("allows a normalized code plus the acknowledgement", () => {
+    expect(canSubmitAccess("  abc123xy ", true)).toBe(true);
   });
 });
 

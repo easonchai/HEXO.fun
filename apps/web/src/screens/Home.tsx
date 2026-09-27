@@ -206,11 +206,11 @@ export function Home({ now, currentEpoch, launchAt, onDeposit }: HomeProps) {
       ) : null}
 
       <div className="home-footer">
-        <span>NO-LOSS</span>
+        <span>PRIZE-LINKED SAVINGS</span>
         <Star />
         <span>DAILY PRIZE DRAWS</span>
         <Star />
-        <span>YOUR DEPOSIT IS NEVER TOUCHED</span>
+        <span>PRINCIPAL ISN'T STAKED IN THE GAME</span>
       </div>
     </div>
   );

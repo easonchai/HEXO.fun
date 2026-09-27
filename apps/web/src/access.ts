@@ -30,6 +30,14 @@ export function inviteCodeFromSearch(search: string): string {
   return new URLSearchParams(search).get("invite")?.trim() ?? "";
 }
 
+/** beta-launch-fixes ticket 17: whether the gate's SUBMIT can run at all —
+ *  a non-empty code and the one-time terms/risk/privacy acknowledgement.
+ *  Mirrors the backend's own refusal (`access.controller.ts`'s `redeem`),
+ *  so a wallet is never asked to sign a message the server will 400. */
+export function canSubmitAccess(code: string, acknowledged: boolean): boolean {
+  return normalizeInviteCode(code) !== "" && acknowledged;
+}
+
 /** What the gate overlay shows. "hidden" once access is confirmed allowed;
  *  "loading" while the wallet layer is still restoring a session, when
  *  nothing should paint at all. "retry" (ticket 16): `GET /access` has been

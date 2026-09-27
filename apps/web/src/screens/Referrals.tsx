@@ -35,10 +35,13 @@ export interface ReferralsScreenProps {
   onDeposit: () => void;
 }
 
-/** spec.md Copy, "Hero tooltip" (Figma tooltip `230:17717`). */
+/** spec.md Copy, "Hero tooltip" (Figma tooltip `230:17717`).
+ *  beta-launch-fixes ticket 17: the $HEXO win-share sentence is commented
+ *  out below, not deleted, until that mechanism exists in code. */
 const HERO_TIP = [
   "Share this code to build your team.",
-  "When friends sign up and deposit $50+, you unlock daily bonus draw tickets and a 2% win-share whenever they win.",
+  "When friends sign up and deposit $50+, you unlock daily bonus draw tickets.",
+  // "and a 2% win-share whenever they win.",
 ] as const;
 
 /**
@@ -47,11 +50,16 @@ const HERO_TIP = [
  * keeps its lettered list; the rest, answer 4's "•" tiers included, are
  * plain text with a literal blank line where Figma's text had one, rendered
  * by styles.css's `white-space: pre-line`.
+ *
+ * beta-launch-fixes ticket 17: the $HEXO win-share does not exist in code
+ * yet, so answer 1 drops that clause and answer 7 (entirely about it) is
+ * commented out below rather than deleted — both come back with one edit
+ * once the mechanism ships.
  */
 const REFERRAL_FAQ: readonly FaqItem[] = [
   {
     q: "How does the referral system work?",
-    a: "When friends join HEXO using your invite link, you form a team. For every qualified friend who deposits and saves, you earn daily bonus tickets entering the main daily prize draw, plus 2% Win-Share paid in $HEXO whenever they win.",
+    a: "When friends join HEXO using your invite link, you form a team. For every qualified friend who deposits and saves, you earn daily bonus tickets entering the main daily prize draw.",
   },
   {
     q: 'What makes a referral "qualified"?',
@@ -85,10 +93,11 @@ const REFERRAL_FAQ: readonly FaqItem[] = [
     q: "Do tickets won from the Hex Board count toward referral bonuses?",
     a: "No. Referral bonus tickets are calculated strictly from your friends' savings deposit tickets ($1 deposited = 1 ticket).",
   },
-  {
-    q: "What happens when someone in my team wins?",
-    a: "You receive 2% of their prize value in $HEXO, auto-staked. Their prize amount is not reduced.",
-  },
+  // $HEXO win-share, commented out until the mechanism exists in code:
+  // {
+  //   q: "What happens when someone in my team wins?",
+  //   a: "You receive 2% of their prize value in $HEXO, auto-staked. Their prize amount is not reduced.",
+  // },
   {
     q: "Why doesn't the referral bonus dilute the draw unfairly?",
     a: "Referral bonus tickets are funded from the overall ticket pool dynamics rather than directly drawn from other participants' shares.\n\nThe overall pot grows alongside the entries, meaning larger prizes for everyone rather than a thinner slice.",
@@ -177,8 +186,10 @@ function ReferralHero({
           we win.
         </h1>
         <p className="referral-hero-lead">
-          Boost your daily tickets together. Earn ongoing bonus tickets on their savings plus a
-          2% win-share—with zero deductions from their balance.
+          Boost your daily tickets together. Earn ongoing bonus tickets on their savings, with
+          zero deductions from their balance.
+          {/* $HEXO win-share, commented out until the mechanism exists in code:
+          " plus a 2% win-share" */}
         </p>
       </div>
 
@@ -187,10 +198,12 @@ function ReferralHero({
           <span className="referral-stat-value">5%</span>
           <span className="referral-stat-label">Max Daily Boost</span>
         </div>
+        {/* $HEXO win-share stat, commented out until the mechanism exists in code:
         <div className="referral-stat">
           <span className="referral-stat-value">2%</span>
           <span className="referral-stat-label">Team Win-Share</span>
         </div>
+        */}
       </div>
 
       <div className="referral-hero-invite">
