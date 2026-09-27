@@ -17,7 +17,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import { atomicShort } from "../activityRows.js";
-import { register, type TxSigner } from "../actions.js";
+import { awaitSendResult, register, type TxSigner } from "../actions.js";
 import { apiBaseUrl, fetchEpochs, type CurrentEpochDto, type EpochDto, type PlayerDto } from "../api.js";
 import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
@@ -78,12 +78,13 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
     setRegisterBusy(true);
     setRegisterNote(null);
     try {
-      const result = await register(
+      let result = await register(
         program,
         { publicKey: owner, sendTransaction },
         pool,
         BigInt(drawing.epochId),
       );
+      if (result.kind === "unknown") result = await awaitSendResult(program, result);
       if (result.kind !== "landed") {
         setRegisterNote(decodeSendFailure(result));
         return;

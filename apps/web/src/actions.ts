@@ -66,6 +66,16 @@ export type SendResult =
   /** The blockhash expired before the transaction confirmed: dropped, not
    *  failed. The UI's answer is "try again", not the decoded program error. */
   | { readonly kind: "expired" }
+  /**
+   * Ticket 15: the confirmation call itself failed — a dropped connection, a
+   * stuttering RPC — for a reason other than the blockhash expiring, so
+   * whether the transaction landed is genuinely unknown. Never "try again":
+   * retrying a deposit whose first attempt actually landed pays twice.
+   * `resolveUnknownSend` below polls the signature until the blockhash's
+   * `lastValidBlockHeight` passes, and only then resolves to `landed`,
+   * `expired` or `failed`.
+   */
+  | { readonly kind: "unknown"; readonly signature: string; readonly lastValidBlockHeight: number }
   /** `code` is the on-chain `Custom` program error number when the failure
    *  carries one (`playerErrors.ts`'s `decodeErrorCode` turns it into player
    *  copy), null otherwise. `message` is the raw diagnostic for `console.error`. */
@@ -118,37 +128,58 @@ function customErrorCode(err: unknown): number | null {
   return typeof code === "number" ? code : null;
 }
 
+/** `computeUnitLimit`'s result: either a sized (or fallback) compute-unit
+ *  limit, or ticket 15's "the simulation itself reported the instructions
+ *  would fail" — a program error caught before the wallet ever sees a
+ *  signature request. */
+type ComputeSizing =
+  | { kind: "units"; units: number }
+  | { kind: "programError"; err: unknown };
+
 /**
  * `setComputeUnitLimit`'s value: `unitsConsumed × COMPUTE_UNIT_MARGIN` from a
  * simulation on `connection` (ticket 08, research/notes/transactions_and_rpc.md
  * "Simulate every transaction to measure real compute-unit usage"), or the
- * per-instruction fallback when simulation throws — a stuttering public RPC,
- * or an instruction set the simulator rejects for an unrelated reason.
+ * per-instruction fallback when the simulation *call itself* throws — a
+ * stuttering public RPC, not a program error. A simulation that ran fine but
+ * reports `value.err` means these exact instructions would fail on chain
+ * (ticket 15's "a failed simulation surfaces its program error before the
+ * wallet is asked to sign"), so that case is reported back instead of
+ * silently falling back and sending anyway.
  */
 async function computeUnitLimit(
   connection: Connection,
   instructions: TransactionInstruction[],
   payer: PublicKey,
-): Promise<number> {
+): Promise<ComputeSizing> {
+  let simulated: { err: unknown; unitsConsumed?: number };
   try {
     const probe = new Transaction().add(
       ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT }),
       ...instructions,
     );
     probe.feePayer = payer;
-    const { value } = await connection.simulateTransaction(probe);
-    if (value.err || value.unitsConsumed === undefined) {
-      throw new Error(
-        value.err ? JSON.stringify(value.err) : "simulation reported no unitsConsumed",
-      );
-    }
-    return Math.ceil(value.unitsConsumed * COMPUTE_UNIT_MARGIN);
+    simulated = (await connection.simulateTransaction(probe)).value;
   } catch {
-    return Math.min(
-      MAX_COMPUTE_UNIT_LIMIT,
-      FALLBACK_COMPUTE_UNITS_PER_INSTRUCTION * instructions.length,
-    );
+    return {
+      kind: "units",
+      units: Math.min(
+        MAX_COMPUTE_UNIT_LIMIT,
+        FALLBACK_COMPUTE_UNITS_PER_INSTRUCTION * instructions.length,
+      ),
+    };
   }
+  if (simulated.err) return { kind: "programError", err: simulated.err };
+  if (simulated.unitsConsumed === undefined) {
+    return {
+      kind: "units",
+      units: Math.min(
+        MAX_COMPUTE_UNIT_LIMIT,
+        FALLBACK_COMPUTE_UNITS_PER_INSTRUCTION * instructions.length,
+      ),
+    };
+  }
+  return { kind: "units", units: Math.ceil(simulated.unitsConsumed * COMPUTE_UNIT_MARGIN) };
 }
 
 /**
@@ -170,14 +201,22 @@ export async function sendMany(
   const provider = providerOf(program);
   const connection = provider.connection;
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(CONFIRMED);
-  const computeUnits = await computeUnitLimit(connection, instructions, owner.publicKey);
+  const sizing = await computeUnitLimit(connection, instructions, owner.publicKey);
+  if (sizing.kind === "programError") {
+    // Ticket 15: caught before anything is signed or sent.
+    return {
+      kind: "failed",
+      code: customErrorCode(sizing.err),
+      message: JSON.stringify(sizing.err),
+    };
+  }
   const transaction = new Transaction({
     blockhash,
     lastValidBlockHeight,
     feePayer: owner.publicKey,
   }).add(
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }),
-    ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: sizing.units }),
     ...instructions,
   );
 
@@ -201,12 +240,62 @@ export async function sendMany(
     return { kind: "landed", signature };
   } catch (error) {
     if (error instanceof TransactionExpiredBlockheightExceededError) return { kind: "expired" };
-    return {
-      kind: "failed",
-      code: null,
-      message: error instanceof Error ? error.message : String(error),
-    };
+    // Ticket 15: the confirm call itself failed for some other reason (a
+    // dropped connection, a stuttering RPC) — whether the transaction landed
+    // is genuinely unknown, so this is not "failed" and never "try again".
+    console.error(error instanceof Error ? error.message : String(error));
+    return { kind: "unknown", signature, lastValidBlockHeight };
   }
+}
+
+/** `SendResult` once `"unknown"` has been resolved: never hangs a caller's
+ *  narrowing on a branch that can no longer occur. */
+export type ResolvedSendResult = Exclude<SendResult, { kind: "unknown" }>;
+
+/**
+ * Ticket 15: resolves a `SendResult` of kind `"unknown"` by polling the
+ * signature's status until it lands, fails on chain, or the blockhash's
+ * `lastValidBlockHeight` passes (expired) — the same three outcomes a clean
+ * confirmation would have produced. Callers keep money buttons disabled
+ * while this is in flight.
+ */
+export async function resolveUnknownSend(
+  connection: Connection,
+  signature: string,
+  lastValidBlockHeight: number,
+  pollMs = 2_000,
+): Promise<ResolvedSendResult> {
+  for (;;) {
+    const { value } = await connection.getSignatureStatuses([signature]);
+    const status = value[0];
+    if (status) {
+      if (status.err) {
+        return { kind: "failed", code: customErrorCode(status.err), message: JSON.stringify(status.err) };
+      }
+      if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") {
+        return { kind: "landed", signature };
+      }
+    }
+    const blockHeight = await connection.getBlockHeight(CONFIRMED);
+    if (blockHeight > lastValidBlockHeight) return { kind: "expired" };
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+/** Runs `result` through `resolveUnknownSend` when it is `"unknown"`;
+ *  otherwise passes it through unchanged. The one call site every send path
+ *  needs so an unknown outcome never reaches player-facing error copy as a
+ *  bare "failed". */
+export async function awaitSendResult(
+  program: HexVaultProgram,
+  result: SendResult,
+): Promise<ResolvedSendResult> {
+  if (result.kind !== "unknown") return result;
+  return resolveUnknownSend(
+    providerOf(program).connection,
+    result.signature,
+    result.lastValidBlockHeight,
+  );
 }
 
 /** Sends `builder`'s instructions through `sendMany` above. */

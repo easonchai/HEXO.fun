@@ -17,7 +17,7 @@ import {
 } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { sendMany, type SendResult } from "./actions.js";
+import { awaitSendResult, resolveUnknownSend, sendMany, type SendResult } from "./actions.js";
 import type { HexVaultProgram } from "./chain.js";
 
 const BLOCKHASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
@@ -34,10 +34,18 @@ interface FakeConnectionOptions {
   simulate?: () => Promise<{ value: { err: unknown; unitsConsumed?: number } }>;
   confirm?: () => Promise<{ value: { err: unknown } }>;
   sendRawTransaction?: () => Promise<string>;
+  signatureStatuses?: () => Promise<{ value: (SignatureStatus | null)[] }>;
+  blockHeight?: () => Promise<number>;
 }
 
-/** The four `Connection` methods `sendMany` calls, nothing else — see
- *  `SendProvider` in actions.ts for why a stub needs no more than this. */
+interface SignatureStatus {
+  err: unknown;
+  confirmationStatus: "processed" | "confirmed" | "finalized";
+}
+
+/** The `Connection` methods `sendMany` and `resolveUnknownSend` call, nothing
+ *  else — see `SendProvider` in actions.ts for why a stub needs no more than
+ *  this. */
 function fakeConnection(options: FakeConnectionOptions = {}): Connection {
   return {
     getLatestBlockhash: async () => ({
@@ -48,6 +56,8 @@ function fakeConnection(options: FakeConnectionOptions = {}): Connection {
       options.simulate ?? (async () => ({ value: { err: null, unitsConsumed: 100_000 } })),
     sendRawTransaction: options.sendRawTransaction ?? (async () => "fake-signature"),
     confirmTransaction: options.confirm ?? (async () => ({ value: { err: null } })),
+    getSignatureStatuses: options.signatureStatuses ?? (async () => ({ value: [null] })),
+    getBlockHeight: options.blockHeight ?? (async () => 0),
   } as unknown as Connection;
 }
 
@@ -226,5 +236,135 @@ describe("sendMany", () => {
     // Had this path returned the moment `sendTransaction` resolved, the
     // result would be `landed`; it is `expired` because confirm ran too.
     expect(result).toEqual<SendResult>({ kind: "expired" });
+  });
+
+  it("ticket 15: maps a confirm failure that is not an expiry to unknown, carrying the signature", async () => {
+    const signer = Keypair.generate();
+    const connection = fakeConnection({
+      confirm: async () => {
+        throw new Error("fetch failed");
+      },
+    });
+    const program = fakeProgram(connection, fakeWallet(signer, { tx: null }));
+
+    const result = await sendMany(
+      program,
+      { publicKey: signer.publicKey },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({
+      kind: "unknown",
+      signature: "fake-signature",
+      lastValidBlockHeight: LAST_VALID_BLOCK_HEIGHT,
+    });
+  });
+
+  it("ticket 15: a simulation that runs but reports a program error fails before anything signs", async () => {
+    const signer = Keypair.generate();
+    let signed = false;
+    const err = { InstructionError: [0, { Custom: 6003 }] };
+    const connection = fakeConnection({
+      simulate: async () => ({ value: { err, unitsConsumed: 100_000 } }),
+    });
+    const wallet = {
+      signTransaction: async <T,>(tx: T): Promise<T> => {
+        signed = true;
+        return tx;
+      },
+    };
+    const program = { provider: { connection, wallet } } as unknown as HexVaultProgram;
+
+    const result = await sendMany(
+      program,
+      { publicKey: signer.publicKey },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({ kind: "failed", code: 6003, message: JSON.stringify(err) });
+    expect(signed).toBe(false);
+  });
+});
+
+describe("resolveUnknownSend", () => {
+  it("resolves to landed once the signature confirms", async () => {
+    const connection = fakeConnection({
+      signatureStatuses: async () => ({
+        value: [{ err: null, confirmationStatus: "confirmed" }],
+      }),
+    });
+
+    const result = await resolveUnknownSend(connection, "sig", LAST_VALID_BLOCK_HEIGHT, 0);
+
+    expect(result).toEqual({ kind: "landed", signature: "sig" });
+  });
+
+  it("resolves to failed with the decoded code once the signature lands with an on-chain error", async () => {
+    const err = { InstructionError: [0, { Custom: 6012 }] };
+    const connection = fakeConnection({
+      signatureStatuses: async () => ({
+        value: [{ err, confirmationStatus: "confirmed" }],
+      }),
+    });
+
+    const result = await resolveUnknownSend(connection, "sig", LAST_VALID_BLOCK_HEIGHT, 0);
+
+    expect(result).toEqual({ kind: "failed", code: 6012, message: JSON.stringify(err) });
+  });
+
+  it("resolves to expired once the blockhash's lastValidBlockHeight passes with no status yet", async () => {
+    const connection = fakeConnection({
+      signatureStatuses: async () => ({ value: [null] }),
+      blockHeight: async () => LAST_VALID_BLOCK_HEIGHT + 1,
+    });
+
+    const result = await resolveUnknownSend(connection, "sig", LAST_VALID_BLOCK_HEIGHT, 0);
+
+    expect(result).toEqual({ kind: "expired" });
+  });
+
+  it("keeps polling while the signature is unseen and the blockhash is still valid", async () => {
+    let calls = 0;
+    const connection = fakeConnection({
+      signatureStatuses: async () => {
+        calls += 1;
+        return {
+          value: [calls < 3 ? null : { err: null, confirmationStatus: "confirmed" }],
+        };
+      },
+      blockHeight: async () => LAST_VALID_BLOCK_HEIGHT - 1,
+    });
+
+    const result = await resolveUnknownSend(connection, "sig", LAST_VALID_BLOCK_HEIGHT, 0);
+
+    expect(calls).toBe(3);
+    expect(result).toEqual({ kind: "landed", signature: "sig" });
+  });
+});
+
+describe("awaitSendResult", () => {
+  it("passes a landed/expired/failed result through unchanged", async () => {
+    const program = { provider: { connection: fakeConnection() } } as unknown as HexVaultProgram;
+    const landed: SendResult = { kind: "landed", signature: "sig" };
+
+    expect(await awaitSendResult(program, landed)).toEqual(landed);
+  });
+
+  it("resolves an unknown result through the same connection the send used", async () => {
+    const connection = fakeConnection({
+      signatureStatuses: async () => ({
+        value: [{ err: null, confirmationStatus: "finalized" }],
+      }),
+    });
+    const program = { provider: { connection } } as unknown as HexVaultProgram;
+    const unknown: SendResult = {
+      kind: "unknown",
+      signature: "sig",
+      lastValidBlockHeight: LAST_VALID_BLOCK_HEIGHT,
+    };
+
+    expect(await awaitSendResult(program, unknown)).toEqual({ kind: "landed", signature: "sig" });
   });
 });

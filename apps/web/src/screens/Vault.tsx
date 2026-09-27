@@ -25,6 +25,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import {
+  awaitSendResult,
   deposit,
   processWithdraw,
   requestWithdraw,
@@ -36,7 +37,7 @@ import { apiBaseUrl, fetchPlayer, type CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
 import { apyFromBaseRateBps } from "../buyTickets.js";
 import { InfoTip } from "../InfoTip.js";
-import type { HexVaultProgram } from "../chain.js";
+import { CLUSTER, type HexVaultProgram } from "../chain.js";
 import {
   addCapped,
   clampDecimals,
@@ -51,7 +52,7 @@ import {
   decodeSendFailure,
   NOTHING_PENDING_CODE,
 } from "../playerErrors.js";
-import type { PoolLike } from "../read.js";
+import { solRentWarning, type PoolLike } from "../read.js";
 import { SHUTDOWN_BANNER } from "../shutdown.js";
 import { useApiPoll } from "../useApiPoll.js";
 import { GlyphRow } from "./Home.js";
@@ -84,6 +85,13 @@ const yearlyYield = (amount: bigint, apy: number): bigint =>
  */
 const NOTHING_PENDING_NOTE = decodeErrorCode(NOTHING_PENDING_CODE);
 
+/** Ticket 15: shown while an `"unknown"` `SendResult` is being polled to a
+ *  real outcome, with a link so the depositor can check for themselves too. */
+const explorerUrl = (signature: string): string =>
+  `https://explorer.solana.com/tx/${signature}${CLUSTER === "devnet" ? "?cluster=devnet" : ""}`;
+
+const CHECKING_NOTE = "Checking your transaction…";
+
 export type VaultMode = "deposit" | "withdraw";
 type Mode = VaultMode;
 
@@ -96,7 +104,12 @@ export interface VaultScreenProps {
   pool: PoolLike | null;
   principal: bigint;
   entries: bigint;
-  walletBalance: bigint;
+  /** Null when the chain read failed (ticket 15): a stuttering RPC must
+   *  never look like an empty wallet and block a deposit as over balance. */
+  walletBalance: bigint | null;
+  /** Connected wallet's own SOL, for the rent warning below; null while
+   *  unread or unavailable. */
+  solBalance: bigint | null;
   paused: boolean;
   /** ticket 11: irreversible. Withdraw goes one-step; everything else refuses. */
   shutdown: boolean;
@@ -107,6 +120,8 @@ export interface VaultScreenProps {
   pendingWithdraw: bigint;
   /** The epoch that pending amount was requested in, so the day it pays after. */
   pendingEpoch: bigint;
+  /** Ticket 16: `status.ts`'s `stale` — shows a "data delayed" chip. */
+  stale: boolean;
   /**
    * Which tab the widget opens on. The dashboard's two buttons are the only
    * way in, and they arrive with an intent already; App unmounts the screen on
@@ -128,12 +143,14 @@ export function Vault(props: VaultScreenProps) {
     principal,
     entries,
     walletBalance,
+    solBalance,
     paused,
     shutdown,
     currentEpoch,
     now,
     pendingWithdraw,
     pendingEpoch,
+    stale,
     initialMode,
     onConnect,
     onDone,
@@ -146,11 +163,18 @@ export function Vault(props: VaultScreenProps) {
   const [mode, setMode] = useState<Mode>(initialMode ?? "deposit");
   const [amountText, setAmountText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(
-    null,
-  );
+  const [note, setNote] = useState<
+    { tone: "ok" | "err"; text: string; href?: string } | null
+  >(null);
   /** Atomic amount of the deposit that just landed; null closes the modal. */
   const [confirmed, setConfirmed] = useState<bigint | null>(null);
+  /** Ticket 15: an app-side confirm step before an embedded wallet's send —
+   *  one click cannot move USDC. Null hides the step; unset entirely for a
+   *  wallet with no `sendTransaction` (nothing is sponsored, so the wallet's
+   *  own confirmation already covers this). */
+  const [pendingConfirm, setPendingConfirm] = useState<{ label: string; amountText: string } | null>(
+    null,
+  );
   /**
    * A `process_withdraw` has been sent and the read model has not caught up.
    * Keyed on the pending amount so the flag clears itself the moment the
@@ -163,9 +187,13 @@ export function Vault(props: VaultScreenProps) {
   /**
    * What the pills clamp to: wallet on deposit, Principal on withdraw.
    * `request_withdraw` only checks Principal now (ADR 0009), so Tickets
-   * spent in the game no longer hold any of it back.
+   * spent in the game no longer hold any of it back. Null only on deposit,
+   * when the wallet balance read failed (ticket 15) — the pills and the
+   * over-balance check both stand down rather than guess.
    */
   const cap = mode === "deposit" ? walletBalance : principal;
+  const balanceUnavailable = mode === "deposit" && walletBalance === null;
+  const rentWarning = solRentWarning(solBalance);
 
   const ownerBase58 = owner?.toBase58();
   const loadPlayerExtras = useCallback(
@@ -201,11 +229,22 @@ export function Vault(props: VaultScreenProps) {
   const addQuick = (units: bigint) =>
     setAmountText(fmt2(addCapped(amount ?? 0n, units * ONE, connected ? cap : null)));
 
-  const run = async (label: string, action: () => Promise<SendResult>) => {
+  const run = async (
+    label: string,
+    signerProgram: HexVaultProgram,
+    action: () => Promise<SendResult>,
+  ) => {
     setBusy(true);
     setNote(null);
     try {
-      const result = await action();
+      let result = await action();
+      if (result.kind === "unknown") {
+        // Ticket 15: the confirmation itself failed, not the transaction — a
+        // retry here could double-send. Money buttons (`busy`) stay disabled
+        // while this polls the signature to a real outcome.
+        setNote({ tone: "ok", text: CHECKING_NOTE, href: explorerUrl(result.signature) });
+        result = await awaitSendResult(signerProgram, result);
+      }
       if (result.kind !== "landed") {
         setNote({ tone: "err", text: decodeSendFailure(result) });
         return;
@@ -231,7 +270,10 @@ export function Vault(props: VaultScreenProps) {
     }
   };
 
-  const overCap = connected && amount !== null && amount > cap;
+  // `cap` is null only on deposit with an unavailable balance read (ticket
+  // 15): unknown is not "over balance", so this stands down rather than
+  // guess — `balanceUnavailable`'s own note carries the warning instead.
+  const overCap = connected && amount !== null && cap !== null && amount > cap;
   const apy = pool ? apyFromBaseRateBps(pool.baseRateBps) : null;
   const underMin =
     mode === "deposit" && pool !== null && amount !== null && amount < pool.minDeposit;
@@ -242,14 +284,14 @@ export function Vault(props: VaultScreenProps) {
     if (!connected || !amount) return;
     const signer: TxSigner = { publicKey: owner, sendTransaction };
     if (mode === "deposit") {
-      void run("Deposit", () => deposit(program, signer, pool, amount));
+      void run("Deposit", program, () => deposit(program, signer, pool, amount));
     } else if (shutdown) {
       // One transaction: request_withdraw + process_withdraw (ticket 11).
-      void run("Withdraw", () =>
+      void run("Withdraw", program, () =>
         shutdownWithdraw(program, signer, pool, amount, pendingWithdraw),
       );
     } else {
-      void run("Withdraw requested", () =>
+      void run("Withdraw requested", program, () =>
         requestWithdraw(program, signer, pool, amount),
       );
     }
@@ -261,7 +303,11 @@ export function Vault(props: VaultScreenProps) {
     setNote(null);
     setPayoutSent(pendingWithdraw);
     try {
-      const result = await processWithdraw(program, { publicKey: owner, sendTransaction }, pool);
+      let result = await processWithdraw(program, { publicKey: owner, sendTransaction }, pool);
+      if (result.kind === "unknown") {
+        setNote({ tone: "ok", text: CHECKING_NOTE, href: explorerUrl(result.signature) });
+        result = await awaitSendResult(program, result);
+      }
       if (result.kind === "landed") {
         setNote({ tone: "ok", text: "Payout sent." });
         onDone();
@@ -304,6 +350,11 @@ export function Vault(props: VaultScreenProps) {
 
   return (
     <div className="vault" data-testid="vault-screen">
+      {stale ? (
+        <span className="chip stale-chip" data-testid="data-delayed-chip">
+          Data delayed
+        </span>
+      ) : null}
       {/* Pre-dithered checkmark coin (scripts/dither-video.mjs). Without autoplay the poster stays. */}
       <video
         className="home-bg"
@@ -352,7 +403,9 @@ export function Vault(props: VaultScreenProps) {
               <span className="vault-amount-symbol">{SYMBOL}</span>
               <span className="vault-amount-available" data-testid="withdrawable-now">
                 {mode === "deposit"
-                  ? `Available ${fmt2(walletBalance)} ${SYMBOL}`
+                  ? walletBalance === null
+                    ? "Balance unavailable"
+                    : `Available ${fmt2(walletBalance)} ${SYMBOL}`
                   : `Withdrawable at day end ${fmt2(principal)} ${SYMBOL}`}
               </span>
             </label>
@@ -371,7 +424,10 @@ export function Vault(props: VaultScreenProps) {
               <button
                 type="button"
                 className="vault-pill"
-                onClick={() => setAmountText(fmt2(cap))}
+                disabled={cap === null}
+                onClick={() => {
+                  if (cap !== null) setAmountText(fmt2(cap));
+                }}
               >
                 MAX
               </button>
@@ -446,7 +502,23 @@ export function Vault(props: VaultScreenProps) {
               className="vault-cta"
               disabled={connected && !canSubmit}
               data-testid={`${mode}-submit`}
-              onClick={connected ? submit : onConnect}
+              onClick={
+                connected
+                  ? () => {
+                      // Ticket 15: an embedded wallet (Privy's sponsored
+                      // path, `sendTransaction` set) confirms in-app first;
+                      // an external wallet already confirms in its own UI.
+                      if (sendTransaction) {
+                        setPendingConfirm({
+                          label: mode === "deposit" ? "Deposit" : "Withdraw",
+                          amountText: fmt2(amount ?? 0n),
+                        });
+                      } else {
+                        submit();
+                      }
+                    }
+                  : onConnect
+              }
             >
               {ctaText}
             </button>
@@ -475,6 +547,16 @@ export function Vault(props: VaultScreenProps) {
                     : "Amount is more than your Principal."}
                 </span>
               ) : null}
+              {balanceUnavailable ? (
+                <span className="vault-note" data-testid="deposit-balance-unavailable">
+                  Balance unavailable right now. Try again in a moment.
+                </span>
+              ) : null}
+              {mode === "deposit" && rentWarning ? (
+                <span className="vault-note" data-testid="sol-rent-warning">
+                  {rentWarning}
+                </span>
+              ) : null}
               {mode === "deposit" && pool ? (
                 <span className="vault-note">
                   Minimum deposit {fmt2(pool.minDeposit)} {SYMBOL}.
@@ -483,6 +565,14 @@ export function Vault(props: VaultScreenProps) {
               {note ? (
                 <span className={`vault-note ${note.tone}`} data-testid="vault-note">
                   {note.text}
+                  {note.href ? (
+                    <>
+                      {" "}
+                      <a href={note.href} target="_blank" rel="noopener noreferrer">
+                        View on explorer
+                      </a>
+                    </>
+                  ) : null}
                 </span>
               ) : null}
             </div>
@@ -529,6 +619,67 @@ export function Vault(props: VaultScreenProps) {
           onPlay={onPlay}
         />
       ) : null}
+
+      {pendingConfirm ? (
+        <ConfirmSend
+          label={pendingConfirm.label}
+          amountText={pendingConfirm.amountText}
+          symbol={SYMBOL}
+          onCancel={() => setPendingConfirm(null)}
+          onConfirm={() => {
+            setPendingConfirm(null);
+            submit();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+interface ConfirmSendProps {
+  label: string;
+  amountText: string;
+  symbol: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+/** Ticket 15: names the action and amount before an embedded wallet's send
+ *  actually moves USDC. */
+function ConfirmSend({ label, amountText, symbol, onCancel, onConfirm }: ConfirmSendProps) {
+  return (
+    <div className="deposit-modal-backdrop" onClick={onCancel} data-testid="confirm-send-modal">
+      <section
+        className="deposit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-send-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="deposit-modal-head">
+          <span className="deposit-modal-brand">
+            <LogoCog size={18} />
+            CONFIRM
+          </span>
+          <button type="button" className="deposit-modal-close" aria-label="Cancel" onClick={onCancel}>
+            ×
+          </button>
+        </header>
+        <p className="deposit-modal-kicker" id="confirm-send-title">
+          {label.toUpperCase()}
+        </p>
+        <p className="deposit-modal-amount" data-testid="confirm-send-amount">
+          {amountText} {symbol}
+        </p>
+        <button
+          type="button"
+          className="vault-cta deposit-modal-play"
+          data-testid="confirm-send-confirm"
+          onClick={onConfirm}
+        >
+          Confirm {label}
+        </button>
+      </section>
     </div>
   );
 }

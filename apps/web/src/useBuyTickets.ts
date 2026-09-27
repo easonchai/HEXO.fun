@@ -6,7 +6,7 @@
 import { useCallback, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
-import { buyTickets, type TxSigner } from "./actions.js";
+import { awaitSendResult, buyTickets, type TxSigner } from "./actions.js";
 import { buyDisabledReason, drawValue, ticketsFromUsdc } from "./buyTickets.js";
 import type { HexVaultProgram } from "./chain.js";
 import { parseAtomic } from "./lib/money.js";
@@ -99,7 +99,8 @@ export function useBuyTickets(options: UseBuyTicketsOptions): BuyTicketsState {
     setError(null);
     void (async () => {
       try {
-        const result = await buyTickets(program, { publicKey: owner, sendTransaction }, pool, amount);
+        let result = await buyTickets(program, { publicKey: owner, sendTransaction }, pool, amount);
+        if (result.kind === "unknown") result = await awaitSendResult(program, result);
         if (result.kind !== "landed") {
           setError(decodeSendFailure(result));
           return;
