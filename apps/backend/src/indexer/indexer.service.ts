@@ -424,7 +424,32 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       };
     });
 
-    const bonuses = computeBonuses(inputs, pool.totalPrincipal, pool.bonusCapBps);
+    // beta-launch-fixes ticket 11: the pool-wide cap is shared across the
+    // whole epoch, so a referrer who first qualifies late in the day is
+    // scaled against the headroom earlier grants already used rather than
+    // the full cap recomputed fresh — which used to compute an amount the
+    // on-chain call then refused outright once summed with what earlier
+    // grants this epoch had already spent.
+    const recordedThisEpoch = await this.prisma.referralGrant.findMany({
+      where: { epochId },
+      select: { referrer: true, amount: true },
+    });
+    const alreadyGrantedThisEpoch = recordedThisEpoch.reduce(
+      (sum, grant) => sum + grant.amount,
+      0n,
+    );
+    const recordedReferrers = new Set(recordedThisEpoch.map((grant) => grant.referrer));
+    // Already-recorded referrers keep their frozen amount (see the
+    // `uncapped` comment below); only referrers with no row yet this epoch
+    // are candidates for a fresh computation against the headroom.
+    const newInputs = inputs.filter((input) => !recordedReferrers.has(input.referrer));
+
+    const bonuses = computeBonuses(
+      newInputs,
+      pool.totalPrincipal,
+      pool.bonusCapBps,
+      alreadyGrantedThisEpoch,
+    );
     if (bonuses.length > 0) {
       await this.prisma.$transaction(async (tx) => {
         // referral-page ticket 05: shares are written in the same
@@ -474,9 +499,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
+    // ticket 11: a deterministic order, so a batch built from this list is
+    // the same set on a retry regardless of Postgres's own row order.
     const pending = await this.prisma.referralGrant.findMany({
       where: { epochId, txSig: null },
       select: { referrer: true, amount: true },
+      orderBy: { referrer: "asc" },
     });
 
     // Re-clamp every already-recorded grant against the freshest Player

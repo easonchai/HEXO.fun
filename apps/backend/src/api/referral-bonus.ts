@@ -95,20 +95,28 @@ function preScaleBonus(input: ReferrerBonusInput): ReferrerBonus {
 /**
  * Every referrer's daily bonus (docs/plan/hexo-referrals ticket 08): each
  * one's own cap first, then a single pool-wide pro-rata scale-down (floored)
- * when the sum would exceed `totalPrincipal * capBps / 10_000`. A referrer
- * whose bonus comes out to 0, before or after scaling, is left out of the
- * result: `grant_tickets` refuses a zero amount.
+ * when the sum would exceed `totalPrincipal * capBps / 10_000` minus
+ * `alreadyGrantedThisEpoch` (beta-launch-fixes ticket 11): the pool-wide cap
+ * is shared across the whole epoch, not recomputed fresh on every call, so a
+ * referrer who first qualifies late in the day is scaled against whatever
+ * headroom the epoch's earlier grants left rather than the full cap, which
+ * used to let a late batch compute an amount the on-chain call then refused
+ * outright. A referrer whose bonus comes out to 0, before or after scaling,
+ * is left out of the result: `grant_tickets` refuses a zero amount.
  */
 export function computeBonuses(
   referrers: readonly ReferrerBonusInput[],
   totalPrincipal: bigint,
   capBps: number,
+  alreadyGrantedThisEpoch: bigint = 0n,
 ): ReferrerBonus[] {
   const preScaled = referrers.map(preScaleBonus).filter((bonus) => bonus.amount > 0n);
   if (preScaled.length === 0) return [];
 
   const sum = preScaled.reduce((total, bonus) => total + bonus.amount, 0n);
-  const cap = (totalPrincipal * BigInt(capBps)) / 10_000n;
+  const poolCap = (totalPrincipal * BigInt(capBps)) / 10_000n;
+  const headroom = poolCap - alreadyGrantedThisEpoch;
+  const cap = headroom > 0n ? headroom : 0n;
   if (sum <= cap) return preScaled;
 
   // Same cap/sum factor applied to `uncapped` as to `amount`, so a referrer

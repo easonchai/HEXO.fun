@@ -1568,5 +1568,75 @@ describe("referral bonus job (ticket 08)", () => {
     expect(shares.length).toBeGreaterThan(0);
     expect(shares.every((share) => share.amount === 0n)).toBe(true);
   });
+
+  // beta-launch-fixes ticket 11: the pool-wide cap is shared across the
+  // whole epoch (computeBonuses' own alreadyGrantedThisEpoch parameter,
+  // wired up here), so a referrer discovered on a later tick is scaled
+  // against the remaining headroom instead of the full cap recomputed
+  // fresh, which used to compute an amount the on-chain call then refused.
+  it("scales a later-qualifying referrer against the headroom an earlier grant already used", async () => {
+    await prisma.pool.update({
+      where: { address: chain.poolAddress().toBase58() },
+      data: { totalPrincipal: 3_000_000_000n, bonusCapBps: 500 }, // 5% of $3,000 = $150 pool cap
+    });
+    const other = Keypair.generate().publicKey.toBase58();
+    await prisma.player.createMany({
+      data: [referrerPlayer(REFERRER), referrerPlayer(other)],
+    });
+    for (let i = 0; i < 3; i++) {
+      await seedQualifiedReferral({ principal: 1_000_000_000n }); // $1,000 each, 3 -> 3% tier
+    }
+
+    // First tick: only REFERRER qualifies yet. Raw 3% of $3,000 = $90,
+    // well within the $150 pool cap.
+    const first = await indexer.referralGrantsDue(EPOCH_ID);
+    expect(first).toEqual([{ referrer: REFERRER, amount: 90_000_000n }]);
+
+    // Later the same epoch, `other` also qualifies with the same shape of
+    // referrals. Only $60 of the $150 pool cap is left ($150 - $90 already
+    // recorded for REFERRER), so `other`'s raw $90 is scaled down to fit.
+    for (let i = 0; i < 3; i++) {
+      await prisma.referral.create({
+        data: {
+          referee: Keypair.generate().publicKey.toBase58(),
+          referrer: other,
+          code: `LATE${i}`.padEnd(8, "0"),
+          boundAt: 0n,
+          aboveSince: WELL_PAST,
+          principal: 1_000_000_000n,
+        },
+      });
+    }
+    const second = await indexer.referralGrantsDue(EPOCH_ID);
+    expect(second).toEqual(
+      expect.arrayContaining([
+        { referrer: REFERRER, amount: 90_000_000n }, // unchanged: frozen once recorded
+        { referrer: other, amount: 60_000_000n }, // scaled to the remaining headroom
+      ]),
+    );
+    expect(second).toHaveLength(2);
+  });
+
+  // ticket 11: the pending-grants query has a deterministic order.
+  it("returns pending grants in a deterministic (referrer-ascending) order", async () => {
+    const referrers = ["c", "a", "b"].map(() => Keypair.generate().publicKey.toBase58());
+    await prisma.player.createMany({ data: referrers.map((owner) => referrerPlayer(owner)) });
+    for (const referrer of referrers) {
+      await prisma.referral.create({
+        data: {
+          referee: Keypair.generate().publicKey.toBase58(),
+          referrer,
+          code: referrer.slice(0, 8).padEnd(8, "0").toUpperCase(),
+          boundAt: 0n,
+          aboveSince: WELL_PAST,
+          principal: 100_000_000n,
+        },
+      });
+    }
+
+    const due = await indexer.referralGrantsDue(EPOCH_ID);
+    const sorted = [...due.map((d) => d.referrer)].sort();
+    expect(due.map((d) => d.referrer)).toEqual(sorted);
+  });
 });
 });
