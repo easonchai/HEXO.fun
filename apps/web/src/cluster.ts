@@ -31,3 +31,23 @@ export function clusterFrom(
 /** The faucet mints a test mint the operator owns. Mainnet has no such mint. */
 export const faucetEnabled = (cluster: Cluster): boolean =>
   cluster === "devnet";
+
+/**
+ * Ticket 14: each cluster's own genesis block hash, checked against the
+ * configured RPC at load so a `VITE_PUBLIC_RPC_URL` pointed at the wrong
+ * cluster is caught before anything signs against it. Fixed values (Solana
+ * cluster genesis hashes never change), so no import needed here either.
+ */
+const GENESIS_HASHES: Record<Cluster, string> = {
+  devnet: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "mainnet-beta": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+};
+
+/** True when `genesisHash` (from the RPC's `getGenesisHash`) is the one this
+ *  `cluster` is supposed to answer to. */
+export function genesisMatchesCluster(
+  genesisHash: string,
+  cluster: Cluster,
+): boolean {
+  return GENESIS_HASHES[cluster] === genesisHash;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { clusterFrom, faucetEnabled } from "./cluster.js";
+import { clusterFrom, faucetEnabled, genesisMatchesCluster } from "./cluster.js";
 
 describe("VITE_CLUSTER", () => {
   it("defaults to devnet when unset or blank", () => {
@@ -27,5 +27,28 @@ describe("VITE_CLUSTER", () => {
       false,
     );
     expect(faucetEnabled(clusterFrom({}))).toBe(true);
+  });
+});
+
+describe("genesisMatchesCluster", () => {
+  it("matches devnet's own genesis hash", () => {
+    expect(
+      genesisMatchesCluster("EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG", "devnet"),
+    ).toBe(true);
+  });
+
+  it("matches mainnet-beta's own genesis hash", () => {
+    expect(
+      genesisMatchesCluster("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d", "mainnet-beta"),
+    ).toBe(true);
+  });
+
+  it("refuses a devnet RPC on a mainnet build, and vice versa", () => {
+    expect(
+      genesisMatchesCluster("EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG", "mainnet-beta"),
+    ).toBe(false);
+    expect(
+      genesisMatchesCluster("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d", "devnet"),
+    ).toBe(false);
   });
 });

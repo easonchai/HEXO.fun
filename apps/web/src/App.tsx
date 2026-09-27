@@ -15,9 +15,9 @@ import { Leaderboard } from "./screens/Leaderboard.js";
 import { Referrals } from "./screens/Referrals.js";
 import { Vault, type VaultMode } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
-import { buyPosition, settlePosition } from "./actions.js";
+import { awaitSendResult, buyPosition, settlePosition } from "./actions.js";
 import { apiBaseUrl, fetchFeed, type RoundDto } from "./api.js";
-import { PROGRAM_ID, type HexVaultProgram } from "./chain.js";
+import { ACCEPTED_MINT, PROGRAM_ID, POOL_ID, poolAddress, type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
   covers,
@@ -36,7 +36,8 @@ import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { SHUTDOWN_BANNER, SHUTDOWN_REASON } from "./shutdown.js";
 import { SoundIcon } from "./SoundIcon.js";
 import { WalletMenu } from "./WalletMenu.js";
-import { poolFromDto, useWalletBalance } from "./read.js";
+import { poolFromDto, solRentWarning, useSolBalance, useWalletBalance } from "./read.js";
+import { useGenesisCheck } from "./useGenesisCheck.js";
 import { useChainClock } from "./useChainClock.js";
 import { useApiPoll } from "./useApiPoll.js";
 import { snapshot, useStatePoll } from "./useStatePoll.js";
@@ -144,7 +145,19 @@ export function App() {
   const ownerKey = publicKey?.toBase58();
   const statePoll = useStatePoll(apiBaseUrl(), ownerKey);
   const state = statePoll.data;
-  const pool = state ? poolFromDto(state.pool, state.priorityFeeMicroLamports) : null;
+  // Ticket 14: refuses to sign against any Pool or mint other than this
+  // build's own configuration. `/state` is unauthenticated input; a
+  // compromised or misconfigured backend could otherwise route a signature
+  // at an attacker's Pool. A mismatch (or a bad RPC genesis hash below)
+  // leaves `pool` null, which every money-action gate below already treats
+  // as "nothing to sign against yet".
+  const expectedPoolAddress = useMemo(() => poolAddress(POOL_ID), []);
+  const poolResult = state
+    ? poolFromDto(state.pool, state.priorityFeeMicroLamports, expectedPoolAddress, ACCEPTED_MINT)
+    : null;
+  const genesisMismatch = useGenesisCheck(connection);
+  const pool = poolResult?.ok && !genesisMismatch ? poolResult.pool : null;
+  const refusalReason = genesisMismatch ?? (poolResult && !poolResult.ok ? poolResult.reason : null);
   const player = state?.player ?? null;
   // The tracked Round: open, or the last one this session saw once it has
   // settled (see api.service.ts `getState`'s comment on `round`).
@@ -165,6 +178,9 @@ export function App() {
     publicKey ?? undefined,
     `${state ? snapshot(state) : ""}:${balanceNonce}`,
   );
+  // Ticket 15: rent for a first deposit or Position's account creation.
+  const solBalance = useSolBalance(connection, publicKey ?? undefined, balanceNonce);
+  const rentWarning = solRentWarning(solBalance);
   const status = useMemo(
     () => summarizeStatus(state?.status ?? null, Date.now()),
     [state?.status],
@@ -238,9 +254,12 @@ export function App() {
   // says, so it only goes on the button as a tooltip.
   const problems: string[] = [];
   if (shutdown) problems.push(SHUTDOWN_REASON);
-  if (!pool) problems.push("no pool found yet");
+  if (!pool) problems.push(refusalReason ?? "no pool found yet");
   if (spend > entries)
     problems.push("not enough Tickets — deposit to earn more");
+  // ticket 15: a Position opens the round's account, which needs rent; a
+  // wallet with only USDC (email login) fails there with no clear reason.
+  if (!position && rentWarning) problems.push(rentWarning);
   // ticket 11: `buy_position` refuses outright once shut down, ahead of the
   // ordinary round-state reasons below.
   const deployHint = shutdown
@@ -266,7 +285,7 @@ export function App() {
           (acc, tile) => acc | (1n << BigInt(tile - 1)),
           0n,
         );
-        const result = await buyPosition(
+        let result = await buyPosition(
           program,
           txSigner,
           pool,
@@ -274,6 +293,7 @@ export function App() {
           tileMask,
           stakeAmount,
         );
+        if (result.kind === "unknown") result = await awaitSendResult(program, result);
         if (result.kind !== "landed") {
           setDeployNote(decodeSendFailure(result));
           return false;
@@ -391,7 +411,8 @@ export function App() {
     setSettleBusy(true);
     try {
       sfx("land");
-      const result = await settlePosition(program, txSigner, pool, settleState.roundId);
+      let result = await settlePosition(program, txSigner, pool, settleState.roundId);
+      if (result.kind === "unknown") result = await awaitSendResult(program, result);
       if (result.kind !== "landed") {
         setDeployNote(decodeSendFailure(result));
         return;
@@ -464,7 +485,7 @@ export function App() {
                 Tickets: {fmt(entries)}
               </span>
               <span className="chip" data-testid="topbar-balance">
-                {SYMBOL}: {fmt(walletBalance)}
+                {SYMBOL}: {walletBalance === null ? "—" : fmt(walletBalance)}
               </span>
             </>
           ) : null}
@@ -486,7 +507,7 @@ export function App() {
             <WalletMenu
               address={signer.publicKey.toBase58()}
               tickets={fmt(entries)}
-              balance={fmt(walletBalance)}
+              balance={walletBalance === null ? "—" : fmt(walletBalance)}
               symbol={SYMBOL}
               addressCopied={addressCopied}
               onCopy={(address) => void copyAddress(address)}
@@ -520,6 +541,12 @@ export function App() {
         </div>
       ) : null}
 
+      {refusalReason ? (
+        <div className="screen-note err" data-testid="pool-refusal-banner">
+          {refusalReason}
+        </div>
+      ) : null}
+
       {shutdown ? (
         <div className="screen-note err" data-testid="shutdown-banner">
           {SHUTDOWN_BANNER}
@@ -542,6 +569,7 @@ export function App() {
             now={now}
             currentEpoch={state?.currentEpoch ?? null}
             player={player}
+            stale={status.stale}
             onDeposit={() => {
               setVaultMode("deposit");
               setTab("VAULT");
@@ -654,12 +682,14 @@ export function App() {
             principal={principal}
             entries={entries}
             walletBalance={walletBalance}
+            solBalance={solBalance}
             paused={pool?.paused ?? false}
             shutdown={shutdown}
             currentEpoch={state?.currentEpoch ?? null}
             now={now}
             pendingWithdraw={pendingWithdraw}
             pendingEpoch={pendingEpoch}
+            stale={status.stale}
             initialMode={vaultMode}
             onConnect={() => signer.connect()}
             onDone={statePoll.kick}

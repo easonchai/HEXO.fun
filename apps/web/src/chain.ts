@@ -167,6 +167,30 @@ export const PROGRAM_ID = programIdFrom(
 /** The single pool this build talks to; the demo runs pool 1. */
 export const POOL_ID = BigInt(trimmed(import.meta.env.VITE_POOL_ID) ?? "1");
 
+/**
+ * The accepted mint this build expects `/state`'s Pool to carry (ticket 14):
+ * a compromised or misconfigured backend could otherwise point a signature
+ * at an attacker's token. Unset in dev, where nothing pins it; a production
+ * build has no fallback, same shape as `programIdFrom` above.
+ */
+export function acceptedMintFrom(
+  raw: string | undefined,
+  isProd: boolean,
+): PublicKey | null {
+  if (raw) return new PublicKey(raw);
+  if (isProd) {
+    throw new Error(
+      "VITE_ACCEPTED_MINT is required in a production build; refusing to skip the mint check.",
+    );
+  }
+  return null;
+}
+
+export const ACCEPTED_MINT = acceptedMintFrom(
+  trimmed(import.meta.env.VITE_ACCEPTED_MINT),
+  import.meta.env.PROD,
+);
+
 /** The cluster's public endpoint unless overridden; .env.example pins the local validator. */
 export const RPC_URL =
   trimmed(import.meta.env.VITE_PUBLIC_RPC_URL) ?? clusterApiUrl(CLUSTER);
