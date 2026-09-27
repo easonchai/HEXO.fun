@@ -179,6 +179,11 @@ model InviteRedemption {
   wallet     String @id
   code       String
   redeemedAt BigInt
+  // beta-launch-fixes ticket 17: when the wallet acknowledged terms, risk and
+  // privacy before this redemption. Nullable so redemptions made before this
+  // column existed stay valid; every new redeem sets it (see
+  // access.controller.ts's `redeem`, which refuses one without it).
+  termsAcknowledgedAt BigInt?
 }
 
 // A depositor's own code (ADR 0014, docs/plan/referral-page ticket 01): one

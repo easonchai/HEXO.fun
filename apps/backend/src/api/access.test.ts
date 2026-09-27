@@ -160,7 +160,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       const signature = sign(wallet, accessMessage(address, body.codes[0]));
       await http
         .post("/access/redeem")
-        .send({ wallet: address, code: body.codes[0], signature })
+        .send({ wallet: address, code: body.codes[0], signature, acknowledged: true })
         .expect(201);
       expect(await prisma.referral.findUnique({ where: { referee: address } })).toMatchObject({
         referrer: owner,
@@ -211,8 +211,33 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       );
       await http
         .post("/access/redeem")
-        .send({ wallet: wallet.publicKey.toBase58(), code: "ZZZZ9999", signature })
+        .send({ wallet: wallet.publicKey.toBase58(), code: "ZZZZ9999", signature, acknowledged: true })
         .expect(404);
+    });
+
+    // beta-launch-fixes ticket 17: the invite gate's one-time terms/risk/privacy
+    // acknowledgement. Missing or falsy `acknowledged` refuses the redeem
+    // before any of the code or signature work.
+    it("400s a redeem missing the terms acknowledgement", async () => {
+      const wallet = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: { code: "NOACK234", maxUses: 5, uses: 0, createdAt: 0n, ownerWallet: null },
+      });
+      const signature = sign(wallet, accessMessage(wallet.publicKey.toBase58(), "NOACK234"));
+      await http
+        .post("/access/redeem")
+        .send({ wallet: wallet.publicKey.toBase58(), code: "NOACK234", signature })
+        .expect(400);
+      await http
+        .post("/access/redeem")
+        .send({
+          wallet: wallet.publicKey.toBase58(),
+          code: "NOACK234",
+          signature,
+          acknowledged: false,
+        })
+        .expect(400);
+      expect(await prisma.inviteRedemption.count()).toBe(0);
     });
 
     it("redeems a valid code, is case-insensitive, and updates uses", async () => {
@@ -228,7 +253,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       );
       const { body } = await http
         .post("/access/redeem")
-        .send({ wallet: wallet.publicKey.toBase58(), code: "abcd2345", signature })
+        .send({ wallet: wallet.publicKey.toBase58(), code: "abcd2345", signature, acknowledged: true })
         .expect(201);
       expect(body).toEqual({ allowed: true, reason: "invite code redeemed" });
 
@@ -238,6 +263,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
         where: { wallet: wallet.publicKey.toBase58() },
       });
       expect(redemption?.code).toBe("ABCD2345");
+      expect(redemption?.termsAcknowledgedAt).not.toBeNull();
 
       const { body: access } = await http
         .get(`/access/${wallet.publicKey.toBase58()}`)
@@ -259,6 +285,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: wallet.publicKey.toBase58(),
           code: "AAAA2222",
           signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "AAAA2222")),
+          acknowledged: true,
         })
         .expect(201);
       await http
@@ -267,6 +294,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: wallet.publicKey.toBase58(),
           code: "BBBB3333",
           signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "BBBB3333")),
+          acknowledged: true,
         })
         .expect(409);
     });
@@ -282,6 +310,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: wallet.publicKey.toBase58(),
           code: "USEDUP22",
           signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "USEDUP22")),
+          acknowledged: true,
         })
         .expect(409);
     });
@@ -297,6 +326,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
             wallet: wallet.publicKey.toBase58(),
             code: "LASTONE1",
             signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "LASTONE1")),
+            acknowledged: true,
           }),
         ),
       );
@@ -327,6 +357,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: referee.publicKey.toBase58(),
           code: "OWNR2345",
           signature: sign(referee, accessMessage(referee.publicKey.toBase58(), "OWNR2345")),
+          acknowledged: true,
         })
         .expect(201);
 
@@ -350,6 +381,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: wallet.publicKey.toBase58(),
           code: "NOOWN123",
           signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "NOOWN123")),
+          acknowledged: true,
         })
         .expect(201);
       const referral = await prisma.referral.findUnique({
@@ -375,6 +407,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: owner.publicKey.toBase58(),
           code: "SELF2345",
           signature: sign(owner, accessMessage(owner.publicKey.toBase58(), "SELF2345")),
+          acknowledged: true,
         })
         .expect(201);
       const referral = await prisma.referral.findUnique({
@@ -406,6 +439,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
               existingDepositor,
               accessMessage(existingDepositor.publicKey.toBase58(), "PLYR2345"),
             ),
+            acknowledged: true,
           })
           .expect(201);
         const referral = await prisma.referral.findUnique({
@@ -446,6 +480,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           code: "INVT2345",
           referralCode: "REFC2345",
           signature,
+          acknowledged: true,
         })
         .expect(201);
 
@@ -484,6 +519,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           code: "INVT6789",
           referralCode: "SELFOWNR",
           signature,
+          acknowledged: true,
         })
         .expect(201);
 
@@ -527,7 +563,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       );
       await http
         .post("/access/redeem")
-        .send({ wallet: referee.publicKey.toBase58(), code: "APLY2345", signature })
+        .send({ wallet: referee.publicKey.toBase58(), code: "APLY2345", signature, acknowledged: true })
         .expect(201);
 
       const referral = await prisma.referral.findUnique({
@@ -571,6 +607,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: wallet.publicKey.toBase58(),
           code: "QUOTA001",
           signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "QUOTA001")),
+          acknowledged: true,
         })
         .expect(201);
 
@@ -598,6 +635,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: wallet.publicKey.toBase58(),
           code: "QUOTA050",
           signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), "QUOTA050")),
+          acknowledged: true,
         })
         .expect(201);
 
@@ -633,6 +671,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
             wallet: wallet.publicKey.toBase58(),
             code: `RACE000${index}`,
             signature: sign(wallet, accessMessage(wallet.publicKey.toBase58(), `RACE000${index}`)),
+            acknowledged: true,
           }),
         ),
       );
@@ -652,6 +691,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: first.publicKey.toBase58(),
           code: "CHAIN001",
           signature: sign(first, accessMessage(first.publicKey.toBase58(), "CHAIN001")),
+          acknowledged: true,
         })
         .expect(201);
 
@@ -667,6 +707,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
           wallet: second.publicKey.toBase58(),
           code: grantedCode,
           signature: sign(second, accessMessage(second.publicKey.toBase58(), grantedCode)),
+          acknowledged: true,
         })
         .expect(201);
 

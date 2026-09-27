@@ -50,7 +50,13 @@ interface RedeemBody {
 
 function parseRedeemBody(body: unknown): RedeemBody {
   const raw = body as
-    | { wallet?: unknown; code?: unknown; signature?: unknown; referralCode?: unknown }
+    | {
+        wallet?: unknown;
+        code?: unknown;
+        signature?: unknown;
+        referralCode?: unknown;
+        acknowledged?: unknown;
+      }
     | null
     | undefined;
   if (typeof raw?.wallet !== "string" || raw.wallet.length === 0) {
@@ -71,6 +77,14 @@ function parseRedeemBody(body: unknown): RedeemBody {
   }
   if (signature.length !== 64) {
     throw new BadRequestException("`signature` must be a 64-byte ed25519 signature.");
+  }
+  // beta-launch-fixes ticket 17: the invite gate's one-time terms, risk and
+  // privacy acknowledgement. `true` only — a missing or falsy value refuses
+  // the redeem outright, before any of the code or signature work below.
+  if (raw.acknowledged !== true) {
+    throw new BadRequestException(
+      "Acknowledge the terms, risk disclosure and privacy notice before redeeming.",
+    );
   }
   let referralCode: string | null = null;
   if (raw.referralCode !== undefined && raw.referralCode !== null) {
@@ -235,7 +249,12 @@ export class AccessController {
           throw new ConflictException("That invite code has no uses left.");
         }
         await tx.inviteRedemption.create({
-          data: { wallet: address, code, redeemedAt: nowSeconds() },
+          data: {
+            wallet: address,
+            code,
+            redeemedAt: nowSeconds(),
+            termsAcknowledgedAt: nowSeconds(),
+          },
         });
 
         const player = await tx.player.findUnique({ where: { owner: address } });
