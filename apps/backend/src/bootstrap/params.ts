@@ -10,6 +10,12 @@ export interface PoolParams {
   readonly admin?: PublicKey;
   /** Pool operator. Absent falls back to the signer. */
   readonly operator?: PublicKey;
+  /** Existing token account to use as the Treasury. Absent creates a fresh
+   * one owned by the signer (hot key). Mainnet requires this explicit. */
+  readonly treasury?: PublicKey;
+  /** Existing token account to use as the Buyback reserve. Absent creates a
+   * fresh one owned by the signer (hot key). Mainnet requires this explicit. */
+  readonly buybackReserve?: PublicKey;
   readonly epochSeconds: number;
   /** Unix seconds. Fixes the phase of the `anchor + k * epochSeconds` grid. */
   readonly epochAnchor: number;
@@ -94,7 +100,54 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
 };
 
 export const USAGE =
-  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--admin PUBKEY] [--operator PUBKEY]";
+  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--admin PUBKEY] [--operator PUBKEY] [--treasury PUBKEY] [--buyback-reserve PUBKEY]";
+
+/** mainnet-beta's genesis hash. Every other cluster (devnet, testnet,
+ * localnet) keeps today's hot-key convenience defaults. */
+export const MAINNET_GENESIS_HASH =
+  "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+
+export interface MainnetGuardInput {
+  readonly genesisHash: string;
+  /** Explicit only (the `--admin`/`ADMIN_ADDRESS` value), undefined when it
+   * would otherwise default to the operator hot key. */
+  readonly admin?: PublicKey | undefined;
+  /** The resolved operator, for the admin-equals-operator check. */
+  readonly operator: PublicKey;
+  /** Explicit only (`--treasury`), undefined when it would be created. */
+  readonly treasury?: PublicKey | undefined;
+  /** Explicit only (`--buyback-reserve`), undefined when it would be
+   * created. */
+  readonly buybackReserve?: PublicKey | undefined;
+  /** Explicit only (`ACCEPTED_MINT`/`HEXUSDC_MINT`), undefined when a fresh
+   * mint would be created. */
+  readonly acceptedMint?: string | undefined;
+}
+
+/**
+ * On mainnet's genesis hash, refuses to proceed unless Admin, Treasury,
+ * Buyback reserve and the accepted mint are all explicit, and refuses an
+ * Admin equal to the Operator key. A forgotten flag names itself instead of
+ * bootstrap silently handing protocol money to the operator hot key. Every
+ * other cluster is untouched.
+ */
+export function assertMainnetSafe(input: MainnetGuardInput): void {
+  if (input.genesisHash !== MAINNET_GENESIS_HASH) return;
+
+  const missing: string[] = [];
+  if (!input.admin) missing.push("--admin");
+  if (!input.treasury) missing.push("--treasury");
+  if (!input.buybackReserve) missing.push("--buyback-reserve");
+  if (!input.acceptedMint) missing.push("ACCEPTED_MINT");
+  if (missing.length > 0) {
+    throw new Error(
+      `mainnet requires ${missing.join(", ")}; refusing to bootstrap with a hot-key default`,
+    );
+  }
+  if (input.admin?.equals(input.operator)) {
+    throw new Error("mainnet refuses an Admin equal to the Operator key");
+  }
+}
 
 /** The accepted mint is 6 decimals on every cluster we run on (bootstrap.ts
  * rejects any other), so whole USDC scales by a constant. */
@@ -167,6 +220,8 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     "payout-timeout"?: string;
     admin?: string;
     operator?: string;
+    treasury?: string;
+    "buyback-reserve"?: string;
   };
   try {
     ({ values } = parseArgs({
@@ -181,6 +236,8 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
         "payout-timeout": { type: "string" },
         admin: { type: "string" },
         operator: { type: "string" },
+        treasury: { type: "string" },
+        "buyback-reserve": { type: "string" },
       },
       allowPositionals: false,
     }));
@@ -227,6 +284,14 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     ...(values.operator === undefined
       ? {}
       : { operator: pubkey("operator", values.operator) }),
+    ...(values.treasury === undefined
+      ? {}
+      : { treasury: pubkey("treasury", values.treasury) }),
+    ...(values["buyback-reserve"] === undefined
+      ? {}
+      : {
+          buybackReserve: pubkey("buyback-reserve", values["buyback-reserve"]),
+        }),
   };
 
   // create_pool requires close_buffer < round_seconds, so a too-fast demo
@@ -236,6 +301,12 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     throw new Error(
       `--round-seconds must be greater than the ${params.closeBuffer}s close buffer`,
     );
+  }
+  // Treasury and buyback_reserve share (mint, owner) when both are the ATA,
+  // so create_pool cannot tell them apart; catch the same-address case here
+  // rather than after both accounts have been checked to exist.
+  if (params.treasury && params.buybackReserve && params.treasury.equals(params.buybackReserve)) {
+    throw new Error("--treasury and --buyback-reserve must differ");
   }
   // Same rule, same reason: create_pool requires registration_window <
   // epoch_seconds, and failing here costs nothing.

@@ -3,11 +3,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_POOL_PARAMS,
+  MAINNET_GENESIS_HASH,
+  assertMainnetSafe,
   envInt,
   isoSeconds,
   nextSundayAnchor,
   parsePoolParams,
 } from "./params";
+
+const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 
 describe("parsePoolParams", () => {
   it("returns the spec §7 defaults with no flags", () => {
@@ -134,6 +138,95 @@ describe("parsePoolParams", () => {
     expect(() => parsePoolParams(["--epoch-anchor", "next sunday"])).toThrow(
       /ISO 8601/,
     );
+  });
+
+  it("takes explicit treasury and buyback reserve as base58 pubkeys", () => {
+    const treasury = Keypair.generate().publicKey;
+    const buybackReserve = Keypair.generate().publicKey;
+    const params = parsePoolParams([
+      "--treasury",
+      treasury.toBase58(),
+      "--buyback-reserve",
+      buybackReserve.toBase58(),
+    ]);
+    expect(params.treasury?.equals(treasury)).toBe(true);
+    expect(params.buybackReserve?.equals(buybackReserve)).toBe(true);
+  });
+
+  it("leaves treasury and buyback reserve unset when neither flag is given", () => {
+    expect(parsePoolParams([])).not.toHaveProperty("treasury");
+    expect(parsePoolParams([])).not.toHaveProperty("buybackReserve");
+  });
+
+  it("rejects a treasury equal to the buyback reserve", () => {
+    const same = Keypair.generate().publicKey.toBase58();
+    expect(() =>
+      parsePoolParams(["--treasury", same, "--buyback-reserve", same]),
+    ).toThrow(/--treasury and --buyback-reserve must differ/);
+  });
+});
+
+describe("assertMainnetSafe", () => {
+  const operator = Keypair.generate().publicKey;
+  const admin = Keypair.generate().publicKey;
+  const treasury = Keypair.generate().publicKey;
+  const buybackReserve = Keypair.generate().publicKey;
+  const acceptedMint = Keypair.generate().publicKey.toBase58();
+
+  it("proceeds on any non-mainnet genesis hash regardless of what is given", () => {
+    expect(() =>
+      assertMainnetSafe({ genesisHash: DEVNET_GENESIS_HASH, operator }),
+    ).not.toThrow();
+  });
+
+  it("refuses mainnet missing any of admin, treasury, buyback reserve or mint", () => {
+    expect(() =>
+      assertMainnetSafe({ genesisHash: MAINNET_GENESIS_HASH, operator }),
+    ).toThrow(/--admin.*--treasury.*--buyback-reserve.*ACCEPTED_MINT/s);
+    expect(() =>
+      assertMainnetSafe({
+        genesisHash: MAINNET_GENESIS_HASH,
+        operator,
+        admin,
+        treasury,
+        buybackReserve,
+      }),
+    ).toThrow(/ACCEPTED_MINT/);
+    expect(() =>
+      assertMainnetSafe({
+        genesisHash: MAINNET_GENESIS_HASH,
+        operator,
+        admin,
+        treasury,
+        acceptedMint,
+      }),
+    ).toThrow(/--buyback-reserve/);
+  });
+
+  it("refuses mainnet with Admin equal to Operator", () => {
+    expect(() =>
+      assertMainnetSafe({
+        genesisHash: MAINNET_GENESIS_HASH,
+        operator,
+        admin: operator,
+        treasury,
+        buybackReserve,
+        acceptedMint,
+      }),
+    ).toThrow(/refuses an Admin equal to the Operator key/);
+  });
+
+  it("proceeds on mainnet when everything is explicit and Admin differs from Operator", () => {
+    expect(() =>
+      assertMainnetSafe({
+        genesisHash: MAINNET_GENESIS_HASH,
+        operator,
+        admin,
+        treasury,
+        buybackReserve,
+        acceptedMint,
+      }),
+    ).not.toThrow();
   });
 });
 

@@ -17,6 +17,7 @@ import {
   TOKEN_PROGRAM_ID,
   createInitializeAccount3Instruction,
   createMint,
+  getAccount,
   getMint,
   getOrCreateAssociatedTokenAccount,
 } from "@solana/spl-token";
@@ -30,7 +31,11 @@ import {
 } from "@solana/web3.js";
 import bs58 from "bs58";
 
-import { parsePoolParams, type PoolParams } from "./bootstrap/params";
+import {
+  assertMainnetSafe,
+  parsePoolParams,
+  type PoolParams,
+} from "./bootstrap/params";
 import { loadIdl } from "./chain/idl";
 import {
   jackpotVaultAddress,
@@ -187,6 +192,34 @@ async function ensureSeededTokenAccount(
   return address;
 }
 
+/**
+ * Takes an explicit `--treasury`/`--buyback-reserve` address as is, rather
+ * than creating one: checked to exist and to hold the accepted mint, so a
+ * typo'd address fails here instead of as an opaque MintMismatch inside
+ * `create_pool`.
+ */
+async function ensureExplicitTokenAccount(
+  connection: Connection,
+  flag: string,
+  address: PublicKey,
+  mint: PublicKey,
+): Promise<PublicKey> {
+  const account = await getAccount(connection, address).catch(
+    (cause: unknown) => {
+      throw new Error(
+        `--${flag} ${address.toBase58()} is not a token account on this cluster`,
+        { cause },
+      );
+    },
+  );
+  if (!account.mint.equals(mint)) {
+    throw new Error(
+      `--${flag} ${address.toBase58()} holds mint ${account.mint.toBase58()}, expected ${mint.toBase58()}`,
+    );
+  }
+  return address;
+}
+
 async function createPool(
   program: Program<Idl>,
   payer: Keypair,
@@ -267,15 +300,16 @@ async function main(): Promise<void> {
   const authority = Keypair.fromSecretKey(
     bs58.decode(requireEnv("OPERATOR_KEYPAIR")),
   );
-  // The loaded key pays, mints and owns the token accounts. It is the
-  // operator unless --operator says otherwise, and the admin only when
-  // neither --admin nor ADMIN_ADDRESS names someone else.
+  // The loaded key pays, mints and owns the token accounts unless overridden.
+  // `explicitAdmin` stays undefined when it would default to the hot key, so
+  // the mainnet guard below can tell "given" from "defaulted".
+  const explicitAdmin =
+    params.admin ??
+    (process.env.ADMIN_ADDRESS
+      ? new PublicKey(process.env.ADMIN_ADDRESS)
+      : undefined);
   const roles = {
-    admin:
-      params.admin ??
-      (process.env.ADMIN_ADDRESS
-        ? new PublicKey(process.env.ADMIN_ADDRESS)
-        : authority.publicKey),
+    admin: explicitAdmin ?? authority.publicKey,
     operator: params.operator ?? authority.publicKey,
   };
   const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
@@ -287,6 +321,41 @@ async function main(): Promise<void> {
   log(
     `admin ${roles.admin.toBase58()}, operator ${roles.operator.toBase58()}`,
   );
+
+  // spec.md: mainnet refuses every hot-key default. Read before anything is
+  // created, so a forgotten flag costs nothing on mainnet.
+  const envMint = process.env.ACCEPTED_MINT ?? process.env.HEXUSDC_MINT;
+  const genesisHash = await step("reading the genesis hash", () =>
+    connection.getGenesisHash(),
+  );
+  assertMainnetSafe({
+    genesisHash,
+    admin: explicitAdmin,
+    operator: roles.operator,
+    treasury: params.treasury,
+    buybackReserve: params.buybackReserve,
+    acceptedMint: envMint,
+  });
+  if (!explicitAdmin) {
+    log(
+      `warning: no --admin/ADMIN_ADDRESS given; defaulting Admin to the operator hot key ${authority.publicKey.toBase58()}`,
+    );
+  }
+  if (!params.treasury) {
+    log(
+      "warning: no --treasury given; bootstrap will create one owned by the operator hot key",
+    );
+  }
+  if (!params.buybackReserve) {
+    log(
+      "warning: no --buyback-reserve given; bootstrap will create one owned by the operator hot key",
+    );
+  }
+  if (!envMint) {
+    log(
+      "warning: no ACCEPTED_MINT given; bootstrap will create a fresh mint controlled by the operator hot key",
+    );
+  }
 
   // The env-resolved program id wins over the checked-in IDL snapshot's
   // address, same as ChainService.
@@ -315,7 +384,6 @@ async function main(): Promise<void> {
 
   // An existing pool has already recorded which mint and which token accounts
   // it accepts, so those win over anything this run would otherwise derive.
-  const envMint = process.env.ACCEPTED_MINT ?? process.env.HEXUSDC_MINT;
   if (
     existing &&
     envMint &&
@@ -346,26 +414,43 @@ async function main(): Promise<void> {
 
   const treasury = existing
     ? existing.treasury
-    : await step("creating the treasury", () =>
-        ensureSeededTokenAccount(
-          connection,
-          authority,
-          mint,
-          "treasury",
-          pool,
-        ),
-      );
+    : params.treasury
+      ? await step("checking --treasury", () =>
+          ensureExplicitTokenAccount(connection, "treasury", params.treasury!, mint),
+        )
+      : await step("creating the treasury", () =>
+          ensureSeededTokenAccount(
+            connection,
+            authority,
+            mint,
+            "treasury",
+            pool,
+          ),
+        );
   const buybackReserve = existing
     ? existing.buybackReserve
-    : await step("creating the buyback reserve", () =>
-        ensureSeededTokenAccount(
-          connection,
-          authority,
-          mint,
-          "buyback",
-          pool,
-        ),
-      );
+    : params.buybackReserve
+      ? await step("checking --buyback-reserve", () =>
+          ensureExplicitTokenAccount(
+            connection,
+            "buyback-reserve",
+            params.buybackReserve!,
+            mint,
+          ),
+        )
+      : await step("creating the buyback reserve", () =>
+          ensureSeededTokenAccount(
+            connection,
+            authority,
+            mint,
+            "buyback",
+            pool,
+          ),
+        );
+
+  if (treasury.equals(buybackReserve)) {
+    throw new Error("treasury and buyback reserve must differ");
+  }
 
   if (existing) {
     log(`pool ${pool.toBase58()} already exists`);
