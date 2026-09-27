@@ -233,6 +233,9 @@ export interface StatusDto {
   /** Principal pulled out and not yet returned; null when the pool or the
    *  vault balance is not known yet. Not surfaced in this app's UI. */
   principalOut: string | null;
+  /** Ticket 05: the deposit-only launch week's `LAUNCH_AT`, ISO, while the
+   *  pool has no Epoch yet; null once an Epoch exists or none is configured. */
+  launchAt: string | null;
 }
 
 export interface PoolSummaryDto {
@@ -269,7 +272,9 @@ export interface PositionDto {
  */
 export interface StateDto {
   pool: PoolDto;
-  currentEpoch: CurrentEpochDto;
+  /** Ticket 05: null before the Pool has ever had an Epoch (deposit-only
+   *  launch week) — see `launchAt` for the countdown target that goes with it. */
+  currentEpoch: CurrentEpochDto | null;
   openRound: RoundSummaryDto | null;
   round: RoundDto | null;
   player: PlayerDto | null;
@@ -286,6 +291,10 @@ export interface StateDto {
    * ever sees it.
    */
   priorityFeeMicroLamports: number;
+  /** Ticket 05: the deposit-only launch week's `LAUNCH_AT`, ISO, present
+   *  only while `currentEpoch` is null; null once an Epoch exists or none is
+   *  configured. */
+  launchAt: string | null;
 }
 
 export const fetchPoolSummary = (

@@ -20,6 +20,7 @@ const status = (overrides: Partial<StatusDto> = {}): StatusDto => ({
   slot: 1,
   shutdown: false,
   principalOut: null,
+  launchAt: null,
   ...overrides,
 });
 

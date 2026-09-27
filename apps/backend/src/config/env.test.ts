@@ -180,4 +180,29 @@ describe("validateEnv", () => {
       validateEnv({ ...base, ACCEPTED_MINT: MINT, CLUSTER: "mainnet-beta" }).CLUSTER,
     ).toBe("mainnet-beta");
   });
+
+  // beta-launch-fixes ticket 05: an optional launch time gates the
+  // Operator's first begin_epoch (see tick.ts step 3).
+  it("leaves LAUNCH_AT out when unset", () => {
+    expect(validateEnv({ ...base, ACCEPTED_MINT: MINT }).LAUNCH_AT).toBeUndefined();
+  });
+
+  it("takes a blank LAUNCH_AT as unset", () => {
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, LAUNCH_AT: "  " }).LAUNCH_AT,
+    ).toBeUndefined();
+  });
+
+  it("takes LAUNCH_AT as a valid ISO timestamp", () => {
+    expect(
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, LAUNCH_AT: "2026-10-01T00:00:00Z" })
+        .LAUNCH_AT,
+    ).toBe("2026-10-01T00:00:00Z");
+  });
+
+  it("fails the boot on a malformed LAUNCH_AT", () => {
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, LAUNCH_AT: "not-a-date" }),
+    ).toThrow(/LAUNCH_AT/);
+  });
 });

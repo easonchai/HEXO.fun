@@ -56,7 +56,8 @@ export function snapshot(data: StateDto): string {
     position: data.position,
     round: data.round,
     openRound: data.openRound,
-    jackpot: data.currentEpoch.jackpotAmount,
+    // Ticket 05: null before the pool has ever had an Epoch.
+    jackpot: data.currentEpoch?.jackpotAmount ?? null,
     totalPrincipal: data.pool.totalPrincipal,
   });
 }

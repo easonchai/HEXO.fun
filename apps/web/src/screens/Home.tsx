@@ -12,12 +12,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiBaseUrl, fetchEpochs, type CurrentEpochDto, type EpochDto } from "../api.js";
 import { dhmsParts } from "../engine.js";
+import { launchCountdown, launchCountdownLabel } from "../launch.js";
 import { useApiPoll } from "../useApiPoll.js";
 
 export interface HomeProps {
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
   currentEpoch: CurrentEpochDto | null;
+  /** Ticket 05: `/state`'s `launchAt`, present only while `currentEpoch` is
+   *  null (the deposit-only launch week). */
+  launchAt: string | null;
   onDeposit: () => void;
 }
 
@@ -105,11 +109,15 @@ export const Star = () => (
   </svg>
 );
 
-export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
+export function Home({ now, currentEpoch, launchAt, onDeposit }: HomeProps) {
   const remaining =
     currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : null;
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
   const parts = remaining === null ? null : dhmsParts(remaining);
+  // Ticket 05: no Epoch yet (deposit-only launch week) counts down to
+  // LAUNCH_AT instead of an Epoch's endsAt.
+  const launching = currentEpoch === null;
+  const launchLabel = launching ? launchCountdownLabel(launchCountdown(launchAt, now)) : null;
 
   const loadEpochs = useCallback(
     (signal: AbortSignal) => fetchEpochs(apiBaseUrl(), EPOCH_LOOKBACK, signal),
@@ -153,7 +161,11 @@ export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
 
       <div className="home-clock">
         <div className="home-clock-label">DAILY PRIZE DRAW · NEXT DRAW IN</div>
-        {drawing || (remaining !== null && remaining <= 0n) ? (
+        {launching ? (
+          <div className="home-drawing" data-testid="home-launch-countdown">
+            {launchLabel}
+          </div>
+        ) : drawing || (remaining !== null && remaining <= 0n) ? (
           <div className="home-drawing" data-testid="home-drawing">
             DRAWING…
           </div>

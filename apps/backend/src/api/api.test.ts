@@ -753,6 +753,26 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     expect(body.shutdown).toBe(false);
   });
 
+  // Ticket 05: `/status` carries the same launch time `/state` does, null
+  // once the seeded Pool already has an Epoch (every other test in this file).
+  it("GET /status carries a null launchAt once the pool has an epoch", async () => {
+    const { body } = await http.get("/status").expect(200);
+    expect(body.launchAt).toBeNull();
+  });
+
+  it("GET /status carries the configured launch time before Epoch 1", async () => {
+    await prisma.pool.update({ where: { address: POOL_ADDRESS }, data: { currentEpochId: 0n } });
+    try {
+      const { body } = await http.get("/status").expect(200);
+      expect(body.launchAt).toBe(process.env.LAUNCH_AT);
+    } finally {
+      await prisma.pool.update({
+        where: { address: POOL_ADDRESS },
+        data: { currentEpochId: CURRENT_EPOCH },
+      });
+    }
+  });
+
   it("GET /healthz reports the operator's SOL and its own status, separate from /status", async () => {
     const { body } = await http.get("/healthz").expect(200);
     expect(body.ok).toBe(true);
@@ -944,6 +964,27 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
         expect(body.openRound).toBeNull();
       } finally {
         await prisma.round.update({ where: { id: 100n }, data: { status: 0 } });
+      }
+    });
+
+    // Ticket 05: the deposit-only launch week. currentEpochId 0 with no
+    // Epoch row is not the indexer falling behind (that only applies once an
+    // Epoch id exists to mirror); `/state` returns a null Epoch and the
+    // configured launch time instead of 404ing.
+    it("returns a null current epoch and the launch time before Epoch 1, instead of 404", async () => {
+      await prisma.pool.update({ where: { address: POOL_ADDRESS }, data: { currentEpochId: 0n } });
+      try {
+        const { body } = await http.get(`/state?owner=${ALICE}`).expect(200);
+        expect(body.currentEpoch).toBeNull();
+        expect(body.launchAt).toBe(process.env.LAUNCH_AT);
+        // Deposits still show the depositor's real Principal even with no Epoch.
+        expect(body.player).toMatchObject({ owner: ALICE, principal: "1000000" });
+        assertNoLargeNumbers(body, "/state (no epoch)");
+      } finally {
+        await prisma.pool.update({
+          where: { address: POOL_ADDRESS },
+          data: { currentEpochId: CURRENT_EPOCH },
+        });
       }
     });
 

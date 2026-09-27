@@ -27,6 +27,7 @@ import {
 } from "../api.js";
 import { CLUSTER, eventKey } from "../chain.js";
 import { dhmsParts } from "../engine.js";
+import { launchCountdown, launchCountdownLabel } from "../launch.js";
 import { formatAddress, formatMoney2 } from "../lib/money.js";
 import { useApiPoll } from "../useApiPoll.js";
 import { Star, wholeDollars } from "./Home.js";
@@ -74,6 +75,9 @@ export interface DashboardScreenProps {
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
   currentEpoch: CurrentEpochDto | null;
+  /** Ticket 05: `/state`'s `launchAt`, present only while `currentEpoch` is
+   *  null (the deposit-only launch week). */
+  launchAt: string | null;
   /** Null until the owner's Player is indexed, or no wallet is connected. */
   player: PlayerDto | null;
   /** Ticket 16: `status.ts`'s `stale` — the Read model or the operator looks
@@ -158,6 +162,7 @@ export function Dashboard(props: DashboardScreenProps) {
     entries,
     now,
     currentEpoch,
+    launchAt,
     player,
     stale,
     onDeposit,
@@ -230,6 +235,10 @@ export function Dashboard(props: DashboardScreenProps) {
     currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : null;
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
   const parts = remaining === null ? null : dhmsParts(remaining);
+  // Ticket 05: no Epoch yet (deposit-only launch week) counts down to
+  // LAUNCH_AT instead of an Epoch's endsAt.
+  const launching = currentEpoch === null;
+  const launchLabel = launching ? launchCountdownLabel(launchCountdown(launchAt, now)) : null;
 
   // Principal drops the moment a withdrawal is requested and the USDC lands a
   // day later, so the card says where the difference went.
@@ -300,7 +309,11 @@ export function Dashboard(props: DashboardScreenProps) {
             {currentEpoch ? wholeDollars(currentEpoch.jackpotAmount) : "$—"}
           </div>
           <div className="dash-clock-label">NEXT DRAW IN</div>
-          {drawing || (remaining !== null && remaining <= 0n) ? (
+          {launching ? (
+            <div className="dash-drawing" data-testid="dash-launch-countdown">
+              {launchLabel}
+            </div>
+          ) : drawing || (remaining !== null && remaining <= 0n) ? (
             <div className="dash-drawing" data-testid="dash-drawing">
               DRAWING…
             </div>

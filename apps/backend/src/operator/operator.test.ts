@@ -176,6 +176,9 @@ function context(over: Partial<TickContext> = {}): Recorder {
     indexerCursor: { ageSeconds: 0, updatedAt: NOW },
     indexerFreshThresholdSeconds: 60n,
     lastExpectedErrors: new Map(),
+    // Unconfigured by default (ticket 05): begin_epoch is never withheld in
+    // any test that is not about the launch window.
+    launchAt: null,
     fulfilled: async () => false,
     principalVaultBalance: async () => 0n,
     // Empty by default so step 6b stays quiet in every test that is not about it.
@@ -538,6 +541,59 @@ describe("runTick", () => {
     });
     expect(result.action).not.toBe("begin_epoch");
     expect(result.labels).toEqual(["register"]);
+  });
+
+  // --- 3 (ticket 05): LAUNCH_AT holds back only the Pool's very first
+  // begin_epoch (no Epoch yet), so deposits can open before the launch time
+  // with nothing else in the tick changing.
+
+  it("3. a future launch time withholds the first begin_epoch", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+      launchAt: NOW + 3_600n,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
+    // Further off than the safety interval, so the safety tick is still the
+    // soonest thing that could re-check, same as any other far-off deadline.
+    expect(result.nextWakeAt).toBe(NOW + SAFETY_INTERVAL_SECONDS);
+  });
+
+  it("3. sleeps straight to the launch time once it is closer than the safety interval", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+      launchAt: NOW + 10n,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.nextWakeAt).toBe(NOW + 10n);
+  });
+
+  it("3. a past launch time begins the first epoch", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+      launchAt: NOW - 1n,
+    });
+    expect(result.labels).toEqual(["begin_epoch"]);
+    expect(result.action).toBe("begin_epoch");
+  });
+
+  it("3. LAUNCH_AT does not hold back a later epoch once one already exists", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      currentEpoch: epoch({ endsAt: NOW }),
+      openRound: null,
+      launchAt: NOW + 3_600n,
+    });
+    expect(result.labels).toEqual(["begin_epoch"]);
   });
 
   // --- 3b. Referral bonuses (docs/plan/hexo-referrals ticket 08): grants

@@ -20,3 +20,7 @@ process.env.POOL_ID ??= "1";
 // real ConfigModule. None of them run boot-guard.ts's genesis-hash check.
 process.env.PROGRAM_ID ??= "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6";
 process.env.CLUSTER ??= "devnet";
+// Beta-launch-fixes ticket 05: a harmless default so any suite that flips a
+// seeded Pool's currentEpochId to 0 sees `/state`/`/status` carry a launch
+// time, without every other suite (whose Pool already has an Epoch) noticing.
+process.env.LAUNCH_AT ??= "2026-12-25T00:00:00.000Z";

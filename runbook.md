@@ -359,3 +359,20 @@
   Player's own `owner` on the retired key, so a Prize the House wins still pays into that key's USDC associated token account. Keep
   the old operator's ATA open after every rotation; close it and a House win is unpayable until `payout_timeout` lets the epoch roll
   over.
+
+  Launch week
+
+  The program already accepts deposits with no Epoch: a deposit before Epoch 1 freezes no weight and Epoch 1's accrual starts from
+  `current_epoch_start` regardless. Set `LAUNCH_AT` (an ISO timestamp, apps/backend/.env) to open a pool for deposits before the
+  first Draw: the Operator's tick step 3 (`begin_epoch`) waits for it, and nothing else in the tick changes. `GET /state` and
+  `GET /status` return a null current Epoch plus the configured `launchAt` the whole time, instead of 404ing; the web shows "first
+  draw in <countdown>" on Home, Vault and Dashboard, deposits and withdrawal requests stay open, and buying Tickets stays hidden
+  (Tickets bought before Epoch 1 begins would reset and are refused on chain: `buy_tickets` requires `current_epoch_id > 0`).
+
+  Bring a launch week up the same way as any other bootstrap: run `bootstrap` (creates the Pool with `currentEpochId` 0), set
+  `LAUNCH_AT` to whenever the first Draw should start, bring the backend up, and invite depositors. Once the chain clock passes
+  `LAUNCH_AT`, the next tick begins Epoch 1 normally and the countdown clears itself.
+
+  Base yield is credited per ended Epoch, so a launch week earns none — if the beta promises yield for that week, fund it as a
+  manual grant. Leave `LAUNCH_AT` unset (or past) for a pool that should begin its first Epoch immediately, which is today's
+  behaviour.

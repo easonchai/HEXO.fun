@@ -558,6 +558,7 @@ export function App() {
           <Home
             now={now}
             currentEpoch={state?.currentEpoch ?? null}
+            launchAt={state?.launchAt ?? null}
             onDeposit={() => setTab("DASHBOARD")}
           />
         ) : null}
@@ -568,6 +569,7 @@ export function App() {
             entries={entries}
             now={now}
             currentEpoch={state?.currentEpoch ?? null}
+            launchAt={state?.launchAt ?? null}
             player={player}
             stale={status.stale}
             onDeposit={() => {
@@ -686,6 +688,7 @@ export function App() {
             paused={pool?.paused ?? false}
             shutdown={shutdown}
             currentEpoch={state?.currentEpoch ?? null}
+            launchAt={state?.launchAt ?? null}
             now={now}
             pendingWithdraw={pendingWithdraw}
             pendingEpoch={pendingEpoch}

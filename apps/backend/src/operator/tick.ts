@@ -176,6 +176,10 @@ export interface TickContext {
   /** Ticket 12: how many times in a row each `action:target` key has hit an
    *  expected error. Empty before anything has repeated. */
   readonly lastExpectedErrors: ReadonlyMap<string, number>;
+  /** Beta-launch-fixes ticket 05: holds step 3 back from the Pool's very
+   *  first `begin_epoch` until this chain timestamp. Null runs step 3 as
+   *  before (unconfigured, or the Pool already has an Epoch). */
+  readonly launchAt: bigint | null;
   /** Has the oracle answered the request for this seed? */
   fulfilled(seed: Uint8Array): Promise<boolean>;
   /** The principal vault's balance, in atomic units. Read only when a payout
@@ -351,6 +355,12 @@ function nextWakeAt(ctx: TickContext, acted: boolean): bigint {
   if (previousEpoch?.status === EPOCH_STATUS.DRAWN) {
     candidates.push(previousEpoch.drawnAt + pool.payoutTimeout);
   }
+  // Ticket 05: wake right at the launch time instead of waiting out the
+  // safety interval, so the countdown's end is when begin_epoch actually
+  // fires. Dropped by the `>= now` filter below once launch has passed.
+  if (pool.currentEpochId === 0n && ctx.launchAt !== null) {
+    candidates.push(ctx.launchAt);
+  }
   if (
     pool.openRoundId === 0n &&
     lastRound &&
@@ -524,8 +534,13 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // the previous Epoch (if any) has actually finished, so no Epoch is ever
   // left two behind. Refused in shutdown, so the epoch loop stops here
   // once the pool is shut down (spec.md "Shutdown").
+  // Ticket 05: the Pool's very first begin_epoch (no Epoch yet) waits for
+  // LAUNCH_AT, if configured, so deposits can open days before the first
+  // Draw without an Epoch existing to reset a bought Ticket. Every later
+  // begin_epoch (currentEpoch already exists) is unaffected.
+  const launchReady = ctx.launchAt === null || now >= ctx.launchAt;
   const epochEnded =
-    pool.currentEpochId === 0n ||
+    (pool.currentEpochId === 0n && launchReady) ||
     (currentEpoch !== null && now >= currentEpoch.endsAt);
   const previousDone =
     previousEpoch === null ||

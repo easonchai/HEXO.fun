@@ -104,6 +104,12 @@ export interface HexVaultEnv {
   /** Shared secret for `POST /access/invites`, sent as `x-admin-key`. Absent
    *  switches the route off (404). At least 32 characters when set. */
   INVITE_ADMIN_KEY?: string;
+  /** Beta-launch-fixes ticket 05: an ISO timestamp holding back the
+   *  Operator's first `begin_epoch` while the Pool has no Epoch yet, so
+   *  deposits can open days before the first Draw. Absent behaves as before:
+   *  `begin_epoch` fires on the first tick. Reported on `/state` and
+   *  `/status` so the web can render a countdown. */
+  LAUNCH_AT?: string;
 }
 
 /**
@@ -207,6 +213,22 @@ function alertIndexerStaleSeconds(raw: unknown): number {
   return value;
 }
 
+/**
+ * Ticket 05: unset or empty takes no launch time (today's behaviour).
+ * Anything else must parse as an ISO timestamp, so a typo fails the boot
+ * instead of the operator silently never gating `begin_epoch`.
+ */
+function launchAt(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return undefined;
+  }
+  const value = String(raw);
+  if (Number.isNaN(Date.parse(value))) {
+    throw new Error(`LAUNCH_AT must be an ISO timestamp, got "${value}"`);
+  }
+  return value;
+}
+
 /** `CLUSTER` must be one of `CLUSTERS`; there is no default, since a wrong
  *  guess is worse than a boot failure. */
 function cluster(raw: unknown): Cluster {
@@ -243,6 +265,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   if (env.INVITE_ADMIN_KEY && String(env.INVITE_ADMIN_KEY).length < 32) {
     throw new Error("INVITE_ADMIN_KEY must be at least 32 characters (try `openssl rand -hex 32`)");
   }
+  const launchAtValue = launchAt(env.LAUNCH_AT);
   return {
     DATABASE_URL: String(env.DATABASE_URL),
     RPC_URL: String(env.RPC_URL),
@@ -270,5 +293,6 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
       ? { SPARRING_KEYPAIR: String(env.SPARRING_KEYPAIR) }
       : {}),
     ...(env.INVITE_ADMIN_KEY ? { INVITE_ADMIN_KEY: String(env.INVITE_ADMIN_KEY) } : {}),
+    ...(launchAtValue !== undefined ? { LAUNCH_AT: launchAtValue } : {}),
   };
 }

@@ -37,6 +37,7 @@ import { apiBaseUrl, fetchPlayer, type CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
 import { apyFromBaseRateBps } from "../buyTickets.js";
 import { InfoTip } from "../InfoTip.js";
+import { launchCountdown, launchCountdownLabel } from "../launch.js";
 import { CLUSTER, type HexVaultProgram } from "../chain.js";
 import {
   addCapped,
@@ -114,6 +115,9 @@ export interface VaultScreenProps {
   /** ticket 11: irreversible. Withdraw goes one-step; everything else refuses. */
   shutdown: boolean;
   currentEpoch: CurrentEpochDto | null;
+  /** Ticket 05: `/state`'s `launchAt`, present only while `currentEpoch` is
+   *  null (the deposit-only launch week). */
+  launchAt: string | null;
   /** Chain clock seconds, for the buy-tickets draw-value preview. */
   now: bigint | null;
   /** Requested but unpaid Principal; 0 when nothing is pending. */
@@ -147,6 +151,7 @@ export function Vault(props: VaultScreenProps) {
     paused,
     shutdown,
     currentEpoch,
+    launchAt,
     now,
     pendingWithdraw,
     pendingEpoch,
@@ -348,11 +353,21 @@ export function Vault(props: VaultScreenProps) {
           ? "POOL PAUSED"
           : mode.toUpperCase();
 
+  // Ticket 05: no Epoch yet (deposit-only launch week) — deposits and
+  // withdrawal requests stay open; this just names when the first Draw is.
+  const launchLabel =
+    currentEpoch === null ? launchCountdownLabel(launchCountdown(launchAt, now)) : null;
+
   return (
     <div className="vault" data-testid="vault-screen">
       {stale ? (
         <span className="chip stale-chip" data-testid="data-delayed-chip">
           Data delayed
+        </span>
+      ) : null}
+      {launchLabel ? (
+        <span className="chip" data-testid="vault-launch-countdown">
+          {launchLabel}
         </span>
       ) : null}
       {/* Pre-dithered checkmark coin (scripts/dither-video.mjs). Without autoplay the poster stays. */}

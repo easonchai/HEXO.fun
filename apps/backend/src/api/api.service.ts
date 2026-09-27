@@ -247,12 +247,19 @@ export class ApiService {
   /** SOL below which `/status` flags the operator as running dry. */
   private readonly operatorSolWarn: number;
 
+  /** Beta-launch-fixes ticket 05: when configured, the ISO timestamp
+   *  `/state` and `/status` report so the web can render a launch countdown
+   *  while the Pool has no Epoch yet. Null when `LAUNCH_AT` is unset. */
+  private readonly launchAt: string | null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly chain: ChainService,
     config: ConfigService<HexVaultEnv, true>,
   ) {
     this.operatorSolWarn = config.get("OPERATOR_SOL_WARN", { infer: true });
+    const launchAt = config.get("LAUNCH_AT", { infer: true });
+    this.launchAt = typeof launchAt === "string" && launchAt.length > 0 ? launchAt : null;
   }
 
   async getPool() {
@@ -460,7 +467,11 @@ export class ApiService {
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
       );
-    if (epoch === null) {
+    // Ticket 05: `epoch === null` while `currentEpochId` is still 0 means the
+    // Pool has never had an Epoch yet (deposit-only launch week), not that
+    // the indexer is behind — that only applies once an Epoch id exists to
+    // mirror. The null branch below carries `launchAt` instead of 404ing.
+    if (epoch === null && pool.currentEpochId > 0n) {
       throw new NotFoundException(
         "The current epoch is not indexed yet. Try again in a few seconds.",
       );
@@ -483,7 +494,7 @@ export class ApiService {
     ];
 
     const [jackpotAmount, rpc, chainTime, balances, priorityFeeMicroLamports] = await Promise.all([
-      this.liveJackpot(epoch),
+      epoch === null ? Promise.resolve(0n) : this.liveJackpot(epoch),
       this.rpcHealth(),
       this.extrapolatedChainNow(),
       this.chainBalances(),
@@ -492,17 +503,30 @@ export class ApiService {
 
     // Same extrapolated instant for the response's chainTime and for the
     // Player's liveWeight, so the two never disagree by the clock's TTL.
-    const { weights, total } = weightsFrom(players, epoch, chainTime);
+    // Ticket 05: no Epoch yet means no Weight has ever started accruing, so
+    // every player's live and draw weight is 0 rather than undefined.
+    const { weights, total } =
+      epoch === null ? { weights: [], total: 0n } : weightsFrom(players, epoch, chainTime);
     const mine =
-      owner === undefined ? undefined : weights.find((entry) => entry.player.owner === owner);
+      owner === undefined
+        ? undefined
+        : (weights.find((entry) => entry.player.owner === owner) ??
+          (epoch === null
+            ? players
+                .filter((player) => player.owner === owner)
+                .map((player) => ({ player, liveWeight: 0n, drawWeight: 0n }))[0]
+            : undefined));
 
     return {
       pool,
-      currentEpoch: {
-        ...epoch,
-        jackpotAmount,
-        drawing: drawingProgressFrom(previousEpoch, players),
-      },
+      currentEpoch:
+        epoch === null
+          ? null
+          : {
+              ...epoch,
+              jackpotAmount,
+              drawing: drawingProgressFrom(previousEpoch, players),
+            },
       openRound: openRound === null ? null : summarizeRound(openRound),
       round,
       player: mine === undefined ? null : playerDto(mine, total),
@@ -514,6 +538,9 @@ export class ApiService {
        *  Untrusted by the time it reaches the browser: the web send helper
        *  caps and validates it before signing (ticket 08). */
       priorityFeeMicroLamports,
+      /** Ticket 05: the deposit-only launch week's countdown target; null
+       *  once an Epoch exists or `LAUNCH_AT` is unset. */
+      launchAt: epoch === null ? this.launchAt : null,
     };
   }
 
@@ -605,6 +632,9 @@ export class ApiService {
     return {
       ...statusFrom(operator, cursor, rpc, pool, balances, this.operatorSolWarn),
       ...(await this.yieldStatus(pool)),
+      // Ticket 05: null once the Pool has an Epoch, or when `LAUNCH_AT` is
+      // unset — the same rule `/state`'s `launchAt` follows.
+      launchAt: pool !== null && pool.currentEpochId > 0n ? null : this.launchAt,
     };
   }
 

@@ -100,6 +100,9 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   /** Ticket 07: how young the Indexer cursor must be for `close_registration`
    *  to trust it. */
   private readonly registrationIndexerFreshSeconds: bigint;
+  /** Ticket 05: holds step 3's very first `begin_epoch` back until this chain
+   *  timestamp; null when `LAUNCH_AT` is unset. */
+  private readonly launchAt: bigint | null;
   /** Logged once, the first tick that sees the pool shut down, so the
    *  epoch and registration loops stopping is announced instead of just
    *  going quiet (ops-and-envs ticket 08). Shutdown is irreversible, so
@@ -125,6 +128,11 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     this.registrationIndexerFreshSeconds = BigInt(
       config.get("REGISTRATION_INDEXER_FRESH_S", { infer: true }),
     );
+    const launchAtIso = config.get("LAUNCH_AT", { infer: true });
+    this.launchAt =
+      typeof launchAtIso === "string" && launchAtIso.length > 0
+        ? BigInt(Math.floor(Date.parse(launchAtIso) / 1000))
+        : null;
     // Which randomness account the program expects depends on how it was
     // compiled, and the IDL is the only thing that travels with the build.
     this.testVrf = chain.program.idl.instructions.some(
@@ -331,6 +339,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       indexerCursor: await this.indexerCursorInfo(),
       indexerFreshThresholdSeconds: this.registrationIndexerFreshSeconds,
       lastExpectedErrors: this.lastExpectedErrors,
+      launchAt: this.launchAt,
       fulfilled: (seed) => this.fulfilled(seed),
       principalVaultBalance: () => this.principalVaultBalance(),
       duePendingWithdrawals: (currentEpochId) =>
