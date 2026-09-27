@@ -920,9 +920,10 @@ function statusFrom(
     pendingWithdrawals: pool?.pendingWithdrawals ?? 0n,
     vaultLiquidity: balances.vaultLiquidity,
     withdrawShortfall: operator?.withdrawShortfall ?? 0n,
-    // Ticket 06: 0 until a tick has looked, same treatment as
+    // Ticket 06/07: 0/false until a tick has looked, same treatment as
     // `withdrawShortfall` above.
     withdrawSkippedCount: operator?.withdrawSkippedCount ?? 0,
+    registrationIndexerStale: operator?.registrationIndexerStale ?? false,
     operatorSol: balances.operatorSol,
     // Null, not false, when the balance is unknown: a failed read is not
     // evidence that the operator still has fees.

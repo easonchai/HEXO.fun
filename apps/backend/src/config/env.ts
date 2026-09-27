@@ -50,6 +50,11 @@ export const DEFAULT_ALERT_TICK_STALE_S = 300;
  *  cursor last advanced before it counts as stuck. */
 export const DEFAULT_ALERT_INDEXER_STALE_S = 600;
 
+/** Ticket 07: how young the Indexer cursor has to be for `close_registration`
+ *  to trust it. Tighter than `ALERT_INDEXER_STALE_S`, which is about paging
+ *  someone; this is about not losing a depositor's Draw and Base yield. */
+export const DEFAULT_REGISTRATION_INDEXER_FRESH_S = 60;
+
 export interface HexVaultEnv {
   DATABASE_URL: string;
   RPC_URL: string;
@@ -89,6 +94,9 @@ export interface HexVaultEnv {
   ALERT_TICK_STALE_S: number;
   /** `GET /alerts`' `INDEXER_STALE` threshold, in seconds. */
   ALERT_INDEXER_STALE_S: number;
+  /** Ticket 07: how young the Indexer cursor must be, in seconds, for
+   *  `close_registration` to trust it. */
+  REGISTRATION_INDEXER_FRESH_S: number;
   CORS_ORIGIN: string;
   PORT: string;
   /** Sparring player secret, base58. Absent switches the Sparring player off. */
@@ -206,6 +214,20 @@ function cluster(raw: unknown): Cluster {
   throw new Error(`CLUSTER must be one of ${CLUSTERS.join(", ")}, got "${String(raw)}"`);
 }
 
+/** Same shape as `alertTickStaleSeconds`. */
+function registrationIndexerFreshSeconds(raw: unknown): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_REGISTRATION_INDEXER_FRESH_S;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `REGISTRATION_INDEXER_FRESH_S must be a non-negative whole number of seconds, got "${String(raw)}"`,
+    );
+  }
+  return value;
+}
+
 /** @nestjs/config `validate` hook: runs once at boot, on the raw process.env. */
 export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   if (!env.ACCEPTED_MINT && env.HEXUSDC_MINT) {
@@ -237,6 +259,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     REFERRAL_QUALIFY_SECONDS: referralQualifySeconds(env.REFERRAL_QUALIFY_SECONDS),
     ALERT_TICK_STALE_S: alertTickStaleSeconds(env.ALERT_TICK_STALE_S),
     ALERT_INDEXER_STALE_S: alertIndexerStaleSeconds(env.ALERT_INDEXER_STALE_S),
+    REGISTRATION_INDEXER_FRESH_S: registrationIndexerFreshSeconds(env.REGISTRATION_INDEXER_FRESH_S),
     CORS_ORIGIN: String(env.CORS_ORIGIN),
     PORT: String(env.PORT ?? "8080"),
     // Spread rather than assigned: under `exactOptionalPropertyTypes` an

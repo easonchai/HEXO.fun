@@ -188,6 +188,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         REFERRAL_QUALIFY_SECONDS: 604_800,
         ALERT_TICK_STALE_S: 300,
         ALERT_INDEXER_STALE_S: 600,
+        REGISTRATION_INDEXER_FRESH_S: 60,
         CORS_ORIGIN: "http://localhost",
         PORT: "0",
       });
@@ -328,7 +329,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       // SAFETY: the Operator only ever calls `wake()` on the Sparring player,
       // and this test drives the crank itself rather than running one.
       const sparring = { wake: () => {} } as unknown as SparringService;
-      const operator = new OperatorService(chain, prisma, indexer, sparring);
+      const operator = new OperatorService(chain, prisma, indexer, sparring, config);
 
       let stopped = false;
       const crank = (async () => {

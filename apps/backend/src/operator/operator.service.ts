@@ -8,11 +8,13 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
 import { getAccount, TokenAccountNotFoundError } from "@solana/spl-token";
 import { PublicKey, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
+import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   clockUnixTimestamp,
@@ -83,6 +85,9 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   private closingRounds = new Map<bigint, number>();
   /** Ticket 06: withdrawal-cranking state across ticks (see `WithdrawState`). */
   private lastWithdrawState: WithdrawState | null = null;
+  /** Ticket 07: how young the Indexer cursor must be for `close_registration`
+   *  to trust it. */
+  private readonly registrationIndexerFreshSeconds: bigint;
   /** Logged once, the first tick that sees the pool shut down, so the
    *  epoch and registration loops stopping is announced instead of just
    *  going quiet (ops-and-envs ticket 08). Shutdown is irreversible, so
@@ -103,7 +108,11 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     @Inject(INDEXER_QUERIES) private readonly indexer: IndexerQueries,
     private readonly sparring: SparringService,
+    config: ConfigService<HexVaultEnv, true>,
   ) {
+    this.registrationIndexerFreshSeconds = BigInt(
+      config.get("REGISTRATION_INDEXER_FRESH_S", { infer: true }),
+    );
     // Which randomness account the program expects depends on how it was
     // compiled, and the IDL is the only thing that travels with the build.
     this.testVrf = chain.program.idl.instructions.some(
@@ -306,6 +315,8 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       ix: this.instructions,
       lastRegisterCheck: this.lastRegisterCheck,
       lastWithdrawState: this.lastWithdrawState,
+      indexerCursor: await this.indexerCursorInfo(),
+      indexerFreshThresholdSeconds: this.registrationIndexerFreshSeconds,
       fulfilled: (seed) => this.fulfilled(seed),
       principalVaultBalance: () => this.principalVaultBalance(),
       duePendingWithdrawals: (currentEpochId) =>
@@ -485,6 +496,20 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     return player?.owner ?? null;
   }
 
+  /** Ticket 07: the Indexer cursor's own staleness, straight off its row. */
+  private async indexerCursorInfo(): Promise<{
+    ageSeconds: number | null;
+    updatedAt: bigint | null;
+  }> {
+    const cursor = await this.prisma.cursor.findUnique({ where: { id: 1 } });
+    if (cursor?.updatedAt == null) return { ageSeconds: null, updatedAt: null };
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
+    return {
+      ageSeconds: Number(nowSeconds - cursor.updatedAt),
+      updatedAt: cursor.updatedAt,
+    };
+  }
+
   /**
    * The clock is read here, not at the start of the tick: `outcome` only
    * exists once `ctx.send` has resolved, so this timestamp reflects when the
@@ -496,7 +521,10 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    * and the web summary never have to reason about chain time (ticket 03).
    */
   private async writeState(
-    outcome: Pick<TickOutcome, "action" | "progress" | "withdrawShortfall" | "withdrawState">,
+    outcome: Pick<
+      TickOutcome,
+      "action" | "progress" | "withdrawShortfall" | "withdrawState" | "indexerStale"
+    >,
     error: string | null,
     waitMs: number,
   ): Promise<void> {
@@ -522,6 +550,9 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       ...(outcome.withdrawState === undefined
         ? {}
         : { withdrawSkippedCount: outcome.withdrawState.skipped.size }),
+      // Ticket 07: only ever true on the tick that withheld `close_registration`
+      // for it; the next tick that does not hit the same wait clears it.
+      ...(outcome.indexerStale === undefined ? {} : { registrationIndexerStale: outcome.indexerStale }),
     };
     await this.prisma.operatorState.upsert({
       where: { id: 1 },

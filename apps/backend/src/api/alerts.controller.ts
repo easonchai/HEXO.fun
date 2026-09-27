@@ -16,7 +16,8 @@ export type AlertCode =
   | "WITHDRAW_SHORTFALL"
   | "ROUND_VOIDED_RECENTLY"
   | "EPOCH_ROLLED_OVER_RECENTLY"
-  | "WITHDRAW_OWNERS_SKIPPED";
+  | "WITHDRAW_OWNERS_SKIPPED"
+  | "REGISTRATION_INDEXER_STALE";
 
 export interface Alert {
   code: AlertCode;
@@ -54,6 +55,8 @@ export interface AlertInputs {
   /** Ticket 06: OperatorState.withdrawSkippedCount, 0 for "never checked"
    *  and "none skipped" alike. */
   withdrawSkippedCount: number;
+  /** Ticket 07: OperatorState.registrationIndexerStale. */
+  registrationIndexerStale: boolean;
 }
 
 export interface AlertThresholds {
@@ -123,6 +126,12 @@ export function evaluateAlerts(inputs: AlertInputs, thresholds: AlertThresholds)
       message: `${inputs.withdrawSkippedCount} owner(s) skipped after repeated withdrawal failures this epoch.`,
     });
   }
+  if (inputs.registrationIndexerStale) {
+    alerts.push({
+      code: "REGISTRATION_INDEXER_STALE",
+      message: "close_registration is withheld: the indexer cursor is stale or behind the epoch's end.",
+    });
+  }
   return alerts;
 }
 
@@ -172,6 +181,7 @@ export class AlertsController {
         roundVoidedRecently: recent.roundVoidedRecently,
         epochRolledOverRecently: recent.epochRolledOverRecently,
         withdrawSkippedCount: status.withdrawSkippedCount,
+        registrationIndexerStale: status.registrationIndexerStale,
       },
       { tickStaleSeconds: this.tickStaleSeconds, indexerStaleSeconds: this.indexerStaleSeconds },
     );

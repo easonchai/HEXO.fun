@@ -16,6 +16,7 @@ const HEALTHY: AlertInputs = {
   roundVoidedRecently: false,
   epochRolledOverRecently: false,
   withdrawSkippedCount: 0,
+  registrationIndexerStale: false,
 };
 
 describe("evaluateAlerts", () => {
@@ -103,6 +104,12 @@ describe("evaluateAlerts", () => {
     expect(evaluateAlerts({ ...HEALTHY, withdrawSkippedCount: 0 }, THRESHOLDS)).toEqual([]);
   });
 
+  it("REGISTRATION_INDEXER_STALE fires while close_registration is withheld", () => {
+    expect(evaluateAlerts({ ...HEALTHY, registrationIndexerStale: true }, THRESHOLDS)).toEqual([
+      { code: "REGISTRATION_INDEXER_STALE", message: expect.any(String) },
+    ]);
+  });
+
   it("stacks every active condition at once", () => {
     const codes = evaluateAlerts(
       {
@@ -116,6 +123,7 @@ describe("evaluateAlerts", () => {
         roundVoidedRecently: true,
         epochRolledOverRecently: true,
         withdrawSkippedCount: 1,
+        registrationIndexerStale: true,
       },
       THRESHOLDS,
     ).map((alert) => alert.code);
@@ -129,6 +137,7 @@ describe("evaluateAlerts", () => {
       "ROUND_VOIDED_RECENTLY",
       "EPOCH_ROLLED_OVER_RECENTLY",
       "WITHDRAW_OWNERS_SKIPPED",
+      "REGISTRATION_INDEXER_STALE",
     ]);
   });
 });

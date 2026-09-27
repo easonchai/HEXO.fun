@@ -167,6 +167,10 @@ function context(over: Partial<TickContext> = {}): Recorder {
     ix: instructions,
     lastRegisterCheck: null,
     lastWithdrawState: null,
+    // Fresh and caught up by default, so step 4's close_registration gate
+    // stays quiet in every test that is not about it.
+    indexerCursor: { ageSeconds: 0, updatedAt: NOW },
+    indexerFreshThresholdSeconds: 60n,
     fulfilled: async () => false,
     principalVaultBalance: async () => 0n,
     // Empty by default so step 6b stays quiet in every test that is not about it.
@@ -666,6 +670,44 @@ describe("runTick", () => {
       pool: pool({ registrationWindow: 300n }),
       previousEpoch: registering({ endsAt: NOW - 300n }),
       lastRegisterCheck: { epochId: 1n, empty: true },
+    });
+    expect(result.labels).toEqual(["close_registration"]);
+  });
+
+  // --- 4. (ticket 07) close_registration is withheld on a stale Read model.
+
+  it("4. (ticket 07) withholds close_registration on a stale cursor and emits the wait reason", async () => {
+    const { ctx, sent, warned } = context({
+      previousEpoch: registering(),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+      // Fresh in age, but never actually synced past the epoch's own end.
+      indexerCursor: { ageSeconds: 5, updatedAt: NOW - 200n },
+    });
+    const outcome = await runTick(ctx);
+    expect(sent).toHaveLength(0);
+    expect(outcome.action).toBeNull();
+    expect(outcome.indexerStale).toBe(true);
+    expect(warned).toHaveLength(1);
+  });
+
+  it("4. (ticket 07) a cursor younger than the threshold but behind the epoch's end still withholds", async () => {
+    const { ctx, sent } = context({
+      previousEpoch: registering({ endsAt: NOW - 100n }),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+      indexerFreshThresholdSeconds: 60n,
+      // Age is well under the 60 s threshold...
+      indexerCursor: { ageSeconds: 10, updatedAt: NOW - 150n },
+    });
+    const outcome = await runTick(ctx);
+    expect(sent).toHaveLength(0);
+    expect(outcome.indexerStale).toBe(true);
+  });
+
+  it("4. (ticket 07) a fresh, caught-up cursor closes registration as today", async () => {
+    const result = await tickLabels({
+      previousEpoch: registering(),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+      indexerCursor: { ageSeconds: 1, updatedAt: NOW },
     });
     expect(result.labels).toEqual(["close_registration"]);
   });

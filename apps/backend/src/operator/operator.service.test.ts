@@ -23,11 +23,13 @@ import {
   SYSVAR_CLOCK_PUBKEY,
   type TransactionInstruction,
 } from "@solana/web3.js";
+import type { ConfigService } from "@nestjs/config";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import { epochAddress, poolAddress, roundAddress } from "../chain/pda";
+import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { CountingConnection } from "../test-utils/counting-connection";
 import { isDatabaseReachableSync } from "../test-utils/db-probe";
@@ -59,6 +61,11 @@ const bn = (value: bigint | number): BN => new BN(value.toString());
 /** A `SparringService` this suite never exercises: only `wake()` is called,
  *  and only to notice a `create_round`, which none of these fixtures send. */
 const noopSparring = { wake: () => {} } as unknown as SparringService;
+/** Every test here fabricates its own chain and DB reads, so the config
+ *  service only needs to answer the one key `OperatorService` asks it for. */
+const fakeConfig = {
+  get: () => 60,
+} as unknown as ConfigService<HexVaultEnv, true>;
 
 const pool = (overrides: object = {}) => ({
   poolId: bn(1),
@@ -147,6 +154,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
       prisma,
       indexer,
       noopSparring,
+      fakeConfig,
     );
 
     try {
@@ -343,6 +351,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService.duePendingWithdrawals", () => {
         roundsToClose: async () => [],
       },
       noopSparring,
+      fakeConfig,
     );
 
     try {
@@ -430,6 +439,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService read budget", () => {
       prisma,
       indexer,
       noopSparring,
+      fakeConfig,
     );
 
     try {
@@ -509,6 +519,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
       prisma,
       indexer,
       noopSparring,
+      fakeConfig,
     );
 
     try {
@@ -606,6 +617,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService randomness subscription", () => 
       prisma,
       indexer,
       noopSparring,
+      fakeConfig,
     );
     return { prisma, connection, accounts, operator };
   }

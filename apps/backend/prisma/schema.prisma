@@ -276,6 +276,10 @@ model OperatorState {
    *  after too many consecutive failures. 0 when none have been, null before
    *  any tick has looked. */
   withdrawSkippedCount Int?
+  /** Ticket 07: true on a tick that withheld `close_registration` for a
+   *  stale Indexer cursor; false once a later tick closes normally. Null
+   *  before any tick has ever checked. */
+  registrationIndexerStale Boolean?
 }
 
 // beta-launch-fixes ticket 16: decoded send failures and error-boundary

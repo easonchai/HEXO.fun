@@ -144,6 +144,15 @@ export interface TickContext {
   readonly lastRegisterCheck: RegisterCheck | null;
   /** Ticket 06: null before any withdrawal has ever failed. */
   readonly lastWithdrawState: WithdrawState | null;
+  /** Ticket 07: the Indexer cursor's own staleness, straight off its row:
+   *  seconds since it last advanced (null before any sync), and the
+   *  wall-clock instant it last advanced (null likewise). */
+  readonly indexerCursor: { readonly ageSeconds: number | null; readonly updatedAt: bigint | null };
+  /** Ticket 07: `close_registration` is withheld unless the cursor's age is
+   *  under this many seconds *and* it last advanced at or after the Epoch's
+   *  `endsAt` — otherwise a depositor the Indexer has not caught up with yet
+   *  could lose the day's Draw and Base yield. Configurable, sensible default. */
+  readonly indexerFreshThresholdSeconds: bigint;
   /** Has the oracle answered the request for this seed? */
   fulfilled(seed: Uint8Array): Promise<boolean>;
   /** The principal vault's balance, in atomic units. Read only when a payout
@@ -224,6 +233,9 @@ export interface TickOutcome {
    * than aborting. Absent when none of those steps failed this tick.
    */
   readonly stepError?: string;
+  /** Ticket 07: `close_registration` was withheld this tick because the
+   *  Indexer's Read model is not fresh enough to trust yet. */
+  readonly indexerStale?: boolean;
   /**
    * The chain timestamp at which this decision could next differ: a Round
    * closing, an Epoch ending, a VRF timeout, the reveal wait after the last
@@ -253,6 +265,23 @@ function registrationClosesAt(pool: PoolState, epoch: EpochState): bigint {
       ? epoch.registrationOpenedAt
       : epoch.endsAt;
   return opened + pool.registrationWindow;
+}
+
+/**
+ * Ticket 07: whether the Indexer's Read model is fresh enough to trust for
+ * `close_registration` — young enough (`ageSeconds` under the threshold, and
+ * not "never synced") *and* caught up: its cursor last advanced at or after
+ * the Epoch's own `endsAt`. Both have to hold, so a cursor that is ticking
+ * along nicely but is still replaying yesterday's backlog does not pass.
+ */
+export function indexerFreshForClose(
+  cursor: { readonly ageSeconds: number | null; readonly updatedAt: bigint | null },
+  thresholdSeconds: bigint,
+  epoch: EpochState,
+): boolean {
+  if (cursor.ageSeconds === null || cursor.updatedAt === null) return false;
+  if (cursor.ageSeconds > Number(thresholdSeconds)) return false;
+  return cursor.updatedAt >= epoch.endsAt;
 }
 
 /**
@@ -541,10 +570,24 @@ async function decide(ctx: TickContext): Promise<Decision> {
       });
     }
 
+    // Ticket 07: never close on a Read model that has not caught up — a
+    // depositor the Indexer has not seen yet would silently lose the day's
+    // Draw and Base yield.
+    if (!indexerFreshForClose(ctx.indexerCursor, ctx.indexerFreshThresholdSeconds, previousEpoch)) {
+      ctx.warn(
+        `close_registration for epoch ${previousEpoch.epochId} withheld: the indexer cursor is stale`,
+      );
+      return finish({
+        action: null,
+        registerCheck: { epochId: previousEpoch.epochId, empty: true },
+        indexerStale: true,
+      });
+    }
+
     // The jackpot was funded at the start of the epoch (step 6b), so closing
     // snapshots whatever the vault holds now.
     await ctx.send(await ctx.ix.closeRegistration(pool, previousEpoch.epochId));
-    return finish({ action: "close_registration" });
+    return finish({ action: "close_registration", indexerStale: false });
   }
 
   // 5. Waiting on the draw's randomness. `draw` is refused in shutdown
