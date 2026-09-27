@@ -23,23 +23,64 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; reason: string }
 /** VITE_API_URL, or the local backend's default port. */
 export const apiBaseUrl = (): string => API_URL;
 
+/**
+ * Ticket 16: every API fetch carries this timeout on top of whatever unmount
+ * abort the caller already passes in — a hung backend must not freeze the
+ * Vault on stale numbers forever. Plain copy, never the raw "Failed to
+ * fetch" a bare `AbortError` would otherwise surface.
+ */
+export const FETCH_TIMEOUT_MS = 8_000;
+export const TIMEOUT_MESSAGE = "Request timed out. Try again.";
+
+/** Combines the caller's own abort (component unmount) with a fresh timeout,
+ *  so either one aborts the fetch; `cancel()` releases the timer and the
+ *  listener once the request settles either way. */
+function withTimeout(
+  signal: AbortSignal | null | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; timedOut: () => boolean; cancel: () => void } {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort);
+  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cancel: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
 async function get<T>(
   baseUrl: string,
   path: string,
   signal?: AbortSignal | null,
 ): Promise<ApiResult<T>> {
+  const timeout = withTimeout(signal, FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(`${baseUrl}${path}`, {
-      signal: signal ?? null,
+      signal: timeout.signal,
       headers: { accept: "application/json" },
     });
     if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
     return { ok: true, data: (await response.json()) as T };
   } catch (error) {
+    if (timeout.timedOut()) return { ok: false, reason: TIMEOUT_MESSAGE };
     return {
       ok: false,
       reason: error instanceof Error ? error.message : "indexer offline",
     };
+  } finally {
+    timeout.cancel();
   }
 }
 
@@ -374,10 +415,11 @@ export async function redeemAccess(
   referralCode?: string,
   signal?: AbortSignal,
 ): Promise<RedeemAccessResult> {
+  const timeout = withTimeout(signal, FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(`${baseUrl}/access/redeem`, {
       method: "POST",
-      signal: signal ?? null,
+      signal: timeout.signal,
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ wallet, code, signature, ...(referralCode ? { referralCode } : {}) }),
     });
@@ -396,8 +438,14 @@ export async function redeemAccess(
     return {
       ok: false,
       status: null,
-      reason: error instanceof Error ? error.message : "indexer offline",
+      reason: timeout.timedOut()
+        ? TIMEOUT_MESSAGE
+        : error instanceof Error
+          ? error.message
+          : "indexer offline",
     };
+  } finally {
+    timeout.cancel();
   }
 }
 

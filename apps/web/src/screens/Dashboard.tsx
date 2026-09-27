@@ -76,6 +76,9 @@ export interface DashboardScreenProps {
   currentEpoch: CurrentEpochDto | null;
   /** Null until the owner's Player is indexed, or no wallet is connected. */
   player: PlayerDto | null;
+  /** Ticket 16: `status.ts`'s `stale` — the Read model or the operator looks
+   *  stopped or unproven, so the numbers on screen may be behind. */
+  stale: boolean;
   onDeposit: () => void;
   onWithdraw: () => void;
   onPlay: () => void;
@@ -156,6 +159,7 @@ export function Dashboard(props: DashboardScreenProps) {
     now,
     currentEpoch,
     player,
+    stale,
     onDeposit,
     onWithdraw,
     onPlay,
@@ -238,6 +242,11 @@ export function Dashboard(props: DashboardScreenProps) {
 
   return (
     <div className="screen-dash" data-testid="dashboard-screen">
+      {stale ? (
+        <span className="chip stale-chip" data-testid="data-delayed-chip">
+          Data delayed
+        </span>
+      ) : null}
       <div className="dash-cards">
         <section className="dash-card dash-card-principal">
           <h2 className="dash-card-title">Your Principal</h2>

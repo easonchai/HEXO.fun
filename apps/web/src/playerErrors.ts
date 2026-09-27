@@ -6,6 +6,7 @@
  * `failed(code)` result directly. Copy uses the screen's words (CONTEXT.md):
  * "day" not epoch, "Tickets" not entries.
  */
+import { currentPage, reportError } from "./errorReport.js";
 import { idl } from "./idl.js";
 
 const GENERIC = "Something went wrong. Try again in a moment.";
@@ -88,5 +89,13 @@ export function decodeSendFailure(
 ): string {
   if (result.kind === "expired") return EXPIRED_TEXT;
   console.error(result.message);
+  // Ticket 16: a landed-but-failed send is a genuinely broken money path,
+  // worth reaching the maintainers for; "expired" (a dropped confirmation,
+  // the player's answer is "try again") is not.
+  reportError({
+    code: result.code === null ? "unknown_error" : `program_error_${result.code}`,
+    message: result.message,
+    page: currentPage(),
+  });
   return decodeErrorCode(result.code ?? -1);
 }

@@ -72,6 +72,21 @@ export function AccessGate({ children }: { children: ReactNode }) {
                   </div>
                   <p className="invite-copy">Enter your invite code to get access to the platform</p>
                 </div>
+                {gate.status === "retry" ? (
+                  <div className="invite-field" data-testid="access-gate-retry">
+                    <p className="invite-error" role="alert">
+                      Can’t reach the server right now.
+                    </p>
+                    <button
+                      type="button"
+                      className="invite-submit"
+                      data-testid="access-gate-retry-button"
+                      onClick={() => gate.retry()}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : null}
                 <div className="invite-field">
                   <label className="invite-label" htmlFor="invite-code">
                     INVITE CODE

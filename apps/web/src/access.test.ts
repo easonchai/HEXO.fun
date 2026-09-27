@@ -66,6 +66,15 @@ describe("gateDecision", () => {
     expect(gateDecision({ ...base, rememberedOwner: "someone-else" })).toBe("checking");
   });
 
+  it("ticket 16: gate decision after a failed fetch is retry, not checking", () => {
+    expect(gateDecision({ ...base, fetchFailed: true })).toBe("retry");
+    expect(gateDecision({ ...base, fetchFailed: false })).toBe("checking");
+  });
+
+  it("ticket 16: a remembered wallet stays hidden even once the fetch has failed", () => {
+    expect(gateDecision({ ...base, rememberedOwner: WALLET, fetchFailed: true })).toBe("hidden");
+  });
+
   it("stays hidden while GET /access re-confirms the wallet that passed last time", () => {
     expect(gateDecision({ ...base, rememberedOwner: WALLET })).toBe("hidden");
   });

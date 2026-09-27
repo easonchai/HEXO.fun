@@ -273,3 +273,18 @@ model OperatorState {
    *  null before any tick has looked. */
   withdrawShortfall BigInt?
 }
+
+// beta-launch-fixes ticket 16: decoded send failures and error-boundary
+// catches the web posts to POST /error-reports, so a broken money path
+// reaches the maintainers instead of only the depositor's console.
+// Write-only from the API's own perspective; nothing reads this back through
+// a route, an operator queries Postgres directly.
+model ErrorReport {
+  id        Int      @id @default(autoincrement())
+  code      String
+  message   String
+  signature String?
+  wallet    String?
+  page      String?
+  createdAt DateTime @default(now())
+}
