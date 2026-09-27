@@ -86,8 +86,8 @@ const FAQ = [
     "Yes. Withdrawing burns that day's tickets, so you can take out whatever share of your tickets you still hold. Spend them all and the rest comes back to you at the daily reset.",
   ],
   [
-    "Do you take any of the prize?",
-    "A small protocol fee funds ongoing operations and token buybacks. The rest goes to that day's winner.",
+    "Do you ever win the draw?",
+    "Yes. We hold tickets like any other player. If we win, the jackpot goes to the treasury and buybacks.",
   ],
 ] as const;
 
