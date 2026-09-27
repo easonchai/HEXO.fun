@@ -65,14 +65,14 @@ describe("summarizeStatus", () => {
     expect(result.label).toBe("STALLED");
   });
 
-  it("goes amber on a fresh tick that still carries an error", () => {
+  it("goes amber on a fresh tick that still carries an error, with generic copy for the code", () => {
     const errored = status({
       operator: {
         id: 1,
         lastTickAt: "2026-09-06T00:00:09.000Z",
         nextWakeAt: null,
         lastAction: "settleRound",
-        lastError: "insufficient jackpot vault balance",
+        lastError: "OPERATOR_TICK_FAILED",
         registeredCount: null,
         registeredTotal: null,
       },
@@ -80,7 +80,8 @@ describe("summarizeStatus", () => {
     const result = summarizeStatus(errored, NOW);
     expect(result.tone).toBe("warn");
     expect(result.stale).toBe(true);
-    expect(result.label).toBe("insufficient jackpot vault balance");
+    expect(result.label).toBe("ERROR");
+    expect(result.detail).not.toContain("OPERATOR_TICK_FAILED");
   });
 
   it("treats a never-synced cursor (null, not 0) as amber even with a fresh tick", () => {

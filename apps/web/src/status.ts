@@ -46,6 +46,12 @@ const warn = (label: string, detail: string): StatusSummary => ({
   stale: true,
 });
 
+/** Ticket 09: `/status` now sends a stable error code, not the operator's
+ *  raw error text, but a code is still an internal detail no player needs
+ *  to read. The pill shows the same generic copy for every code. */
+const OPERATOR_ERROR_LABEL = "ERROR";
+const OPERATOR_ERROR_DETAIL = "operator reported an error";
+
 /** `nowMs` is injected so this stays pure and testable. */
 export function summarizeStatus(
   status: StatusDto | null,
@@ -56,7 +62,9 @@ export function summarizeStatus(
   const error = status.operator?.lastError ?? null;
   const lastTickAt = status.operator?.lastTickAt ?? null;
   if (!lastTickAt) {
-    return warn(error ?? "STARTING", error ?? "operator has not ticked yet");
+    return error
+      ? warn(OPERATOR_ERROR_LABEL, OPERATOR_ERROR_DETAIL)
+      : warn("STARTING", "operator has not ticked yet");
   }
 
   const tickAge = (nowMs - Date.parse(lastTickAt)) / 1000;
@@ -84,7 +92,7 @@ export function summarizeStatus(
       stale: false,
     };
   }
-  if (error) return warn(error, error);
+  if (error) return warn(OPERATOR_ERROR_LABEL, OPERATOR_ERROR_DETAIL);
   if (!tickFresh) {
     return warn(
       "STALLED",

@@ -1417,6 +1417,70 @@ describe("runTick", () => {
     });
     expect(result.labels).toEqual(["create_round"]);
   });
+
+  // --- Ticket 09: epochNoProgress and drawnUnpaid are computed off the
+  // previous epoch every tick, regardless of which step (if any) acts.
+
+  it("epochNoProgress and drawnUnpaid read false on a healthy mid-round state", async () => {
+    const { ctx } = context();
+    const outcome = await runTick(ctx);
+    expect(outcome.epochNoProgress).toBe(false);
+    expect(outcome.drawnUnpaid).toBe(false);
+  });
+
+  it("epochNoProgress fires once a registering epoch outlives its window plus the slack", async () => {
+    const { ctx } = context({
+      pool: pool({ registrationWindow: 60n, vrfTimeout: 120n }),
+      previousEpoch: registering({ endsAt: NOW - (60n + 120n + 300n + 1n) }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.epochNoProgress).toBe(true);
+  });
+
+  it("epochNoProgress stays false for a registering epoch still inside its window", async () => {
+    const { ctx } = context({
+      pool: pool({ registrationWindow: 60n, vrfTimeout: 120n }),
+      previousEpoch: registering({ endsAt: NOW - (60n + 120n + 300n - 1n) }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.epochNoProgress).toBe(false);
+  });
+
+  it("epochNoProgress clears once the epoch reaches Paid or RolledOver, no matter its age", async () => {
+    const { ctx } = context({
+      previousEpoch: epoch({ status: EPOCH_STATUS.PAID, endsAt: NOW - 1_000_000n }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.epochNoProgress).toBe(false);
+  });
+
+  it("drawnUnpaid fires once a drawn epoch outlives DRAWN_UNPAID_ALERT_SECONDS, before payout_timeout does", async () => {
+    const { ctx } = context({
+      pool: pool({ payoutTimeout: 86_400n, openRoundId: 0n, paused: true }),
+      openRound: null,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        drawnAt: NOW - (DRAWN_UNPAID_ALERT_SECONDS + 1n),
+      }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.drawnUnpaid).toBe(true);
+  });
+
+  it("drawnUnpaid stays false for a drawn epoch still inside the alert window", async () => {
+    const { ctx } = context({
+      pool: pool({ payoutTimeout: 86_400n, openRoundId: 0n, paused: true }),
+      openRound: null,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        drawnAt: NOW - (DRAWN_UNPAID_ALERT_SECONDS - 1n),
+      }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.drawnUnpaid).toBe(false);
+  });
 });
 
 describe("instruction builders", () => {

@@ -10,7 +10,8 @@ import {
   type Round,
 } from "@prisma/client";
 import { unpackAccount } from "@solana/spl-token";
-import { LAMPORTS_PER_SOL, PublicKey, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
+import { Keypair, LAMPORTS_PER_SOL, PublicKey, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
+import bs58 from "bs58";
 
 import { ChainService } from "../chain/chain.service";
 import { rpcStatus } from "../chain/rpc-fallback";
@@ -201,6 +202,25 @@ interface RpcHealth {
 interface ChainBalances {
   vaultLiquidity: bigint | null;
   operatorSol: number | null;
+  /** Ticket 09: the sparring player's SOL, null when either `SPARRING_KEYPAIR`
+   *  is not configured (the service is off) or the read failed — both read
+   *  the same as "unknown", same as `operatorSol`. */
+  sparringSol: number | null;
+}
+
+/**
+ * Ticket 09: `/status`'s stable code in place of `OperatorState.lastError`'s
+ * raw text. A bare identifier is an Anchor/IDL error name (`instructions.ts`'s
+ * `mapSendError` puts exactly that in `Error.message`), which is already safe
+ * to show — it names no host, path or account. Anything else (a network
+ * error, a Postgres error, `principalVaultBalance`'s "does not exist; run
+ * bootstrap first") might carry one, so it collapses to one generic code; the
+ * full text still reaches the logs from the tick's own `logger.error` call.
+ */
+const KNOWN_ERROR_CODE = /^[A-Za-z]+$/;
+export function operatorErrorCode(message: string | null): string | null {
+  if (message === null) return null;
+  return KNOWN_ERROR_CODE.test(message) ? message : "OPERATOR_TICK_FAILED";
 }
 
 /** The cached Clock sysvar value plus the wall-clock moment it was observed
@@ -244,8 +264,14 @@ export class ApiService {
    */
   private lastServedChainTime = 0n;
 
-  /** SOL below which `/status` flags the operator as running dry. */
+  /** SOL below which `/status` flags the operator as running dry. Also the
+   *  threshold for the sparring player (ticket 09): both are hot keys paying
+   *  their own fees, and spec.md names no separate figure for the second. */
   private readonly operatorSolWarn: number;
+  /** Ticket 09: the sparring player's public key, decoded the same way
+   *  `SparringService` does, or null when `SPARRING_KEYPAIR` is not set (the
+   *  service is off, so there is nothing to alert on). */
+  private readonly sparringPubkey: PublicKey | null;
 
   /** Beta-launch-fixes ticket 05: when configured, the ISO timestamp
    *  `/state` and `/status` report so the web can render a launch countdown
@@ -260,6 +286,10 @@ export class ApiService {
     this.operatorSolWarn = config.get("OPERATOR_SOL_WARN", { infer: true });
     const launchAt = config.get("LAUNCH_AT", { infer: true });
     this.launchAt = typeof launchAt === "string" && launchAt.length > 0 ? launchAt : null;
+    const sparringSecret = config.get("SPARRING_KEYPAIR", { infer: true });
+    this.sparringPubkey = sparringSecret
+      ? Keypair.fromSecretKey(bs58.decode(sparringSecret)).publicKey
+      : null;
   }
 
   async getPool() {
@@ -629,12 +659,21 @@ export class ApiService {
       this.rpcHealth(),
       this.chainBalances(),
     ]);
+    // Ticket 09: the current epoch's own close deadline and jackpot, for the
+    // near-close alert conditions. One extra row read, gated on a pool
+    // actually being indexed, same tolerance as the rest of this method.
+    const epoch =
+      pool === null ? null : await this.prisma.epoch.findUnique({ where: { id: pool.currentEpochId } });
     return {
       ...statusFrom(operator, cursor, rpc, pool, balances, this.operatorSolWarn),
       ...(await this.yieldStatus(pool)),
       // Ticket 05: null once the Pool has an Epoch, or when `LAUNCH_AT` is
       // unset — the same rule `/state`'s `launchAt` follows.
       launchAt: pool !== null && pool.currentEpochId > 0n ? null : this.launchAt,
+      epochEndsAt: epoch?.endsAt ?? null,
+      epochStatus: epoch?.status ?? null,
+      jackpotAmount: epoch === null ? null : await this.liveJackpot(epoch),
+      minJackpot: pool?.minJackpot ?? 0n,
     };
   }
 
@@ -786,7 +825,7 @@ export class ApiService {
       this.logger.warn(
         `balance read failed: ${cause instanceof Error ? cause.message : String(cause)}`,
       );
-      return { vaultLiquidity: null, operatorSol: null };
+      return { vaultLiquidity: null, operatorSol: null, sparringSol: null };
     }
   }
 
@@ -804,11 +843,17 @@ export class ApiService {
       Date.now() - this.balances.at > BALANCES_TTL_MS
     ) {
       const principalVault = this.chain.principalVaultAddress();
+      const accounts = [
+        principalVault,
+        this.chain.keypair.publicKey,
+        ...(this.sparringPubkey ? [this.sparringPubkey] : []),
+      ];
       const result = this.chain.connection
-        .getMultipleAccountsInfo([principalVault, this.chain.keypair.publicKey])
-        .then(([vault, fees]) => ({
+        .getMultipleAccountsInfo(accounts)
+        .then(([vault, fees, sparring]) => ({
           vaultLiquidity: vault ? unpackAccount(principalVault, vault).amount : null,
           operatorSol: fees ? fees.lamports / LAMPORTS_PER_SOL : 0,
+          sparringSol: this.sparringPubkey === null ? null : sparring ? sparring.lamports / LAMPORTS_PER_SOL : 0,
         }));
       const entry: CachedRead<ChainBalances> = { at: Date.now(), result };
       this.balances = entry;
@@ -936,6 +981,13 @@ function statusFrom(
       // needs to know when it plans to wake before calling it stalled.
       nextWakeAt:
         operator.nextWakeAt == null ? null : new Date(Number(operator.nextWakeAt) * 1000),
+      // Ticket 09: same treatment as the two above.
+      lastSuccessAt:
+        operator.lastSuccessAt == null ? null : new Date(Number(operator.lastSuccessAt) * 1000),
+      // Ticket 09: a stable code in place of the raw text, so an internal
+      // hostname or path in a chain or Postgres error never reaches a
+      // client. The raw text still reaches the logs from the tick itself.
+      lastError: operatorErrorCode(operator.lastError),
     },
     cursor: {
       lastSlot: cursor?.lastSlot ?? null,
@@ -961,6 +1013,12 @@ function statusFrom(
       balances.operatorSol === null
         ? null
         : balances.operatorSol < operatorSolWarn,
+    // Ticket 09: same null-means-unknown treatment as operatorSol/Low, and
+    // null when the sparring player is not configured at all — there is
+    // nothing to warn about for a service that is off.
+    sparringSol: balances.sparringSol,
+    sparringSolLow:
+      balances.sparringSol === null ? null : balances.sparringSol < operatorSolWarn,
     // Irreversible once true (ops-and-envs ticket 08); false, not null,
     // before the pool is indexed, matching every other pool-derived figure
     // above.

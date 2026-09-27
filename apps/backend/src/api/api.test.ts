@@ -43,6 +43,7 @@ import {
   JACKPOT_BALANCE_TTL_MS,
   oddsPercent,
   oneDayYieldCost,
+  operatorErrorCode,
   playerTicketExtras,
   poolBonusCap,
   principalOut,
@@ -414,6 +415,25 @@ describe("playerTicketExtras", () => {
       playerTicketExtras(player({ principal: 500n, boughtEpoch: 7n, boughtAmount: 1_000n }), 7n)
         .buyAllowanceLeft,
     ).toBe(0n);
+  });
+});
+
+describe("operatorErrorCode", () => {
+  it("is null when there is no error", () => {
+    expect(operatorErrorCode(null)).toBeNull();
+  });
+
+  it("passes a bare IDL/Anchor error name through unchanged", () => {
+    expect(operatorErrorCode("InsufficientVaultLiquidity")).toBe("InsufficientVaultLiquidity");
+  });
+
+  it("collapses anything else to one generic code, so a hostname or path never reaches a client", () => {
+    expect(operatorErrorCode("RPC getMultipleAccountsInfo timed out after 10000ms")).toBe(
+      "OPERATOR_TICK_FAILED",
+    );
+    expect(
+      operatorErrorCode("principal vault Ax1...9Z does not exist; run bootstrap first"),
+    ).toBe("OPERATOR_TICK_FAILED");
   });
 });
 
@@ -801,23 +821,31 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
   describe("GET /alerts", () => {
     // The default seed's OperatorState.withdrawShortfall is 250_000n (see
     // "GET /status reports the withdrawal queue..." above), and every other
-    // condition reads healthy against it, so the untouched seed already
-    // proves the wiring for exactly one code without any setup of its own.
-    it("is 503 with exactly WITHDRAW_SHORTFALL against the seeded OperatorState row", async () => {
+    // condition reads healthy against it except YIELD_BUDGET_LOW — the same
+    // seed's HUGE_U64 totalPrincipal dwarfs its yieldBudget (see "GET /status
+    // reports the yield budget..." above) — so the untouched seed already
+    // proves the wiring for exactly these two codes without any setup of its
+    // own.
+    it("is 503 with exactly WITHDRAW_SHORTFALL and YIELD_BUDGET_LOW against the seeded rows", async () => {
       const { body } = await http.get("/alerts").expect(503);
       expect(body).toEqual({
-        alerts: [{ code: "WITHDRAW_SHORTFALL", message: expect.any(String) }],
+        alerts: [
+          { code: "WITHDRAW_SHORTFALL", message: expect.any(String) },
+          { code: "YIELD_BUDGET_LOW", message: expect.any(String) },
+        ],
       });
     });
 
-    it("is 200 with an empty list once the withdraw shortfall clears", async () => {
+    it("is 503 with exactly YIELD_BUDGET_LOW once the withdraw shortfall clears", async () => {
       await prisma.operatorState.update({
         where: { id: 1 },
         data: { withdrawShortfall: 0n },
       });
       try {
-        const { body } = await http.get("/alerts").expect(200);
-        expect(body).toEqual({ alerts: [] });
+        const { body } = await http.get("/alerts").expect(503);
+        expect(body).toEqual({
+          alerts: [{ code: "YIELD_BUDGET_LOW", message: expect.any(String) }],
+        });
       } finally {
         await prisma.operatorState.update({
           where: { id: 1 },
@@ -856,6 +884,10 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
         expect(body.alerts).toEqual([
           { code: "ROUND_VOIDED_RECENTLY", message: expect.any(String) },
           { code: "EPOCH_ROLLED_OVER_RECENTLY", message: expect.any(String) },
+          // The seeded pool's yield budget is already below one epoch's Base
+          // yield (same fixture the two tests above account for); this test
+          // only clears withdrawShortfall, not that.
+          { code: "YIELD_BUDGET_LOW", message: expect.any(String) },
         ]);
       } finally {
         await prisma.event.deleteMany({

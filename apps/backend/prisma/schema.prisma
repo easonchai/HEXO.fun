@@ -280,6 +280,20 @@ model OperatorState {
    *  stale Indexer cursor; false once a later tick closes normally. Null
    *  before any tick has ever checked. */
   registrationIndexerStale Boolean?
+  /** Ticket 09: wall-clock unix seconds of the last tick that completed
+   *  without an error, so OPERATOR_FAILING can tell "ticks are failing"
+   *  from "ticks have stopped" (OPERATOR_STALE covers the latter). Null
+   *  before the first successful tick. */
+  lastSuccessAt    BigInt?
+  /** Ticket 09: true on a tick whose previous epoch missed its expected
+   *  deadline (epoch length + registration window + VRF timeout + slack) to
+   *  reach a terminal status; false once one does. Null before any tick has
+   *  ever looked. */
+  epochNoProgress  Boolean?
+  /** Ticket 09: true on a tick whose previous epoch drew a winner more than
+   *  a few minutes ago and still has not been paid; false once it is. Null
+   *  before any tick has ever looked. */
+  drawnUnpaid      Boolean?
 }
 
 // beta-launch-fixes ticket 16: decoded send failures and error-boundary

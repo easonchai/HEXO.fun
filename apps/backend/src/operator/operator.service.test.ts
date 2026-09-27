@@ -530,6 +530,8 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
         where: { id: 1 },
       });
       expect(afterFailure.lastError).toMatch(/timed out/);
+      // Ticket 09: a failing tick never stamps lastSuccessAt.
+      expect(afterFailure.lastSuccessAt).toBeNull();
 
       // The single-flight guard resets in `runOnce`'s `finally`, so the next
       // call is never skipped by the failed one still "running".
@@ -538,6 +540,8 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
         where: { id: 1 },
       });
       expect(afterRecovery.lastError).toBeNull();
+      // Ticket 09: the recovering tick stamps it.
+      expect(afterRecovery.lastSuccessAt).not.toBeNull();
     } finally {
       await prisma.operatorState.deleteMany({ where: { id: 1 } });
       await prisma.$disconnect();

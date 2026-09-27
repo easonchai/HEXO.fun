@@ -211,6 +211,9 @@ export interface OperatorStateDto {
    *  between ticks is only a stall once this has passed. */
   nextWakeAt: string | null;
   lastAction: string | null;
+  /** Ticket 09: a stable error code (`operatorErrorCode` in the backend's
+   *  api.service.ts), never the raw error text. `status.ts` maps it to
+   *  generic copy for the pill. */
   lastError: string | null;
   registeredCount: number | null;
   registeredTotal: number | null;

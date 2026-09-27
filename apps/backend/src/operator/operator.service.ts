@@ -591,7 +591,13 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   private async writeState(
     outcome: Pick<
       TickOutcome,
-      "action" | "progress" | "withdrawShortfall" | "withdrawState" | "indexerStale"
+      | "action"
+      | "progress"
+      | "withdrawShortfall"
+      | "withdrawState"
+      | "indexerStale"
+      | "epochNoProgress"
+      | "drawnUnpaid"
     >,
     error: string | null,
     waitMs: number,
@@ -601,6 +607,10 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       lastTickAt: nowSeconds,
       nextWakeAt: nowSeconds + BigInt(Math.round(waitMs / 1000)),
       lastError: error,
+      // Ticket 09: written only on a tick that completed without error, so
+      // OPERATOR_FAILING can tell "still ticking, still failing" from "just
+      // recovered".
+      ...(error === null ? { lastSuccessAt: nowSeconds } : {}),
       ...(outcome.action === null ? {} : { lastAction: outcome.action }),
       ...(outcome.progress === undefined
         ? {}
@@ -621,6 +631,10 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       // Ticket 07: only ever true on the tick that withheld `close_registration`
       // for it; the next tick that does not hit the same wait clears it.
       ...(outcome.indexerStale === undefined ? {} : { registrationIndexerStale: outcome.indexerStale }),
+      // Ticket 09: present on every tick that reaches decide(), so these
+      // always reflect the freshest read.
+      ...(outcome.epochNoProgress === undefined ? {} : { epochNoProgress: outcome.epochNoProgress }),
+      ...(outcome.drawnUnpaid === undefined ? {} : { drawnUnpaid: outcome.drawnUnpaid }),
     };
     await this.prisma.operatorState.upsert({
       where: { id: 1 },

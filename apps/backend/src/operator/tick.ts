@@ -117,6 +117,45 @@ export const EXPECTED_ERROR_REPEAT_LIMIT = 3;
  */
 export const DRAWN_UNPAID_ALERT_SECONDS = 300n;
 
+/**
+ * Ticket 09: slack layered onto `epochNoProgress`'s deadline below, covering
+ * RPC and indexer lag beyond the epoch's own registration window and VRF
+ * timeout. Fixed, like `DRAWN_UNPAID_ALERT_SECONDS` above.
+ */
+export const NO_PROGRESS_SLACK_SECONDS = 300n;
+
+/**
+ * Ticket 09: whether `epoch` (the previous epoch, still draining through its
+ * lifecycle) has missed the deadline by which it should have reached a
+ * terminal status (Paid or RolledOver). The void/rollover paths in
+ * `decide()` already self-heal a stuck Registering, Drawing or Drawn epoch
+ * on their own timeouts; this is the backstop for whatever a timeout does
+ * not cover, so it does not need to know which phase is actually stuck.
+ */
+export function epochNoProgress(pool: PoolState, epoch: EpochState | null, now: bigint): boolean {
+  if (epoch === null) return false;
+  if (epoch.status === EPOCH_STATUS.PAID || epoch.status === EPOCH_STATUS.ROLLED_OVER) {
+    return false;
+  }
+  const expectedDoneBy =
+    epoch.endsAt + pool.registrationWindow + pool.vrfTimeout + NO_PROGRESS_SLACK_SECONDS;
+  return now > expectedDoneBy;
+}
+
+/**
+ * Ticket 09: an epoch drawn but sitting unpaid for more than a few minutes,
+ * whether the winner is the House or a human and regardless of
+ * `payout_timeout` — a page, not the rollover-gate decision step 6 already
+ * makes off the same `DRAWN_UNPAID_ALERT_SECONDS` constant.
+ */
+export function epochDrawnUnpaid(epoch: EpochState | null, now: bigint): boolean {
+  return (
+    epoch !== null &&
+    epoch.status === EPOCH_STATUS.DRAWN &&
+    now > epoch.drawnAt + DRAWN_UNPAID_ALERT_SECONDS
+  );
+}
+
 /** Ticket 06: what step 6b remembers about withdrawal cranking across ticks,
  *  scoped to one epoch (a new epoch starts the count clean). The service
  *  persists this across ticks; the pure function only reads and returns it. */
@@ -276,6 +315,13 @@ export interface TickOutcome {
   /** Ticket 07: `close_registration` was withheld this tick because the
    *  Indexer's Read model is not fresh enough to trust yet. */
   readonly indexerStale?: boolean;
+  /** Ticket 09: whether the previous epoch has missed its expected deadline
+   *  to reach a terminal status. Present on every tick. */
+  readonly epochNoProgress?: boolean;
+  /** Ticket 09: whether the previous epoch drew a winner more than
+   *  `DRAWN_UNPAID_ALERT_SECONDS` ago and still has not been paid. Present
+   *  on every tick. */
+  readonly drawnUnpaid?: boolean;
   /**
    * The chain timestamp at which this decision could next differ: a Round
    * closing, an Epoch ending, a VRF timeout, the reveal wait after the last
@@ -404,8 +450,15 @@ async function decide(ctx: TickContext): Promise<Decision> {
   let expectedErrors = ctx.lastExpectedErrors;
   let expectedErrorsChanged = false;
   let withdrawStateOut: WithdrawState | undefined;
+  // Ticket 09: computed once per tick, off the same ctx every branch below
+  // reads, so every return (via `finish`) carries the same answer regardless
+  // of which step acted.
+  const noProgress = epochNoProgress(pool, previousEpoch, now);
+  const drawnUnpaidNow = epochDrawnUnpaid(previousEpoch, now);
   const finish = (decision: Decision): Decision => ({
     ...decision,
+    epochNoProgress: noProgress,
+    drawnUnpaid: drawnUnpaidNow,
     ...(stepError !== undefined ? { stepError } : {}),
     ...(expectedErrorsChanged ? { expectedErrors } : {}),
     ...(withdrawStateOut !== undefined ? { withdrawState: withdrawStateOut } : {}),
