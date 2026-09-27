@@ -221,6 +221,7 @@ describe("OperatorService catch-path state write", () => {
       failingPrisma as unknown as PrismaService,
       indexer,
       noopSparring,
+      fakeConfig,
     );
 
     const outcome = await operator.runOnce();
@@ -264,6 +265,7 @@ describe("OperatorService.onModuleDestroy", () => {
       prisma as unknown as PrismaService,
       indexer,
       noopSparring,
+      fakeConfig,
     );
 
     const tickPromise = operator.tick();
