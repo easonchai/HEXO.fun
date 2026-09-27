@@ -97,6 +97,26 @@ const capExceeded = (cause: unknown): boolean =>
  *  given up on for the rest of the epoch. Fixed and small, per the ticket. */
 export const WITHDRAW_FAILURE_LIMIT = 3;
 
+/**
+ * Ticket 12: how many times in a row an *expected* race (see
+ * `EXPECTED_ERRORS`) has hit the same action and target. The first two are
+ * noise — a read that lost a race with a transaction already in flight — but
+ * the third means something is actually wedged (a stale mirror row, most
+ * often), so it graduates into a real, recorded tick error instead of being
+ * swallowed forever.
+ */
+export const EXPECTED_ERROR_REPEAT_LIMIT = 3;
+
+/**
+ * Ticket 12: a drawn epoch with a human winner never rolls over just because
+ * `payout_timeout` elapsed — it also waits for this much longer, so an admin
+ * who is not yet being paged (a misconfigured `payout_timeout` shorter than
+ * this) still gets a window to intervene before the prize is given up on.
+ * The House has no such protection to wait for: rolling its own win back into
+ * the pot costs nobody a payout.
+ */
+export const DRAWN_UNPAID_ALERT_SECONDS = 300n;
+
 /** Ticket 06: what step 6b remembers about withdrawal cranking across ticks,
  *  scoped to one epoch (a new epoch starts the count clean). The service
  *  persists this across ticks; the pure function only reads and returns it. */
@@ -153,6 +173,9 @@ export interface TickContext {
    *  `endsAt` — otherwise a depositor the Indexer has not caught up with yet
    *  could lose the day's Draw and Base yield. Configurable, sensible default. */
   readonly indexerFreshThresholdSeconds: bigint;
+  /** Ticket 12: how many times in a row each `action:target` key has hit an
+   *  expected error. Empty before anything has repeated. */
+  readonly lastExpectedErrors: ReadonlyMap<string, number>;
   /** Has the oracle answered the request for this seed? */
   fulfilled(seed: Uint8Array): Promise<boolean>;
   /** The principal vault's balance, in atomic units. Read only when a payout
@@ -201,8 +224,18 @@ export interface TickContext {
   /** A Round `close_round` was just sent for; keep it out of later
    *  `roundsToClose` results until the indexer mirrors `RoundClosed`. */
   forgetRound(id: bigint): void;
-  /** Owner of the Player whose registered interval contains `target`. */
+  /** Ticket 12: owners a `register` batch was just confirmed for; keep them
+   *  out of later `playersToRegister` results for the rest of the epoch, so
+   *  a zero-weight owner (a no-op on chain) is not resent forever and a
+   *  Read-model lag cannot resend a batch that already landed. */
+  forgetRegistered(owners: readonly string[]): Promise<void>;
+  /** Owner of the Player whose registered interval contains `target`, from
+   *  the Read model. Null on a miss, which step 6 falls back to `winnerOnChain` for. */
   winner(epochId: bigint, target: bigint): Promise<string | null>;
+  /** Ticket 12: same lookup, scanning Player accounts on chain instead of the
+   *  Read model. Only asked when `winner` misses, so a mirror gap cannot cost
+   *  a winner their Prize. */
+  winnerOnChain(epochId: bigint, target: bigint): Promise<string | null>;
   send(instructions: TransactionInstruction[]): Promise<string>;
   /** Something an operator should read but that is not a failed tick: so far
    *  only a payout that would not land, which step 6 retries. */
@@ -233,6 +266,9 @@ export interface TickOutcome {
    * than aborting. Absent when none of those steps failed this tick.
    */
   readonly stepError?: string;
+  /** Ticket 12: the updated expected-error repeat counts, present only when
+   *  a step this tick recorded, cleared or escalated one. */
+  readonly expectedErrors?: ReadonlyMap<string, number>;
   /** Ticket 07: `close_registration` was withheld this tick because the
    *  Indexer's Read model is not fresh enough to trust yet. */
   readonly indexerStale?: boolean;
@@ -350,26 +386,31 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
 async function decide(ctx: TickContext): Promise<Decision> {
   const { pool, currentEpoch, previousEpoch, openRound, now } = ctx;
 
-  // Ticket 06: accumulated across steps 2, 2c and 6b below, so a failure in
-  // one of them never has to `return` (and so cut the tick short) to be
+  // Ticket 06/12: accumulated across steps 2, 2c and 6b below, so a failure
+  // in one of them never has to `return` (and so cut the tick short) to be
   // remembered — every later `return` in this function is wrapped in
   // `finish()`, which folds these back in.
   let stepError: string | undefined;
+  let expectedErrors = ctx.lastExpectedErrors;
+  let expectedErrorsChanged = false;
   let withdrawStateOut: WithdrawState | undefined;
   const finish = (decision: Decision): Decision => ({
     ...decision,
     ...(stepError !== undefined ? { stepError } : {}),
+    ...(expectedErrorsChanged ? { expectedErrors } : {}),
     ...(withdrawStateOut !== undefined ? { withdrawState: withdrawStateOut } : {}),
   });
 
   /**
-   * Ticket 06: runs one of step 2 or 2c's sends. On success, or on an
-   * `AccountNotInitialized` race (someone else already did this), the
-   * caller's bookkeeping (`forgetPositions`/`forgetRound`) still runs and the
-   * attempt counts as done. Anything else on `EXPECTED_ERRORS` is a race, not
-   * a failure, and is swallowed. A real, unexpected failure is recorded as
-   * `stepError` instead of thrown, so the tick can fall through to the next
-   * step (and eventually `create_round`) rather than aborting.
+   * Ticket 12: runs one expected-error-prone send. On success, clears any
+   * repeat count for `key`. On an `AccountNotInitialized` race, `alreadyGone`
+   * runs (closing the local bookkeeping the same way a confirmed send would)
+   * and the attempt is treated as done. On any other member of
+   * `EXPECTED_ERRORS`, the repeat count for `key` goes up; the third time,
+   * it escalates into `stepError` instead of being swallowed again. Anything
+   * else is a real failure (ticket 06): recorded as `stepError` immediately.
+   * Either way, throwing is never how this reports a failure — the caller
+   * falls through to the next step.
    */
   async function attempt(
     key: string,
@@ -378,6 +419,12 @@ async function decide(ctx: TickContext): Promise<Decision> {
   ): Promise<boolean> {
     try {
       await send();
+      if (expectedErrors.has(key)) {
+        const next = new Map(expectedErrors);
+        next.delete(key);
+        expectedErrors = next;
+        expectedErrorsChanged = true;
+      }
       return true;
     } catch (cause) {
       const message = errorMessage(cause);
@@ -385,7 +432,17 @@ async function decide(ctx: TickContext): Promise<Decision> {
         await alreadyGone();
         return true;
       }
-      if (EXPECTED_ERRORS.has(message)) return false;
+      if (EXPECTED_ERRORS.has(message)) {
+        const count = (expectedErrors.get(key) ?? 0) + 1;
+        const next = new Map(expectedErrors);
+        next.set(key, count);
+        expectedErrors = next;
+        expectedErrorsChanged = true;
+        if (count >= EXPECTED_ERROR_REPEAT_LIMIT) {
+          stepError = stepError ?? `${key} failed ${count} times in a row: ${message}`;
+        }
+        return false;
+      }
       stepError = stepError ?? `${key} failed: ${message}`;
       return false;
     }
@@ -537,10 +594,11 @@ async function decide(ctx: TickContext): Promise<Decision> {
         .slice(0, BATCH_SIZE)
         .map((owner) => new PublicKey(owner));
       await ctx.send(await ctx.ix.register(pool, previousEpoch.epochId, batch));
-      // ponytail: an owner whose on-chain weight is zero registers as a no-op
-      // and comes back next tick, so a sloppy indexer query stalls the epoch
-      // here forever. The contract is on IndexerQueries.playersToRegister; if
-      // it has to be enforced on this side, compare consecutive batches.
+      // Ticket 12: dropped for the rest of the epoch once a send for them is
+      // confirmed, whether or not it actually registered anything — a
+      // zero-weight owner's `register` is a no-op on chain and would
+      // otherwise come back from `playersToRegister` forever.
+      await ctx.forgetRegistered(owners.slice(0, BATCH_SIZE));
       return finish({
         action: "register",
         progress: {
@@ -607,13 +665,20 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // 6. Drawn: pay whoever owns the interval the target landed in. A winner
   // whose token account is frozen or closed cannot be paid at all, so past
   // `payout_timeout` the epoch rolls over instead and the prize stays in the
-  // vault for the next draw rather than stranding this epoch forever.
+  // vault for the next draw rather than stranding this epoch forever. Ticket
+  // 12: the Read model's miss falls back to an on-chain scan before a
+  // Payout Rollover is ever considered, and a human (non-House) winner is
+  // never rolled over until the drawn-unpaid condition has had
+  // `DRAWN_UNPAID_ALERT_SECONDS` to page someone, regardless of how short
+  // `payout_timeout` is set.
   if (previousEpoch?.status === EPOCH_STATUS.DRAWN) {
-    const timedOut = now > previousEpoch.drawnAt + pool.payoutTimeout;
-    const winner = await ctx.winner(
-      previousEpoch.epochId,
-      previousEpoch.target,
-    );
+    const winner =
+      (await ctx.winner(previousEpoch.epochId, previousEpoch.target)) ??
+      (await ctx.winnerOnChain(previousEpoch.epochId, previousEpoch.target));
+    const isHouse = winner !== null && winner === pool.house.toBase58();
+    const alertHasFired = now > previousEpoch.drawnAt + DRAWN_UNPAID_ALERT_SECONDS;
+    const timedOut =
+      now > previousEpoch.drawnAt + pool.payoutTimeout && (isHouse || alertHasFired);
     if (winner) {
       try {
         await ctx.send(

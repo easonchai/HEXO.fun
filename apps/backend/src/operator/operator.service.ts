@@ -43,6 +43,11 @@ import { isFulfilled, randomnessAddress } from "./vrf";
 
 /** How long a settled Position's address is remembered; well past any sweep lag. */
 const SETTLED_MEMORY_MS = 5 * 60_000;
+/** Ticket 12: how long a `register` attempt is remembered against
+ *  `playersToRegister`, well past the longest reasonable registration window
+ *  (an epoch's own length), so a zero-weight owner is not resent for the
+ *  whole epoch rather than just a few minutes. */
+const REGISTERED_MEMORY_MS = 24 * 60 * 60_000;
 /** The slow safety net alongside the deadline-driven sleep (ticket 03): runs
  *  regardless, so a mis-computed deadline degrades to "checked on this
  *  cadence" rather than a stall. Same cadence `nextWakeAt` falls back to. */
@@ -83,8 +88,15 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    *  (ops-and-envs ticket 08): keeps an immediate next tick from resending
    *  it before the indexer's `RoundClosed` mirror lands. */
   private closingRounds = new Map<bigint, number>();
+  /** Ticket 12: owners a `register` send was just confirmed for, by when
+   *  (same idea as `settled`): dropped from `playersToRegister` results for a
+   *  while, so a zero-weight owner (a no-op on chain) is not resent forever
+   *  and a Read-model lag cannot resend a batch that already landed. */
+  private registeredRecently = new Map<string, number>();
   /** Ticket 06: withdrawal-cranking state across ticks (see `WithdrawState`). */
   private lastWithdrawState: WithdrawState | null = null;
+  /** Ticket 12: expected-error repeat counts across ticks, by `action:target`. */
+  private lastExpectedErrors = new Map<string, number>();
   /** Ticket 07: how young the Indexer cursor must be for `close_registration`
    *  to trust it. */
   private readonly registrationIndexerFreshSeconds: bigint;
@@ -233,6 +245,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       this.syncRandomnessWatch(ctx.openRound);
       if (outcome.registerCheck) this.lastRegisterCheck = outcome.registerCheck;
       if (outcome.withdrawState) this.lastWithdrawState = outcome.withdrawState;
+      if (outcome.expectedErrors) this.lastExpectedErrors = new Map(outcome.expectedErrors);
       if (outcome.action) this.logger.log(`sent ${outcome.action}`);
       if (outcome.stepError) this.logger.warn(`tick step failed: ${outcome.stepError}`);
       // A new Round exists on chain now; the Sparring player buys in without
@@ -317,11 +330,22 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       lastWithdrawState: this.lastWithdrawState,
       indexerCursor: await this.indexerCursorInfo(),
       indexerFreshThresholdSeconds: this.registrationIndexerFreshSeconds,
+      lastExpectedErrors: this.lastExpectedErrors,
       fulfilled: (seed) => this.fulfilled(seed),
       principalVaultBalance: () => this.principalVaultBalance(),
       duePendingWithdrawals: (currentEpochId) =>
         this.duePendingWithdrawals(currentEpochId),
-      playersToRegister: (epochId) => this.indexer.playersToRegister(epochId),
+      playersToRegister: async (epochId) => {
+        const owners = await this.indexer.playersToRegister(epochId);
+        return owners.filter((owner) => !this.registeredRecently.has(owner));
+      },
+      forgetRegistered: async (owners) => {
+        const now = Date.now();
+        for (const [owner, at] of this.registeredRecently) {
+          if (now - at > REGISTERED_MEMORY_MS) this.registeredRecently.delete(owner);
+        }
+        for (const owner of owners) this.registeredRecently.set(owner, now);
+      },
       referralGrantsDue: (epochId) => this.indexer.referralGrantsDue(epochId),
       markReferralGrantsSent: (epochId, referrers, txSig) =>
         this.indexer.markReferralGrantsSent(epochId, referrers, txSig),
@@ -346,6 +370,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
         this.closingRounds.set(id, now);
       },
       winner: (epochId, target) => this.winner(epochId, target),
+      winnerOnChain: (epochId, target) => this.winnerOnChain(epochId, target),
       send: (instructions) => this.chain.send(instructions),
       warn: (message) => this.logger.warn(message),
     };
@@ -494,6 +519,40 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       select: { owner: true },
     });
     return player?.owner ?? null;
+  }
+
+  /**
+   * Ticket 12: same lookup as `winner`, scanning every Player account on
+   * chain instead of the Read model, for when it misses — a mirror gap must
+   * never cost a winner their Prize. Only asked on a miss, so this is rare;
+   * ponytail: scans the whole program's Player accounts (fine at beta
+   * scale, same trade `ApiService.liveWeights` already makes), add a
+   * `getProgramAccounts` memcmp filter on `reg_epoch` if it ever grows.
+   */
+  private async winnerOnChain(epochId: bigint, target: bigint): Promise<string | null> {
+    interface DecodedPlayer {
+      owner: PublicKey;
+      regEpoch: { toString(): string };
+      regStart: { toString(): string };
+      regEnd: { toString(): string };
+    }
+    // SAFETY: `program.account` is keyed by plain strings in `Program<Idl>`
+    // (no generated per-account types), same reason `instructions.ts`'s
+    // `method()` casts; the shape is checked structurally by `DecodedPlayer`.
+    const accountNamespace = this.chain.program.account as unknown as Record<
+      string,
+      { all(): Promise<{ account: DecodedPlayer }[]> } | undefined
+    >;
+    const playerAccounts = accountNamespace.player;
+    if (!playerAccounts) throw new Error("player account namespace is missing from the IDL");
+    const accounts = await playerAccounts.all();
+    const hit = accounts.find(({ account }) => {
+      const regEpoch = BigInt(account.regEpoch.toString());
+      const regStart = BigInt(account.regStart.toString());
+      const regEnd = BigInt(account.regEnd.toString());
+      return regEpoch === epochId && target >= regStart && target < regEnd;
+    });
+    return hit ? hit.account.owner.toBase58() : null;
   }
 
   /** Ticket 07: the Indexer cursor's own staleness, straight off its row. */
