@@ -521,7 +521,16 @@ export class ApiService {
     const { weights, total } = await this.liveWeights();
     return weights
       .slice()
-      .sort((a, b) => (b.drawWeight === a.drawWeight ? 0 : b.drawWeight > a.drawWeight ? 1 : -1))
+      .sort((a, b) => {
+        // Ticket 01: a tie (most commonly two players at 0% before any
+        // Round opens) otherwise falls back to whatever order the DB
+        // returned, which is not guaranteed stable across requests. House
+        // always sorts last among ties; real players break ties by owner
+        // so the order is deterministic and the test is stable.
+        if (b.drawWeight !== a.drawWeight) return b.drawWeight > a.drawWeight ? 1 : -1;
+        if (a.player.isHouse !== b.player.isHouse) return a.player.isHouse ? 1 : -1;
+        return a.player.owner < b.player.owner ? -1 : a.player.owner > b.player.owner ? 1 : 0;
+      })
       .slice(0, limit)
       .map(({ player, liveWeight, drawWeight }) => ({
         owner: player.owner,

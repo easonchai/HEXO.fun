@@ -25,21 +25,36 @@ Promise.race([prisma.$connect(), timeout])
 const cache = new Map<string, boolean>();
 
 /** Probes `url` once per test run (cached) and reports whether it accepted a
- *  real connection within `timeoutMs`. Never throws. */
+ *  real connection within `timeoutMs`. Never throws.
+ *
+ *  Ticket 01: a database-backed suite that skips itself must say so loudly.
+ *  `pnpm test:unit` otherwise prints an all-green run even when every
+ *  DB-backed `describe.skipIf` block never collected a single test, so a
+ *  missing 5433 Postgres cannot pass for a full run. The warning fires on
+ *  every call (not just the first probe per url), because each caller is a
+ *  separate suite that skipped itself and each one needs naming. */
 export function isDatabaseReachableSync(url: string, timeoutMs = 1500): boolean {
   const cached = cache.get(url);
-  if (cached !== undefined) return cached;
-
-  let reachable: boolean;
-  try {
-    execFileSync(process.execPath, ["-e", PROBE_SCRIPT, url, String(timeoutMs)], {
-      stdio: "ignore",
-      timeout: timeoutMs + 1000,
-    });
-    reachable = true;
-  } catch {
-    reachable = false;
+  let reachable = cached;
+  if (reachable === undefined) {
+    try {
+      execFileSync(process.execPath, ["-e", PROBE_SCRIPT, url, String(timeoutMs)], {
+        stdio: "ignore",
+        timeout: timeoutMs + 1000,
+      });
+      reachable = true;
+    } catch {
+      reachable = false;
+    }
+    cache.set(url, reachable);
   }
-  cache.set(url, reachable);
+
+  if (!reachable) {
+    const db = url.split("/").pop() ?? url;
+    console.warn(
+      `[test:db] SKIPPING a database-backed suite: no Postgres reachable for "${db}". ` +
+        `Run "pnpm --filter @hexvault/backend test:db" and re-run tests for a real signal.`,
+    );
+  }
   return reachable;
 }

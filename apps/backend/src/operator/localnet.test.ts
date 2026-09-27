@@ -17,7 +17,6 @@ import { BN } from "@anchor-lang/core";
 import {
   createAccount,
   createMint,
-  getAccount,
   getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
   mintTo,
@@ -169,6 +168,9 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       await mintTo(connection, authority, mint, authorityToken.address, authority, JACKPOT);
 
       const poolId = BigInt(Date.now());
+      // run-local.sh points `loadIdl()` (via HEXVAULT_IDL_PATH) at the
+      // freshly built target/idl/hex_vault.json, so this is the id it just
+      // deployed, not whatever the committed src/idl/ snapshot carries.
       const programId = String(loadIdl().address);
       const config = stubConfig({
         DATABASE_URL: process.env.DATABASE_URL ?? "",
@@ -220,6 +222,13 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         // of the suite is the same as before either parameter existed.
         registrationWindow: new BN(0),
         payoutTimeout: new BN(86_400),
+        // Base yield and grant-tickets are off (0) so this suite's round and
+        // jackpot flow behaves exactly as it did before these params
+        // existed; `ticketsPerUsdc` only has to be positive to pass
+        // `create_pool`'s own validation and is never exercised here.
+        baseRateBps: 0,
+        ticketsPerUsdc: 10,
+        bonusCapBps: 0,
       })
         .accountsPartial({
           payer: authority.publicKey,
@@ -366,9 +375,21 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
           })
           .rpc();
 
-        const balancesBefore = new Map([
-          [a.keypair.publicKey.toBase58(), await tokenBalance(connection, a.token)],
-          [b.keypair.publicKey.toBase58(), await tokenBalance(connection, b.token)],
+        // A non-House win compounds into the winner's Principal instead of
+        // paying their token account (epochs.rs `payout`, spec's no-loss
+        // model), so the win is asserted against Principal, not a token
+        // balance.
+        const principalOf = async (wallet: PublicKey): Promise<bigint> => {
+          const info = await connection.getAccountInfo(chain.playerAddress(wallet));
+          const raw = chain.program.coder.accounts.decode<{ principal: BN }>(
+            "player",
+            info?.data ?? Buffer.alloc(0),
+          );
+          return BigInt(raw.principal.toString());
+        };
+        const principalsBefore = new Map([
+          [a.keypair.publicKey.toBase58(), await principalOf(a.keypair.publicKey)],
+          [b.keypair.publicKey.toBase58(), await principalOf(b.keypair.publicKey)],
         ]);
 
         // The operator opens rounds on its own; wait for one with enough time
@@ -428,8 +449,8 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         const winnerWallet = [a, b].find((w) => w.keypair.publicKey.toBase58() === winner);
         expect(winnerWallet, `winner ${winner} is one of the two depositors`).toBeDefined();
 
-        const after = await tokenBalance(connection, winnerWallet?.token as PublicKey);
-        expect(after - (balancesBefore.get(winner) ?? 0n)).toBe(epoch?.jackpotAmount);
+        const principalAfter = await principalOf(winnerWallet?.keypair.publicKey as PublicKey);
+        expect(principalAfter - (principalsBefore.get(winner) ?? 0n)).toBe(epoch?.jackpotAmount);
       } finally {
         stopped = true;
         await crank;
@@ -467,9 +488,6 @@ async function fundedWallet(
   await mintTo(connection, authority, mint, account.address, authority, 10_000_000n);
   return { keypair, token: account.address };
 }
-
-const tokenBalance = async (connection: Connection, address: PublicKey): Promise<bigint> =>
-  (await getAccount(connection, address)).amount;
 
 async function programAccounts<T>(
   chain: ChainService,

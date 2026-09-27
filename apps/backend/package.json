@@ -8,6 +8,7 @@
     "build": "prisma generate && nest build",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "test:db": "sh scripts/test-db.sh",
     "bootstrap": "tsx src/bootstrap.ts",
     "admin": "tsx src/admin/main.ts",
     "sparring-setup": "tsx src/sparring-setup.ts",

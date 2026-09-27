@@ -142,8 +142,9 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     const env: Partial<HexVaultEnv> = {
       OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
       POOL_ID: poolId.toString(),
-      // The address baked into the IDL snapshot is the one run-local.sh
-      // deploys, so the two cannot drift apart within a run.
+      // run-local.sh points `loadIdl()` (via HEXVAULT_IDL_PATH) at the
+      // freshly built target/idl/hex_vault.json, so this is the id it just
+      // deployed, not whatever the committed src/idl/ snapshot carries.
       PROGRAM_ID: loadIdl().address,
       RPC_URL: rpcUrl,
     };
@@ -198,6 +199,13 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         // change its timing.
         registrationWindow: new BN(0),
         payoutTimeout: new BN(86_400),
+        // Base yield and grant-tickets are off (0), same reasoning as the
+        // operator localnet suite: neither is what this suite is about.
+        // `ticketsPerUsdc` only has to be positive to pass `create_pool`'s
+        // own validation.
+        baseRateBps: 0,
+        ticketsPerUsdc: 10,
+        bonusCapBps: 0,
       })
       .accountsPartial({
         payer: authority.publicKey,
