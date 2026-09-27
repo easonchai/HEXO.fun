@@ -35,6 +35,7 @@ import {
   type RegisterCheck,
   type TickContext,
   type TickOutcome,
+  type WithdrawState,
 } from "./tick";
 import { isFulfilled, randomnessAddress } from "./vrf";
 
@@ -80,6 +81,8 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    *  (ops-and-envs ticket 08): keeps an immediate next tick from resending
    *  it before the indexer's `RoundClosed` mirror lands. */
   private closingRounds = new Map<bigint, number>();
+  /** Ticket 06: withdrawal-cranking state across ticks (see `WithdrawState`). */
+  private lastWithdrawState: WithdrawState | null = null;
   /** Logged once, the first tick that sees the pool shut down, so the
    *  epoch and registration loops stopping is announced instead of just
    *  going quiet (ops-and-envs ticket 08). Shutdown is irreversible, so
@@ -220,12 +223,14 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       const outcome = await runTick(ctx);
       this.syncRandomnessWatch(ctx.openRound);
       if (outcome.registerCheck) this.lastRegisterCheck = outcome.registerCheck;
+      if (outcome.withdrawState) this.lastWithdrawState = outcome.withdrawState;
       if (outcome.action) this.logger.log(`sent ${outcome.action}`);
+      if (outcome.stepError) this.logger.warn(`tick step failed: ${outcome.stepError}`);
       // A new Round exists on chain now; the Sparring player buys in without
       // waiting for its own (much slower) safety tick to notice.
       if (outcome.action === "create_round") this.sparring.wake();
       const waitMs = msUntilWake(ctx.now, outcome.nextWakeAt);
-      await this.writeState(outcome, null, waitMs);
+      await this.writeState(outcome, outcome.stepError ?? null, waitMs);
       return { ...outcome, waitMs };
     } catch (cause) {
       const error =
@@ -300,6 +305,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       lastRound,
       ix: this.instructions,
       lastRegisterCheck: this.lastRegisterCheck,
+      lastWithdrawState: this.lastWithdrawState,
       fulfilled: (seed) => this.fulfilled(seed),
       principalVaultBalance: () => this.principalVaultBalance(),
       duePendingWithdrawals: (currentEpochId) =>
@@ -490,7 +496,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    * and the web summary never have to reason about chain time (ticket 03).
    */
   private async writeState(
-    outcome: Pick<TickOutcome, "action" | "progress" | "withdrawShortfall">,
+    outcome: Pick<TickOutcome, "action" | "progress" | "withdrawShortfall" | "withdrawState">,
     error: string | null,
     waitMs: number,
   ): Promise<void> {
@@ -511,6 +517,11 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       ...(outcome.withdrawShortfall === undefined
         ? {}
         : { withdrawShortfall: outcome.withdrawShortfall }),
+      // Ticket 06: how many owners step 6b has given up on for the epoch,
+      // for the new alert condition naming the count.
+      ...(outcome.withdrawState === undefined
+        ? {}
+        : { withdrawSkippedCount: outcome.withdrawState.skipped.size }),
     };
     await this.prisma.operatorState.upsert({
       where: { id: 1 },

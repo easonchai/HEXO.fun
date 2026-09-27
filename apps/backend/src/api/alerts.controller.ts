@@ -15,7 +15,8 @@ export type AlertCode =
   | "INDEXER_STALE"
   | "WITHDRAW_SHORTFALL"
   | "ROUND_VOIDED_RECENTLY"
-  | "EPOCH_ROLLED_OVER_RECENTLY";
+  | "EPOCH_ROLLED_OVER_RECENTLY"
+  | "WITHDRAW_OWNERS_SKIPPED";
 
 export interface Alert {
   code: AlertCode;
@@ -50,6 +51,9 @@ export interface AlertInputs {
   withdrawShortfall: bigint;
   roundVoidedRecently: boolean;
   epochRolledOverRecently: boolean;
+  /** Ticket 06: OperatorState.withdrawSkippedCount, 0 for "never checked"
+   *  and "none skipped" alike. */
+  withdrawSkippedCount: number;
 }
 
 export interface AlertThresholds {
@@ -113,6 +117,12 @@ export function evaluateAlerts(inputs: AlertInputs, thresholds: AlertThresholds)
       message: "An epoch rolled over without paying out in the last hour.",
     });
   }
+  if (inputs.withdrawSkippedCount > 0) {
+    alerts.push({
+      code: "WITHDRAW_OWNERS_SKIPPED",
+      message: `${inputs.withdrawSkippedCount} owner(s) skipped after repeated withdrawal failures this epoch.`,
+    });
+  }
   return alerts;
 }
 
@@ -161,6 +171,7 @@ export class AlertsController {
         withdrawShortfall: status.withdrawShortfall,
         roundVoidedRecently: recent.roundVoidedRecently,
         epochRolledOverRecently: recent.epochRolledOverRecently,
+        withdrawSkippedCount: status.withdrawSkippedCount,
       },
       { tickStaleSeconds: this.tickStaleSeconds, indexerStaleSeconds: this.indexerStaleSeconds },
     );

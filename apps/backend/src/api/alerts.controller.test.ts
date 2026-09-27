@@ -15,6 +15,7 @@ const HEALTHY: AlertInputs = {
   withdrawShortfall: 0n,
   roundVoidedRecently: false,
   epochRolledOverRecently: false,
+  withdrawSkippedCount: 0,
 };
 
 describe("evaluateAlerts", () => {
@@ -95,6 +96,13 @@ describe("evaluateAlerts", () => {
     ]);
   });
 
+  it("WITHDRAW_OWNERS_SKIPPED fires once at least one owner has been skipped", () => {
+    expect(evaluateAlerts({ ...HEALTHY, withdrawSkippedCount: 2 }, THRESHOLDS)).toEqual([
+      { code: "WITHDRAW_OWNERS_SKIPPED", message: expect.stringContaining("2") },
+    ]);
+    expect(evaluateAlerts({ ...HEALTHY, withdrawSkippedCount: 0 }, THRESHOLDS)).toEqual([]);
+  });
+
   it("stacks every active condition at once", () => {
     const codes = evaluateAlerts(
       {
@@ -107,6 +115,7 @@ describe("evaluateAlerts", () => {
         withdrawShortfall: 1n,
         roundVoidedRecently: true,
         epochRolledOverRecently: true,
+        withdrawSkippedCount: 1,
       },
       THRESHOLDS,
     ).map((alert) => alert.code);
@@ -119,6 +128,7 @@ describe("evaluateAlerts", () => {
       "WITHDRAW_SHORTFALL",
       "ROUND_VOIDED_RECENTLY",
       "EPOCH_ROLLED_OVER_RECENTLY",
+      "WITHDRAW_OWNERS_SKIPPED",
     ]);
   });
 });

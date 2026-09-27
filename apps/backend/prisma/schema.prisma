@@ -272,6 +272,10 @@ model OperatorState {
    *  last tick that tried to pay them. 0 when the last try covered them all,
    *  null before any tick has looked. */
   withdrawShortfall BigInt?
+  /** Ticket 06: owners step 6b has given up on for the rest of the epoch
+   *  after too many consecutive failures. 0 when none have been, null before
+   *  any tick has looked. */
+  withdrawSkippedCount Int?
 }
 
 // beta-launch-fixes ticket 16: decoded send failures and error-boundary

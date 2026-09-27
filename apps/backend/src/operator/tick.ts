@@ -74,10 +74,12 @@ const UNPAYABLE_WINNER = [
   "custom program error: 0x11",
 ];
 
-const cannotPayWinner = (cause: unknown): boolean => {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  return UNPAYABLE_WINNER.some((marker) => message.includes(marker));
-};
+/** Every catch below narrows `unknown` the same way. */
+const errorMessage = (cause: unknown): string =>
+  cause instanceof Error ? cause.message : String(cause);
+
+const cannotPayWinner = (cause: unknown): boolean =>
+  UNPAYABLE_WINNER.some((marker) => errorMessage(cause).includes(marker));
 
 /**
  * `grant_tickets`' operator-path cap errors (ticket 04). `computeBonuses`'
@@ -88,10 +90,33 @@ const cannotPayWinner = (cause: unknown): boolean => {
  */
 const GRANT_CAP_EXCEEDED = ["DailyPlayerGrantCapExceeded", "DailyPoolGrantCapExceeded"];
 
-const capExceeded = (cause: unknown): boolean => {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  return GRANT_CAP_EXCEEDED.some((marker) => message.includes(marker));
-};
+const capExceeded = (cause: unknown): boolean =>
+  GRANT_CAP_EXCEEDED.some((marker) => errorMessage(cause).includes(marker));
+
+/** Ticket 06: consecutive failed tries before a single owner's withdrawal is
+ *  given up on for the rest of the epoch. Fixed and small, per the ticket. */
+export const WITHDRAW_FAILURE_LIMIT = 3;
+
+/** Ticket 06: what step 6b remembers about withdrawal cranking across ticks,
+ *  scoped to one epoch (a new epoch starts the count clean). The service
+ *  persists this across ticks; the pure function only reads and returns it. */
+export interface WithdrawState {
+  readonly epochId: bigint;
+  /** Once a batch send has failed, every following tick sends the queue one
+   *  at a time instead of batching, so one bad owner cannot block the rest. */
+  readonly singleMode: boolean;
+  /** Consecutive single-send failures per owner, this epoch. */
+  readonly failures: ReadonlyMap<string, number>;
+  /** Owners given up on for the rest of the epoch after `WITHDRAW_FAILURE_LIMIT`. */
+  readonly skipped: ReadonlySet<string>;
+}
+
+const EMPTY_WITHDRAW_STATE = (epochId: bigint): WithdrawState => ({
+  epochId,
+  singleMode: false,
+  failures: new Map(),
+  skipped: new Set(),
+});
 
 /**
  * What step 4 remembers about the last tick's `playersToRegister` check, so
@@ -117,6 +142,8 @@ export interface TickContext {
   readonly ix: OperatorInstructions;
   /** Null before the first tick has ever checked. */
   readonly lastRegisterCheck: RegisterCheck | null;
+  /** Ticket 06: null before any withdrawal has ever failed. */
+  readonly lastWithdrawState: WithdrawState | null;
   /** Has the oracle answered the request for this seed? */
   fulfilled(seed: Uint8Array): Promise<boolean>;
   /** The principal vault's balance, in atomic units. Read only when a payout
@@ -187,6 +214,16 @@ export interface TickOutcome {
    * so a tick that acted earlier leaves the last reported figure standing.
    */
   readonly withdrawShortfall?: bigint;
+  /** Ticket 06: this tick's withdrawal-cranking state, present whenever step
+   *  6b ran, for the service to remember as next tick's `lastWithdrawState`. */
+  readonly withdrawState?: WithdrawState;
+  /**
+   * Ticket 06: a failure in the withdrawal, settle-position or close-round
+   * step, recorded so the service writes it as the tick's `lastError` even
+   * though the tick went on to act (possibly reaching `create_round`) rather
+   * than aborting. Absent when none of those steps failed this tick.
+   */
+  readonly stepError?: string;
   /**
    * The chain timestamp at which this decision could next differ: a Round
    * closing, an Epoch ending, a VRF timeout, the reveal wait after the last
@@ -284,6 +321,47 @@ export async function runTick(ctx: TickContext): Promise<TickOutcome> {
 async function decide(ctx: TickContext): Promise<Decision> {
   const { pool, currentEpoch, previousEpoch, openRound, now } = ctx;
 
+  // Ticket 06: accumulated across steps 2, 2c and 6b below, so a failure in
+  // one of them never has to `return` (and so cut the tick short) to be
+  // remembered — every later `return` in this function is wrapped in
+  // `finish()`, which folds these back in.
+  let stepError: string | undefined;
+  let withdrawStateOut: WithdrawState | undefined;
+  const finish = (decision: Decision): Decision => ({
+    ...decision,
+    ...(stepError !== undefined ? { stepError } : {}),
+    ...(withdrawStateOut !== undefined ? { withdrawState: withdrawStateOut } : {}),
+  });
+
+  /**
+   * Ticket 06: runs one of step 2 or 2c's sends. On success, or on an
+   * `AccountNotInitialized` race (someone else already did this), the
+   * caller's bookkeeping (`forgetPositions`/`forgetRound`) still runs and the
+   * attempt counts as done. Anything else on `EXPECTED_ERRORS` is a race, not
+   * a failure, and is swallowed. A real, unexpected failure is recorded as
+   * `stepError` instead of thrown, so the tick can fall through to the next
+   * step (and eventually `create_round`) rather than aborting.
+   */
+  async function attempt(
+    key: string,
+    send: () => Promise<void>,
+    alreadyGone: () => Promise<void>,
+  ): Promise<boolean> {
+    try {
+      await send();
+      return true;
+    } catch (cause) {
+      const message = errorMessage(cause);
+      if (message === "AccountNotInitialized") {
+        await alreadyGone();
+        return true;
+      }
+      if (EXPECTED_ERRORS.has(message)) return false;
+      stepError = stepError ?? `${key} failed: ${message}`;
+      return false;
+    }
+  }
+
   // 1. Round: an Open round past its close asks for randomness, the same
   // instant `buy_position` starts refusing (program §2.3); Requested and
   // fulfilled settles; Requested past `vrf_timeout` voids. Runs first so a
@@ -294,23 +372,25 @@ async function decide(ctx: TickContext): Promise<Decision> {
       now >= openRound.endsAt - pool.closeBuffer
     ) {
       await ctx.send(await ctx.ix.requestRoundRandomness(pool, openRound));
-      return { action: "request_round_randomness" };
+      return finish({ action: "request_round_randomness" });
     }
     if (openRound.status === ROUND_STATUS.REQUESTED) {
       if (await ctx.fulfilled(openRound.vrfSeed)) {
         await ctx.send(await ctx.ix.settleRound(pool, openRound));
-        return { action: "settle_round" };
+        return finish({ action: "settle_round" });
       }
       if (now > openRound.requestedAt + pool.vrfTimeout) {
         await ctx.send(await ctx.ix.voidRound(pool, openRound));
-        return { action: "void_round" };
+        return finish({ action: "void_round" });
       }
     }
   }
 
   // 2. Sweep: unsettled Positions on any Round that is Settled, Forfeited or
   // Voided, not just the newest one. Grouped by Round because a batch settles
-  // within one Round; one batch, and one Round, per tick, as before.
+  // within one Round; one batch, and one Round, per tick, as before. Ticket
+  // 06: a failure here (of any kind) is recorded, not thrown, so it never
+  // blocks the epoch or round loops below it.
   const sweep = await ctx.unsettledPositions();
   const [firstUnsettled] = sweep;
   if (firstUnsettled) {
@@ -318,26 +398,40 @@ async function decide(ctx: TickContext): Promise<Decision> {
     const batch = sweep
       .filter((position) => position.roundId === roundId)
       .slice(0, BATCH_SIZE);
-    await ctx.send(await ctx.ix.settlePositions(pool, roundId, batch));
-    // The accounts are closed now, but the indexer can keep (or briefly
-    // resurrect) their rows for a few sweeps; tell the context so no later
-    // tick resends settle_position and gets AccountNotInitialized.
-    await ctx.forgetPositions(batch.map((position) => position.address));
-    return { action: "settle_position" };
+    const addresses = batch.map((position) => position.address);
+    const sent = await attempt(
+      `settle_position:${roundId}`,
+      async () => {
+        await ctx.send(await ctx.ix.settlePositions(pool, roundId, batch));
+        // The accounts are closed now, but the indexer can keep (or briefly
+        // resurrect) their rows for a few sweeps; tell the context so no
+        // later tick resends settle_position and gets AccountNotInitialized.
+        await ctx.forgetPositions(addresses);
+      },
+      () => ctx.forgetPositions(addresses),
+    );
+    if (sent) return finish({ action: "settle_position" });
   }
 
   // 2c. Close a terminal Round once nothing settled on it is still owed
   // (ops-and-envs ticket 08): reclaims its rent for the operator.
   // Permissionless on the program side and never refused in shutdown, so
-  // this runs whether or not the pool is shut down.
+  // this runs whether or not the pool is shut down. Ticket 06: a failure
+  // here is recorded, not thrown, same as step 2.
   const [roundToClose] = await ctx.roundsToClose();
   if (roundToClose !== undefined) {
-    await ctx.send(await ctx.ix.closeRound(pool, roundToClose));
-    // The account is closed now, but the indexer mirrors that off the
-    // RoundClosed event asynchronously; tell the context so an immediate
-    // next tick does not resend close_round and get AccountNotInitialized.
-    ctx.forgetRound(roundToClose);
-    return { action: "close_round" };
+    const sent = await attempt(
+      `close_round:${roundToClose}`,
+      async () => {
+        await ctx.send(await ctx.ix.closeRound(pool, roundToClose));
+        // The account is closed now, but the indexer mirrors that off the
+        // RoundClosed event asynchronously; tell the context so an immediate
+        // next tick does not resend close_round and get AccountNotInitialized.
+        ctx.forgetRound(roundToClose);
+      },
+      async () => ctx.forgetRound(roundToClose),
+    );
+    if (sent) return finish({ action: "close_round" });
   }
 
   // 3. Begin Epoch: only once the Round and the sweep above are clear, and
@@ -353,7 +447,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
     previousEpoch.status === EPOCH_STATUS.ROLLED_OVER;
   if (!pool.shutdown && epochEnded && pool.openRoundId === 0n && previousDone) {
     await ctx.send(await ctx.ix.beginEpoch(pool));
-    return { action: "begin_epoch" };
+    return finish({ action: "begin_epoch" });
   }
 
   // 3b. Referral bonuses (ticket 08): once per epoch, right after
@@ -376,7 +470,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
           batch.map((grant) => grant.referrer),
           signature,
         );
-        return { action: "grant_tickets" };
+        return finish({ action: "grant_tickets" });
       } catch (cause) {
         if (!capExceeded(cause)) throw cause;
         // referralGrantsDue re-clamps every grant against the freshest
@@ -418,39 +512,39 @@ async function decide(ctx: TickContext): Promise<Decision> {
       // and comes back next tick, so a sloppy indexer query stalls the epoch
       // here forever. The contract is on IndexerQueries.playersToRegister; if
       // it has to be enforced on this side, compare consecutive batches.
-      return {
+      return finish({
         action: "register",
         progress: {
           count: previousEpoch.registeredCount,
           total: previousEpoch.registeredCount + owners.length,
         },
         registerCheck: { epochId: previousEpoch.epochId, empty: false },
-      };
+      });
     }
 
     const emptyLastTick =
       ctx.lastRegisterCheck?.epochId === previousEpoch.epochId &&
       ctx.lastRegisterCheck.empty;
     if (!emptyLastTick) {
-      return {
+      return finish({
         action: null,
         registerCheck: { epochId: previousEpoch.epochId, empty: true },
-      };
+      });
     }
 
     // The program refuses to close before this instant, so that everyone who
     // earned weight in the epoch has had the window to register.
     if (now < registrationClosesAt(pool, previousEpoch)) {
-      return {
+      return finish({
         action: null,
         registerCheck: { epochId: previousEpoch.epochId, empty: true },
-      };
+      });
     }
 
     // The jackpot was funded at the start of the epoch (step 6b), so closing
     // snapshots whatever the vault holds now.
     await ctx.send(await ctx.ix.closeRegistration(pool, previousEpoch.epochId));
-    return { action: "close_registration" };
+    return finish({ action: "close_registration" });
   }
 
   // 5. Waiting on the draw's randomness. `draw` is refused in shutdown
@@ -459,11 +553,11 @@ async function decide(ctx: TickContext): Promise<Decision> {
   if (previousEpoch?.status === EPOCH_STATUS.DRAWING) {
     if (!pool.shutdown && (await ctx.fulfilled(previousEpoch.vrfSeed))) {
       await ctx.send(await ctx.ix.draw(pool, previousEpoch));
-      return { action: "draw" };
+      return finish({ action: "draw" });
     }
     if (now > previousEpoch.requestedAt + pool.vrfTimeout) {
       await ctx.send(await ctx.ix.rolloverEpoch(pool, previousEpoch));
-      return { action: "rollover_epoch" };
+      return finish({ action: "rollover_epoch" });
     }
   }
 
@@ -482,7 +576,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
         await ctx.send(
           await ctx.ix.payout(pool, previousEpoch.epochId, new PublicKey(winner)),
         );
-        return { action: "payout" };
+        return finish({ action: "payout" });
       } catch (cause) {
         if (!cannotPayWinner(cause)) throw cause;
         ctx.warn(
@@ -494,7 +588,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
     }
     if (timedOut) {
       await ctx.send(await ctx.ix.rolloverEpoch(pool, previousEpoch));
-      return { action: "rollover_epoch" };
+      return finish({ action: "rollover_epoch" });
     }
     // Retried next tick rather than treated as an error: either the payout
     // will start landing, or no row covers the target yet because the
@@ -507,26 +601,75 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // delaying a round, a draw or a payout. A vault too short to cover the
   // next batch reports the gap and waits for the admin to bring principal
   // back, retrying on the following tick.
-  const due = await ctx.duePendingWithdrawals(pool.currentEpochId);
+  const withdrawStateIn =
+    ctx.lastWithdrawState?.epochId === pool.currentEpochId
+      ? ctx.lastWithdrawState
+      : EMPTY_WITHDRAW_STATE(pool.currentEpochId);
+  const due = (await ctx.duePendingWithdrawals(pool.currentEpochId)).filter(
+    (entry) => !withdrawStateIn.skipped.has(entry.owner),
+  );
   let withdrawShortfall = 0n;
   if (due.length > 0) {
-    const batch = due.slice(0, WITHDRAW_BATCH_SIZE);
+    // Ticket 06: once a batch send has failed, every following tick pays the
+    // queue one at a time instead — a single bad owner cannot then block
+    // anyone behind them, at the cost of one payout per tick instead of
+    // `WITHDRAW_BATCH_SIZE`.
+    const batch = withdrawStateIn.singleMode ? due.slice(0, 1) : due.slice(0, WITHDRAW_BATCH_SIZE);
     try {
       await ctx.send(await ctx.ix.processWithdrawals(pool, batch));
-      return { action: "process_withdraw", withdrawShortfall: 0n };
+      const failures = new Map(withdrawStateIn.failures);
+      for (const entry of batch) failures.delete(entry.owner);
+      withdrawStateOut = {
+        epochId: pool.currentEpochId,
+        // Back to batching once a send lands cleanly with nothing left
+        // waiting behind it; otherwise keep cranking singly until it does.
+        singleMode: withdrawStateIn.singleMode && due.length > batch.length,
+        failures,
+        skipped: withdrawStateIn.skipped,
+      };
+      return finish({ action: "process_withdraw", withdrawShortfall: 0n });
     } catch (cause) {
-      if ((cause instanceof Error ? cause.message : "") !== SHORT_VAULT) throw cause;
-      // The batch that was actually tried, not the whole queue: the program
-      // refused to pay these four, and sizing the gap against a queue of
-      // forty would ask the admin to bring back ten times the principal the
-      // next transaction needs.
-      const owed = batch.reduce((sum, entry) => sum + entry.amount, 0n);
-      const held = await ctx.principalVaultBalance();
-      withdrawShortfall = owed > held ? owed - held : 0n;
-      ctx.warn(
-        `principal vault holds ${held} against ${owed} of due withdrawals; short by ${withdrawShortfall}`,
-      );
+      const message = errorMessage(cause);
+      if (message === SHORT_VAULT) {
+        // The batch that was actually tried, not the whole queue: the
+        // program refused to pay these four, and sizing the gap against a
+        // queue of forty would ask the admin to bring back ten times the
+        // principal the next transaction needs.
+        const owed = batch.reduce((sum, entry) => sum + entry.amount, 0n);
+        const held = await ctx.principalVaultBalance();
+        withdrawShortfall = owed > held ? owed - held : 0n;
+        ctx.warn(
+          `principal vault holds ${held} against ${owed} of due withdrawals; short by ${withdrawShortfall}`,
+        );
+        withdrawStateOut = withdrawStateIn;
+      } else if (!withdrawStateIn.singleMode) {
+        // First failure of a batch: never blame a specific owner yet, just
+        // switch strategy so the next tick isolates the bad one.
+        withdrawStateOut = { ...withdrawStateIn, singleMode: true };
+        stepError =
+          stepError ??
+          `withdrawal batch failed, retrying one at a time: ${message}`;
+      } else {
+        const owner = batch[0]?.owner;
+        if (owner === undefined) throw cause;
+        const count = (withdrawStateIn.failures.get(owner) ?? 0) + 1;
+        const failures = new Map(withdrawStateIn.failures);
+        const skipped = new Set(withdrawStateIn.skipped);
+        if (count >= WITHDRAW_FAILURE_LIMIT) {
+          failures.delete(owner);
+          skipped.add(owner);
+          ctx.warn(
+            `withdrawal to ${owner} failed ${count} times in a row; skipping for the rest of epoch ${pool.currentEpochId}`,
+          );
+        } else {
+          failures.set(owner, count);
+        }
+        withdrawStateOut = { epochId: pool.currentEpochId, singleMode: true, failures, skipped };
+        stepError = stepError ?? `withdrawal to ${owner} failed: ${message}`;
+      }
     }
+  } else {
+    withdrawStateOut = withdrawStateIn;
   }
 
   // 7. Open the next round, if a whole one still fits in this epoch, and the
@@ -547,10 +690,10 @@ async function decide(ctx: TickContext): Promise<Decision> {
     await ctx.send(
       await ctx.ix.createRound(pool, now, now + pool.roundSeconds),
     );
-    return { action: "create_round", withdrawShortfall };
+    return finish({ action: "create_round", withdrawShortfall });
   }
 
-  return { ...NOTHING, withdrawShortfall };
+  return finish({ ...NOTHING, withdrawShortfall });
 }
 
 /**

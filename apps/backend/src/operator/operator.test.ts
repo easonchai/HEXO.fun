@@ -35,7 +35,9 @@ import {
   runTick,
   SAFETY_INTERVAL_SECONDS,
   WITHDRAW_BATCH_SIZE,
+  WITHDRAW_FAILURE_LIMIT,
   type TickContext,
+  type WithdrawState,
 } from "./tick";
 import { isFulfilled, keccak256, randomnessAddress, vrfSeed } from "./vrf";
 
@@ -164,6 +166,7 @@ function context(over: Partial<TickContext> = {}): Recorder {
     lastRound: null,
     ix: instructions,
     lastRegisterCheck: null,
+    lastWithdrawState: null,
     fulfilled: async () => false,
     principalVaultBalance: async () => 0n,
     // Empty by default so step 6b stays quiet in every test that is not about it.
@@ -326,7 +329,7 @@ describe("runTick", () => {
     expect(forgotten).toEqual([positions.slice(0, 8).map((position) => position.address)]);
   });
 
-  it("2. keeps the rows when the send fails, so the next tick retries", async () => {
+  it("2. (ticket 06) keeps the rows when the send fails, records the error, and lets the tick continue", async () => {
     const forgotten: string[][] = [];
     const { ctx } = context({
       pool: pool({ openRoundId: 0n }),
@@ -341,12 +344,39 @@ describe("runTick", () => {
       forgetPositions: async (addresses) => {
         forgotten.push(addresses);
       },
-      send: async () => {
-        throw new Error("blockhash expired");
+      send: async (ixs) => {
+        if (ixs.some((ix) => label(ix) === "settle_position")) {
+          throw new Error("blockhash expired");
+        }
+        return "signature";
       },
     });
-    await expect(runTick(ctx)).rejects.toThrow("blockhash expired");
+    const outcome = await runTick(ctx);
     expect(forgotten).toEqual([]);
+    expect(outcome.stepError).toMatch(/blockhash expired/);
+    // Falls through to open the next round instead of aborting the tick.
+    expect(outcome.action).toBe("create_round");
+  });
+
+  it("2. (ticket 12) an AccountNotInitialized race is treated as already settled", async () => {
+    const address = Keypair.generate().publicKey.toBase58();
+    const forgotten: string[][] = [];
+    const { ctx } = context({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      unsettledPositions: async () => [
+        { address, owner: Keypair.generate().publicKey.toBase58(), roundId: 3n },
+      ],
+      forgetPositions: async (addresses) => {
+        forgotten.push(addresses);
+      },
+      send: async () => {
+        throw new Error("AccountNotInitialized");
+      },
+    });
+    const outcome = await runTick(ctx);
+    expect(forgotten).toEqual([[address]]);
+    expect(outcome.stepError).toBeUndefined();
   });
 
   it("2. sweeps a leftover position before begin_epoch when the epoch has also ended", async () => {
@@ -975,14 +1005,92 @@ describe("runTick", () => {
     );
   });
 
-  it("6b. lets any other send failure fail the tick", async () => {
+  it("6b. (ticket 06) any other failure switches to single-send mode and records the error instead of throwing", async () => {
     const { ctx } = context({
       duePendingWithdrawals: async () => pending(1),
       send: async () => {
         throw new Error("blockhash expired");
       },
     });
-    await expect(runTick(ctx)).rejects.toThrow("blockhash expired");
+    const outcome = await runTick(ctx);
+    expect(outcome.action).toBeNull();
+    expect(outcome.stepError).toMatch(/blockhash expired/);
+    expect(outcome.withdrawState?.singleMode).toBe(true);
+  });
+
+  it("6b. (ticket 06) falls back to single sends after a batch failure", async () => {
+    const owners = pending(3);
+    let attempt = 0;
+    const { ctx, sent } = context({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      duePendingWithdrawals: async () => owners,
+      send: async (ixs) => {
+        attempt += 1;
+        if (attempt === 1) throw new Error("some transient failure");
+        sent.push(ixs);
+        return "signature";
+      },
+    });
+    // First tick: the 3-owner batch fails, switches to single-send mode.
+    const first = await runTick(ctx);
+    expect(first.action).toBeNull();
+    expect(first.withdrawState?.singleMode).toBe(true);
+
+    // Second tick: pays exactly one, still in single-send mode (two remain).
+    const { ctx: ctx2 } = context({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      duePendingWithdrawals: async () => owners,
+      lastWithdrawState: first.withdrawState ?? null,
+      send: async (ixs) => {
+        sent.push(ixs);
+        return "signature";
+      },
+    });
+    const second = await runTick(ctx2);
+    expect(second.action).toBe("process_withdraw");
+    expect((sent.at(-1) ?? []).filter((ix) => label(ix) === "process_withdraw")).toHaveLength(1);
+    expect(second.withdrawState?.singleMode).toBe(true);
+  });
+
+  it("6b. (ticket 06) skips an owner for the rest of the epoch after WITHDRAW_FAILURE_LIMIT consecutive failures", async () => {
+    const [entry] = pending(1);
+    if (entry === undefined) throw new Error("test setup");
+    let state: WithdrawState | null = null;
+    let outcome;
+    for (let i = 0; i < WITHDRAW_FAILURE_LIMIT; i += 1) {
+      const { ctx, warned: w } = context({
+        pool: pool({ openRoundId: 0n, paused: true }),
+        openRound: null,
+        lastWithdrawState: i === 0 ? { epochId: 2n, singleMode: true, failures: new Map(), skipped: new Set() } : state,
+        duePendingWithdrawals: async () => [entry],
+        send: async () => {
+          throw new Error("frozen destination");
+        },
+      });
+      outcome = await runTick(ctx);
+      state = outcome.withdrawState ?? state;
+      if (i === WITHDRAW_FAILURE_LIMIT - 1) {
+        expect(w).toEqual(
+          expect.arrayContaining([expect.stringContaining("skipping for the rest of epoch")]),
+        );
+      }
+    }
+    expect(state?.skipped.has(entry.owner)).toBe(true);
+
+    // Once skipped, the owner is filtered out of the queue entirely.
+    const { ctx: finalCtx } = context({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      lastWithdrawState: state,
+      duePendingWithdrawals: async () => [entry],
+      send: () => {
+        throw new Error("must not be sent: owner is skipped");
+      },
+    });
+    const finalOutcome = await runTick(finalCtx);
+    expect(finalOutcome.action).toBeNull();
   });
 
   it("6b. reports no shortfall and reads no balance when nothing is due", async () => {
