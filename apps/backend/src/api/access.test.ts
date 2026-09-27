@@ -493,6 +493,53 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       expect(referral?.referrer).toBe(inviteOwner.publicKey.toBase58());
       expect(referral?.code).toBe("INVT6789");
     });
+
+    // beta-launch-fixes ticket 13: a wallet that opened a `?ref=CODE` link
+    // and called POST /referrals/apply before ever redeeming an invite
+    // already has a Referral row by the time it redeems. Redeem must not
+    // try to insert a second one (which would hit the unique `referee` and
+    // fail the whole redemption over a binding that already succeeded).
+    it("keeps the earlier Referrer when a Referral already exists from /referrals/apply", async () => {
+      const inviteOwner = Keypair.generate();
+      const earlierReferrer = Keypair.generate();
+      const referee = Keypair.generate();
+      await prisma.inviteCode.create({
+        data: {
+          code: "APLY2345",
+          maxUses: 5,
+          uses: 0,
+          createdAt: 0n,
+          ownerWallet: inviteOwner.publicKey.toBase58(),
+        },
+      });
+      await prisma.referral.create({
+        data: {
+          referee: referee.publicKey.toBase58(),
+          referrer: earlierReferrer.publicKey.toBase58(),
+          code: "PRE00001",
+          boundAt: 0n,
+        },
+      });
+
+      const signature = sign(
+        referee,
+        accessMessage(referee.publicKey.toBase58(), "APLY2345"),
+      );
+      await http
+        .post("/access/redeem")
+        .send({ wallet: referee.publicKey.toBase58(), code: "APLY2345", signature })
+        .expect(201);
+
+      const referral = await prisma.referral.findUnique({
+        where: { referee: referee.publicKey.toBase58() },
+      });
+      expect(referral?.referrer).toBe(earlierReferrer.publicKey.toBase58());
+      expect(referral?.code).toBe("PRE00001");
+      const redemption = await prisma.inviteRedemption.findUnique({
+        where: { wallet: referee.publicKey.toBase58() },
+      });
+      expect(redemption?.code).toBe("APLY2345");
+    });
   });
 
   describe("invite code quota (ticket 07)", () => {

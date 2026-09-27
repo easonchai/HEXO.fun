@@ -442,7 +442,11 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       .useValue(fakeChain)
       .compile();
 
-    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    // trustProxy (ticket 13): the API sits behind Traefik, so the throttler
+    // must key on the forwarded client address, not Traefik's own.
+    app = moduleRef.createNestApplication<NestFastifyApplication>(
+      new FastifyAdapter({ trustProxy: true }),
+    );
     prisma = app.get(PrismaService);
     await truncate(prisma);
     await seed(prisma);
@@ -1094,6 +1098,28 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       const second = await http.get("/state").expect(200);
       expect(second.body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
       expect(jackpotReads).toBe(before + 1);
+    });
+  });
+
+  // ticket 13: Fastify trusts Traefik's forwarded address, so the throttler
+  // (which is otherwise IP-keyed) gives each real client its own bucket
+  // instead of one shared bucket for every request Traefik forwards.
+  describe("GET /access/:wallet throttling keys on the forwarded address", () => {
+    it("throttles one forwarded address without touching another's budget", async () => {
+      const wallet = Keypair.generate().publicKey.toBase58();
+      for (let i = 0; i < 10; i += 1) {
+        await http
+          .get(`/access/${wallet}`)
+          .set("x-forwarded-for", "203.0.113.11")
+          .expect(200);
+      }
+      const throttled = await http
+        .get(`/access/${wallet}`)
+        .set("x-forwarded-for", "203.0.113.11");
+      expect(throttled.status).toBe(429);
+
+      // A different forwarded client has its own, untouched budget.
+      await http.get(`/access/${wallet}`).set("x-forwarded-for", "203.0.113.12").expect(200);
     });
   });
 

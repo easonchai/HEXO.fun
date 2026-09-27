@@ -71,3 +71,14 @@ services:
       - "traefik.http.routers.${STACK_NAME:-hexvault}-api.entrypoints=websecure"
       - "traefik.http.routers.${STACK_NAME:-hexvault}-api.tls.certresolver=${CERT_RESOLVER}"
       - "traefik.http.services.${STACK_NAME:-hexvault}-api.loadbalancer.server.port=8080"
+      # ticket 13 (beta-launch-fixes): config only, not applied here. The
+      # backend's own ThrottlerModule (api.module.ts) already covers the
+      # faucet, access and referral-apply routes; a Traefik rate-limit
+      # middleware in front additionally covers the polled read routes
+      # (`/pool`, `/state`, `/status`, ...), which the backend leaves
+      # unthrottled on purpose since the frontend polls them every 2s. To
+      # apply one, uncomment and attach it to the router above with a
+      # `traefik.http.routers.<name>-api.middlewares=` label:
+      # - "traefik.http.middlewares.${STACK_NAME:-hexvault}-api-ratelimit.ratelimit.average=20"
+      # - "traefik.http.middlewares.${STACK_NAME:-hexvault}-api-ratelimit.ratelimit.burst=40"
+      # - "traefik.http.routers.${STACK_NAME:-hexvault}-api.middlewares=${STACK_NAME:-hexvault}-api-ratelimit"

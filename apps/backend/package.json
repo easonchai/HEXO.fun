@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@anchor-lang/core": "1.1.2",
+    "@fastify/helmet": "^13.1.1",
     "@ledgerhq/hw-app-solana": "7.11.0",
     "@ledgerhq/hw-transport-node-hid": "6.33.5",
     "@nestjs/common": "11.2.3",

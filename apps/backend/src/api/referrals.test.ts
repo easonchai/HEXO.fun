@@ -158,7 +158,6 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
     expect(body).toEqual({
       referralCode: null,
-      inviteCodes: [],
       referrals: { items: [], nextCursor: null },
       qualifiedCount: 0,
       band: { tier: 0, rateBps: 0, minCount: 0, maxCount: 0 },
@@ -176,29 +175,15 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     expect(body.referralCode).toBe("ABCD2345");
   });
 
-  it("lists owned invite codes with redeemed state", async () => {
+  // beta-launch-fixes ticket 13: an owner's unused invite codes are never in
+  // this response, so nobody can harvest them off the leaderboard.
+  it("never returns inviteCodes, even when the wallet owns some", async () => {
     await prisma.inviteCode.create({
       data: { code: "ABCD2345", ownerWallet: REFERRER, maxUses: 5, uses: 2, createdAt: 0n },
     });
-    await prisma.inviteCode.create({
-      data: { code: "WXYZ6789", ownerWallet: REFERRER, maxUses: 5, uses: 5, createdAt: 0n },
-    });
-    // Owned by someone else: must not show up under REFERRER.
-    await prisma.inviteCode.create({
-      data: {
-        code: "OTHR1234",
-        ownerWallet: Keypair.generate().publicKey.toBase58(),
-        maxUses: 5,
-        uses: 0,
-        createdAt: 0n,
-      },
-    });
 
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
-    expect(body.inviteCodes).toEqual([
-      { code: "ABCD2345", redeemed: false },
-      { code: "WXYZ6789", redeemed: true },
-    ]);
+    expect(body).not.toHaveProperty("inviteCodes");
   });
 
   it("masks referral wallets and reports the qualified / holding / below status", async () => {
