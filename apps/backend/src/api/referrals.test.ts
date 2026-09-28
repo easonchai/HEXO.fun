@@ -1,10 +1,11 @@
 // Against a real Postgres (docs/plan/hexo-referrals ticket 11), same shape as
 // access.test.ts: a dedicated database so a rerun, or another agent's suite,
 // cannot collide with these rows. ReferralsController is exercised directly,
-// not through the whole ApiModule: it needs no ChainService, so there is
-// nothing to fake. The SerializationInterceptor is wired in here by hand
-// (api.module.ts registers it for the real app) so bigint fields serialize
-// the same way in this isolated test as they do in production.
+// not through the whole ApiModule: its only ChainService call is
+// `poolAddress()`, so a one-method fake stands in. The
+// SerializationInterceptor is wired in here by hand (api.module.ts registers
+// it for the real app) so bigint fields serialize the same way in this
+// isolated test as they do in production.
 const TEST_DATABASE_URL =
   "postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault_referrals";
 process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -18,11 +19,12 @@ import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
 import type { Player, Pool } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { ChainService } from "../chain/chain.service";
 import { ConfigModule } from "../config/config.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
@@ -35,10 +37,15 @@ const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 const REFERRER = Keypair.generate().publicKey.toBase58();
 const POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
+/** A pool left behind by a Pool cutover (ADR 0016). */
+const RETIRED_POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
+
+/** Makes POOL_ADDRESS the Active pool. */
+const fakeChain = { provide: ChainService, useValue: { poolAddress: () => new PublicKey(POOL_ADDRESS) } };
 
 async function truncate(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE "Pool", "InviteCode", "Referral", "ReferralGrant", "ReferralGrantShare", "ReferralCode", "Player"',
+    'TRUNCATE "Pool", "InviteCode", "Referral", "ReferralGrant", "ReferralGrantShare", "ReferralCode", "Player" CASCADE',
   );
 }
 
@@ -54,7 +61,8 @@ function sign(keypair: Keypair, message: string): string {
   return bs58.encode(signEd25519(null, Buffer.from(message, "utf8"), key));
 }
 
-const emptyPlayer = (owner: string): Player => ({
+const emptyPlayer = (owner: string, poolAddress: string = POOL_ADDRESS): Player => ({
+  poolAddress,
   owner,
   principal: 0n,
   entries: 0n,
@@ -122,7 +130,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     const moduleRef = await Test.createTestingModule({
       imports: [ConfigModule, PrismaModule],
       controllers: [ReferralsController],
-      providers: [{ provide: APP_INTERCEPTOR, useClass: SerializationInterceptor }],
+      providers: [{ provide: APP_INTERCEPTOR, useClass: SerializationInterceptor }, fakeChain],
     })
       .overrideProvider(PrismaService)
       .useValue(new PrismaService({ datasourceUrl: TEST_DATABASE_URL }))
@@ -143,13 +151,14 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
   });
 
   beforeEach(async () => {
-    await prisma.pool.deleteMany();
     await prisma.inviteCode.deleteMany();
     await prisma.referral.deleteMany();
     await prisma.referralGrantShare.deleteMany();
     await prisma.referralGrant.deleteMany();
     await prisma.referralCode.deleteMany();
     await prisma.player.deleteMany();
+    // Last: every pool-scoped row above references it (onDelete: Restrict).
+    await prisma.pool.deleteMany();
   });
 
   it("400s a malformed wallet", async () => {
@@ -278,6 +287,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     });
     await prisma.referralGrant.create({
       data: {
+        poolAddress: POOL_ADDRESS,
         epochId: 5n,
         referrer: REFERRER,
         amount: 8_000_000n,
@@ -288,8 +298,8 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     });
     await prisma.referralGrantShare.createMany({
       data: [
-        { epochId: 5n, referrer: REFERRER, referee, amount: 6_000_000n },
-        { epochId: 5n, referrer: REFERRER, referee: otherReferee, amount: 2_000_000n },
+        { poolAddress: POOL_ADDRESS, epochId: 5n, referrer: REFERRER, referee, amount: 6_000_000n },
+        { poolAddress: POOL_ADDRESS, epochId: 5n, referrer: REFERRER, referee: otherReferee, amount: 2_000_000n },
       ],
     });
 
@@ -329,6 +339,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     await prisma.pool.create({ data: emptyPool({ currentEpochId: 5n }) });
     await prisma.referralGrant.create({
       data: {
+        poolAddress: POOL_ADDRESS,
         epochId: 5n,
         referrer: REFERRER,
         amount: 10_000_000n,
@@ -340,12 +351,29 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
     // A different epoch's grant must not leak into today's reading.
     await prisma.referralGrant.create({
       data: {
+        poolAddress: POOL_ADDRESS,
         epochId: 4n,
         referrer: REFERRER,
         amount: 50_000_000n,
         uncapped: 50_000_000n,
         qualifiedCount: 4,
         rateBps: 300,
+      },
+    });
+    // Nor a retired pool's grant for the same epoch id: ids restart per pool
+    // (ADR 0016).
+    await prisma.pool.create({
+      data: emptyPool({ address: RETIRED_POOL_ADDRESS, currentEpochId: 5n }),
+    });
+    await prisma.referralGrant.create({
+      data: {
+        poolAddress: RETIRED_POOL_ADDRESS,
+        epochId: 5n,
+        referrer: REFERRER,
+        amount: 90_000_000n,
+        uncapped: 90_000_000n,
+        qualifiedCount: 9,
+        rateBps: 500,
       },
     });
 
@@ -370,7 +398,7 @@ describe.skipIf(!DB_AVAILABLE)("POST /referrals/apply", () => {
     const moduleRef = await Test.createTestingModule({
       imports: [ConfigModule, PrismaModule],
       controllers: [ReferralsController],
-      providers: [{ provide: APP_INTERCEPTOR, useClass: SerializationInterceptor }],
+      providers: [{ provide: APP_INTERCEPTOR, useClass: SerializationInterceptor }, fakeChain],
     })
       .overrideProvider(PrismaService)
       .useValue(new PrismaService({ datasourceUrl: TEST_DATABASE_URL }))
@@ -379,6 +407,9 @@ describe.skipIf(!DB_AVAILABLE)("POST /referrals/apply", () => {
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     prisma = app.get(PrismaService);
     await truncate(prisma);
+    await prisma.pool.createMany({
+      data: [emptyPool(), emptyPool({ address: RETIRED_POOL_ADDRESS })],
+    });
 
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
@@ -474,6 +505,34 @@ describe.skipIf(!DB_AVAILABLE)("POST /referrals/apply", () => {
       })
       .expect(200);
     expect(body.applied).toBe(false);
+
+    const referral = await prisma.referral.findUnique({
+      where: { referee: wallet.publicKey.toBase58() },
+    });
+    expect(referral).toBeNull();
+  });
+
+  // ADR 0016: "first deposit" means first deposit ever, so a Pool cutover
+  // does not reopen binding for someone who deposited in the old pool.
+  it("quietly declines a wallet whose only Player is in the retired pool", async () => {
+    const owner = Keypair.generate();
+    const wallet = Keypair.generate();
+    await prisma.referralCode.create({
+      data: { code: "RETD2345", owner: owner.publicKey.toBase58(), createdAt: 0n },
+    });
+    await prisma.player.create({
+      data: emptyPlayer(wallet.publicKey.toBase58(), RETIRED_POOL_ADDRESS),
+    });
+
+    const { body } = await http
+      .post("/referrals/apply")
+      .send({
+        wallet: wallet.publicKey.toBase58(),
+        code: "RETD2345",
+        signature: sign(wallet, applyReferralMessage(wallet.publicKey.toBase58(), "RETD2345")),
+      })
+      .expect(200);
+    expect(body).toEqual({ applied: false, reason: "This wallet has already deposited." });
 
     const referral = await prisma.referral.findUnique({
       where: { referee: wallet.publicKey.toBase58() },

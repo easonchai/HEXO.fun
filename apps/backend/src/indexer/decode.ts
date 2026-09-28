@@ -285,8 +285,11 @@ export function poolRow(
   };
 }
 
-export function epochRow(epoch: DecodedEpoch): Prisma.EpochCreateInput {
+// The account bytes carry no pool, so the caller passes the Active pool's
+// address for the row's key (ADR 0016).
+export function epochRow(epoch: DecodedEpoch, poolAddress: string): Prisma.EpochUncheckedCreateInput {
   return {
+    poolAddress,
     id: big(epoch.epochId),
     startsAt: big(epoch.startsAt),
     endsAt: big(epoch.endsAt),
@@ -300,8 +303,9 @@ export function epochRow(epoch: DecodedEpoch): Prisma.EpochCreateInput {
   };
 }
 
-export function roundRow(round: DecodedRound): Prisma.RoundCreateInput {
+export function roundRow(round: DecodedRound, poolAddress: string): Prisma.RoundUncheckedCreateInput {
   return {
+    poolAddress,
     id: big(round.roundId),
     epochId: big(round.epochId),
     startsAt: big(round.startsAt),
@@ -315,8 +319,9 @@ export function roundRow(round: DecodedRound): Prisma.RoundCreateInput {
   };
 }
 
-export function playerRow(player: DecodedPlayer): Prisma.PlayerCreateInput {
+export function playerRow(player: DecodedPlayer, poolAddress: string): Prisma.PlayerUncheckedCreateInput {
   return {
+    poolAddress,
     owner: player.owner.toBase58(),
     principal: big(player.principal),
     entries: big(player.entries),
@@ -345,9 +350,11 @@ export function positionRow(
   address: PublicKey,
   position: DecodedPosition,
   roundId: bigint,
-): Prisma.PositionCreateInput {
+  poolAddress: string,
+): Prisma.PositionUncheckedCreateInput {
   return {
     address: address.toBase58(),
+    poolAddress,
     owner: position.owner.toBase58(),
     roundId,
     tiles: big(position.tiles),

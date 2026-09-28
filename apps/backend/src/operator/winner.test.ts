@@ -5,12 +5,14 @@ import { Test } from "@nestjs/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { ChainModule } from "../chain/chain.module";
+import { ChainService } from "../chain/chain.service";
 import { ConfigModule } from "../config/config.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { OperatorModule } from "./operator.module";
 import { OperatorService } from "./operator.service";
+import { ensurePoolRow } from "./pool-row.fixture";
 
 // PrismaClient reads DATABASE_URL when it is constructed, which happens below
 // rather than at import time, so overriding the setup file's default here is
@@ -23,6 +25,8 @@ process.env.DATABASE_URL = TEST_DATABASE_URL;
 const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 const OWNERS = ["winner-test-a", "winner-test-b", "winner-test-c"];
+const RETIRED_OWNER = "winner-test-retired";
+const RETIRED_POOL_ID = 99n;
 
 const player = (owner: string, regStart: string, regEnd: string) => ({
   owner,
@@ -60,20 +64,38 @@ describe.skipIf(!DB_AVAILABLE)("winner lookup", () => {
     }).compile();
     prisma = moduleRef.get(PrismaService);
     operator = moduleRef.get(OperatorService);
+    const chain = moduleRef.get(ChainService);
+    const active = chain.poolAddress().toBase58();
+    const retired = chain.poolAddress(RETIRED_POOL_ID).toBase58();
+    await ensurePoolRow(prisma, active, chain.poolId);
+    await ensurePoolRow(prisma, retired, RETIRED_POOL_ID);
 
-    await prisma.player.deleteMany({ where: { owner: { in: OWNERS } } });
+    await prisma.player.deleteMany({ where: { owner: { in: [...OWNERS, RETIRED_OWNER] } } });
     await prisma.player.createMany({
       data: [
         // A weight far past 2^64, where a naive number comparison would fail.
-        player(OWNERS[0] as string, "0", "40000000000000000000"),
-        player(OWNERS[1] as string, "40000000000000000000", "80000000000000000000"),
-        { ...player(OWNERS[2] as string, "0", "80000000000000000000"), regEpoch: 6n },
+        { ...player(OWNERS[0] as string, "0", "40000000000000000000"), poolAddress: active },
+        {
+          ...player(OWNERS[1] as string, "40000000000000000000", "80000000000000000000"),
+          poolAddress: active,
+        },
+        {
+          ...player(OWNERS[2] as string, "0", "80000000000000000000"),
+          regEpoch: 6n,
+          poolAddress: active,
+        },
+        // Same epoch id and interval in a retired pool (ADR 0016): epoch 7
+        // there is a different Draw, so it must never win this one.
+        {
+          ...player(RETIRED_OWNER, "80000000000000000000", "90000000000000000000"),
+          poolAddress: retired,
+        },
       ],
     });
   });
 
   afterAll(async () => {
-    await prisma.player.deleteMany({ where: { owner: { in: OWNERS } } });
+    await prisma.player.deleteMany({ where: { owner: { in: [...OWNERS, RETIRED_OWNER] } } });
     await prisma.$disconnect();
   });
 
@@ -92,6 +114,7 @@ describe.skipIf(!DB_AVAILABLE)("winner lookup", () => {
 
   it("ignores players registered for another epoch, and targets nobody holds", async () => {
     expect(await winner(6n, 0n)).toBe(OWNERS[2]);
+    // Held by RETIRED_OWNER, but only in the retired pool.
     expect(await winner(7n, 80_000_000_000_000_000_000n)).toBeNull();
   });
 });

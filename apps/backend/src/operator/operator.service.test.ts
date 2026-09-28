@@ -36,6 +36,7 @@ import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { EPOCH_STATUS, ROUND_STATUS } from "./chain-state";
 import type { IndexerQueries } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
+import { ensurePoolRow } from "./pool-row.fixture";
 import type { SparringService } from "./sparring";
 import { msUntilWake, SAFETY_INTERVAL_SECONDS } from "./tick";
 import { RANDOMNESS_DISCRIMINATOR, randomnessAddress } from "./vrf";
@@ -44,6 +45,9 @@ const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 const PROGRAM_ID = new PublicKey("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
 const POOL = poolAddress(PROGRAM_ID, 1n);
+const POOL_ADDRESS = POOL.toBase58();
+/** A pool a cutover left behind (ADR 0016): same program, older id. */
+const RETIRED_POOL_ADDRESS = poolAddress(PROGRAM_ID, 99n).toBase58();
 
 // No RPC is reached: `beginEpoch`'s `.instruction()` only encodes calldata.
 const idl = { ...loadIdl(), address: PROGRAM_ID.toBase58() } as Idl;
@@ -108,7 +112,8 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
   it("records lastTickAt at or after the instant a slow send resolves", async () => {
     const prisma = new PrismaService();
     await prisma.$connect();
-    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+    await ensurePoolRow(prisma, POOL_ADDRESS, 1n);
+    await prisma.operatorState.deleteMany({ where: { poolAddress: POOL_ADDRESS } });
 
     const accounts = new Map<string, Buffer>();
     accounts.set(
@@ -165,7 +170,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
       expect(outcome.waitMs).toBe(0);
 
       const state = await prisma.operatorState.findUniqueOrThrow({
-        where: { id: 1 },
+        where: { poolAddress: POOL_ADDRESS },
       });
       expect(Number(state.lastTickAt)).toBeGreaterThanOrEqual(
         Math.floor(sendResolvedAtMs / 1000),
@@ -179,7 +184,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
       expect(state.nextWakeAt).toEqual(state.lastTickAt);
     } finally {
       dateNowSpy.mockRestore();
-      await prisma.operatorState.deleteMany({ where: { id: 1 } });
+      await prisma.operatorState.deleteMany({ where: { poolAddress: POOL_ADDRESS } });
       await prisma.$disconnect();
     }
   });
@@ -294,6 +299,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService.duePendingWithdrawals", () => {
     pendingWithdraw: bigint;
     pendingEpoch: bigint;
   }) => ({
+    poolAddress: POOL_ADDRESS,
     principal: 0n,
     entries: 0n,
     weightAcc: "0",
@@ -323,10 +329,19 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService.duePendingWithdrawals", () => {
     const newer = owner();
     const thisEpoch = owner();
     const zeroAmount = owner();
-    const owners = [oldest, newer, thisEpoch, zeroAmount];
+    const retired = owner();
+    const owners = [oldest, newer, thisEpoch, zeroAmount, retired];
+    await ensurePoolRow(prisma, POOL_ADDRESS, 1n);
+    await ensurePoolRow(prisma, RETIRED_POOL_ADDRESS, 99n);
     await prisma.player.deleteMany({ where: { owner: { in: owners } } });
     await prisma.player.createMany({
       data: [
+        // Owed and past its epoch, but in a retired pool (ADR 0016): the
+        // Active pool's vault must never pay it.
+        {
+          ...player({ owner: retired, pendingWithdraw: 3_000_000n, pendingEpoch: 1n }),
+          poolAddress: RETIRED_POOL_ADDRESS,
+        },
         // Out of order on purpose: the ordering has to come from the query.
         player({ owner: newer, pendingWithdraw: 2_000_000n, pendingEpoch: 4n }),
         player({ owner: oldest, pendingWithdraw: 1_000_000n, pendingEpoch: 2n }),
@@ -343,6 +358,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService.duePendingWithdrawals", () => {
         programId: PROGRAM_ID,
         keypair: Keypair.generate(),
         connection: new CountingConnection(new Map()),
+        poolAddress: () => POOL,
       } as unknown as ChainService,
       prisma,
       {
@@ -375,7 +391,8 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService read budget", () => {
   it("costs two account reads per tick and sleeps the safety interval when there is nothing to do", async () => {
     const prisma = new PrismaService();
     await prisma.$connect();
-    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+    await ensurePoolRow(prisma, POOL_ADDRESS, 1n);
+    await prisma.operatorState.deleteMany({ where: { poolAddress: POOL_ADDRESS } });
 
     const CHAIN_NOW = 1_800_000_000n;
     // An Epoch running well past the safety interval, no open Round, paused so
@@ -451,7 +468,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService read budget", () => {
         // runOnce swallows a failed tick into a null action, so without this
         // a broken fixture would look like a quiet crank.
         const state = await prisma.operatorState.findUniqueOrThrow({
-          where: { id: 1 },
+          where: { poolAddress: POOL_ADDRESS },
         });
         expect(state.lastError).toBeNull();
         expect(outcome.nextWakeAt).toBe(CHAIN_NOW + SAFETY_INTERVAL_SECONDS);
@@ -465,7 +482,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService read budget", () => {
       // cycle, and nothing else. A reintroduced poll shows up here.
       expect(connection.callCounts()).toEqual({ getMultipleAccountsInfo: 6 });
     } finally {
-      await prisma.operatorState.deleteMany({ where: { id: 1 } });
+      await prisma.operatorState.deleteMany({ where: { poolAddress: POOL_ADDRESS } });
       await prisma.$disconnect();
     }
   });
@@ -480,7 +497,8 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
   it("records lastError from a timed-out read, and recovers on the next tick", async () => {
     const prisma = new PrismaService();
     await prisma.$connect();
-    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+    await ensurePoolRow(prisma, POOL_ADDRESS, 1n);
+    await prisma.operatorState.deleteMany({ where: { poolAddress: POOL_ADDRESS } });
 
     const accounts = new Map<string, Buffer>();
     accounts.set(POOL.toBase58(), await program.coder.accounts.encode("pool", pool()));
@@ -527,7 +545,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
     try {
       await operator.runOnce();
       const afterFailure = await prisma.operatorState.findUniqueOrThrow({
-        where: { id: 1 },
+        where: { poolAddress: POOL_ADDRESS },
       });
       expect(afterFailure.lastError).toMatch(/timed out/);
       // Ticket 09: a failing tick never stamps lastSuccessAt.
@@ -537,13 +555,13 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
       // call is never skipped by the failed one still "running".
       await operator.runOnce();
       const afterRecovery = await prisma.operatorState.findUniqueOrThrow({
-        where: { id: 1 },
+        where: { poolAddress: POOL_ADDRESS },
       });
       expect(afterRecovery.lastError).toBeNull();
       // Ticket 09: the recovering tick stamps it.
       expect(afterRecovery.lastSuccessAt).not.toBeNull();
     } finally {
-      await prisma.operatorState.deleteMany({ where: { id: 1 } });
+      await prisma.operatorState.deleteMany({ where: { poolAddress: POOL_ADDRESS } });
       await prisma.$disconnect();
     }
   });
@@ -582,7 +600,8 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService randomness subscription", () => 
   async function setUp() {
     const prisma = new PrismaService();
     await prisma.$connect();
-    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+    await ensurePoolRow(prisma, POOL_ADDRESS, 1n);
+    await prisma.operatorState.deleteMany({ where: { poolAddress: POOL_ADDRESS } });
 
     const accounts = new Map<string, Buffer>();
     accounts.set(
@@ -629,7 +648,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService randomness subscription", () => 
   }
 
   async function tearDown(prisma: PrismaService): Promise<void> {
-    await prisma.operatorState.deleteMany({ where: { id: 1 } });
+    await prisma.operatorState.deleteMany({ where: { poolAddress: POOL_ADDRESS } });
     await prisma.$disconnect();
   }
 
@@ -686,6 +705,197 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService randomness subscription", () => 
       expect(connection.callsTo("onAccountChange")).toBe(1); // no new watch opened
     } finally {
       await tearDown(prisma);
+    }
+  });
+});
+
+// Pool cutover (ADR 0016, ticket 02): after POOL_ID moves to a new pool, the
+// database still holds the retired pool's OperatorState and Cursor. The
+// operator must read and write only the Active pool's rows, or it would
+// report the retired pool's last tick as its own and trust the retired
+// pool's fresh cursor to close the new pool's registration.
+describe.skipIf(!DB_AVAILABLE)("OperatorService on a freshly cut-over pool", () => {
+  const ACTIVE = poolAddress(PROGRAM_ID, 42n);
+  const ACTIVE_ADDRESS = ACTIVE.toBase58();
+  const both = { poolAddress: { in: [ACTIVE_ADDRESS, RETIRED_POOL_ADDRESS] } };
+
+  it("reads no cursor and no last tick for the new pool, then writes its own OperatorState row", async () => {
+    const prisma = new PrismaService();
+    await prisma.$connect();
+    await ensurePoolRow(prisma, RETIRED_POOL_ADDRESS, 99n);
+    await ensurePoolRow(prisma, ACTIVE_ADDRESS, 42n);
+    await prisma.operatorState.deleteMany({ where: both });
+    await prisma.cursor.deleteMany({ where: both });
+
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
+    // The retired pool's indexer was healthy right up to the cutover.
+    await prisma.cursor.create({
+      data: { poolAddress: RETIRED_POOL_ADDRESS, updatedAt: nowSeconds },
+    });
+    await prisma.operatorState.create({
+      data: { poolAddress: RETIRED_POOL_ADDRESS, lastTickAt: 1n, lastAction: "retired" },
+    });
+
+    // Epoch 1 ended and is Registering with an empty list, so close_registration
+    // is due and only the indexer cursor's freshness can hold it back.
+    const CHAIN_NOW = nowSeconds;
+    const epoch = (epochId: bigint, status: number, endsAt: bigint) => ({
+      epochId: bn(epochId),
+      startsAt: bn(endsAt - 86_400n),
+      endsAt: bn(endsAt),
+      status,
+      registeredWeight: bn(0),
+      registeredCount: 0,
+      jackpotAmount: bn(0),
+      vrfSeed: Array(32).fill(0),
+      requestedAt: bn(0),
+      target: bn(0),
+      winner: PublicKey.default,
+      drawnAt: bn(0),
+      registrationOpenedAt: bn(0),
+      bump: 255,
+    });
+    const accounts = new Map<string, Buffer>();
+    accounts.set(
+      ACTIVE_ADDRESS,
+      await program.coder.accounts.encode(
+        "pool",
+        pool({ poolId: bn(42), currentEpochId: bn(2), registrationWindow: bn(0) }),
+      ),
+    );
+    accounts.set(
+      epochAddress(PROGRAM_ID, ACTIVE, 1n).toBase58(),
+      await program.coder.accounts.encode(
+        "epoch",
+        epoch(1n, EPOCH_STATUS.REGISTERING, CHAIN_NOW - 1_000n),
+      ),
+    );
+    accounts.set(
+      epochAddress(PROGRAM_ID, ACTIVE, 2n).toBase58(),
+      await program.coder.accounts.encode(
+        "epoch",
+        epoch(2n, EPOCH_STATUS.OPEN, CHAIN_NOW + 85_400n),
+      ),
+    );
+    const clock = Buffer.alloc(40);
+    clock.writeBigInt64LE(CHAIN_NOW, 32);
+    accounts.set(SYSVAR_CLOCK_PUBKEY.toBase58(), clock);
+
+    const sent: TransactionInstruction[][] = [];
+    const fakeChain = {
+      program,
+      programId: PROGRAM_ID,
+      keypair: Keypair.generate(),
+      connection: new CountingConnection(accounts),
+      poolAddress: () => ACTIVE,
+      epochAddress: (id: bigint) => epochAddress(PROGRAM_ID, ACTIVE, id),
+      roundAddress: (id: bigint) => roundAddress(PROGRAM_ID, ACTIVE, id),
+      recordChainTime: () => {},
+      send: async (instructions: TransactionInstruction[]) => {
+        sent.push(instructions);
+        return "signature";
+      },
+    };
+    const indexer: IndexerQueries = {
+      playersToRegister: async () => [],
+      unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
+    };
+    const operator = new OperatorService(
+      fakeChain as unknown as ChainService,
+      prisma,
+      indexer,
+      noopSparring,
+      fakeConfig,
+    );
+    const activeState = () =>
+      prisma.operatorState.findUnique({ where: { poolAddress: ACTIVE_ADDRESS } });
+
+    try {
+      // No row yet: /status reads null last tick for the new pool.
+      expect(await activeState()).toBeNull();
+
+      // First empty registration check; the first tick creates the Active
+      // pool's row beside the retired one instead of overwriting it.
+      await operator.runOnce();
+      const first = await activeState();
+      expect(first?.lastTickAt).not.toBeNull();
+      expect(first?.lastError).toBeNull();
+      const retired = await prisma.operatorState.findUniqueOrThrow({
+        where: { poolAddress: RETIRED_POOL_ADDRESS },
+      });
+      expect(retired.lastTickAt).toBe(1n);
+      expect(retired.lastAction).toBe("retired");
+
+      // Close is due, but the new pool's indexer has never synced: the
+      // retired pool's fresh cursor must not stand in for it.
+      const withheld = await operator.runOnce();
+      expect(withheld.action).toBeNull();
+      expect(withheld.indexerStale).toBe(true);
+      expect((await activeState())?.registrationIndexerStale).toBe(true);
+      expect(sent).toHaveLength(0);
+
+      // The new pool's own first sync is what lets it close.
+      await prisma.cursor.create({
+        data: { poolAddress: ACTIVE_ADDRESS, updatedAt: BigInt(Math.floor(Date.now() / 1000)) },
+      });
+      const closed = await operator.runOnce();
+      expect(closed.action).toBe("close_registration");
+      expect(sent).toHaveLength(1);
+    } finally {
+      await prisma.operatorState.deleteMany({ where: both });
+      await prisma.cursor.deleteMany({ where: both });
+      await prisma.$disconnect();
+    }
+  });
+
+  it("skips the state write, without failing the tick, before the indexer mirrors the Pool row", async () => {
+    const prisma = new PrismaService();
+    await prisma.$connect();
+    // A pool id no test ever gives a Pool row, so the foreign key cannot hold.
+    const UNMIRRORED = poolAddress(PROGRAM_ID, 4_242n);
+    const accounts = new Map<string, Buffer>();
+    accounts.set(
+      UNMIRRORED.toBase58(),
+      await program.coder.accounts.encode("pool", pool({ poolId: bn(4_242) })),
+    );
+    const clock = Buffer.alloc(40);
+    clock.writeBigInt64LE(1_800_000_000n, 32);
+    accounts.set(SYSVAR_CLOCK_PUBKEY.toBase58(), clock);
+    const operator = new OperatorService(
+      {
+        program,
+        programId: PROGRAM_ID,
+        keypair: Keypair.generate(),
+        connection: new CountingConnection(accounts),
+        poolAddress: () => UNMIRRORED,
+        recordChainTime: () => {},
+        send: async () => "signature",
+      } as unknown as ChainService,
+      prisma,
+      {
+        playersToRegister: async () => [],
+        unsettledPositions: async () => [],
+        referralGrantsDue: async () => [],
+        markReferralGrantsSent: async () => {},
+        roundsToClose: async () => [],
+      },
+      noopSparring,
+      fakeConfig,
+    );
+
+    try {
+      // The success path's write used to throw here, turning a sent
+      // begin_epoch into a "tick failed" with a foreign-key error.
+      const outcome = await operator.runOnce();
+      expect(outcome.action).toBe("begin_epoch");
+      expect(
+        await prisma.operatorState.findUnique({ where: { poolAddress: UNMIRRORED.toBase58() } }),
+      ).toBeNull();
+    } finally {
+      await prisma.$disconnect();
     }
   });
 });

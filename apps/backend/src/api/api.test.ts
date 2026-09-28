@@ -66,6 +66,19 @@ const ALICE = Keypair.generate().publicKey.toBase58();
 const BOB = Keypair.generate().publicKey.toBase58();
 const HOUSE = Keypair.generate().publicKey.toBase58();
 
+/** A pool the database still holds after a Pool cutover (ADR 0016). The seed
+ *  gives it rows that collide with the Active pool's ids (epoch 7, round
+ *  100, Alice) or sort ahead of them, so every exact-match assertion in this
+ *  file also proves the route ignores it. */
+const RETIRED_POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
+/** Only ever deposited in the retired pool. */
+const CAROL = Keypair.generate().publicKey.toBase58();
+
+/** Player's composite key in the Active pool, for `update` calls. */
+const activePlayer = (owner: string) => ({
+  poolAddress_owner: { poolAddress: POOL_ADDRESS, owner },
+});
+
 // Both sit past 2^53, so a route that leaked a JSON number would round the
 // value rather than return these digits. u64 columns cannot take the u128 one.
 const HUGE_U64 = "9007199254740993";
@@ -213,6 +226,7 @@ const fakeChain = {
       return { value: { amount: VAULT_BALANCE.toString() } };
     },
   },
+  poolAddress: (): PublicKey => new PublicKey(POOL_ADDRESS),
   jackpotVaultAddress: (): PublicKey => Keypair.generate().publicKey,
   principalVaultAddress: (): PublicKey => PRINCIPAL_VAULT,
   roundAddress: (): PublicKey => Keypair.generate().publicKey,
@@ -224,7 +238,8 @@ const fakeChain = {
   },
 };
 
-const emptyPlayer = (owner: string): Player => ({
+const emptyPlayer = (owner: string, poolAddress: string = POOL_ADDRESS): Player => ({
+  poolAddress,
   owner,
   principal: 0n,
   entries: 0n,
@@ -271,7 +286,7 @@ function assertNoLargeNumbers(value: unknown, path: string): void {
 
 async function truncate(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE "Pool", "Epoch", "Round", "Player", "Position", "Event", "Cursor", "FaucetClaim", "OperatorState"',
+    'TRUNCATE "Pool", "Epoch", "Round", "Player", "Position", "Event", "Cursor", "FaucetClaim", "OperatorState" CASCADE',
   );
 }
 
@@ -588,7 +603,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
 
   it("GET /players/:owner floors buyAllowanceLeft at zero once bought spend reaches Principal", async () => {
     await prisma.player.update({
-      where: { owner: BOB },
+      where: activePlayer(BOB),
       data: { principal: 1_000n, boughtEpoch: CURRENT_EPOCH, boughtAmount: 1_000n },
     });
     try {
@@ -597,7 +612,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       expect(body.buyAllowanceLeft).toBe("0");
     } finally {
       await prisma.player.update({
-        where: { owner: BOB },
+        where: activePlayer(BOB),
         data: { principal: 0n, boughtEpoch: 0n, boughtAmount: 0n },
       });
     }
@@ -632,11 +647,11 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     // the draw. Alice's seeded head start is dropped so Bob's share is not
     // rounded to zero.
     await prisma.player.update({
-      where: { owner: ALICE },
+      where: activePlayer(ALICE),
       data: { weightAcc: new Prisma.Decimal(0) },
     });
     await prisma.player.update({
-      where: { owner: BOB },
+      where: activePlayer(BOB),
       data: { principal: 1_000_000n, entries: 1_000_000n, lastUpdate: CHAIN_NOW },
     });
     try {
@@ -648,11 +663,11 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       expect(body.odds).toBe(oddsPercent(bobAtDraw, bobAtDraw + aliceAtDraw));
     } finally {
       await prisma.player.update({
-        where: { owner: ALICE },
+        where: activePlayer(ALICE),
         data: { weightAcc: HUGE_U128 },
       });
       await prisma.player.update({
-        where: { owner: BOB },
+        where: activePlayer(BOB),
         data: { principal: 0n, entries: 0n, lastUpdate: CURRENT_START },
       });
     }
@@ -707,6 +722,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
           slot: 20n,
           signature: "sig20",
           index: 0,
+          poolAddress: POOL_ADDRESS,
           name: "PositionBought",
           data: { roundId: "99", owner: ALICE, tiles: "1", stakePerTile: "100", total: "100" },
           blockTime: NOW - 20n,
@@ -715,6 +731,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
           slot: 21n,
           signature: "sig21",
           index: 0,
+          poolAddress: POOL_ADDRESS,
           name: "PositionBought",
           data: { roundId: "100", owner: ALICE, tiles: "1", stakePerTile: "100", total: "100" },
           blockTime: NOW - 10n,
@@ -723,6 +740,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
           slot: 22n,
           signature: "sig22",
           index: 0,
+          poolAddress: POOL_ADDRESS,
           name: "PositionBought",
           data: { roundId: "99", owner: CARL, tiles: "1", stakePerTile: "50", total: "50" },
           blockTime: NOW - 5n,
@@ -818,6 +836,59 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     assertNoLargeNumbers(body, "/status (yield)");
   });
 
+  // pool-cutover ticket 02: the seed also holds a retired pool's rows (see
+  // `seedRetiredPool`). Every other test here already fails if a route reads
+  // them; these name the ticket's routes outright.
+  describe("with a retired pool in the database (ADR 0016)", () => {
+    it("GET /epochs and /rounds return only the Active pool's rows", async () => {
+      const epochs = await http.get("/epochs").expect(200);
+      expect(epochs.body.map((epoch: { id: string }) => epoch.id)).toEqual(["7", "6"]);
+      const rounds = await http.get("/rounds").expect(200);
+      expect(rounds.body.map((round: { id: string }) => round.id)).toEqual(["100", "99"]);
+      const round = await http.get("/rounds/100").expect(200);
+      expect(round.body.pot).toBe("5000");
+      await http.get("/rounds/101").expect(404);
+    });
+
+    it("GET /players/:owner reads the Active pool's Player only", async () => {
+      const alice = await http.get(`/players/${ALICE}`).expect(200);
+      expect(alice.body.principal).toBe("1000000");
+      await http.get(`/players/${CAROL}`).expect(404);
+    });
+
+    it("GET /state reads the Active pool's Pool, Epoch, Round and Player", async () => {
+      const { body } = await http.get(`/state?owner=${CAROL}`).expect(200);
+      expect(body.pool.address).toBe(POOL_ADDRESS);
+      expect(body.currentEpoch.id).toBe("7");
+      expect(body.openRound.id).toBe("100");
+      expect(body.player).toBeNull();
+    });
+
+    it("GET /status reports the Active pool's operator and cursor", async () => {
+      const { body } = await http.get("/status").expect(200);
+      expect(body.operator.lastAction).toBe("settle_round");
+      expect(body.cursor.lastSlot).toBe("15");
+      expect(body.pendingWithdrawals).toBe(POOL_PENDING_WITHDRAWALS.toString());
+    });
+
+    it("GET /status reads a null operator and cursor for an Active pool with no rows yet", async () => {
+      // A fresh cutover: the retired pool's rows are there, the Active
+      // pool's are not until the first tick and sync.
+      const operator = await prisma.operatorState.findUniqueOrThrow({ where: { poolAddress: POOL_ADDRESS } });
+      const cursor = await prisma.cursor.findUniqueOrThrow({ where: { poolAddress: POOL_ADDRESS } });
+      await prisma.operatorState.delete({ where: { poolAddress: POOL_ADDRESS } });
+      await prisma.cursor.delete({ where: { poolAddress: POOL_ADDRESS } });
+      try {
+        const { body } = await http.get("/status").expect(200);
+        expect(body.operator).toBeNull();
+        expect(body.cursor).toEqual({ lastSlot: null, lastSignature: null, ageSeconds: null });
+      } finally {
+        await prisma.operatorState.create({ data: operator });
+        await prisma.cursor.create({ data: cursor });
+      }
+    });
+  });
+
   describe("GET /alerts", () => {
     // The default seed's OperatorState.withdrawShortfall is 250_000n (see
     // "GET /status reports the withdrawal queue..." above), and every other
@@ -838,7 +909,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
 
     it("is 503 with exactly YIELD_BUDGET_LOW once the withdraw shortfall clears", async () => {
       await prisma.operatorState.update({
-        where: { id: 1 },
+        where: { poolAddress: POOL_ADDRESS },
         data: { withdrawShortfall: 0n },
       });
       try {
@@ -848,7 +919,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
         });
       } finally {
         await prisma.operatorState.update({
-          where: { id: 1 },
+          where: { poolAddress: POOL_ADDRESS },
           data: { withdrawShortfall: 250_000n },
         });
       }
@@ -856,7 +927,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
 
     it("is 503 with ROUND_VOIDED_RECENTLY and EPOCH_ROLLED_OVER_RECENTLY, from Event rows in the last hour", async () => {
       await prisma.operatorState.update({
-        where: { id: 1 },
+        where: { poolAddress: POOL_ADDRESS },
         data: { withdrawShortfall: 0n },
       });
       await prisma.event.createMany({
@@ -865,6 +936,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
             slot: 900n,
             signature: "sigAlertsVoided",
             index: 0,
+            poolAddress: POOL_ADDRESS,
             name: "RoundVoided",
             data: { roundId: "101" },
             blockTime: NOW - 60n,
@@ -873,6 +945,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
             slot: 901n,
             signature: "sigAlertsRolledOver",
             index: 0,
+            poolAddress: POOL_ADDRESS,
             name: "EpochRolledOver",
             data: { epochId: "7" },
             blockTime: NOW - 30n,
@@ -894,7 +967,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
           where: { signature: { in: ["sigAlertsVoided", "sigAlertsRolledOver"] } },
         });
         await prisma.operatorState.update({
-          where: { id: 1 },
+          where: { poolAddress: POOL_ADDRESS },
           data: { withdrawShortfall: 250_000n },
         });
       }
@@ -993,12 +1066,12 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     });
 
     it("returns a null open Round once the epoch has none open", async () => {
-      await prisma.round.update({ where: { id: 100n }, data: { status: 2 } });
+      await prisma.round.update({ where: { poolAddress_id: { poolAddress: POOL_ADDRESS, id: 100n } }, data: { status: 2 } });
       try {
         const { body } = await http.get("/state").expect(200);
         expect(body.openRound).toBeNull();
       } finally {
-        await prisma.round.update({ where: { id: 100n }, data: { status: 0 } });
+        await prisma.round.update({ where: { poolAddress_id: { poolAddress: POOL_ADDRESS, id: 100n } }, data: { status: 0 } });
       }
     });
 
@@ -1266,43 +1339,46 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
 });
 
 async function seed(prisma: PrismaService): Promise<void> {
-  await prisma.pool.create({
-    data: {
-      address: POOL_ADDRESS,
-      poolId: 1n,
-      admin: HOUSE,
-      operator: HOUSE,
-      pendingAdmin: null,
-      mint: Keypair.generate().publicKey.toBase58(),
-      pendingWithdrawals: POOL_PENDING_WITHDRAWALS,
-      minJackpot: 1_000_000n,
-      epochSeconds: EPOCH_LENGTH,
-      epochAnchor: CURRENT_START,
-      roundSeconds: 60n,
-      closeBuffer: POOL_CLOSE_BUFFER,
-      minDeposit: POOL_MIN_DEPOSIT,
-      houseCutBps: 600,
-      paused: false,
-      currentEpochId: CURRENT_EPOCH,
-      currentEpochEndsAt: CURRENT_START + EPOCH_LENGTH,
-      previousEpochEndsAt: CURRENT_START,
-      totalPrincipal: BigInt(HUGE_U64),
-      carryPot: 0n,
-      baseRateBps: POOL_BASE_RATE_BPS,
-      yieldBudget: POOL_YIELD_BUDGET,
-      ticketsPerUsdc: POOL_TICKETS_PER_USDC,
-      bonusCapBps: POOL_BONUS_CAP_BPS,
-      bonusEpoch: CURRENT_EPOCH,
-      bonusGranted: POOL_BONUS_GRANTED,
-      version: 1,
-      shutdown: false,
-      updatedSlot: 15n,
-    },
-  });
+  const activePool: Prisma.PoolUncheckedCreateInput = {
+    address: POOL_ADDRESS,
+    poolId: 1n,
+    admin: HOUSE,
+    operator: HOUSE,
+    pendingAdmin: null,
+    mint: Keypair.generate().publicKey.toBase58(),
+    pendingWithdrawals: POOL_PENDING_WITHDRAWALS,
+    minJackpot: 1_000_000n,
+    epochSeconds: EPOCH_LENGTH,
+    epochAnchor: CURRENT_START,
+    roundSeconds: 60n,
+    closeBuffer: POOL_CLOSE_BUFFER,
+    minDeposit: POOL_MIN_DEPOSIT,
+    houseCutBps: 600,
+    paused: false,
+    currentEpochId: CURRENT_EPOCH,
+    currentEpochEndsAt: CURRENT_START + EPOCH_LENGTH,
+    previousEpochEndsAt: CURRENT_START,
+    totalPrincipal: BigInt(HUGE_U64),
+    carryPot: 0n,
+    baseRateBps: POOL_BASE_RATE_BPS,
+    yieldBudget: POOL_YIELD_BUDGET,
+    ticketsPerUsdc: POOL_TICKETS_PER_USDC,
+    bonusCapBps: POOL_BONUS_CAP_BPS,
+    bonusEpoch: CURRENT_EPOCH,
+    bonusGranted: POOL_BONUS_GRANTED,
+    version: 1,
+    shutdown: false,
+    updatedSlot: 15n,
+  };
+  // The retired pool first, so an unscoped `findFirst` would most likely
+  // land on it rather than on the Active pool by luck of insertion order.
+  await seedRetiredPool(prisma, activePool);
+  await prisma.pool.create({ data: activePool });
 
   await prisma.epoch.createMany({
     data: [
       {
+        poolAddress: POOL_ADDRESS,
         id: PREVIOUS_EPOCH,
         startsAt: PREVIOUS_START,
         endsAt: CURRENT_START,
@@ -1314,6 +1390,7 @@ async function seed(prisma: PrismaService): Promise<void> {
         winner: null,
       },
       {
+        poolAddress: POOL_ADDRESS,
         id: CURRENT_EPOCH,
         startsAt: CURRENT_START,
         endsAt: CURRENT_START + EPOCH_LENGTH,
@@ -1330,6 +1407,7 @@ async function seed(prisma: PrismaService): Promise<void> {
   await prisma.round.createMany({
     data: [
       {
+        poolAddress: POOL_ADDRESS,
         id: 99n,
         epochId: CURRENT_EPOCH,
         startsAt: CURRENT_START - 60n,
@@ -1341,6 +1419,7 @@ async function seed(prisma: PrismaService): Promise<void> {
         tileTotals: { "17": "4000" },
       },
       {
+        poolAddress: POOL_ADDRESS,
         id: 100n,
         epochId: CURRENT_EPOCH,
         startsAt: CURRENT_START,
@@ -1384,6 +1463,7 @@ async function seed(prisma: PrismaService): Promise<void> {
       // `round` query param needed to find it.
       {
         address: Keypair.generate().publicKey.toBase58(),
+        poolAddress: POOL_ADDRESS,
         owner: ALICE,
         roundId: 100n,
         tiles: 7n,
@@ -1393,6 +1473,7 @@ async function seed(prisma: PrismaService): Promise<void> {
       // naming it explicitly with `round=99`, since it is not `openRound`.
       {
         address: Keypair.generate().publicKey.toBase58(),
+        poolAddress: POOL_ADDRESS,
         owner: BOB,
         roundId: 99n,
         tiles: 3n,
@@ -1418,22 +1499,126 @@ async function seed(prisma: PrismaService): Promise<void> {
       { slot: 16n, signature: "sig16", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH - 1n), owner: ALICE, amount: "8000", shortfall: "999" }, blockTime: NOW - 45n },
       { slot: 17n, signature: "sig17", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH), owner: ALICE, amount: "12000", shortfall: "500" }, blockTime: NOW - 40n },
       { slot: 18n, signature: "sig18", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH), owner: BOB, amount: "700", shortfall: "300" }, blockTime: NOW - 35n },
-    ],
+    ].map((row) => ({ ...row, poolAddress: POOL_ADDRESS })),
   });
 
   await prisma.cursor.create({
-    data: { id: 1, lastSignature: "sig15", lastSlot: 15n, updatedAt: NOW - 42n },
+    data: { poolAddress: POOL_ADDRESS, lastSignature: "sig15", lastSlot: 15n, updatedAt: NOW - 42n },
   });
 
   await prisma.operatorState.create({
     data: {
-      id: 1,
+      poolAddress: POOL_ADDRESS,
       lastTickAt: NOW - 2n,
       lastAction: "settle_round",
       lastError: null,
       registeredCount: 1,
       registeredTotal: 3,
       withdrawShortfall: 250_000n,
+    },
+  });
+}
+
+/**
+ * A retired pool's rows, left behind by a Pool cutover (ADR 0016). Each one
+ * collides with an Active-pool key (epoch 7, round 100, Alice's Player and
+ * Position) or sorts ahead of the Active pool's rows (epoch 9, open round
+ * 101, event slots 30+), so a route that forgot its `poolAddress` filter
+ * returns something the exact-match assertions above do not expect.
+ */
+async function seedRetiredPool(
+  prisma: PrismaService,
+  activePool: Prisma.PoolUncheckedCreateInput,
+): Promise<void> {
+  const retiredEpoch = CURRENT_EPOCH + 2n;
+  await prisma.pool.create({
+    data: {
+      ...activePool,
+      address: RETIRED_POOL_ADDRESS,
+      poolId: 0n,
+      currentEpochId: retiredEpoch,
+      totalPrincipal: 1n,
+      pendingWithdrawals: 0n,
+      updatedSlot: 1n,
+    },
+  });
+  await prisma.epoch.createMany({
+    data: [CURRENT_EPOCH, CURRENT_EPOCH + 1n, retiredEpoch].map((id) => ({
+      poolAddress: RETIRED_POOL_ADDRESS,
+      id,
+      startsAt: 0n,
+      endsAt: 1n,
+      status: 3,
+      registeredWeight: "1",
+      registeredCount: 9,
+      jackpotAmount: 1n,
+      target: "0",
+      winner: null,
+    })),
+  });
+  await prisma.round.createMany({
+    data: [
+      {
+        poolAddress: RETIRED_POOL_ADDRESS,
+        id: 100n,
+        epochId: CURRENT_EPOCH,
+        startsAt: 0n,
+        endsAt: 1n,
+        status: 2,
+        pot: 1n,
+        houseCut: 0n,
+        winningTile: 3,
+        tileTotals: { "3": "1" },
+      },
+      {
+        poolAddress: RETIRED_POOL_ADDRESS,
+        id: 101n,
+        epochId: retiredEpoch,
+        startsAt: 0n,
+        endsAt: 1n,
+        status: 0, // Open, and newer than the Active pool's open round
+        pot: 1n,
+        houseCut: 0n,
+        winningTile: null,
+        tileTotals: {},
+      },
+    ],
+  });
+  await prisma.player.createMany({
+    data: [
+      { ...emptyPlayer(ALICE, RETIRED_POOL_ADDRESS), principal: 777n },
+      // Holds entries, so an unscoped scan would hand her a share of the odds.
+      { ...emptyPlayer(CAROL, RETIRED_POOL_ADDRESS), principal: 5n, entries: 5n },
+    ],
+  });
+  await prisma.position.create({
+    data: {
+      address: Keypair.generate().publicKey.toBase58(),
+      poolAddress: RETIRED_POOL_ADDRESS,
+      owner: ALICE,
+      roundId: 100n,
+      tiles: 99n,
+      stakePerTile: 1n,
+    },
+  });
+  await prisma.event.createMany({
+    data: [
+      { slot: 30n, signature: "retired30", index: 0, name: "Deposited", data: { owner: ALICE, amount: "777" }, blockTime: NOW - 20n },
+      { slot: 31n, signature: "retired31", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH), owner: ALICE, amount: "1", shortfall: "1" }, blockTime: NOW - 15n },
+      { slot: 32n, signature: "retired32", index: 0, name: "PositionBought", data: { roundId: "555", owner: ALICE, tiles: "1", stakePerTile: "1", total: "1" }, blockTime: NOW - 10n },
+      { slot: 33n, signature: "retired33", index: 0, name: "RoundVoided", data: { roundId: "101" }, blockTime: NOW - 5n },
+    ].map((row) => ({ ...row, poolAddress: RETIRED_POOL_ADDRESS })),
+  });
+  await prisma.cursor.create({
+    data: { poolAddress: RETIRED_POOL_ADDRESS, lastSignature: "retired33", lastSlot: 999n, updatedAt: NOW - 5_000n },
+  });
+  await prisma.operatorState.create({
+    data: {
+      poolAddress: RETIRED_POOL_ADDRESS,
+      lastTickAt: NOW - 9_000n,
+      lastAction: "retired_tick",
+      lastError: null,
+      withdrawShortfall: 0n,
     },
   });
 }

@@ -162,7 +162,9 @@ export class AccessController {
     const wallet = parseWallet(walletRaw).toBase58();
     const [redemption, player] = await Promise.all([
       this.prisma.inviteRedemption.findUnique({ where: { wallet } }),
-      this.prisma.player.findUnique({ where: { owner: wallet } }),
+      // Cross-pool on purpose: a depositor from a retired pool stays let in
+      // after a Pool cutover (ADR 0016).
+      this.prisma.player.findFirst({ where: { owner: wallet } }),
     ]);
     if (redemption !== null) {
       return { allowed: true, reason: "invite code redeemed" };
@@ -238,7 +240,10 @@ export class AccessController {
           data: { wallet: address, code, redeemedAt: nowSeconds() },
         });
 
-        const player = await tx.player.findUnique({ where: { owner: address } });
+        // Cross-pool, like POST /referrals/apply's check: a wallet that
+        // deposited in a retired pool has had its first deposit, so it
+        // never gains a Referrer after a Pool cutover (ADR 0016).
+        const player = await tx.player.findFirst({ where: { owner: address } });
         // A wallet that applied a Referral code via POST /referrals/apply
         // before ever redeeming an invite already has a Referral row here
         // (beta-launch-fixes ticket 13): keep that earlier Referrer rather

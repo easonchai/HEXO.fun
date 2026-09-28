@@ -53,6 +53,7 @@ import {
 } from "./chain-state";
 import type { IndexerQueries } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
+import { ensurePoolRow } from "./pool-row.fixture";
 import type { SparringService } from "./sparring";
 
 import { randomnessAddress } from "./vrf";
@@ -123,6 +124,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
   // Built inside the test: `skipIf` still evaluates this block, and there is
   // no validator (and no RPC url) when the suite is skipped.
   let prisma: PrismaService | null = null;
+  let poolKey = "";
   const owners: string[] = [];
 
   afterAll(async () => {
@@ -130,6 +132,10 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
     if (owners.length > 0) {
       await prisma.player.deleteMany({ where: { owner: { in: owners } } });
     }
+    // The Pool row stays: a Pool row is never deleted (ADR 0016), and each
+    // run's pool id is fresh.
+    await prisma.cursor.deleteMany({ where: { poolAddress: poolKey } });
+    await prisma.operatorState.deleteMany({ where: { poolAddress: poolKey } });
     await prisma.$disconnect();
   });
 
@@ -338,10 +344,24 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       // and this test drives the crank itself rather than running one.
       const sparring = { wake: () => {} } as unknown as SparringService;
       const operator = new OperatorService(chain, prisma, indexer, sparring, config);
+      // Also the indexer's job: the Pool row every pool-scoped row the
+      // operator touches references (ADR 0016), and a fresh Cursor, without
+      // which close_registration is withheld (ticket 07).
+      poolKey = pool.toBase58();
+      await ensurePoolRow(prisma, poolKey, poolId);
+      const markIndexerSynced = async (db: PrismaService): Promise<void> => {
+        const updatedAt = BigInt(Math.floor(Date.now() / 1000));
+        await db.cursor.upsert({
+          where: { poolAddress: poolKey },
+          create: { poolAddress: poolKey, updatedAt },
+          update: { updatedAt },
+        });
+      };
 
       let stopped = false;
       const crank = (async () => {
         while (!stopped) {
+          await markIndexerSynced(prisma);
           await operator.tick();
           await mirrorPlayers(chain, pool, prisma, owners);
           await fulfil(chain, method, authority);
@@ -566,6 +586,7 @@ async function mirrorPlayers(
 ): Promise<void> {
   for (const player of await allPlayers(chain, pool)) {
     const row = {
+      poolAddress: pool.toBase58(),
       owner: player.owner.toBase58(),
       principal: BigInt(player.principal.toString()),
       entries: BigInt(player.entries.toString()),
@@ -589,7 +610,11 @@ async function mirrorPlayers(
       bonusGranted: BigInt(player.bonusGranted.toString()),
     };
     if (!owners.includes(row.owner)) owners.push(row.owner);
-    await prisma.player.upsert({ where: { owner: row.owner }, create: row, update: row });
+    await prisma.player.upsert({
+      where: { poolAddress_owner: { poolAddress: row.poolAddress, owner: row.owner } },
+      create: row,
+      update: row,
+    });
   }
 }
 
