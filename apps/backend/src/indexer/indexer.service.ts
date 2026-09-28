@@ -10,7 +10,7 @@ import type { Epoch, Player, Prisma, Round } from "@prisma/client";
 import { PublicKey, type ConfirmedSignatureInfo } from "@solana/web3.js";
 import bs58 from "bs58";
 
-import { generateInviteCode } from "../api/invite-code";
+import { ensureReferralCode } from "../api/referral-code";
 import {
   applyReferralEvent,
   isQualified,
@@ -114,25 +114,6 @@ function referralPrincipalEvents(
     }
   }
   return result;
-}
-
-/**
- * A fresh code for a wallet's first-deposit ReferralCode (ADR 0014,
- * docs/plan/referral-page ticket 01), reusing InviteCode's own alphabet and
- * length. Unlike InviteCode's insert, which lets its own primary key catch a
- * collision, ReferralCode and InviteCode are separate tables: a generated
- * code landing in the other one would not fail an insert, so this checks
- * both by hand before returning one.
- */
-async function generateReferralCode(tx: Prisma.TransactionClient): Promise<string> {
-  for (;;) {
-    const code = generateInviteCode();
-    const [invite, referral] = await Promise.all([
-      tx.inviteCode.findUnique({ where: { code } }),
-      tx.referralCode.findUnique({ where: { code } }),
-    ]);
-    if (invite === null && referral === null) return code;
-  }
 }
 
 /**
@@ -1331,16 +1312,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         // on ReferralCode itself, which is wallet-level, so a depositor from
         // a retired pool keeps the code they have and never trips the
         // unique owner index on their first deposit into a new one (ADR 0016).
-        const owned = await tx.referralCode.findUnique({ where: { owner } });
-        if (owned === null) {
-          await tx.referralCode.create({
-            data: {
-              code: await generateReferralCode(tx),
-              owner,
-              createdAt: nowSeconds(),
-            },
-          });
-        }
+        await ensureReferralCode(tx, owner);
       }
       if (referralEvents.length > 0 && created.count > 0) {
         // `created.count === 0` means every row in this batch already

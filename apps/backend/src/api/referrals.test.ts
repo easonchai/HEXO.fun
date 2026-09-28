@@ -45,7 +45,7 @@ const fakeChain = { provide: ChainService, useValue: { poolAddress: () => new Pu
 
 async function truncate(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE "Pool", "InviteCode", "Referral", "ReferralGrant", "ReferralGrantShare", "ReferralCode", "Player" CASCADE',
+    'TRUNCATE "Pool", "InviteCode", "InviteRedemption", "Referral", "ReferralGrant", "ReferralGrantShare", "ReferralCode", "Player" CASCADE',
   );
 }
 
@@ -151,6 +151,7 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
   });
 
   beforeEach(async () => {
+    await prisma.inviteRedemption.deleteMany();
     await prisma.inviteCode.deleteMany();
     await prisma.referral.deleteMany();
     await prisma.referralGrantShare.deleteMany();
@@ -184,6 +185,20 @@ describe.skipIf(!DB_AVAILABLE)("GET /referrals/:wallet", () => {
 
     const { body } = await http.get(`/referrals/${REFERRER}`).expect(200);
     expect(body.referralCode).toBe("ABCD2345");
+  });
+
+  it("mints a code for a wallet past the gate that has not deposited, once", async () => {
+    await prisma.inviteRedemption.create({
+      data: { wallet: REFERRER, code: "ABCD2345", redeemedAt: 0n },
+    });
+
+    const [first, second] = await Promise.all([
+      http.get(`/referrals/${REFERRER}`).expect(200),
+      http.get(`/referrals/${REFERRER}`).expect(200),
+    ]);
+    expect(first.body.referralCode).toMatch(/^[2-9A-HJ-NP-Z]{8}$/);
+    expect(second.body.referralCode).toBe(first.body.referralCode);
+    expect(await prisma.referralCode.count({ where: { owner: REFERRER } })).toBe(1);
   });
 
   // beta-launch-fixes ticket 13: an owner's unused invite codes are never in

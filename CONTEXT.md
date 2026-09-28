@@ -166,7 +166,7 @@ A single-use code that lets a wallet past the beta gate. It may have an owner. G
 _Avoid_: Access token, whitelist, referral code (a different thing)
 
 **Referral code**:
-A depositor's own code, one per wallet, unlimited uses, shared as a link. Applying it before a wallet's first deposit makes its owner that wallet's Referrer. Outlives the beta; does not pass the beta gate.
+A wallet's own code, one per wallet, minted at first deposit or once it is past the beta gate, unlimited uses, shared as a link. Applying it before a wallet's first deposit makes its owner that wallet's Referrer. Outlives the beta; does not pass the beta gate.
 _Avoid_: Invite code (a different thing), promo code
 
 **Referrer**:
