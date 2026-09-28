@@ -6,6 +6,7 @@
  * `failed(code)` result directly. Copy uses the screen's words (CONTEXT.md):
  * "day" not epoch, "Tickets" not entries.
  */
+import { currentPage, reportError } from "./errorReport.js";
 import { idl } from "./idl.js";
 
 const GENERIC = "Something went wrong. Try again in a moment.";
@@ -23,6 +24,8 @@ const HAND_WRITTEN: Record<number, string> = {
   [NOTHING_PENDING_CODE]: "Already paid out. Refreshing your balance.", // NothingPending
   6042: "Today's draw hasn't closed registration yet. Try again in a moment.", // RegistrationWindowOpen
   6051: "This pool is closed. Withdrawals still work; nothing else does.", // PoolShutDown
+  6058: "The game is paused right now. Try again once it restarts.", // GamePaused
+  6059: "The daily draw is paused, so Tickets can't be bought right now.", // JackpotPaused
 };
 
 const IDL_MESSAGE_BY_CODE = new Map(
@@ -88,5 +91,13 @@ export function decodeSendFailure(
 ): string {
   if (result.kind === "expired") return EXPIRED_TEXT;
   console.error(result.message);
+  // Ticket 16: a landed-but-failed send is a genuinely broken money path,
+  // worth reaching the maintainers for; "expired" (a dropped confirmation,
+  // the player's answer is "try again") is not.
+  reportError({
+    code: result.code === null ? "unknown_error" : `program_error_${result.code}`,
+    message: result.message,
+    page: currentPage(),
+  });
   return decodeErrorCode(result.code ?? -1);
 }

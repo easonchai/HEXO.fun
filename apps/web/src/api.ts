@@ -23,23 +23,64 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; reason: string }
 /** VITE_API_URL, or the local backend's default port. */
 export const apiBaseUrl = (): string => API_URL;
 
+/**
+ * Ticket 16: every API fetch carries this timeout on top of whatever unmount
+ * abort the caller already passes in — a hung backend must not freeze the
+ * Vault on stale numbers forever. Plain copy, never the raw "Failed to
+ * fetch" a bare `AbortError` would otherwise surface.
+ */
+export const FETCH_TIMEOUT_MS = 8_000;
+export const TIMEOUT_MESSAGE = "Request timed out. Try again.";
+
+/** Combines the caller's own abort (component unmount) with a fresh timeout,
+ *  so either one aborts the fetch; `cancel()` releases the timer and the
+ *  listener once the request settles either way. */
+function withTimeout(
+  signal: AbortSignal | null | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; timedOut: () => boolean; cancel: () => void } {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort);
+  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cancel: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
 async function get<T>(
   baseUrl: string,
   path: string,
   signal?: AbortSignal | null,
 ): Promise<ApiResult<T>> {
+  const timeout = withTimeout(signal, FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(`${baseUrl}${path}`, {
-      signal: signal ?? null,
+      signal: timeout.signal,
       headers: { accept: "application/json" },
     });
     if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
     return { ok: true, data: (await response.json()) as T };
   } catch (error) {
+    if (timeout.timedOut()) return { ok: false, reason: TIMEOUT_MESSAGE };
     return {
       ok: false,
       reason: error instanceof Error ? error.message : "indexer offline",
     };
+  } finally {
+    timeout.cancel();
   }
 }
 
@@ -63,6 +104,12 @@ export interface PoolDto {
   /** Tickets credited per USDC spent in `buy_tickets`. */
   ticketsPerUsdc: number;
   paused: boolean;
+  /** game-jackpot-pause: no new rounds or positions while true. A new pool
+   *  starts with it on. */
+  gamePaused: boolean;
+  /** game-jackpot-pause: no new epoch, ticket purchase or draw close while
+   *  true. A new pool starts with it on. */
+  jackpotPaused: boolean;
   currentEpochId: string;
   currentEpochEndsAt: string;
   previousEpochEndsAt: string;
@@ -170,6 +217,9 @@ export interface OperatorStateDto {
    *  between ticks is only a stall once this has passed. */
   nextWakeAt: string | null;
   lastAction: string | null;
+  /** Ticket 09: a stable error code (`operatorErrorCode` in the backend's
+   *  api.service.ts), never the raw error text. `status.ts` maps it to
+   *  generic copy for the pill. */
   lastError: string | null;
   registeredCount: number | null;
   registeredTotal: number | null;
@@ -192,6 +242,9 @@ export interface StatusDto {
   /** Principal pulled out and not yet returned; null when the pool or the
    *  vault balance is not known yet. Not surfaced in this app's UI. */
   principalOut: string | null;
+  /** Ticket 05: the deposit-only launch week's `LAUNCH_AT`, ISO, while the
+   *  pool has no Epoch yet; null once an Epoch exists or none is configured. */
+  launchAt: string | null;
 }
 
 export interface PoolSummaryDto {
@@ -228,7 +281,9 @@ export interface PositionDto {
  */
 export interface StateDto {
   pool: PoolDto;
-  currentEpoch: CurrentEpochDto;
+  /** Ticket 05: null before the Pool has ever had an Epoch (deposit-only
+   *  launch week) — see `launchAt` for the countdown target that goes with it. */
+  currentEpoch: CurrentEpochDto | null;
   openRound: RoundSummaryDto | null;
   round: RoundDto | null;
   player: PlayerDto | null;
@@ -245,6 +300,10 @@ export interface StateDto {
    * ever sees it.
    */
   priorityFeeMicroLamports: number;
+  /** Ticket 05: the deposit-only launch week's `LAUNCH_AT`, ISO, present
+   *  only while `currentEpoch` is null; null once an Epoch exists or none is
+   *  configured. */
+  launchAt: string | null;
 }
 
 export const fetchPoolSummary = (
@@ -374,10 +433,11 @@ export async function redeemAccess(
   referralCode?: string,
   signal?: AbortSignal,
 ): Promise<RedeemAccessResult> {
+  const timeout = withTimeout(signal, FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(`${baseUrl}/access/redeem`, {
       method: "POST",
-      signal: signal ?? null,
+      signal: timeout.signal,
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ wallet, code, signature, ...(referralCode ? { referralCode } : {}) }),
     });
@@ -396,8 +456,14 @@ export async function redeemAccess(
     return {
       ok: false,
       status: null,
-      reason: error instanceof Error ? error.message : "indexer offline",
+      reason: timeout.timedOut()
+        ? TIMEOUT_MESSAGE
+        : error instanceof Error
+          ? error.message
+          : "indexer offline",
     };
+  } finally {
+    timeout.cancel();
   }
 }
 

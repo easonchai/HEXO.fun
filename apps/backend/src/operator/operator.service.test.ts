@@ -23,11 +23,13 @@ import {
   SYSVAR_CLOCK_PUBKEY,
   type TransactionInstruction,
 } from "@solana/web3.js";
+import type { ConfigService } from "@nestjs/config";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import { epochAddress, poolAddress, roundAddress } from "../chain/pda";
+import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { CountingConnection } from "../test-utils/counting-connection";
 import { isDatabaseReachableSync } from "../test-utils/db-probe";
@@ -59,6 +61,11 @@ const bn = (value: bigint | number): BN => new BN(value.toString());
 /** A `SparringService` this suite never exercises: only `wake()` is called,
  *  and only to notice a `create_round`, which none of these fixtures send. */
 const noopSparring = { wake: () => {} } as unknown as SparringService;
+/** Every test here fabricates its own chain and DB reads, so the config
+ *  service only needs to answer the one key `OperatorService` asks it for. */
+const fakeConfig = {
+  get: () => 60,
+} as unknown as ConfigService<HexVaultEnv, true>;
 
 const pool = (overrides: object = {}) => ({
   poolId: bn(1),
@@ -147,6 +154,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
       prisma,
       indexer,
       noopSparring,
+      fakeConfig,
     );
 
     try {
@@ -174,6 +182,104 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService end-of-tick timestamp", () => {
       await prisma.operatorState.deleteMany({ where: { id: 1 } });
       await prisma.$disconnect();
     }
+  });
+});
+
+// Ticket 10: a database blip during a failing tick must not itself crash the
+// process. No DB needed here — both the RPC read and the state write are
+// fakes, so this covers the catch-path write in isolation.
+describe("OperatorService catch-path state write", () => {
+  it("does not reject when recording the tick's own error also fails", async () => {
+    const fakeChain = {
+      program,
+      programId: PROGRAM_ID,
+      keypair: Keypair.generate(),
+      connection: {
+        getMultipleAccountsInfo: async () => {
+          throw new Error("boom: rpc down");
+        },
+      },
+      poolAddress: () => POOL,
+      recordChainTime: () => {},
+    };
+    const failingPrisma = {
+      operatorState: {
+        upsert: async () => {
+          throw new Error("db blip");
+        },
+      },
+    };
+    const indexer: IndexerQueries = {
+      playersToRegister: async () => [],
+      unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
+    };
+    const operator = new OperatorService(
+      fakeChain as unknown as ChainService,
+      failingPrisma as unknown as PrismaService,
+      indexer,
+      noopSparring,
+      fakeConfig,
+    );
+
+    const outcome = await operator.runOnce();
+    expect(outcome.action).toBeNull();
+  });
+});
+
+// Ticket 10: Nest only calls onModuleDestroy when enableShutdownHooks() is
+// on (main.ts); this covers that it actually waits for the tick in flight
+// rather than tearing down underneath it.
+describe("OperatorService.onModuleDestroy", () => {
+  it("awaits the in-flight tick before resolving", async () => {
+    let releaseTick: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseTick = resolve;
+    });
+    const fakeChain = {
+      program,
+      programId: PROGRAM_ID,
+      keypair: Keypair.generate(),
+      connection: {
+        getMultipleAccountsInfo: async () => {
+          await gate;
+          throw new Error("boom: rpc down");
+        },
+        removeAccountChangeListener: async () => {},
+      },
+      poolAddress: () => POOL,
+      recordChainTime: () => {},
+    };
+    const prisma = { operatorState: { upsert: async () => {} } };
+    const indexer: IndexerQueries = {
+      playersToRegister: async () => [],
+      unsettledPositions: async () => [],
+      referralGrantsDue: async () => [],
+      markReferralGrantsSent: async () => {},
+      roundsToClose: async () => [],
+    };
+    const operator = new OperatorService(
+      fakeChain as unknown as ChainService,
+      prisma as unknown as PrismaService,
+      indexer,
+      noopSparring,
+      fakeConfig,
+    );
+
+    const tickPromise = operator.tick();
+    let destroyed = false;
+    const destroyPromise = operator.onModuleDestroy().then(() => {
+      destroyed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(destroyed).toBe(false);
+
+    releaseTick();
+    await tickPromise;
+    await destroyPromise;
+    expect(destroyed).toBe(true);
   });
 });
 
@@ -247,6 +353,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService.duePendingWithdrawals", () => {
         roundsToClose: async () => [],
       },
       noopSparring,
+      fakeConfig,
     );
 
     try {
@@ -334,6 +441,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService read budget", () => {
       prisma,
       indexer,
       noopSparring,
+      fakeConfig,
     );
 
     try {
@@ -413,6 +521,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
       prisma,
       indexer,
       noopSparring,
+      fakeConfig,
     );
 
     try {
@@ -421,6 +530,8 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
         where: { id: 1 },
       });
       expect(afterFailure.lastError).toMatch(/timed out/);
+      // Ticket 09: a failing tick never stamps lastSuccessAt.
+      expect(afterFailure.lastSuccessAt).toBeNull();
 
       // The single-flight guard resets in `runOnce`'s `finally`, so the next
       // call is never skipped by the failed one still "running".
@@ -429,6 +540,8 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService RPC failure recovery", () => {
         where: { id: 1 },
       });
       expect(afterRecovery.lastError).toBeNull();
+      // Ticket 09: the recovering tick stamps it.
+      expect(afterRecovery.lastSuccessAt).not.toBeNull();
     } finally {
       await prisma.operatorState.deleteMany({ where: { id: 1 } });
       await prisma.$disconnect();
@@ -510,6 +623,7 @@ describe.skipIf(!DB_AVAILABLE)("OperatorService randomness subscription", () => 
       prisma,
       indexer,
       noopSparring,
+      fakeConfig,
     );
     return { prisma, connection, accounts, operator };
   }

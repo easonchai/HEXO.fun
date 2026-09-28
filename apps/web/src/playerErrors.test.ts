@@ -26,6 +26,14 @@ describe("decodeErrorCode", () => {
       "Today's draw hasn't closed registration yet. Try again in a moment.",
     ], // RegistrationWindowOpen
     [6051, "This pool is closed. Withdrawals still work; nothing else does."], // PoolShutDown
+    [
+      6058,
+      "The game is paused right now. Try again once it restarts.",
+    ], // GamePaused
+    [
+      6059,
+      "The daily draw is paused, so Tickets can't be bought right now.",
+    ], // JackpotPaused
   ])("has player copy for code %i", (code, copy) => {
     expect(decodeErrorCode(code)).toBe(copy);
   });
@@ -85,6 +93,15 @@ describe("decodePlayerError", () => {
     const error = new Error("custom error: InsufficientVaultLiquidity");
     expect(decodePlayerError(error)).toBe(
       "The vault is being topped up. Try the payout again in a few minutes.",
+    );
+  });
+
+  it("decodes the two feature-pause errors by name", () => {
+    expect(decodePlayerError(new Error("simulation failed: GamePaused"))).toBe(
+      "The game is paused right now. Try again once it restarts.",
+    );
+    expect(decodePlayerError(new Error("simulation failed: JackpotPaused"))).toBe(
+      "The daily draw is paused, so Tickets can't be bought right now.",
     );
   });
 

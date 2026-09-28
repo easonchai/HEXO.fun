@@ -17,7 +17,6 @@ import { BN } from "@anchor-lang/core";
 import {
   createAccount,
   createMint,
-  getAccount,
   getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
   mintTo,
@@ -169,6 +168,9 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       await mintTo(connection, authority, mint, authorityToken.address, authority, JACKPOT);
 
       const poolId = BigInt(Date.now());
+      // run-local.sh points `loadIdl()` (via HEXVAULT_IDL_PATH) at the
+      // freshly built target/idl/hex_vault.json, so this is the id it just
+      // deployed, not whatever the committed src/idl/ snapshot carries.
       const programId = String(loadIdl().address);
       const config = stubConfig({
         DATABASE_URL: process.env.DATABASE_URL ?? "",
@@ -176,6 +178,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         RPC_TIMEOUT_MS: DEFAULT_RPC_TIMEOUT_MS,
         PROGRAM_ID: programId,
         POOL_ID: poolId.toString(),
+        CLUSTER: "devnet",
         OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
         ACCEPTED_MINT: mint.toBase58(),
         OPERATOR_SOL_WARN: 0.3,
@@ -185,6 +188,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         REFERRAL_QUALIFY_SECONDS: 604_800,
         ALERT_TICK_STALE_S: 300,
         ALERT_INDEXER_STALE_S: 600,
+        REGISTRATION_INDEXER_FRESH_S: 60,
         CORS_ORIGIN: "http://localhost",
         PORT: "0",
       });
@@ -220,6 +224,13 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         // of the suite is the same as before either parameter existed.
         registrationWindow: new BN(0),
         payoutTimeout: new BN(86_400),
+        // Base yield and grant-tickets are off (0) so this suite's round and
+        // jackpot flow behaves exactly as it did before these params
+        // existed; `ticketsPerUsdc` only has to be positive to pass
+        // `create_pool`'s own validation and is never exercised here.
+        baseRateBps: 0,
+        ticketsPerUsdc: 10,
+        bonusCapBps: 0,
       })
         .accountsPartial({
           payer: authority.publicKey,
@@ -234,6 +245,14 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
           systemProgram: SystemProgram.programId,
         })
         .rpc();
+      // game-jackpot-pause ticket 02: create_pool leaves both switches on.
+      // Start them the way `bootstrap --start` does, jackpot first, so the
+      // operator runs this pool as it did before either switch existed.
+      for (const feature of ["jackpot", "game"]) {
+        await method("setFeaturePause", { [feature]: {} }, false)
+          .accountsPartial({ signer: authority.publicKey, pool })
+          .rpc();
+      }
 
       // Params apply to the next epoch created, so this lands before the
       // operator opens the first one.
@@ -318,7 +337,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       // SAFETY: the Operator only ever calls `wake()` on the Sparring player,
       // and this test drives the crank itself rather than running one.
       const sparring = { wake: () => {} } as unknown as SparringService;
-      const operator = new OperatorService(chain, prisma, indexer, sparring);
+      const operator = new OperatorService(chain, prisma, indexer, sparring, config);
 
       let stopped = false;
       const crank = (async () => {
@@ -366,9 +385,21 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
           })
           .rpc();
 
-        const balancesBefore = new Map([
-          [a.keypair.publicKey.toBase58(), await tokenBalance(connection, a.token)],
-          [b.keypair.publicKey.toBase58(), await tokenBalance(connection, b.token)],
+        // A non-House win compounds into the winner's Principal instead of
+        // paying their token account (epochs.rs `payout`, spec's no-loss
+        // model), so the win is asserted against Principal, not a token
+        // balance.
+        const principalOf = async (wallet: PublicKey): Promise<bigint> => {
+          const info = await connection.getAccountInfo(chain.playerAddress(wallet));
+          const raw = chain.program.coder.accounts.decode<{ principal: BN }>(
+            "player",
+            info?.data ?? Buffer.alloc(0),
+          );
+          return BigInt(raw.principal.toString());
+        };
+        const principalsBefore = new Map([
+          [a.keypair.publicKey.toBase58(), await principalOf(a.keypair.publicKey)],
+          [b.keypair.publicKey.toBase58(), await principalOf(b.keypair.publicKey)],
         ]);
 
         // The operator opens rounds on its own; wait for one with enough time
@@ -428,8 +459,8 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         const winnerWallet = [a, b].find((w) => w.keypair.publicKey.toBase58() === winner);
         expect(winnerWallet, `winner ${winner} is one of the two depositors`).toBeDefined();
 
-        const after = await tokenBalance(connection, winnerWallet?.token as PublicKey);
-        expect(after - (balancesBefore.get(winner) ?? 0n)).toBe(epoch?.jackpotAmount);
+        const principalAfter = await principalOf(winnerWallet?.keypair.publicKey as PublicKey);
+        expect(principalAfter - (principalsBefore.get(winner) ?? 0n)).toBe(epoch?.jackpotAmount);
       } finally {
         stopped = true;
         await crank;
@@ -467,9 +498,6 @@ async function fundedWallet(
   await mintTo(connection, authority, mint, account.address, authority, 10_000_000n);
   return { keypair, token: account.address };
 }
-
-const tokenBalance = async (connection: Connection, address: PublicKey): Promise<bigint> =>
-  (await getAccount(connection, address)).amount;
 
 async function programAccounts<T>(
   chain: ChainService,

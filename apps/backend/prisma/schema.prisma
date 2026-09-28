@@ -57,6 +57,11 @@ model Pool {
   /// Admin-only and irreversible: stops every inflow, the game and the
   /// draw, and lets withdrawals skip the epoch lock.
   shutdown            Boolean
+  /// Game pause: no new Round or Position (game-jackpot-pause).
+  gamePaused          Boolean @default(false)
+  /// Jackpot pause: no new epoch, ticket purchase, grant or registration
+  /// close (game-jackpot-pause).
+  jackpotPaused       Boolean @default(false)
   updatedSlot         BigInt
 }
 
@@ -272,4 +277,41 @@ model OperatorState {
    *  last tick that tried to pay them. 0 when the last try covered them all,
    *  null before any tick has looked. */
   withdrawShortfall BigInt?
+  /** Ticket 06: owners step 6b has given up on for the rest of the epoch
+   *  after too many consecutive failures. 0 when none have been, null before
+   *  any tick has looked. */
+  withdrawSkippedCount Int?
+  /** Ticket 07: true on a tick that withheld `close_registration` for a
+   *  stale Indexer cursor; false once a later tick closes normally. Null
+   *  before any tick has ever checked. */
+  registrationIndexerStale Boolean?
+  /** Ticket 09: wall-clock unix seconds of the last tick that completed
+   *  without an error, so OPERATOR_FAILING can tell "ticks are failing"
+   *  from "ticks have stopped" (OPERATOR_STALE covers the latter). Null
+   *  before the first successful tick. */
+  lastSuccessAt    BigInt?
+  /** Ticket 09: true on a tick whose previous epoch missed its expected
+   *  deadline (epoch length + registration window + VRF timeout + slack) to
+   *  reach a terminal status; false once one does. Null before any tick has
+   *  ever looked. */
+  epochNoProgress  Boolean?
+  /** Ticket 09: true on a tick whose previous epoch drew a winner more than
+   *  a few minutes ago and still has not been paid; false once it is. Null
+   *  before any tick has ever looked. */
+  drawnUnpaid      Boolean?
+}
+
+// beta-launch-fixes ticket 16: decoded send failures and error-boundary
+// catches the web posts to POST /error-reports, so a broken money path
+// reaches the maintainers instead of only the depositor's console.
+// Write-only from the API's own perspective; nothing reads this back through
+// a route, an operator queries Postgres directly.
+model ErrorReport {
+  id        Int      @id @default(autoincrement())
+  code      String
+  message   String
+  signature String?
+  wallet    String?
+  page      String?
+  createdAt DateTime @default(now())
 }

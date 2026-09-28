@@ -8,6 +8,7 @@
     "build": "prisma generate && nest build",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "test:db": "sh scripts/test-db.sh",
     "bootstrap": "tsx src/bootstrap.ts",
     "admin": "tsx src/admin/main.ts",
     "sparring-setup": "tsx src/sparring-setup.ts",
@@ -15,6 +16,7 @@
   },
   "dependencies": {
     "@anchor-lang/core": "1.1.2",
+    "@fastify/helmet": "^13.1.1",
     "@ledgerhq/hw-app-solana": "7.11.0",
     "@ledgerhq/hw-transport-node-hid": "6.33.5",
     "@nestjs/common": "11.2.3",

@@ -25,6 +25,9 @@ export interface AccessGateState {
   error: string | null;
   connect: () => void;
   submit: () => void;
+  /** Ticket 16: forces an immediate `GET /access` retry from the gate's own
+   *  retry control, resetting the backoff. */
+  retry: () => void;
 }
 
 export interface AccessGateOptions {
@@ -37,6 +40,12 @@ export interface AccessGateOptions {
   connect: () => void;
   signMessage: ((message: Uint8Array) => Promise<Uint8Array>) | undefined;
 }
+
+/** Ticket 16: automatic retries keep going forever; the retry control only
+ *  appears once this much time has passed with no answer. */
+const RETRY_CONTROL_AFTER_MS = 10_000;
+const RETRY_BACKOFF_BASE_MS = 1_000;
+const RETRY_BACKOFF_MAX_MS = 10_000;
 
 const REF_CODE_STORAGE_KEY = "hexo-ref-code";
 /** The wallet that last passed the gate, so a reload does not flash the
@@ -110,20 +119,50 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   const [refCode, setRefCode] = useState(() => captureRefCode());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Ticket 16: `GET /access` retries with backoff on its own; `fetchFailed`
+  // only flips once ten seconds of that have passed with no answer, so
+  // `gateDecision` shows a retry control instead of spinning forever on an
+  // unreachable API. `retryNonce` lets the control's own click force an
+  // immediate retry, resetting the backoff.
+  const [fetchFailed, setFetchFailed] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     setAccess(null);
+    setFetchFailed(false);
     if (!owner) return;
     let cancelled = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
-    void fetchAccess(baseUrl, owner, controller.signal).then((result) => {
-      if (!cancelled && result.ok) setAccess(result.data);
-    });
+    const startedAt = Date.now();
+
+    const tick = (): void => {
+      void fetchAccess(baseUrl, owner, controller.signal).then((result) => {
+        if (cancelled) return;
+        if (result.ok) {
+          setAccess(result.data);
+          setFetchFailed(false);
+          return;
+        }
+        if (Date.now() - startedAt >= RETRY_CONTROL_AFTER_MS) setFetchFailed(true);
+        attempt += 1;
+        const delay = Math.min(RETRY_BACKOFF_BASE_MS * 2 ** attempt, RETRY_BACKOFF_MAX_MS);
+        timer = setTimeout(tick, delay);
+      });
+    };
+    tick();
+
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
       controller.abort();
     };
-  }, [baseUrl, owner]);
+  }, [baseUrl, owner, retryNonce]);
+
+  const retryAccess = useCallback(() => {
+    setRetryNonce((value) => value + 1);
+  }, []);
 
   const redeem = useCallback(() => {
     const wallet = owner;
@@ -160,7 +199,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   // redeems once the access check says this wallet still needs a code. A
   // wallet that already has access skips the redeem and the gate just closes.
   const [pending, setPending] = useState(false);
-  const status = gateDecision({ ready, connected, owner, access, rememberedOwner });
+  const status = gateDecision({ ready, connected, owner, access, rememberedOwner, fetchFailed });
   useEffect(() => {
     if (!pending || status === "loading" || status === "connect" || status === "checking")
       return;
@@ -218,5 +257,6 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
     error,
     connect,
     submit,
+    retry: retryAccess,
   };
 }

@@ -9,6 +9,13 @@ describe("parseAdminCommand", () => {
     expect(parseAdminCommand(["unpause"])).toEqual({ kind: "unpause" });
   });
 
+  it("parses the four feature pause commands with no flags", () => {
+    for (const kind of ["pause-game", "pause-jackpot", "start-game", "start-jackpot"]) {
+      expect(parseAdminCommand([kind])).toEqual({ kind });
+    }
+    expect(() => parseAdminCommand(["start-game", "now"])).toThrow(/unexpected argument/);
+  });
+
   it("rejects stray arguments to pause/unpause", () => {
     expect(() => parseAdminCommand(["pause", "now"])).toThrow(/unexpected argument/);
   });

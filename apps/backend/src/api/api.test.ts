@@ -43,6 +43,7 @@ import {
   JACKPOT_BALANCE_TTL_MS,
   oddsPercent,
   oneDayYieldCost,
+  operatorErrorCode,
   playerTicketExtras,
   poolBonusCap,
   principalOut,
@@ -417,6 +418,25 @@ describe("playerTicketExtras", () => {
   });
 });
 
+describe("operatorErrorCode", () => {
+  it("is null when there is no error", () => {
+    expect(operatorErrorCode(null)).toBeNull();
+  });
+
+  it("passes a bare IDL/Anchor error name through unchanged", () => {
+    expect(operatorErrorCode("InsufficientVaultLiquidity")).toBe("InsufficientVaultLiquidity");
+  });
+
+  it("collapses anything else to one generic code, so a hostname or path never reaches a client", () => {
+    expect(operatorErrorCode("RPC getMultipleAccountsInfo timed out after 10000ms")).toBe(
+      "OPERATOR_TICK_FAILED",
+    );
+    expect(
+      operatorErrorCode("principal vault Ax1...9Z does not exist; run bootstrap first"),
+    ).toBe("OPERATOR_TICK_FAILED");
+  });
+});
+
 const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
 describe.skipIf(!DB_AVAILABLE)("API routes", () => {
@@ -442,7 +462,11 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       .useValue(fakeChain)
       .compile();
 
-    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    // trustProxy (ticket 13): the API sits behind Traefik, so the throttler
+    // must key on the forwarded client address, not Traefik's own.
+    app = moduleRef.createNestApplication<NestFastifyApplication>(
+      new FastifyAdapter({ trustProxy: true }),
+    );
     prisma = app.get(PrismaService);
     await truncate(prisma);
     await seed(prisma);
@@ -749,6 +773,26 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     expect(body.shutdown).toBe(false);
   });
 
+  // Ticket 05: `/status` carries the same launch time `/state` does, null
+  // once the seeded Pool already has an Epoch (every other test in this file).
+  it("GET /status carries a null launchAt once the pool has an epoch", async () => {
+    const { body } = await http.get("/status").expect(200);
+    expect(body.launchAt).toBeNull();
+  });
+
+  it("GET /status carries the configured launch time before Epoch 1", async () => {
+    await prisma.pool.update({ where: { address: POOL_ADDRESS }, data: { currentEpochId: 0n } });
+    try {
+      const { body } = await http.get("/status").expect(200);
+      expect(body.launchAt).toBe(process.env.LAUNCH_AT);
+    } finally {
+      await prisma.pool.update({
+        where: { address: POOL_ADDRESS },
+        data: { currentEpochId: CURRENT_EPOCH },
+      });
+    }
+  });
+
   it("GET /healthz reports the operator's SOL and its own status, separate from /status", async () => {
     const { body } = await http.get("/healthz").expect(200);
     expect(body.ok).toBe(true);
@@ -777,23 +821,31 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
   describe("GET /alerts", () => {
     // The default seed's OperatorState.withdrawShortfall is 250_000n (see
     // "GET /status reports the withdrawal queue..." above), and every other
-    // condition reads healthy against it, so the untouched seed already
-    // proves the wiring for exactly one code without any setup of its own.
-    it("is 503 with exactly WITHDRAW_SHORTFALL against the seeded OperatorState row", async () => {
+    // condition reads healthy against it except YIELD_BUDGET_LOW — the same
+    // seed's HUGE_U64 totalPrincipal dwarfs its yieldBudget (see "GET /status
+    // reports the yield budget..." above) — so the untouched seed already
+    // proves the wiring for exactly these two codes without any setup of its
+    // own.
+    it("is 503 with exactly WITHDRAW_SHORTFALL and YIELD_BUDGET_LOW against the seeded rows", async () => {
       const { body } = await http.get("/alerts").expect(503);
       expect(body).toEqual({
-        alerts: [{ code: "WITHDRAW_SHORTFALL", message: expect.any(String) }],
+        alerts: [
+          { code: "WITHDRAW_SHORTFALL", message: expect.any(String) },
+          { code: "YIELD_BUDGET_LOW", message: expect.any(String) },
+        ],
       });
     });
 
-    it("is 200 with an empty list once the withdraw shortfall clears", async () => {
+    it("is 503 with exactly YIELD_BUDGET_LOW once the withdraw shortfall clears", async () => {
       await prisma.operatorState.update({
         where: { id: 1 },
         data: { withdrawShortfall: 0n },
       });
       try {
-        const { body } = await http.get("/alerts").expect(200);
-        expect(body).toEqual({ alerts: [] });
+        const { body } = await http.get("/alerts").expect(503);
+        expect(body).toEqual({
+          alerts: [{ code: "YIELD_BUDGET_LOW", message: expect.any(String) }],
+        });
       } finally {
         await prisma.operatorState.update({
           where: { id: 1 },
@@ -832,6 +884,10 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
         expect(body.alerts).toEqual([
           { code: "ROUND_VOIDED_RECENTLY", message: expect.any(String) },
           { code: "EPOCH_ROLLED_OVER_RECENTLY", message: expect.any(String) },
+          // The seeded pool's yield budget is already below one epoch's Base
+          // yield (same fixture the two tests above account for); this test
+          // only clears withdrawShortfall, not that.
+          { code: "YIELD_BUDGET_LOW", message: expect.any(String) },
         ]);
       } finally {
         await prisma.event.deleteMany({
@@ -852,6 +908,9 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       // The browser needs both and no longer reads the Pool account itself.
       expect(body.pool.closeBuffer).toBe(POOL_CLOSE_BUFFER.toString());
       expect(body.pool.minDeposit).toBe(POOL_MIN_DEPOSIT.toString());
+      // game-jackpot-pause ticket 02: the web reads both switches off here.
+      expect(body.pool.gamePaused).toBe(false);
+      expect(body.pool.jackpotPaused).toBe(false);
       expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
       // Open epoch: same live-vault-balance rule as GET /epochs/current.
       expect(body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
@@ -940,6 +999,33 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
         expect(body.openRound).toBeNull();
       } finally {
         await prisma.round.update({ where: { id: 100n }, data: { status: 0 } });
+      }
+    });
+
+    // Ticket 05: the deposit-only launch week. currentEpochId 0 with no
+    // Epoch row is not the indexer falling behind (that only applies once an
+    // Epoch id exists to mirror); `/state` returns a null Epoch and the
+    // configured launch time instead of 404ing.
+    it("returns a null current epoch and the launch time before Epoch 1, instead of 404", async () => {
+      // game-jackpot-pause ticket 02: a new pool sits here, both switches on,
+      // for as long as the deposit-only week lasts.
+      await prisma.pool.update({
+        where: { address: POOL_ADDRESS },
+        data: { currentEpochId: 0n, gamePaused: true, jackpotPaused: true },
+      });
+      try {
+        const { body } = await http.get(`/state?owner=${ALICE}`).expect(200);
+        expect(body.pool).toMatchObject({ gamePaused: true, jackpotPaused: true });
+        expect(body.currentEpoch).toBeNull();
+        expect(body.launchAt).toBe(process.env.LAUNCH_AT);
+        // Deposits still show the depositor's real Principal even with no Epoch.
+        expect(body.player).toMatchObject({ owner: ALICE, principal: "1000000" });
+        assertNoLargeNumbers(body, "/state (no epoch)");
+      } finally {
+        await prisma.pool.update({
+          where: { address: POOL_ADDRESS },
+          data: { currentEpochId: CURRENT_EPOCH, gamePaused: false, jackpotPaused: false },
+        });
       }
     });
 
@@ -1094,6 +1180,28 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       const second = await http.get("/state").expect(200);
       expect(second.body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
       expect(jackpotReads).toBe(before + 1);
+    });
+  });
+
+  // ticket 13: Fastify trusts Traefik's forwarded address, so the throttler
+  // (which is otherwise IP-keyed) gives each real client its own bucket
+  // instead of one shared bucket for every request Traefik forwards.
+  describe("GET /access/:wallet throttling keys on the forwarded address", () => {
+    it("throttles one forwarded address without touching another's budget", async () => {
+      const wallet = Keypair.generate().publicKey.toBase58();
+      for (let i = 0; i < 10; i += 1) {
+        await http
+          .get(`/access/${wallet}`)
+          .set("x-forwarded-for", "203.0.113.11")
+          .expect(200);
+      }
+      const throttled = await http
+        .get(`/access/${wallet}`)
+        .set("x-forwarded-for", "203.0.113.11");
+      expect(throttled.status).toBe(429);
+
+      // A different forwarded client has its own, untouched budget.
+      await http.get(`/access/${wallet}`).set("x-forwarded-for", "203.0.113.12").expect(200);
     });
   });
 

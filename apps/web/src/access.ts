@@ -32,8 +32,9 @@ export function inviteCodeFromSearch(search: string): string {
 
 /** What the gate overlay shows. "hidden" once access is confirmed allowed;
  *  "loading" while the wallet layer is still restoring a session, when
- *  nothing should paint at all. */
-export type GateStatus = "loading" | "hidden" | "connect" | "checking" | "redeem";
+ *  nothing should paint at all. "retry" (ticket 16): `GET /access` has been
+ *  failing long enough that silently spinning is no longer honest. */
+export type GateStatus = "loading" | "hidden" | "connect" | "checking" | "redeem" | "retry";
 
 export interface GateInputs {
   /** False while Privy or wallet-adapter is still restoring last session's wallet. */
@@ -43,6 +44,10 @@ export interface GateInputs {
   access: AccessDto | null;
   /** The wallet that last passed the gate, from localStorage; "" when none. */
   rememberedOwner: string;
+  /** Ticket 16: true once the access check has failed for long enough
+   *  (`useAccessGate.ts`'s retry backoff) that "checking…" should become a
+   *  retry control instead of spinning forever on an unreachable API. */
+  fetchFailed?: boolean;
 }
 
 /** A returning wallet that passed the gate before stays hidden while
@@ -50,11 +55,12 @@ export interface GateInputs {
  *  revoked once redeemed, so a stale answer can only be wrong for a wallet
  *  that never had it, and the fetch result still shows the card then. */
 export function gateDecision(inputs: GateInputs): GateStatus {
-  const { ready, connected, owner, access, rememberedOwner } = inputs;
+  const { ready, connected, owner, access, rememberedOwner, fetchFailed } = inputs;
   if (!ready) return "loading";
   if (!connected) return "connect";
   if (access === null) {
-    return owner !== undefined && owner === rememberedOwner ? "hidden" : "checking";
+    if (owner !== undefined && owner === rememberedOwner) return "hidden";
+    return fetchFailed ? "retry" : "checking";
   }
   return access.allowed ? "hidden" : "redeem";
 }

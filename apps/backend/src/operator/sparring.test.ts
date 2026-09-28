@@ -80,6 +80,8 @@ const pool = (over: Partial<PoolState> = {}): PoolState => ({
   openRoundId: 3n,
   totalPrincipal: 1_000_000_000n,
   shutdown: false,
+  gamePaused: false,
+  jackpotPaused: false,
   ...over,
 });
 

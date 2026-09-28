@@ -11,12 +11,21 @@ const REQUIRED_KEYS = [
   "OPERATOR_KEYPAIR",
   "ACCEPTED_MINT",
   "CORS_ORIGIN",
+  "PROGRAM_ID",
+  "POOL_ID",
+  "CLUSTER",
 ] as const;
 
-// The program is mid-rewrite under this ID (see ticket 05). PROGRAM_ID isn't
-// in spec's "no default" column, so an unset value falls back to it rather
-// than failing boot.
+// Used only as an explicit, concrete program id in tests and scripts now
+// (beta-launch-fixes ticket 10): PROGRAM_ID itself has no default any more, a
+// mainnet stack must never be able to crank a devnet Pool by omission.
 export const DEFAULT_PROGRAM_ID = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6";
+
+/** The clusters `CLUSTER` may name (beta-launch-fixes ticket 10); checked
+ *  against the RPC's genesis hash at boot in boot-guard.ts. Same two values
+ *  as the web's VITE_CLUSTER (apps/web/src/cluster.ts). */
+export const CLUSTERS = ["devnet", "mainnet-beta"] as const;
+export type Cluster = (typeof CLUSTERS)[number];
 
 /** SOL the operator is warned about falling below, in `/status` and `/healthz`. */
 export const DEFAULT_OPERATOR_SOL_WARN = 0.5;
@@ -41,6 +50,11 @@ export const DEFAULT_ALERT_TICK_STALE_S = 300;
  *  cursor last advanced before it counts as stuck. */
 export const DEFAULT_ALERT_INDEXER_STALE_S = 600;
 
+/** Ticket 07: how young the Indexer cursor has to be for `close_registration`
+ *  to trust it. Tighter than `ALERT_INDEXER_STALE_S`, which is about paging
+ *  someone; this is about not losing a depositor's Draw and Base yield. */
+export const DEFAULT_REGISTRATION_INDEXER_FRESH_S = 60;
+
 export interface HexVaultEnv {
   DATABASE_URL: string;
   RPC_URL: string;
@@ -52,6 +66,9 @@ export interface HexVaultEnv {
   RPC_TIMEOUT_MS: number;
   PROGRAM_ID: string;
   POOL_ID: string;
+  /** Checked against the RPC's genesis hash at boot (boot-guard.ts), so a
+   *  wrong RPC_URL fails fast instead of cranking the wrong network. */
+  CLUSTER: Cluster;
   /** The hot crank key. The admin's key is never in this env. */
   OPERATOR_KEYPAIR: string;
   /** Pool admin, base58 pubkey. Read for CLI targeting only; absent means
@@ -77,6 +94,9 @@ export interface HexVaultEnv {
   ALERT_TICK_STALE_S: number;
   /** `GET /alerts`' `INDEXER_STALE` threshold, in seconds. */
   ALERT_INDEXER_STALE_S: number;
+  /** Ticket 07: how young the Indexer cursor must be, in seconds, for
+   *  `close_registration` to trust it. */
+  REGISTRATION_INDEXER_FRESH_S: number;
   CORS_ORIGIN: string;
   PORT: string;
   /** Sparring player secret, base58. Absent switches the Sparring player off. */
@@ -84,6 +104,12 @@ export interface HexVaultEnv {
   /** Shared secret for `POST /access/invites`, sent as `x-admin-key`. Absent
    *  switches the route off (404). At least 32 characters when set. */
   INVITE_ADMIN_KEY?: string;
+  /** Beta-launch-fixes ticket 05: an ISO timestamp holding back the
+   *  Operator's first `begin_epoch` while the Pool has no Epoch yet, so
+   *  deposits can open days before the first Draw. Absent behaves as before:
+   *  `begin_epoch` fires on the first tick. Reported on `/state` and
+   *  `/status` so the web can render a countdown. */
+  LAUNCH_AT?: string;
 }
 
 /**
@@ -187,6 +213,43 @@ function alertIndexerStaleSeconds(raw: unknown): number {
   return value;
 }
 
+/**
+ * Ticket 05: unset or empty takes no launch time (today's behaviour).
+ * Anything else must parse as an ISO timestamp, so a typo fails the boot
+ * instead of the operator silently never gating `begin_epoch`.
+ */
+function launchAt(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return undefined;
+  }
+  const value = String(raw);
+  if (Number.isNaN(Date.parse(value))) {
+    throw new Error(`LAUNCH_AT must be an ISO timestamp, got "${value}"`);
+  }
+  return value;
+}
+
+/** `CLUSTER` must be one of `CLUSTERS`; there is no default, since a wrong
+ *  guess is worse than a boot failure. */
+function cluster(raw: unknown): Cluster {
+  if (CLUSTERS.includes(raw as Cluster)) return raw as Cluster;
+  throw new Error(`CLUSTER must be one of ${CLUSTERS.join(", ")}, got "${String(raw)}"`);
+}
+
+/** Same shape as `alertTickStaleSeconds`. */
+function registrationIndexerFreshSeconds(raw: unknown): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_REGISTRATION_INDEXER_FRESH_S;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      `REGISTRATION_INDEXER_FRESH_S must be a non-negative whole number of seconds, got "${String(raw)}"`,
+    );
+  }
+  return value;
+}
+
 /** @nestjs/config `validate` hook: runs once at boot, on the raw process.env. */
 export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   if (!env.ACCEPTED_MINT && env.HEXUSDC_MINT) {
@@ -202,12 +265,14 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   if (env.INVITE_ADMIN_KEY && String(env.INVITE_ADMIN_KEY).length < 32) {
     throw new Error("INVITE_ADMIN_KEY must be at least 32 characters (try `openssl rand -hex 32`)");
   }
+  const launchAtValue = launchAt(env.LAUNCH_AT);
   return {
     DATABASE_URL: String(env.DATABASE_URL),
     RPC_URL: String(env.RPC_URL),
     RPC_TIMEOUT_MS: rpcTimeoutMs(env.RPC_TIMEOUT_MS),
-    PROGRAM_ID: String(env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID),
-    POOL_ID: String(env.POOL_ID ?? "1"),
+    PROGRAM_ID: String(env.PROGRAM_ID),
+    POOL_ID: String(env.POOL_ID),
+    CLUSTER: cluster(env.CLUSTER),
     OPERATOR_KEYPAIR: String(env.OPERATOR_KEYPAIR),
     ACCEPTED_MINT: String(acceptedMint),
     OPERATOR_SOL_WARN: solWarn(env.OPERATOR_SOL_WARN),
@@ -217,6 +282,7 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     REFERRAL_QUALIFY_SECONDS: referralQualifySeconds(env.REFERRAL_QUALIFY_SECONDS),
     ALERT_TICK_STALE_S: alertTickStaleSeconds(env.ALERT_TICK_STALE_S),
     ALERT_INDEXER_STALE_S: alertIndexerStaleSeconds(env.ALERT_INDEXER_STALE_S),
+    REGISTRATION_INDEXER_FRESH_S: registrationIndexerFreshSeconds(env.REGISTRATION_INDEXER_FRESH_S),
     CORS_ORIGIN: String(env.CORS_ORIGIN),
     PORT: String(env.PORT ?? "8080"),
     // Spread rather than assigned: under `exactOptionalPropertyTypes` an
@@ -227,5 +293,6 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
       ? { SPARRING_KEYPAIR: String(env.SPARRING_KEYPAIR) }
       : {}),
     ...(env.INVITE_ADMIN_KEY ? { INVITE_ADMIN_KEY: String(env.INVITE_ADMIN_KEY) } : {}),
+    ...(launchAtValue !== undefined ? { LAUNCH_AT: launchAtValue } : {}),
   };
 }

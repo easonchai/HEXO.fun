@@ -31,14 +31,42 @@ function* walk(dir) {
   }
 }
 
+const URL_RE = /https?:\/\/[^\s"'<>)]+/g;
+
+function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ticket 14: a production build's browser RPC is a domain-locked key —
+ * Vite has to ship it, and it is safe to ship because the provider checks
+ * the request's origin, not the URL. `allowedHost` names that one host
+ * (this build's own configured `VITE_PUBLIC_RPC_URL`); a matching pattern
+ * whose URL sits on any other host still fails, so a second, unexpected
+ * provider key shipping alongside it is still caught.
+ */
+function matchesOnlyAllowedHost(text, re, allowedHost) {
+  if (!allowedHost) return false;
+  const urls = text.match(URL_RE) ?? [];
+  const matching = urls.filter((url) => re.test(url));
+  return matching.length > 0 && matching.every((url) => hostOf(url) === allowedHost);
+}
+
 /**
  * First `{ file, pattern }` match across `files` (`{ path, text }`), or
- * `null`. Pure: no filesystem, no `process.exit`.
+ * `null`. Pure: no filesystem, no `process.exit`. `allowedHost`, when given,
+ * lets exactly that one host's occurrences of a pattern through.
  */
-export function findLeak(files) {
+export function findLeak(files, allowedHost) {
   for (const { path, text } of files) {
     for (const { name, re } of PATTERNS) {
-      if (re.test(text)) return { file: path, pattern: name };
+      if (!re.test(text)) continue;
+      if (matchesOnlyAllowedHost(text, re, allowedHost)) continue;
+      return { file: path, pattern: name };
     }
   }
   return null;
@@ -66,7 +94,10 @@ function main() {
     );
     process.exit(1);
   }
-  const hit = findLeak(readDist());
+  // The one host this build's own RPC URL is allowed to carry a key on;
+  // unset in dev, where there is nothing to allow.
+  const allowedHost = hostOf(process.env.VITE_PUBLIC_RPC_URL ?? "");
+  const hit = findLeak(readDist(), allowedHost);
   if (hit) {
     console.error(
       `check-bundle-keys: ${hit.file} contains a leaked key (${hit.pattern})`,

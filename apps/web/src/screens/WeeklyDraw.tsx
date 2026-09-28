@@ -17,7 +17,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
 import { atomicShort } from "../activityRows.js";
-import { register, type TxSigner } from "../actions.js";
+import { awaitSendResult, register, type TxSigner } from "../actions.js";
 import { apiBaseUrl, fetchEpochs, type CurrentEpochDto, type EpochDto, type PlayerDto } from "../api.js";
 import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
@@ -41,13 +41,15 @@ export interface WeeklyDrawScreenProps {
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
   currentEpoch: CurrentEpochDto | null;
+  /** game-jackpot-pause: the draw is held; the header says so. */
+  jackpotPaused: boolean;
   /** Null until the owner's Player is indexed, or no wallet is connected. */
   player: PlayerDto | null;
   onDone: () => void;
 }
 
 export function WeeklyDraw(props: WeeklyDrawScreenProps) {
-  const { program, owner, sendTransaction, pool, now, currentEpoch, player, onDone } = props;
+  const { program, owner, sendTransaction, pool, now, currentEpoch, jackpotPaused, player, onDone } = props;
   const ownerBase58 = owner?.toBase58();
 
   const loadEpochs = useCallback(
@@ -78,12 +80,13 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
     setRegisterBusy(true);
     setRegisterNote(null);
     try {
-      const result = await register(
+      let result = await register(
         program,
         { publicKey: owner, sendTransaction },
         pool,
         BigInt(drawing.epochId),
       );
+      if (result.kind === "unknown") result = await awaitSendResult(program, result);
       if (result.kind !== "landed") {
         setRegisterNote(decodeSendFailure(result));
         return;
@@ -105,7 +108,9 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
         wide
         title="DAILY DRAW"
         aside={
-          <span className="dual-line-inline">draw in {countdown}</span>
+          <span className="dual-line-inline" data-testid="draw-header-clock">
+            {jackpotPaused ? "draw paused" : `draw in ${countdown}`}
+          </span>
         }
       >
         <p className="screen-copy">

@@ -62,6 +62,23 @@ export function phaseFor(
   return "settling";
 }
 
+/**
+ * What the empty board says while no round is open (game-jackpot-pause 03).
+ * No epoch yet means the pool is new and nothing has started, whatever the
+ * game switch says: the operator opens no round before epoch 1. Otherwise
+ * the game switch decides. Null means "nothing to say", so the board shows
+ * its ordinary waiting state.
+ */
+export function idleBoardLabel(
+  roundOpen: boolean,
+  epochStarted: boolean,
+  gamePaused: boolean,
+): "STARTS SOON" | "GAME PAUSED" | null {
+  if (roundOpen) return null;
+  if (!epochStarted) return "STARTS SOON";
+  return gamePaused ? "GAME PAUSED" : null;
+}
+
 /** True once the round has a winning tile the program will pay against. */
 export const isRevealed = (round: RoundLike): boolean =>
   round.status === ROUND_SETTLED || round.status === ROUND_FORFEITED;

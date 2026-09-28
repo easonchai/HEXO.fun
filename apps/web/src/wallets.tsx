@@ -71,19 +71,28 @@ export interface GameSigner {
 
 /**
  * Public Privy application id. Privy app ids are publishable client
- * identifiers (they ship in the bundle by design), so this fallback is safe
- * to keep in source. Set VITE_PRIVY_APP_ID="" (or "off") to explicitly
- * disable Privy — the localnet e2e does exactly that so the funded dev
- * burner is the one-click connection.
+ * identifiers (they ship in the bundle by design), so a dev fallback is safe
+ * to keep in source — but ticket 14 drops it in a production build: a
+ * forgotten env var must not silently ship someone else's Privy app. Set
+ * VITE_PRIVY_APP_ID="" (or "off") to explicitly disable Privy — the localnet
+ * e2e does exactly that so the funded dev burner is the one-click
+ * connection; that stays available in prod too, just no longer as a default.
  */
 const PRIVY_APP_ID_FALLBACK = "cmtlbhuh402u30cjv957bvump";
 
-const privyAppIdFrom = (
+export const privyAppIdFrom = (
   env: Record<string, string | undefined>,
+  isProd: boolean,
 ): string | undefined => {
   const raw = env.VITE_PRIVY_APP_ID?.trim();
   if (raw === "" || raw?.toLowerCase() === "off") return undefined;
-  return raw || PRIVY_APP_ID_FALLBACK;
+  if (raw) return raw;
+  if (isProd) {
+    throw new Error(
+      'VITE_PRIVY_APP_ID is required in a production build; set a real app id, or "off" to use standard wallets.',
+    );
+  }
+  return PRIVY_APP_ID_FALLBACK;
 };
 
 export interface WalletEnvironment extends Record<string, string | undefined> {
@@ -92,8 +101,10 @@ export interface WalletEnvironment extends Record<string, string | undefined> {
 }
 
 /** Privy boots only when an App ID is configured; otherwise standard wallets. */
-export const walletModeFor = (env: WalletEnvironment): WalletMode =>
-  privyAppIdFrom(env) ? "privy" : "standard";
+export const walletModeFor = (
+  env: WalletEnvironment,
+  isProd: boolean,
+): WalletMode => (privyAppIdFrom(env, isProd) ? "privy" : "standard");
 
 // Built once: connectors register wallet-standard listeners, and a fresh set
 // per render (or per StrictMode double-mount) can miss Phantom's injection.
@@ -136,7 +147,7 @@ export function WalletLayer({
   env: WalletEnvironment;
   children: ReactNode;
 }) {
-  const appId = privyAppIdFrom(env);
+  const appId = privyAppIdFrom(env, import.meta.env.PROD);
   const clientId = env.VITE_PRIVY_CLIENT_ID?.trim() || undefined;
   const rpcs = useMemo(() => solanaRpcsFor(RPC_URL), []);
   if (appId) {
@@ -148,8 +159,9 @@ export function WalletLayer({
           appearance: {
             theme: "#0E1B2B",
             accentColor: "#B6FF3B",
-            // Privy defaults to ethereum-only, which connects Phantom's EVM side.
-            // walletChainType: "solana-only",
+            // Ticket 14: Privy defaults to ethereum-only, which connects
+            // Phantom's EVM side instead of its Solana one.
+            walletChainType: "solana-only",
           },
           externalWallets: {
             solana: { connectors: SOLANA_CONNECTORS },

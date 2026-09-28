@@ -1,6 +1,8 @@
 // Randomness plumbing shared by the tick and its tests: the request seed the
 // program derives, the address of the account that answers it, and the
 // fulfilled check.
+import { randomBytes } from "node:crypto";
+
 import { PublicKey } from "@solana/web3.js";
 import { utils } from "@anchor-lang/core";
 
@@ -62,15 +64,31 @@ export function randomnessAddress(
 }
 
 /**
- * `utils::vrf_seed`: keccak256(domain || pool || id_le). A Round or Epoch
- * stores its seed once the program computes it, so this is only needed for
- * `close_registration`, which has to be handed the randomness account in the
- * same transaction that derives the seed.
+ * `utils::vrf_seed`: keccak256(domain || pool || id_le || nonce). A Round or
+ * Epoch stores its seed once the program computes it, so this is only needed
+ * for `request_round_randomness` and `close_registration`, which have to
+ * derive the randomness account address for the same request they are about
+ * to make (beta-launch-fixes ticket 02: the nonce makes that address
+ * unknowable to anyone before the request lands).
  */
-export function vrfSeed(domain: "round" | "epoch", pool: PublicKey, id: bigint): Uint8Array {
+export function vrfSeed(
+  domain: "round" | "epoch",
+  pool: PublicKey,
+  id: bigint,
+  nonce: Uint8Array,
+): Uint8Array {
   const idLe = Buffer.alloc(8);
   idLe.writeBigUInt64LE(id);
-  return keccak256(Buffer.concat([Buffer.from(domain), pool.toBuffer(), idLe]));
+  return keccak256(Buffer.concat([Buffer.from(domain), pool.toBuffer(), idLe, Buffer.from(nonce)]));
+}
+
+/**
+ * A fresh 32-byte nonce for one randomness request. Cryptographically random:
+ * predictability would let a griefer precompute the resulting seed and
+ * pre-create ORAO's request account for it before the Operator ever asks.
+ */
+export function randomNonce(): Uint8Array {
+  return new Uint8Array(randomBytes(32));
 }
 
 // --- keccak256 -------------------------------------------------------------

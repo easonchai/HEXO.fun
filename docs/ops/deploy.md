@@ -141,6 +141,20 @@ any time the on-chain IDL has drifted. `--dry-run` prints which of `init`/`upgra
 without calling either. Not run automatically by a plain deploy, so a staging deploy stays fast;
 run it whenever the IDL actually changed.
 
+Three things bit on devnew on 2026-09-28, all outside this repo:
+
+- `anchor idl` shells out to `npx @solana-program/program-metadata`, whose `@solana/kit` is a
+  peer dependency. With `legacy-peer-deps=true` in `~/.npmrc` npx skips it and the CLI dies with
+  `Cannot find module '@solana/kit'`. Fix: `npm i --prefix ~/.npm/_npx/<hash> @solana/kit@6`.
+- The CLI sends its 15-transaction plan five at a time and the whole plan fails on one HTTP 429,
+  on the public devnet RPC and on the free Helius tier alike. Run the CLI directly with a
+  `--require` preload that wraps `createTransactionPlanExecutor` to send one at a time (the
+  2026-09-28 run kept one under the scratchpad), or use a paid RPC.
+- The IDL account created on 2026-09-23 decoded as `seed: "dl", canonical: false` under
+  program-metadata 0.5.1, and `update` failed with "instruction requires an initialized
+  account". `program-metadata close idl <program>` then `create` fixed it. Failed runs leave
+  12.5 KiB buffers behind: `list-buffers <authority>` then `close-buffer <address>` reclaims them.
+
 ## Upgrade policy (ADR 0013)
 
 - Append-only. A new field takes bytes from a struct's `_reserved`, never reorders or resizes an
@@ -171,8 +185,10 @@ Three ways an admin-gated instruction gets signed, picked by env vars the admin 
   (`apps/backend/src/admin/squads.ts`, `adminMode`); everything else it prints goes to stderr, so
   `admin withdraw-principal --amount 25000 | pbcopy` hands Squads a clean paste. In Squads:
   Transaction Builder, Add instruction, Import base58 encoded tx, paste, simulate, then collect
-  approvals and execute. The transaction carries a blockhash that expires in about a minute;
-  re-run the command for a fresh one if the paste took too long. `pause`, `fund-jackpot`,
+  approvals and execute. `start-game` and `start-jackpot` are admin-gated too and go through
+  the same path. The transaction carries a blockhash that expires in about a minute;
+  re-run the command for a fresh one if the paste took too long. `pause`, `pause-game`,
+  `pause-jackpot`, `fund-jackpot`,
   `fund-yield`, `principal-out` and `emergency-crank` never go through Squads: the first three
   are permissionless or dual-signer by design, and `principal-out` is read-only, so none of them
   has to wait on multisig approval, which matters most for `pause` in an incident.
@@ -180,6 +196,29 @@ Three ways an admin-gated instruction gets signed, picked by env vars the admin 
 `scripts/deploy.sh mainnet` always signs the program upgrade itself with a Ledger
 (`--upgrade-authority usb://ledger`), independent of whichever of the three modes above the admin
 CLI is using for instructions.
+
+## Treasury and Buyback reserve for a mainnet Pool
+
+`bootstrap` refuses to run on mainnet's genesis hash unless `--admin`, `--treasury` and
+`--buyback-reserve` are all given explicitly, and refuses an `--admin` equal to the operator hot
+key (`apps/backend/src/bootstrap/params.ts`, `assertMainnetSafe`); it never creates a mint on
+mainnet either. Treasury and Buyback reserve share (mint, owner), so they cannot both be the
+Associated Token Account of the Squads vault and the accepted mint: `create_pool` would accept it,
+but the two roles would then be indistinguishable to anyone reading the vault's token accounts.
+Create one of them as a plain (non-ATA) token account instead, owned by the vault:
+
+```
+spl-token create-account <accepted-mint> --owner <squads-vault> --fee-payer <funding-keypair>
+```
+
+run twice with two throwaway account keypairs (`spl-token create-account` without `--owner`
+defaults to a fresh random address rather than the deterministic ATA when a keypair is supplied
+positionally: `spl-token create-account <accepted-mint> <new-account-keypair.json> --owner
+<squads-vault>`). Pass the resulting addresses to bootstrap:
+
+```
+bootstrap --admin <squads-vault> --treasury <treasury-address> --buyback-reserve <buyback-address>
+```
 
 ## Moving admin and the upgrade authority to Squads later
 

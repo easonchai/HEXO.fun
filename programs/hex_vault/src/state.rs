@@ -119,9 +119,21 @@ pub struct Pool {
     /// Carved from the front of `_reserved` (ops-and-envs ticket 02),
     /// exercising the ADR 0013 rule once: `false` is the safe zero value.
     pub shutdown: bool,
+    /// Stops `create_round` and `buy_position` (game-jackpot-pause ticket
+    /// 01). `create_pool` sets this `true`; the zero value stays the safe
+    /// default for a pool that predates this field. Carved from
+    /// `_reserved` alongside `jackpot_paused`.
+    pub game_paused: bool,
+    /// Stops the epoch cycle's next step: `begin_epoch`, `buy_tickets`,
+    /// `grant_tickets` and `close_registration` (game-jackpot-pause ticket
+    /// 01). An epoch already Drawing or Drawn still finishes. `create_pool`
+    /// sets this `true`; the zero value stays the safe default for a pool
+    /// that predates this field. Carved from `_reserved` alongside
+    /// `game_paused`.
+    pub jackpot_paused: bool,
     /// Take new fields from here. Their zero value must be the safe default,
     /// or bump `version` and migrate on first touch. See ADR 0013.
-    pub _reserved: [u8; 127],
+    pub _reserved: [u8; 125],
 }
 
 /// One lottery cycle. Contiguous: the next opens the moment this one ends.

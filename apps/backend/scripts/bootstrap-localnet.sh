@@ -4,6 +4,8 @@ set -eu
 # Ticket 09 acceptance item 1: boot an isolated validator, deploy the
 # already-built program, run `bootstrap` twice and diff the two KEY=value
 # blocks. Not part of any test suite; run it by hand after `anchor build`.
+# Both runs pass --start (game-jackpot-pause ticket 02), so the pool comes
+# up running; run 2 finds both switches already off and sends nothing.
 #
 # Usage:  sh apps/backend/scripts/bootstrap-localnet.sh [--round-seconds 20 ...]
 #         HEXVAULT_RPC_PORT=9399 sh apps/backend/scripts/bootstrap-localnet.sh
@@ -74,7 +76,7 @@ export POOL_ID="${POOL_ID:-1}"
 
 echo
 echo "=== run 1 (fresh cluster) ==="
-pnpm exec tsx src/bootstrap.ts "$@" >"$work/run1.out"
+pnpm exec tsx src/bootstrap.ts --start "$@" >"$work/run1.out"
 
 # The mint keypair is not persisted anywhere, so run 1's mint is run 2's
 # input. That is the same handoff a human makes by pasting it into .env.
@@ -83,7 +85,7 @@ export ACCEPTED_MINT
 
 echo
 echo "=== run 2 (same cluster, ACCEPTED_MINT from run 1) ==="
-pnpm exec tsx src/bootstrap.ts "$@" >"$work/run2.out"
+pnpm exec tsx src/bootstrap.ts --start "$@" >"$work/run2.out"
 
 echo
 echo "=== KEY=value block ==="

@@ -47,6 +47,13 @@ export interface PoolState {
    *  draw, and lets withdrawals skip the epoch lock (ops-and-envs ticket
    *  02). The operator reads this to stop the epoch and round loops. */
   readonly shutdown: boolean;
+  /** Game pause (game-jackpot-pause ticket 02): the tick opens no Round
+   *  while this is set. A new pool starts with it on. */
+  readonly gamePaused: boolean;
+  /** Jackpot pause (game-jackpot-pause ticket 02): the tick skips
+   *  begin_epoch, grant_tickets and close_registration while this is set.
+   *  A new pool starts with it on. */
+  readonly jackpotPaused: boolean;
 }
 
 export interface EpochState {
@@ -115,6 +122,8 @@ export function decodePool(
     openRoundId: big(raw.openRoundId),
     totalPrincipal: big(raw.totalPrincipal),
     shutdown: raw.shutdown === true,
+    gamePaused: raw.gamePaused === true,
+    jackpotPaused: raw.jackpotPaused === true,
   };
 }
 

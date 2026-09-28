@@ -85,6 +85,7 @@ beforeEach(async () => {
   // RPC lacks V2 has to be cleared between tests, and so does what the live
   // path has written (a fresh process starts with neither).
   indexer["v2Unsupported"] = false;
+  indexer["v2UnsupportedSince"] = undefined;
   indexer["freshWrites"].clear();
   await wipe();
 });
@@ -449,6 +450,20 @@ describe("account sync", () => {
     expect(await prisma.position.count()).toBe(0);
   });
 
+  // beta-launch-fixes ticket 08: the flag is not permanent.
+  it("gives getProgramAccountsV2 another try after an hour", async () => {
+    indexer["lastSyncedSlot"] = undefined;
+    await put("pool", chain.poolAddress(), poolAccount());
+    indexer["v2Unsupported"] = true;
+    indexer["v2UnsupportedSince"] = Date.now() - 61 * 60 * 1000; // just past the 1h window
+    connection.resetCalls();
+
+    await indexer.syncAccounts();
+
+    expect(connection.callsTo("getProgramAccountsV2")).toBeGreaterThan(0);
+    expect(indexer["v2Unsupported"]).toBe(false);
+  });
+
   it("ignores an account that does not sit at this pool's PDA", async () => {
     // Same layout, different pool: the tables are keyed by owner and epoch id,
     // so a second pool's accounts would overwrite this one's.
@@ -536,6 +551,59 @@ describe("full-walk RPC endpoint consistency (security review ticket 14)", () =>
     // the Pool that page 1 alone did see never lands, and no earlier row's
     // absence gets misread as "gone" either.
     expect(await prisma.pool.count()).toBe(0);
+  });
+
+  // beta-launch-fixes ticket 08: `withRpcFallback` fails over per call with
+  // no stickiness, so one call landing on the fallback and getting "method
+  // not found" back must not be read as the primary lacking the extension.
+  it("does not disable getProgramAccountsV2 when only the fallback RPC answers method-not-found", async () => {
+    const primary = new CountingConnection();
+    const fallback = new CountingConnection();
+    fallback.noProgramAccountsV2 = true;
+    const wrapped = withRpcFallback(
+      primary as unknown as Connection,
+      fallback as unknown as Connection,
+      1_000,
+    );
+    const env: Partial<HexVaultEnv> = {
+      OPERATOR_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
+      POOL_ID: POOL_ID.toString(),
+      PROGRAM_ID: PROGRAM_ID.toBase58(),
+      RPC_URL: "http://127.0.0.1:1",
+      REFERRAL_QUALIFY_SECONDS: 604_800,
+    };
+    const config = {
+      get: (key: keyof HexVaultEnv) => env[key],
+    } as unknown as ConfigService<HexVaultEnv, true>;
+    const localChain = new ChainService(wrapped, config);
+    const localIndexer = new IndexerService(prisma, localChain, config);
+
+    const poolData = await localChain.program.coder.accounts.encode("pool", poolAccount());
+    primary.setAccount(localChain.poolAddress(), poolData);
+
+    // The primary's own getProgramAccountsV2 call looks like a timeout, so
+    // withRpcFallback retries this one call on the fallback, which lacks the
+    // extension and answers "method not found".
+    const realRpcRequest = primary._rpcRequest.bind(primary);
+    primary._rpcRequest = (method: string, params: unknown[]) => {
+      if (method === "getProgramAccountsV2") {
+        return Promise.reject(new Error("RPC getProgramAccountsV2 timed out after 10000ms"));
+      }
+      return realRpcRequest(method, params);
+    };
+
+    // This one sweep degrades (no page ever actually answered), but the flag
+    // must stay false: it was the fallback, not the primary, that said
+    // "method not found".
+    await expect(localIndexer.syncAccounts()).rejects.toThrow(/getProgramAccountsV2 returned no pages/);
+    expect(localIndexer["v2Unsupported"]).toBe(false);
+
+    // Restore normal primary behaviour: the next sweep succeeds via V2 on
+    // the primary, proving the fallback's false "method not found" did not
+    // disable it for good.
+    primary._rpcRequest = realRpcRequest;
+    await localIndexer.syncAccounts();
+    expect(await prisma.pool.count()).toBe(1);
   });
 });
 
@@ -766,6 +834,50 @@ describe("event ingest", () => {
     const event = await prisma.event.findFirstOrThrow({ where: { signature: "sig-backfill" } });
     // batch()'s own fixed block time, not the 999_999n last observed live.
     expect(event.blockTime).toBe(1_700_000_000n);
+  });
+
+  // beta-launch-fixes ticket 08: the live path stores the event but never
+  // advances the cursor, so a gap between two live events is always
+  // replayed by the next catch-up rather than the cursor having already
+  // jumped past the missed one.
+  it("a live event does not move the cursor; a later catch-up still replays an older gap", async () => {
+    await put("pool", chain.poolAddress(), poolAccount());
+    indexer["subscribeToLogs"]();
+
+    const pool = chain.poolAddress();
+    connection.fireLogs(
+      pool,
+      "finalized",
+      { err: null, signature: "sig-live-only", logs: batch("sig-live-only", 0n, [deposited]).logs },
+      50,
+    );
+    await indexer["queue"];
+
+    // The live event was stored...
+    await prisma.event.findFirstOrThrow({ where: { signature: "sig-live-only" } });
+    // ...but the cursor never moved, so a websocket gap before this event
+    // stays visible to the next catch-up instead of looking already caught up.
+    expect(await prisma.cursor.findUnique({ where: { id: 1 } })).toBeNull();
+
+    // The RPC's own signature history has an older signature the live path
+    // never saw (the gap), plus the one it did see.
+    connection.signaturesForAddress = [
+      { signature: "sig-live-only", slot: 50, err: null, blockTime: 1_700_000_050 },
+      { signature: "sig-gap", slot: 10, err: null, blockTime: 1_700_000_010 },
+    ];
+    connection.setTransaction(
+      "sig-gap",
+      batch("sig-gap", 10n, [depositedFor(STRANGER, 1, 1, 1)]).logs,
+    );
+    connection.setTransaction("sig-live-only", batch("sig-live-only", 50n, [deposited]).logs);
+
+    await indexer["catchUpEvents"]();
+
+    await prisma.event.findFirstOrThrow({ where: { signature: "sig-gap" } });
+    expect(await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+      lastSignature: "sig-live-only",
+      lastSlot: 50n,
+    });
   });
 });
 
@@ -1195,6 +1307,64 @@ describe("referral qualification", () => {
     expect(row.principal).toBe(80_000_000n);
     expect(row.aboveSince).toBe(1_200n);
   });
+
+  // beta-launch-fixes ticket 08: a missed Principal-changing event (a
+  // websocket gap) leaves the Referral row overstating a referee's
+  // Principal until something else happens to touch it; a full sweep must
+  // self-heal that against the mirrored Player.
+  it("a full sweep reconciles a Referral's Principal against the mirrored Player and clears aboveSince if it now falls below the threshold", async () => {
+    await seedReferral({ principal: 60_000_000n, aboveSince: 1_600_000_000n });
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put(
+      "player",
+      chain.playerAddress(OWNER),
+      playerAccount(OWNER, { principal: bn(10_000_000) }),
+    );
+    indexer["lastSyncedSlot"] = undefined; // force a full walk
+
+    await indexer.syncAccounts();
+
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(10_000_000n);
+    expect(row.aboveSince).toBeNull();
+  });
+
+  it("a full sweep leaves a Referral untouched when its Principal already matches the mirrored Player", async () => {
+    await seedReferral({ principal: 3_000_000n, aboveSince: null });
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put("player", chain.playerAddress(OWNER), playerAccount(OWNER)); // default principal 3,000,000
+    indexer["lastSyncedSlot"] = undefined;
+
+    await indexer.syncAccounts();
+
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(3_000_000n);
+    expect(row.aboveSince).toBeNull();
+  });
+
+  it("an incremental (non-full) sweep does not reconcile Referral Principal", async () => {
+    await seedReferral({ principal: 60_000_000n, aboveSince: 1_600_000_000n });
+    await put("pool", chain.poolAddress(), poolAccount());
+    await put(
+      "player",
+      chain.playerAddress(OWNER),
+      playerAccount(OWNER, { principal: bn(10_000_000) }),
+    );
+    indexer["lastSyncedSlot"] = undefined;
+    await indexer.syncAccounts(); // first sweep is always full; get past it
+
+    // Reset the Referral row back to its drifted state, then run a sweep
+    // that is now incremental (lastSyncedSlot is set from the sweep above).
+    await prisma.referral.update({
+      where: { referee },
+      data: { principal: 60_000_000n, aboveSince: 1_600_000_000n },
+    });
+    await indexer.syncAccounts();
+
+    const row = await prisma.referral.findUniqueOrThrow({ where: { referee } });
+    expect(row.principal).toBe(60_000_000n);
+    expect(row.aboveSince).toBe(1_600_000_000n);
+  });
 });
 
 // docs/plan/hexo-referrals ticket 08: computeBonuses' inputs and the
@@ -1567,6 +1737,76 @@ describe("referral bonus job (ticket 08)", () => {
     });
     expect(shares.length).toBeGreaterThan(0);
     expect(shares.every((share) => share.amount === 0n)).toBe(true);
+  });
+
+  // beta-launch-fixes ticket 11: the pool-wide cap is shared across the
+  // whole epoch (computeBonuses' own alreadyGrantedThisEpoch parameter,
+  // wired up here), so a referrer discovered on a later tick is scaled
+  // against the remaining headroom instead of the full cap recomputed
+  // fresh, which used to compute an amount the on-chain call then refused.
+  it("scales a later-qualifying referrer against the headroom an earlier grant already used", async () => {
+    await prisma.pool.update({
+      where: { address: chain.poolAddress().toBase58() },
+      data: { totalPrincipal: 3_000_000_000n, bonusCapBps: 500 }, // 5% of $3,000 = $150 pool cap
+    });
+    const other = Keypair.generate().publicKey.toBase58();
+    await prisma.player.createMany({
+      data: [referrerPlayer(REFERRER), referrerPlayer(other)],
+    });
+    for (let i = 0; i < 3; i++) {
+      await seedQualifiedReferral({ principal: 1_000_000_000n }); // $1,000 each, 3 -> 3% tier
+    }
+
+    // First tick: only REFERRER qualifies yet. Raw 3% of $3,000 = $90,
+    // well within the $150 pool cap.
+    const first = await indexer.referralGrantsDue(EPOCH_ID);
+    expect(first).toEqual([{ referrer: REFERRER, amount: 90_000_000n }]);
+
+    // Later the same epoch, `other` also qualifies with the same shape of
+    // referrals. Only $60 of the $150 pool cap is left ($150 - $90 already
+    // recorded for REFERRER), so `other`'s raw $90 is scaled down to fit.
+    for (let i = 0; i < 3; i++) {
+      await prisma.referral.create({
+        data: {
+          referee: Keypair.generate().publicKey.toBase58(),
+          referrer: other,
+          code: `LATE${i}`.padEnd(8, "0"),
+          boundAt: 0n,
+          aboveSince: WELL_PAST,
+          principal: 1_000_000_000n,
+        },
+      });
+    }
+    const second = await indexer.referralGrantsDue(EPOCH_ID);
+    expect(second).toEqual(
+      expect.arrayContaining([
+        { referrer: REFERRER, amount: 90_000_000n }, // unchanged: frozen once recorded
+        { referrer: other, amount: 60_000_000n }, // scaled to the remaining headroom
+      ]),
+    );
+    expect(second).toHaveLength(2);
+  });
+
+  // ticket 11: the pending-grants query has a deterministic order.
+  it("returns pending grants in a deterministic (referrer-ascending) order", async () => {
+    const referrers = ["c", "a", "b"].map(() => Keypair.generate().publicKey.toBase58());
+    await prisma.player.createMany({ data: referrers.map((owner) => referrerPlayer(owner)) });
+    for (const referrer of referrers) {
+      await prisma.referral.create({
+        data: {
+          referee: Keypair.generate().publicKey.toBase58(),
+          referrer,
+          code: referrer.slice(0, 8).padEnd(8, "0").toUpperCase(),
+          boundAt: 0n,
+          aboveSince: WELL_PAST,
+          principal: 100_000_000n,
+        },
+      });
+    }
+
+    const due = await indexer.referralGrantsDue(EPOCH_ID);
+    const sorted = [...due.map((d) => d.referrer)].sort();
+    expect(due.map((d) => d.referrer)).toEqual(sorted);
   });
 });
 });

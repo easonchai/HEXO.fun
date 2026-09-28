@@ -239,7 +239,14 @@ export class AccessController {
         });
 
         const player = await tx.player.findUnique({ where: { owner: address } });
-        if (player === null) {
+        // A wallet that applied a Referral code via POST /referrals/apply
+        // before ever redeeming an invite already has a Referral row here
+        // (beta-launch-fixes ticket 13): keep that earlier Referrer rather
+        // than trying to insert a second one, which would hit the Referral
+        // table's unique `referee` and fail this whole transaction, blocking
+        // the invite redemption over a binding that already succeeded.
+        const existingReferral = await tx.referral.findUnique({ where: { referee: address } });
+        if (player === null && existingReferral === null) {
           let bound: { referrer: string; code: string } | null = null;
           if (referralCode !== null) {
             const owner = await tx.referralCode.findUnique({ where: { code: referralCode } });

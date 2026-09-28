@@ -137,6 +137,111 @@ export function randomnessFor(value: bigint | number): Uint8Array {
   return bytes;
 }
 
+// --- vrf_seed(domain, pool, id, nonce) --------------------------------------
+//
+// `request_round_randomness` and `close_registration` (beta-launch-fixes
+// ticket 02) mix a 32-byte nonce into the seed, so a test has to derive the
+// same seed client-side to know which randomness account to pass -- the
+// address is unknowable from public inputs alone any more. No dependency in
+// this workspace carries Solana's pre-standard Keccak (differs from SHA3-256
+// only in the padding byte), so it is duplicated here from
+// `apps/backend/src/operator/vrf.ts`'s own copy, for the same reason that
+// file gives: it runs once or twice per test on 48-80 bytes, so speed is
+// irrelevant and a real dependency is not worth adding for it.
+
+function u64le64(n: bigint | number): Buffer {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(BigInt(n));
+  return buf;
+}
+
+const KECCAK_RATE = 136;
+const KECCAK_ROUNDS = 24;
+
+const KECCAK_ROUND_CONSTANTS = new BigUint64Array([
+  0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n,
+  0x000000000000808bn, 0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n,
+  0x000000000000008an, 0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
+  0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n,
+  0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an,
+  0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+]);
+
+const KECCAK_ROTATIONS = new BigUint64Array([
+  0n, 1n, 62n, 28n, 27n, 36n, 44n, 6n, 55n, 20n, 3n, 10n, 43n, 25n, 39n, 41n, 45n, 15n,
+  21n, 8n, 18n, 2n, 61n, 56n, 14n,
+]);
+
+const rotl = (x: bigint, n: bigint): bigint => (n === 0n ? x : (x << n) | (x >> (64n - n)));
+
+function keccakPermute(lanes: BigUint64Array): void {
+  const c = new BigUint64Array(5);
+  const b = new BigUint64Array(25);
+  for (let round = 0; round < KECCAK_ROUNDS; round += 1) {
+    for (let x = 0; x < 5; x += 1) {
+      c[x] = (lanes[x] as bigint) ^ (lanes[x + 5] as bigint) ^ (lanes[x + 10] as bigint) ^
+        (lanes[x + 15] as bigint) ^ (lanes[x + 20] as bigint);
+    }
+    for (let x = 0; x < 5; x += 1) {
+      const d = (c[(x + 4) % 5] as bigint) ^ rotl(c[(x + 1) % 5] as bigint, 1n);
+      for (let y = 0; y < 25; y += 5) lanes[x + y] = (lanes[x + y] as bigint) ^ d;
+    }
+    for (let x = 0; x < 5; x += 1) {
+      for (let y = 0; y < 5; y += 1) {
+        b[y + 5 * ((2 * x + 3 * y) % 5)] = rotl(
+          lanes[x + 5 * y] as bigint,
+          KECCAK_ROTATIONS[x + 5 * y] as bigint,
+        );
+      }
+    }
+    for (let y = 0; y < 25; y += 5) {
+      for (let x = 0; x < 5; x += 1) {
+        lanes[x + y] = (b[x + y] as bigint) ^ (~(b[((x + 1) % 5) + y] as bigint) & (b[((x + 2) % 5) + y] as bigint));
+      }
+    }
+    lanes[0] = (lanes[0] as bigint) ^ (KECCAK_ROUND_CONSTANTS[round] as bigint);
+  }
+}
+
+function keccak256(input: Uint8Array): Uint8Array {
+  const padded = new Uint8Array((Math.floor(input.length / KECCAK_RATE) + 1) * KECCAK_RATE);
+  padded.set(input);
+  padded[input.length] = 0x01;
+  padded[padded.length - 1] = (padded[padded.length - 1] ?? 0) | 0x80;
+
+  const lanes = new BigUint64Array(25);
+  const view = new DataView(padded.buffer, padded.byteOffset, padded.byteLength);
+  for (let offset = 0; offset < padded.length; offset += KECCAK_RATE) {
+    for (let lane = 0; lane < KECCAK_RATE / 8; lane += 1) {
+      lanes[lane] = (lanes[lane] as bigint) ^ view.getBigUint64(offset + lane * 8, true);
+    }
+    keccakPermute(lanes);
+  }
+
+  const digest = new Uint8Array(32);
+  const out = new DataView(digest.buffer);
+  for (let lane = 0; lane < 4; lane += 1) out.setBigUint64(lane * 8, lanes[lane] as bigint, true);
+  return digest;
+}
+
+/** `utils::vrf_seed`: keccak256(domain || pool || id_le || nonce). */
+export function vrfSeed(
+  domain: "round" | "epoch",
+  pool: PublicKey,
+  id: bigint,
+  nonce: Uint8Array,
+): Uint8Array {
+  return keccak256(
+    Buffer.concat([Buffer.from(domain), pool.toBuffer(), u64le64(id), Buffer.from(nonce)]),
+  );
+}
+
+/** A fixed, non-zero nonce: tests don't need real unpredictability, just a
+ *  value that isn't the account's zero-initialized default. */
+export function testNonce(fill = 1): Uint8Array {
+  return new Uint8Array(32).fill(fill);
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -271,7 +376,11 @@ const DEFAULT_PARAMS = {
   houseCutBps: 600, // 6%, the bootstrap default
   minJackpot: 0,
   registrationWindow: 0,
-  payoutTimeout: 86_400,
+  // Strictly less than epochSeconds: set_params requires payout_timeout <
+  // epoch_seconds (beta-launch-fixes ticket 03), so a pool bootstrapped here
+  // has to satisfy that from the start or its very first set_params call
+  // (even a no-op one, just testing who may call it) would refuse.
+  payoutTimeout: 82_800,
   baseRateBps: 488, // spec §7: ~5% APY with daily compounding
   ticketsPerUsdc: 10,
   bonusCapBps: 500, // spec: default 5%
@@ -375,6 +484,22 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       systemProgram: SystemProgram.programId,
     })
     .signers([operator])
+    .rpc();
+
+  // A new pool starts with both the game and the jackpot paused (spec
+  // "game-jackpot-pause"): the admin has to explicitly start each one. Every
+  // suite's fixture starts both right here, right after create_pool, so the
+  // rest of the tests see the pool the way they did before either switch
+  // existed -- running from the moment `setupPool` returns.
+  await program.methods
+    .setFeaturePause({ game: {} }, false)
+    .accountsPartial({ signer: admin.publicKey, pool })
+    .signers([admin])
+    .rpc();
+  await program.methods
+    .setFeaturePause({ jackpot: {} }, false)
+    .accountsPartial({ signer: admin.publicKey, pool })
+    .signers([admin])
     .rpc();
 
   async function fundedWallet(amount: bigint) {

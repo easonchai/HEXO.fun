@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { safePriorityFee } from "./read.js";
+import { isMissingTokenAccount, MIN_SOL_LAMPORTS, safePriorityFee, solRentWarning } from "./read.js";
 
 const FLOOR = 1_000;
 const CEILING = 50_000;
@@ -41,5 +41,37 @@ describe("safePriorityFee", () => {
     // can disagree with StateDto's declared `number` type.
     expect(safePriorityFee(undefined as unknown as number)).toBe(FLOOR);
     expect(safePriorityFee("4242" as unknown as number)).toBe(FLOOR);
+  });
+});
+
+describe("isMissingTokenAccount", () => {
+  it("treats the RPC's missing-account message as a real zero balance", () => {
+    expect(
+      isMissingTokenAccount(
+        new Error("failed to get token account balance: could not find account"),
+      ),
+    ).toBe(true);
+  });
+
+  it("treats any other failure as unknown, not zero", () => {
+    expect(isMissingTokenAccount(new Error("fetch failed"))).toBe(false);
+    expect(isMissingTokenAccount(new Error("429 Too Many Requests"))).toBe(false);
+  });
+});
+
+describe("solRentWarning", () => {
+  it("warns naming the amount when SOL is below the rent floor", () => {
+    const warning = solRentWarning(0n);
+    expect(warning).toContain("SOL");
+    expect(warning).toMatch(/0\.003/);
+  });
+
+  it("says nothing once the wallet covers the floor", () => {
+    expect(solRentWarning(MIN_SOL_LAMPORTS)).toBeNull();
+    expect(solRentWarning(MIN_SOL_LAMPORTS + 1n)).toBeNull();
+  });
+
+  it("says nothing while the balance is still unknown", () => {
+    expect(solRentWarning(null)).toBeNull();
   });
 });

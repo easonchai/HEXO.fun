@@ -13,6 +13,11 @@
 
   Pushing runs a pre-push hook (check-deployable.sh plus pnpm test:unit, no CI); skip it once with git push --no-verify.
 
+  `pnpm test:unit` only gives a real signal once `pnpm --filter @hexvault/backend test:db` has created and migrated
+  the five per-suite databases on the 5433 test Postgres (`docker run -p 5433:5432 postgres:16-alpine` or
+  `docker-compose.dev.yml`'s postgres service). Without it, every DB-backed suite skips itself and prints a
+  warning naming the database it could not reach; a green run without those warnings is the only one that counts.
+
   See also: docs/architecture.md (components, accounts, roles, fund flow), docs/ops/deploy.md
   (deploying and upgrading), docs/ops/funds.md (pulling and returning principal, shutdown),
   docs/ops/environments.md (dev/staging/mainnet) and docs/ops/incidents.md (what to do when an
@@ -206,6 +211,17 @@
        KEY=value block and progress goes to stderr, so `bootstrap > pool.env` gives a clean file.
        Paste ACCEPTED_MINT back into .env if the block names a mint you did not already have.
 
+       A new pool starts with the game and the jackpot both paused: deposits work, but the
+       operator begins no epoch and opens no round. Pass --start to bootstrap for a dev pool
+       that runs at once. Otherwise start each one on purpose, jackpot first so epoch 1 exists
+       before the game looks for it:
+
+         pnpm --filter @hexvault/backend admin start-jackpot
+         pnpm --filter @hexvault/backend admin start-game
+
+       Both are admin-only, so on mainnet each one is a Squads paste. pause-game and
+       pause-jackpot undo them and either key can run them.
+
     2. Wipe the dev database and rebuild the stack. Epoch, Round and Player rows carry no pool
        column, so the previous pool's rows collide with the new pool's ids on the same numbers.
 
@@ -354,3 +370,20 @@
   Player's own `owner` on the retired key, so a Prize the House wins still pays into that key's USDC associated token account. Keep
   the old operator's ATA open after every rotation; close it and a House win is unpayable until `payout_timeout` lets the epoch roll
   over.
+
+  Launch week
+
+  The program already accepts deposits with no Epoch: a deposit before Epoch 1 freezes no weight and Epoch 1's accrual starts from
+  `current_epoch_start` regardless. Set `LAUNCH_AT` (an ISO timestamp, apps/backend/.env) to open a pool for deposits before the
+  first Draw: the Operator's tick step 3 (`begin_epoch`) waits for it, and nothing else in the tick changes. `GET /state` and
+  `GET /status` return a null current Epoch plus the configured `launchAt` the whole time, instead of 404ing; the web shows "first
+  draw in <countdown>" on Home, Vault and Dashboard, deposits and withdrawal requests stay open, and buying Tickets stays hidden
+  (Tickets bought before Epoch 1 begins would reset and are refused on chain: `buy_tickets` requires `current_epoch_id > 0`).
+
+  Bring a launch week up the same way as any other bootstrap: run `bootstrap` (creates the Pool with `currentEpochId` 0), set
+  `LAUNCH_AT` to whenever the first Draw should start, bring the backend up, and invite depositors. Once the chain clock passes
+  `LAUNCH_AT`, the next tick begins Epoch 1 normally and the countdown clears itself.
+
+  Base yield is credited per ended Epoch, so a launch week earns none — if the beta promises yield for that week, fund it as a
+  manual grant. Leave `LAUNCH_AT` unset (or past) for a pool that should begin its first Epoch immediately, which is today's
+  behaviour.

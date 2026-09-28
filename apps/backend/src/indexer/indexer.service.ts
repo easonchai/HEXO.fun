@@ -147,6 +147,9 @@ const SWEEP_INTERVAL_MS = 60_000;
  * last one, so this only bites once an hour instead of every minute.
  */
 const FULL_WALK_INTERVAL_MS = 60 * 60 * 1000;
+/** ticket 08: how long `v2Unsupported` sticks before `fetchAll` gives
+ *  `getProgramAccountsV2` another try. */
+const V2_UNSUPPORTED_RESET_MS = 60 * 60 * 1000;
 const CURSOR_ID = 1;
 // One page of `getSignaturesForAddress`. `catchUpEvents` pages backwards
 // with `before` past as many of these as the backlog since the cursor takes,
@@ -248,9 +251,15 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   private lastSyncedSlot: bigint | undefined;
   /** Wall time of the last full walk, gating `FULL_WALK_INTERVAL_MS`. */
   private lastFullWalkAt = 0;
-  /** Set once an RPC answers "method not found" for `getProgramAccountsV2`,
-   *  which a local validator and most non-Helius providers do. */
+  /** Set once the primary RPC answers "method not found" for
+   *  `getProgramAccountsV2`, which a local validator and most non-Helius
+   *  providers do. Cleared after `V2_UNSUPPORTED_RESET_MS` (ticket 08): a
+   *  provider can add the extension, or a fallback-served false positive
+   *  (see `fetchAll`'s own guard) should not degrade every later sweep for
+   *  the rest of the process's life. */
   private v2Unsupported = false;
+  /** Wall time `v2Unsupported` was last set; undefined while it is false. */
+  private v2UnsupportedSince: number | undefined;
   /**
    * Addresses the log path has written, and the slot it wrote them from.
    * `getProgramAccountsV2`'s index runs behind the chain (measured
@@ -424,7 +433,32 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       };
     });
 
-    const bonuses = computeBonuses(inputs, pool.totalPrincipal, pool.bonusCapBps);
+    // beta-launch-fixes ticket 11: the pool-wide cap is shared across the
+    // whole epoch, so a referrer who first qualifies late in the day is
+    // scaled against the headroom earlier grants already used rather than
+    // the full cap recomputed fresh — which used to compute an amount the
+    // on-chain call then refused outright once summed with what earlier
+    // grants this epoch had already spent.
+    const recordedThisEpoch = await this.prisma.referralGrant.findMany({
+      where: { epochId },
+      select: { referrer: true, amount: true },
+    });
+    const alreadyGrantedThisEpoch = recordedThisEpoch.reduce(
+      (sum, grant) => sum + grant.amount,
+      0n,
+    );
+    const recordedReferrers = new Set(recordedThisEpoch.map((grant) => grant.referrer));
+    // Already-recorded referrers keep their frozen amount (see the
+    // `uncapped` comment below); only referrers with no row yet this epoch
+    // are candidates for a fresh computation against the headroom.
+    const newInputs = inputs.filter((input) => !recordedReferrers.has(input.referrer));
+
+    const bonuses = computeBonuses(
+      newInputs,
+      pool.totalPrincipal,
+      pool.bonusCapBps,
+      alreadyGrantedThisEpoch,
+    );
     if (bonuses.length > 0) {
       await this.prisma.$transaction(async (tx) => {
         // referral-page ticket 05: shares are written in the same
@@ -474,9 +508,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
+    // ticket 11: a deterministic order, so a batch built from this list is
+    // the same set on a retry regardless of Postgres's own row order.
     const pending = await this.prisma.referralGrant.findMany({
       where: { epochId, txSig: null },
       select: { referrer: true, amount: true },
+      orderBy: { referrer: "asc" },
     });
 
     // Re-clamp every already-recorded grant against the freshest Player
@@ -870,6 +907,54 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         }),
     );
 
+    // beta-launch-fixes ticket 08: a websocket gap can miss a
+    // WithdrawRequested/YieldCredited/JackpotPaid event for a referee, which
+    // overstates (or understates) the Referral row's own tracked Principal
+    // (see referral.ts's own docs on why that is tracked independently of
+    // Player). A full walk sees every Player fresh, so each one reconciles
+    // every Referral's principal and aboveSince against the mirrored Player,
+    // the same crossing logic `applyReferralEvent` applies to a live event
+    // (a `Deposited` carries the absolute new Principal, which is exactly
+    // what reconciling against a snapshot needs). An incremental walk only
+    // reports changed accounts, so this is skipped there rather than
+    // reconciling every Referral against a mix of fresh and stale Player
+    // rows.
+    if (fullWalk) {
+      const referrals = await this.prisma.referral.findMany({
+        select: { referee: true, principal: true, aboveSince: true },
+      });
+      if (referrals.length > 0) {
+        const referralPlayers = await this.prisma.player.findMany({
+          where: { owner: { in: referrals.map((referral) => referral.referee) } },
+          select: { owner: true, principal: true },
+        });
+        const principalByOwner = new Map(
+          referralPlayers.map((player) => [player.owner, player.principal]),
+        );
+        const now = nowSeconds();
+        const drifted = referrals.flatMap((referral) => {
+          const actual = principalByOwner.get(referral.referee);
+          if (actual === undefined || actual === referral.principal) return [];
+          const next = applyReferralEvent(
+            { principal: referral.principal, aboveSince: referral.aboveSince },
+            { kind: "Deposited", principal: actual },
+            now,
+          );
+          return [{ referee: referral.referee, ...next }];
+        });
+        if (drifted.length > 0) {
+          await this.prisma.$transaction(
+            drifted.map((update) =>
+              this.prisma.referral.update({
+                where: { referee: update.referee },
+                data: { principal: update.principal, aboveSince: update.aboveSince },
+              }),
+            ),
+          );
+        }
+      }
+    }
+
     // Position stores its round's address, not its id, so the ids come from
     // the rounds decoded a moment ago. Rounds are never closed, so a position
     // of this pool always finds its round here.
@@ -981,6 +1066,18 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const coder = this.chain.program.coder.accounts;
     let slot: bigint | undefined;
     let decoded: { pubkey: PublicKey; data: Buffer }[] = [];
+    // ticket 08: give getProgramAccountsV2 another try after an hour, rather
+    // than treating one "method not found" as true for the process's whole
+    // life (a provider can add the extension later; see this flag's own
+    // comment for the fallback-served false-positive case).
+    if (
+      this.v2Unsupported &&
+      this.v2UnsupportedSince !== undefined &&
+      Date.now() - this.v2UnsupportedSince >= V2_UNSUPPORTED_RESET_MS
+    ) {
+      this.v2Unsupported = false;
+      this.v2UnsupportedSince = undefined;
+    }
     if (!this.v2Unsupported) {
       const raw: RawProgramAccount[] = [];
       let paginationKey: string | undefined;
@@ -1014,10 +1111,22 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         } while (paginationKey !== undefined);
       } catch (error: unknown) {
         if (!(error instanceof MethodNotFound)) throw error;
-        this.logger.warn(
-          "this RPC has no getProgramAccountsV2; every sweep walks all program accounts from now on",
-        );
-        this.v2Unsupported = true;
+        // beta-launch-fixes ticket 08: `withRpcFallback` fails over per call
+        // with no stickiness, so this one call landing on the fallback (a
+        // brief primary hiccup) and getting "method not found" back does not
+        // mean the primary lacks it too. Only disable the paginated walk
+        // when the primary itself is the one that just answered that way.
+        if (rpcStatus(this.chain.connection).endpoint === "primary") {
+          this.logger.warn(
+            "this RPC has no getProgramAccountsV2; every sweep walks all program accounts for the next hour",
+          );
+          this.v2Unsupported = true;
+          this.v2UnsupportedSince = Date.now();
+        } else {
+          this.logger.debug(
+            "getProgramAccountsV2 method-not-found came from the fallback RPC, not the primary; not disabling it",
+          );
+        }
         slot = undefined;
       }
       decoded = raw.map(({ pubkey, account }) => ({
@@ -1084,7 +1193,25 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     return this.persist(batch, events);
   }
 
-  private persist(batch: LogBatch, events: DecodedEvent[]): Promise<number> {
+  /**
+   * `advanceCursor` (beta-launch-fixes ticket 08, default true): the live
+   * websocket path (`subscribeToLogs`) passes `false`. Only the catch-up
+   * poll (`ingestSignature`, driven by `catchUpEvents`) is allowed to move
+   * `lastSignature`/`lastSlot`/`updatedAt`, so a gap between two live events
+   * (a dropped socket, a missed notification) is always replayed: the
+   * cursor never jumps ahead of a signature the catch-up walk has not
+   * actually confirmed. `updatedAt` on that same row is the indexer's
+   * freshness stamp (read as `cursor.ageSeconds` in api.service.ts's status
+   * snapshot) — with this change it only advances when catch-up actually
+   * consumed something, so a stalled backlog (a signature whose logs never
+   * show up) correctly stops advancing it instead of a live event down the
+   * same table masking the stall.
+   */
+  private persist(
+    batch: LogBatch,
+    events: DecodedEvent[],
+    options: { advanceCursor: boolean } = { advanceCursor: true },
+  ): Promise<number> {
     const rows = events.map((event, index) => ({
       slot: batch.slot,
       signature: batch.signature,
@@ -1179,17 +1306,19 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           });
         }
       }
-      const cursor = await tx.cursor.findUnique({ where: { id: CURSOR_ID } });
-      // The live socket and the catch-up poll both write; only the poll walks
-      // backwards, and it must not drag the resume point back with it.
-      const reached = cursor?.lastSlot ?? null;
-      if (reached === null || reached <= batch.slot) {
-        const at = { lastSignature: batch.signature, lastSlot: batch.slot, updatedAt: nowSeconds() };
-        await tx.cursor.upsert({
-          where: { id: CURSOR_ID },
-          create: { id: CURSOR_ID, ...at },
-          update: at,
-        });
+      if (options.advanceCursor) {
+        const cursor = await tx.cursor.findUnique({ where: { id: CURSOR_ID } });
+        // Only the catch-up poll walks backwards, and it must not drag the
+        // resume point back with it.
+        const reached = cursor?.lastSlot ?? null;
+        if (reached === null || reached <= batch.slot) {
+          const at = { lastSignature: batch.signature, lastSlot: batch.slot, updatedAt: nowSeconds() };
+          await tx.cursor.upsert({
+            where: { id: CURSOR_ID },
+            create: { id: CURSOR_ID, ...at },
+            update: at,
+          });
+        }
       }
       return created.count;
     });
@@ -1289,6 +1418,13 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * `getBlockTime` call per event. Never wall time: a local validator's chain
    * clock runs faster than it. `undefined` (nothing has read the clock yet)
    * stores as null, same as a backfilled transaction with no block time.
+   *
+   * beta-launch-fixes ticket 08: never advances the cursor. A websocket gap
+   * between two live events used to be permanently unreplayable, because the
+   * cursor had already jumped to whichever signature happened to arrive
+   * after the gap; the next catch-up walk saw its own cursor already past
+   * the missed signature and never went looking for it. Only `ingestSignature`
+   * (the catch-up poll, via `catchUpEvents`) advances it now.
    */
   private subscribeToLogs(): void {
     this.subscriptionId = this.chain.connection.onLogs(
@@ -1306,6 +1442,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
               logs: logs.logs,
             },
             events,
+            { advanceCursor: false },
           );
         }).catch((error: unknown) => this.noteFailure("live log ingest failed", error));
       },

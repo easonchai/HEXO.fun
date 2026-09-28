@@ -81,7 +81,8 @@ What that means if you deposit:
   over rather than paying out dust.
 - The hot key on the VPS opens rounds, draws and pays out, and does nothing else. It cannot
   change parameters, move principal, or unpause. Either key can pause; only the admin can
-  lift it.
+  lift it. The game and the jackpot also pause on their own, and a new pool starts with both
+  paused until the admin starts them.
 - Inviting a friend who deposits and keeps at least 50 USDC in for 7 straight days earns you a
   daily Entries bonus; see [`CONTEXT.md`](CONTEXT.md) for exact tiers. The invite code your
   friend redeems, and every referral tie, is tracked in the app, not the program.

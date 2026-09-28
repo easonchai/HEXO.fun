@@ -13,19 +13,6 @@ export function maskWallet(wallet: string): string {
   return wallet.length <= 10 ? wallet : `${wallet.slice(0, 4)}…${wallet.slice(-4)}`;
 }
 
-/** One owned InviteCode row, reduced to what the wallet's own-codes list
- *  needs (referral-page ticket 07). */
-export interface InviteCodeInput {
-  readonly code: string;
-  readonly maxUses: number;
-  readonly uses: number;
-}
-
-export interface InviteCodeDto {
-  readonly code: string;
-  readonly redeemed: boolean;
-}
-
 /** One Referral row, reduced to what the Your Team table needs
  *  (referral-page ticket 05): qualification, when it bound, and its own
  *  share of today's grant (0n when the referral isn't part of the basis, or
@@ -63,9 +50,6 @@ export interface ReferralsResponse {
   /** The wallet's own Referral code (ADR 0014); null before its first
    *  deposit, since the indexer creates it on that event. */
   readonly referralCode: string | null;
-  /** This wallet's own Invite codes, granted by redeeming one (ticket 07);
-   *  no web UI yet. */
-  readonly inviteCodes: InviteCodeDto[];
   readonly referrals: ReferralsPageDto;
   readonly qualifiedCount: number;
   /** Current band (referral-page ticket 03); tier 0 means no rate yet. */
@@ -113,18 +97,18 @@ function paginateReferrals(
 
 /**
  * Builds GET /referrals/:wallet's response (ticket 11; `referralCode` added
- * by ADR 0014 / docs/plan/referral-page ticket 01; `inviteCodes` by ticket
- * 07) from already-fetched rows: this wallet's own ReferralCode, its owned
- * InviteCodes, its Referrals (each already carrying its own share of
- * today's grant — ticket 05), and today's ReferralGrant `{amount, uncapped}`
- * (both 0n when the job has not granted today yet — referral-page ticket
- * 04). `band`/`nextBand` (referral-page ticket 03) and `qualifiedCount` are
- * computed over every Referral, not just the page that ends up in
- * `referrals.items`.
+ * by ADR 0014 / docs/plan/referral-page ticket 01) from already-fetched
+ * rows: this wallet's own ReferralCode, its Referrals (each already carrying
+ * its own share of today's grant — ticket 05), and today's ReferralGrant
+ * `{amount, uncapped}` (both 0n when the job has not granted today yet —
+ * referral-page ticket 04). `band`/`nextBand` (referral-page ticket 03) and
+ * `qualifiedCount` are computed over every Referral, not just the page that
+ * ends up in `referrals.items`. Invite codes are never in this response
+ * (beta-launch-fixes ticket 13): they are private, and returning a wallet's
+ * unused codes here let anyone harvest them off the leaderboard.
  */
 export function buildReferralsResponse(
   referralCode: string | null,
-  inviteCodes: readonly InviteCodeInput[],
   referrals: readonly ReferralInput[],
   now: bigint,
   qualifySeconds: number,
@@ -140,10 +124,6 @@ export function buildReferralsResponse(
 
   return {
     referralCode,
-    inviteCodes: inviteCodes.map((invite) => ({
-      code: invite.code,
-      redeemed: invite.uses >= invite.maxUses,
-    })),
     referrals: {
       items: page.map((referral) => {
         const status = referralStatus(referral.aboveSince, now, qualifySeconds);

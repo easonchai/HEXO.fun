@@ -14,13 +14,21 @@ use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, Tran
 use crate::constants::{BPS_DENOMINATOR, SEED_JACKPOT, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
 use crate::errors::HexVaultError;
 use crate::events::{
-    AdminChanged, AdminProposed, Deposited, EmergencyWithdrawn, HouseSwept, OperatorChanged,
-    ParamsSet, Paused, PoolCreated, PoolShutdown, PrincipalDeployed, TicketsBought,
-    TicketsGranted, WithdrawRequested, Withdrawn,
+    AdminChanged, AdminProposed, Deposited, EmergencyWithdrawn, FeaturePaused, HouseSwept,
+    OperatorChanged, ParamsSet, Paused, PoolCreated, PoolShutdown, PrincipalDeployed,
+    TicketsBought, TicketsGranted, WithdrawRequested, Withdrawn,
 };
 use crate::state::{Player, Pool};
 use crate::touch::touch;
 use crate::utils;
+
+/// Which switch `set_feature_pause` changes (game-jackpot-pause ticket 01).
+/// `set_pause`'s own `paused` field is untouched by either variant.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum PauseFeature {
+    Game,
+    Jackpot,
+}
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct CreatePoolParams {
@@ -149,6 +157,12 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     pool.bonus_granted = 0;
     pool.version = crate::constants::CURRENT_VERSION;
     pool.paused = false;
+    // The game and the jackpot start only once the admin explicitly turns
+    // each on (spec "Solution"): a deposit-only launch week needs no
+    // operator-side date check. `shutdown` is the only other place that
+    // touches these.
+    pool.game_paused = true;
+    pool.jackpot_paused = true;
     pool.current_epoch_id = 0;
     pool.current_epoch_start = 0;
     pool.current_epoch_ends_at = 0;
@@ -256,6 +270,19 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         pool.registration_window >= 0 && pool.registration_window < pool.epoch_seconds,
         HexVaultError::InvalidParameter
     );
+    // Same reasoning, both appended in the same upgrade (beta-launch-fixes
+    // ticket 03): a `payout_timeout` at or above `epoch_seconds` would let an
+    // honest late Payout roll over into the very epoch that is supposed to
+    // follow it, and a `round_seconds` at or below `close_buffer` would
+    // reject every Position on the next Round created.
+    require!(
+        pool.payout_timeout < pool.epoch_seconds,
+        HexVaultError::InvalidParameter
+    );
+    require!(
+        pool.round_seconds > pool.close_buffer,
+        HexVaultError::InvalidParameter
+    );
 
     emit!(ParamsSet {
         pool: pool.key(),
@@ -296,6 +323,39 @@ pub fn set_pause(ctx: Context<SetPause>, paused: bool) -> Result<()> {
     Ok(())
 }
 
+/// Sets the game or the jackpot switch on its own (game-jackpot-pause ticket
+/// 01), so an admin can start or stop either without touching the other or
+/// `set_pause`'s deposit/withdraw gate. Same role rule as `set_pause`: the
+/// admin either way, the operator pause-only, and unpausing refused once
+/// `shutdown` has fired.
+pub fn set_feature_pause(
+    ctx: Context<SetFeaturePause>,
+    feature: PauseFeature,
+    paused: bool,
+) -> Result<()> {
+    let now = utils::now()?;
+    let pool = &mut ctx.accounts.pool;
+    let signer = ctx.accounts.signer.key();
+    let allowed = signer == pool.admin || (paused && signer == pool.operator);
+    require!(allowed, HexVaultError::Unauthorized);
+    // Shutdown already set both switches on for good; unpausing either one
+    // would restart what it stopped.
+    require!(paused || !pool.shutdown, HexVaultError::PoolShutDown);
+
+    match feature {
+        PauseFeature::Game => pool.game_paused = paused,
+        PauseFeature::Jackpot => pool.jackpot_paused = paused,
+    }
+
+    emit!(FeaturePaused {
+        pool: pool.key(),
+        feature,
+        paused,
+        at: now,
+    });
+    Ok(())
+}
+
 /// Admin-only, irreversible (spec "Shutdown"). Stops every inflow, the game
 /// and the draw, and lets `process_withdraw` skip the epoch lock. Modelled
 /// on Marginfi/Kamino `ReduceOnly`: from here on, depositors pull their own
@@ -307,6 +367,8 @@ pub fn shutdown(ctx: Context<Shutdown>) -> Result<()> {
 
     pool.shutdown = true;
     pool.paused = true;
+    pool.game_paused = true;
+    pool.jackpot_paused = true;
     emit!(PoolShutdown {
         pool: pool.key(),
         at: now,
@@ -696,7 +758,13 @@ pub fn sweep_house(ctx: Context<SweepHouse>) -> Result<()> {
         .saturating_sub(pool.total_principal)
         .saturating_sub(pool.pending_withdrawals);
     let yield_swept = pool.yield_budget.min(surplus);
-    pool.yield_budget = 0;
+    // Deducts only what was actually swept (beta-launch-fixes ticket 03): a
+    // partial sweep (surplus < yield_budget) used to zero the whole budget,
+    // writing off the remainder that stayed in the vault unswept.
+    pool.yield_budget = pool
+        .yield_budget
+        .checked_sub(yield_swept)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
 
     let pool_id_bytes = pool.pool_id.to_le_bytes();
     let pool_bump = [pool.bump];
@@ -791,6 +859,11 @@ pub fn buy_tickets(ctx: Context<BuyTickets>, amount: u64) -> Result<()> {
 
     require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(!pool.paused, HexVaultError::PoolPaused);
+    // Bought before Epoch 1 exists would be Entries with nowhere to register
+    // and no epoch boundary to reset them, so they are just lost the moment
+    // `begin_epoch` first runs (beta-launch-fixes ticket 03).
+    require!(pool.current_epoch_id > 0, HexVaultError::NoEpochYet);
+    require!(!pool.jackpot_paused, HexVaultError::JackpotPaused);
     require!(amount > 0, HexVaultError::ZeroAmount);
     require!(!player.is_house, HexVaultError::HouseCannotBuyTickets);
 
@@ -900,8 +973,11 @@ pub fn grant_tickets(ctx: Context<GrantTickets>, amount: u64) -> Result<()> {
     // rule buy_tickets, credit_yield and payout's compounding follow (ticket
     // 02's Comments).
     touch(player, pool, now)?;
-    // Refused for both the admin and the operator path.
+    // Refused for both the admin and the operator path (production-hardening
+    // ticket 02: pause stops all Ticket movement).
     require!(!pool.shutdown, HexVaultError::PoolShutDown);
+    require!(!pool.paused, HexVaultError::PoolPaused);
+    require!(!pool.jackpot_paused, HexVaultError::JackpotPaused);
     require!(amount > 0, HexVaultError::ZeroAmount);
 
     if !by_admin {
@@ -1023,6 +1099,20 @@ pub struct SetParams<'info> {
 pub struct SetPause<'info> {
     /// Admin or operator. Which one is allowed depends on the direction, so
     /// the handler checks it rather than a `has_one` here.
+    pub signer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
+        bump = pool.bump,
+    )]
+    pub pool: Account<'info, Pool>,
+}
+
+/// Same shape as `SetPause`: the signer may be either role, and the handler
+/// decides which direction it may move.
+#[derive(Accounts)]
+pub struct SetFeaturePause<'info> {
     pub signer: Signer<'info>,
 
     #[account(

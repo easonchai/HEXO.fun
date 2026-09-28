@@ -178,6 +178,49 @@ describe("computeBonuses: pool-wide pro-rata scale-down", () => {
   });
 });
 
+// beta-launch-fixes ticket 11: the pool-wide cap is shared across the whole
+// epoch, so a late referrer's batch is scaled against what earlier grants
+// already used, not the full cap.
+describe("computeBonuses: alreadyGrantedThisEpoch (pool cap headroom)", () => {
+  it("scales a late referrer against the remaining headroom, not the full pool cap", () => {
+    // 5% of $3,000 = $150 pool cap; $120 already recorded this epoch leaves
+    // $30 headroom. A single late referrer whose raw bonus is $90 (3
+    // referrals of $1,000 at the 3% tier) is scaled down to fit in $30.
+    const totalPrincipal = 3_000n * USDC;
+    const referrals = Array.from({ length: 3 }, () => 1_000n * USDC);
+    const [bonus] = computeBonuses(
+      [referrer("late", referrals)],
+      totalPrincipal,
+      500,
+      120n * USDC,
+    );
+    expect(bonus).toMatchObject({ amount: 30n * USDC });
+  });
+
+  it("returns nothing when the epoch's recorded grants already used the whole pool cap", () => {
+    const totalPrincipal = 3_000n * USDC;
+    const bonuses = computeBonuses(
+      [referrer("late", [1_000n * USDC])],
+      totalPrincipal,
+      500,
+      150n * USDC, // the whole 5% cap already recorded
+    );
+    expect(bonuses).toEqual([]);
+  });
+
+  it("defaults to 0 already granted, same as omitting the argument entirely", () => {
+    const inputs = [referrer("a", [10n * USDC])];
+    const withDefault = computeBonuses(inputs, NO_POOL_CAP.totalPrincipal, NO_POOL_CAP.capBps);
+    const withExplicitZero = computeBonuses(
+      inputs,
+      NO_POOL_CAP.totalPrincipal,
+      NO_POOL_CAP.capBps,
+      0n,
+    );
+    expect(withExplicitZero).toEqual(withDefault);
+  });
+});
+
 describe("computeBonuses: referrers who earn nothing", () => {
   it("zero qualified referrals -> nothing", () => {
     expect(

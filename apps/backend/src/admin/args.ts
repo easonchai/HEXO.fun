@@ -33,6 +33,12 @@ export const DEFAULT_EMERGENCY_CRANK_BATCH = 5;
 export type AdminCommand =
   | { readonly kind: "pause" }
   | { readonly kind: "unpause" }
+  /** game-jackpot-pause ticket 02: `set_feature_pause`. The pause commands
+   *  take the operator or the admin; the start commands the admin alone. */
+  | { readonly kind: "pause-game" }
+  | { readonly kind: "pause-jackpot" }
+  | { readonly kind: "start-game" }
+  | { readonly kind: "start-jackpot" }
   | { readonly kind: "fund-jackpot"; readonly amount: bigint }
   /** Raw atomic hexUSDC, same units as fund-jackpot. */
   | { readonly kind: "fund-yield"; readonly amount: bigint }
@@ -70,6 +76,8 @@ export const USAGE = [
   "  set-params [--epoch-seconds N] [--epoch-anchor ISO8601] [--round-seconds N] [--close-buffer N] [--vrf-timeout N] [--min-deposit N] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--base-rate-bps N] [--tickets-per-usdc N] [--bonus-cap-bps N]",
   "  pause",
   "  unpause",
+  "  pause-game | pause-jackpot   (operator or admin)",
+  "  start-game | start-jackpot   (admin only)",
   "  fund-jackpot --amount N   (N is raw atomic hexUSDC, 6 decimals)",
   "  fund-yield --amount N   (N is raw atomic hexUSDC, 6 decimals)",
   "  grant-tickets --owner PUBKEY --amount N   (admin path, uncapped; N is a whole number of tickets)",
@@ -213,6 +221,13 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
     case "unpause":
       rejectExtra(rest);
       return { kind: "unpause" };
+
+    case "pause-game":
+    case "pause-jackpot":
+    case "start-game":
+    case "start-jackpot":
+      rejectExtra(rest);
+      return { kind: command };
 
     case "fund-jackpot":
       return {

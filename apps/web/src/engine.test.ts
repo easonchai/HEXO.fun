@@ -9,6 +9,7 @@ import {
   displayTile,
   expectedReward,
   hmText,
+  idleBoardLabel,
   isRevealed,
   phaseFor,
   roundKey,
@@ -272,5 +273,21 @@ describe("decideReveal", () => {
     // A different round id in the played set does not block this one.
     const played = new Set([roundKey(999n)]);
     expect(decideReveal(remembered, played)).toBe("fire");
+  });
+});
+
+describe("idleBoardLabel", () => {
+  it("says nothing while a round is open, paused or not", () => {
+    expect(idleBoardLabel(true, true, true)).toBeNull();
+  });
+  it("says starts soon before the first epoch, whatever the game switch", () => {
+    expect(idleBoardLabel(false, false, true)).toBe("STARTS SOON");
+    expect(idleBoardLabel(false, false, false)).toBe("STARTS SOON");
+  });
+  it("says game paused between rounds once the game is paused", () => {
+    expect(idleBoardLabel(false, true, true)).toBe("GAME PAUSED");
+  });
+  it("says nothing between rounds of a running game", () => {
+    expect(idleBoardLabel(false, true, false)).toBeNull();
   });
 });

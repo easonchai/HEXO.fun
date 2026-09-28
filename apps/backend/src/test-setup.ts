@@ -15,3 +15,12 @@ process.env.OPERATOR_KEYPAIR ??= bs58.encode(Keypair.generate().secretKey);
 process.env.ACCEPTED_MINT ??= Keypair.generate().publicKey.toBase58();
 process.env.CORS_ORIGIN ??= "http://localhost:5173";
 process.env.POOL_ID ??= "1";
+// PROGRAM_ID and CLUSTER have no default in validateEnv any more (ticket 10);
+// these two just satisfy that requirement for every suite that imports the
+// real ConfigModule. None of them run boot-guard.ts's genesis-hash check.
+process.env.PROGRAM_ID ??= "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6";
+process.env.CLUSTER ??= "devnet";
+// Beta-launch-fixes ticket 05: a harmless default so any suite that flips a
+// seeded Pool's currentEpochId to 0 sees `/state`/`/status` carry a launch
+// time, without every other suite (whose Pool already has an Epoch) noticing.
+process.env.LAUNCH_AT ??= "2026-12-25T00:00:00.000Z";

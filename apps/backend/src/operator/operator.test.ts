@@ -31,11 +31,15 @@ import {
 } from "./chain-state";
 import { OperatorInstructions } from "./instructions";
 import {
+  DRAWN_UNPAID_ALERT_SECONDS,
+  EXPECTED_ERROR_REPEAT_LIMIT,
   msUntilWake,
   runTick,
   SAFETY_INTERVAL_SECONDS,
   WITHDRAW_BATCH_SIZE,
+  WITHDRAW_FAILURE_LIMIT,
   type TickContext,
+  type WithdrawState,
 } from "./tick";
 import { isFulfilled, keccak256, randomnessAddress, vrfSeed } from "./vrf";
 
@@ -101,6 +105,8 @@ const pool = (over: Partial<PoolState> = {}): PoolState => ({
   openRoundId: 3n,
   totalPrincipal: 1_000_000_000n,
   shutdown: false,
+  gamePaused: false,
+  jackpotPaused: false,
   ...over,
 });
 
@@ -145,12 +151,14 @@ interface Recorder {
   sent: TransactionInstruction[][];
   warned: string[];
   markedSent: { epochId: bigint; referrers: string[]; txSig: string }[];
+  forgottenRegistered: string[][];
 }
 
 function context(over: Partial<TickContext> = {}): Recorder {
   const sent: TransactionInstruction[][] = [];
   const warned: string[] = [];
   const markedSent: { epochId: bigint; referrers: string[]; txSig: string }[] = [];
+  const forgottenRegistered: string[][] = [];
   const ctx: TickContext = {
     now: NOW,
     pool: pool(),
@@ -164,17 +172,30 @@ function context(over: Partial<TickContext> = {}): Recorder {
     lastRound: null,
     ix: instructions,
     lastRegisterCheck: null,
+    lastWithdrawState: null,
+    // Fresh and caught up by default, so step 4's close_registration gate
+    // stays quiet in every test that is not about it.
+    indexerCursor: { ageSeconds: 0, updatedAt: NOW },
+    indexerFreshThresholdSeconds: 60n,
+    lastExpectedErrors: new Map(),
+    // Unconfigured by default (ticket 05): begin_epoch is never withheld in
+    // any test that is not about the launch window.
+    launchAt: null,
     fulfilled: async () => false,
     principalVaultBalance: async () => 0n,
     // Empty by default so step 6b stays quiet in every test that is not about it.
     duePendingWithdrawals: async () => [],
     playersToRegister: async () => [],
+    forgetRegistered: async (owners) => {
+      forgottenRegistered.push([...owners]);
+    },
     unsettledPositions: async () => [],
     forgetPositions: async () => {},
     // Empty by default so step 2c stays quiet in every test that is not about it.
     roundsToClose: async () => [],
     forgetRound: () => {},
     winner: async () => null,
+    winnerOnChain: async () => null,
     // Empty by default so step 3b stays quiet in every test that is not about it.
     referralGrantsDue: async () => [],
     markReferralGrantsSent: async (epochId, referrers, txSig) => {
@@ -187,7 +208,7 @@ function context(over: Partial<TickContext> = {}): Recorder {
     warn: (message) => warned.push(message),
     ...over,
   };
-  return { ctx, sent, warned, markedSent };
+  return { ctx, sent, warned, markedSent, forgottenRegistered };
 }
 
 /** Runs one tick and returns the labels of the single transaction it sent. */
@@ -326,7 +347,7 @@ describe("runTick", () => {
     expect(forgotten).toEqual([positions.slice(0, 8).map((position) => position.address)]);
   });
 
-  it("2. keeps the rows when the send fails, so the next tick retries", async () => {
+  it("2. (ticket 06) keeps the rows when the send fails, records the error, and lets the tick continue", async () => {
     const forgotten: string[][] = [];
     const { ctx } = context({
       pool: pool({ openRoundId: 0n }),
@@ -341,12 +362,68 @@ describe("runTick", () => {
       forgetPositions: async (addresses) => {
         forgotten.push(addresses);
       },
-      send: async () => {
-        throw new Error("blockhash expired");
+      send: async (ixs) => {
+        if (ixs.some((ix) => label(ix) === "settle_position")) {
+          throw new Error("blockhash expired");
+        }
+        return "signature";
       },
     });
-    await expect(runTick(ctx)).rejects.toThrow("blockhash expired");
+    const outcome = await runTick(ctx);
     expect(forgotten).toEqual([]);
+    expect(outcome.stepError).toMatch(/blockhash expired/);
+    // Falls through to open the next round instead of aborting the tick.
+    expect(outcome.action).toBe("create_round");
+  });
+
+  it("2. (ticket 12) an AccountNotInitialized race is treated as already settled", async () => {
+    const address = Keypair.generate().publicKey.toBase58();
+    const forgotten: string[][] = [];
+    const { ctx } = context({
+      pool: pool({ openRoundId: 0n }),
+      openRound: null,
+      unsettledPositions: async () => [
+        { address, owner: Keypair.generate().publicKey.toBase58(), roundId: 3n },
+      ],
+      forgetPositions: async (addresses) => {
+        forgotten.push(addresses);
+      },
+      send: async () => {
+        throw new Error("AccountNotInitialized");
+      },
+    });
+    const outcome = await runTick(ctx);
+    expect(forgotten).toEqual([[address]]);
+    expect(outcome.stepError).toBeUndefined();
+  });
+
+  it("2. (ticket 12) an expected race is swallowed twice, then escalates to a recorded error", async () => {
+    const positions = () => [
+      {
+        address: Keypair.generate().publicKey.toBase58(),
+        owner: Keypair.generate().publicKey.toBase58(),
+        roundId: 3n,
+      },
+    ];
+    let expectedErrors: ReadonlyMap<string, number> = new Map();
+    let outcome;
+    for (let i = 0; i < EXPECTED_ERROR_REPEAT_LIMIT; i += 1) {
+      const { ctx } = context({
+        pool: pool({ openRoundId: 0n }),
+        openRound: null,
+        lastExpectedErrors: expectedErrors,
+        unsettledPositions: async () => positions(),
+        send: async (ixs) => {
+          if (ixs.some((ix) => label(ix) === "settle_position")) {
+            throw new Error("RoundNotSettled");
+          }
+          return "signature";
+        },
+      });
+      outcome = await runTick(ctx);
+      expectedErrors = outcome.expectedErrors ?? expectedErrors;
+    }
+    expect(outcome?.stepError).toMatch(/RoundNotSettled/);
   });
 
   it("2. sweeps a leftover position before begin_epoch when the epoch has also ended", async () => {
@@ -468,6 +545,82 @@ describe("runTick", () => {
     expect(result.labels).toEqual(["register"]);
   });
 
+  // --- 3 (ticket 05): LAUNCH_AT holds back only the Pool's very first
+  // begin_epoch (no Epoch yet), so deposits can open before the launch time
+  // with nothing else in the tick changing.
+
+  it("3. a future launch time withholds the first begin_epoch", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+      launchAt: NOW + 3_600n,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
+    // Further off than the safety interval, so the safety tick is still the
+    // soonest thing that could re-check, same as any other far-off deadline.
+    expect(result.nextWakeAt).toBe(NOW + SAFETY_INTERVAL_SECONDS);
+  });
+
+  it("3. sleeps straight to the launch time once it is closer than the safety interval", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+      launchAt: NOW + 10n,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.nextWakeAt).toBe(NOW + 10n);
+  });
+
+  it("3. a past launch time begins the first epoch", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+      launchAt: NOW - 1n,
+    });
+    expect(result.labels).toEqual(["begin_epoch"]);
+    expect(result.action).toBe("begin_epoch");
+  });
+
+  // game-jackpot-pause ticket 02: begin_epoch is refused under jackpot
+  // pause, and a new pool starts that way.
+  it("3. does not begin the first epoch while the jackpot is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n, jackpotPaused: true }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
+  });
+
+  it("3. does not begin the next epoch while the jackpot is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n, jackpotPaused: true }),
+      currentEpoch: epoch({ endsAt: NOW }),
+      openRound: null,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
+  });
+
+  it("3. LAUNCH_AT does not hold back a later epoch once one already exists", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n }),
+      currentEpoch: epoch({ endsAt: NOW }),
+      openRound: null,
+      launchAt: NOW + 3_600n,
+    });
+    expect(result.labels).toEqual(["begin_epoch"]);
+  });
+
   // --- 3b. Referral bonuses (docs/plan/hexo-referrals ticket 08): grants
   // due for the epoch that just began, batched like registration.
 
@@ -533,6 +686,17 @@ describe("runTick", () => {
       pool: pool({ shutdown: true }),
       referralGrantsDue: () => {
         throw new Error("must not be asked while shut down");
+      },
+    });
+    expect(result.action).toBeNull();
+  });
+
+  // game-jackpot-pause ticket 02: grant_tickets is refused under jackpot pause.
+  it("3b. does not grant tickets while the jackpot is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ jackpotPaused: true }),
+      referralGrantsDue: () => {
+        throw new Error("must not be asked while the jackpot is paused");
       },
     });
     expect(result.action).toBeNull();
@@ -640,6 +804,56 @@ describe("runTick", () => {
     expect(result.labels).toEqual(["close_registration"]);
   });
 
+  // --- 4. (ticket 07) close_registration is withheld on a stale Read model.
+
+  it("4. (ticket 07) withholds close_registration on a stale cursor and emits the wait reason", async () => {
+    const { ctx, sent, warned } = context({
+      previousEpoch: registering(),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+      // Fresh in age, but never actually synced past the epoch's own end.
+      indexerCursor: { ageSeconds: 5, updatedAt: NOW - 200n },
+    });
+    const outcome = await runTick(ctx);
+    expect(sent).toHaveLength(0);
+    expect(outcome.action).toBeNull();
+    expect(outcome.indexerStale).toBe(true);
+    expect(warned).toHaveLength(1);
+  });
+
+  it("4. (ticket 07) a cursor younger than the threshold but behind the epoch's end still withholds", async () => {
+    const { ctx, sent } = context({
+      previousEpoch: registering({ endsAt: NOW - 100n }),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+      indexerFreshThresholdSeconds: 60n,
+      // Age is well under the 60 s threshold...
+      indexerCursor: { ageSeconds: 10, updatedAt: NOW - 150n },
+    });
+    const outcome = await runTick(ctx);
+    expect(sent).toHaveLength(0);
+    expect(outcome.indexerStale).toBe(true);
+  });
+
+  it("4. (ticket 07) a fresh, caught-up cursor closes registration as today", async () => {
+    const result = await tickLabels({
+      previousEpoch: registering(),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+      indexerCursor: { ageSeconds: 1, updatedAt: NOW },
+    });
+    expect(result.labels).toEqual(["close_registration"]);
+  });
+
+  // --- 4. (ticket 12) a confirmed register batch is not resent.
+
+  it("4. (ticket 12) forgets the owners a register batch was just confirmed for", async () => {
+    const owner = Keypair.generate().publicKey.toBase58();
+    const { ctx, forgottenRegistered } = context({
+      previousEpoch: registering({ registeredCount: 2 }),
+      playersToRegister: async () => [owner],
+    });
+    await runTick(ctx);
+    expect(forgottenRegistered).toEqual([[owner]]);
+  });
+
   it("4. a late begin_epoch owes the window from when registration opened", async () => {
     // The program anchors the window on `registrationOpenedAt` when that is
     // later than `endsAt`, so the tick has to wait for the same instant or
@@ -678,6 +892,28 @@ describe("runTick", () => {
       },
     });
     expect(result.action).toBeNull();
+  });
+
+  // game-jackpot-pause ticket 02: close_registration is refused under
+  // jackpot pause, register is not.
+  it("4. does not close registration while the jackpot is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ jackpotPaused: true }),
+      previousEpoch: registering(),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
+  });
+
+  it("4. still registers players while the jackpot is paused", async () => {
+    const owner = Keypair.generate().publicKey.toBase58();
+    const result = await tickLabels({
+      pool: pool({ jackpotPaused: true }),
+      previousEpoch: registering(),
+      playersToRegister: async () => [owner],
+    });
+    expect(result.labels).toEqual(["register"]);
   });
 
   // --- 5. Draw or rollover.
@@ -840,7 +1076,7 @@ describe("runTick", () => {
     expect(result.nextWakeAt).toBe(NOW + 20n);
   });
 
-  it("6. rolls the drawn epoch over once the payout timeout has passed", async () => {
+  it("6. rolls the drawn epoch over once payout_timeout and the drawn-unpaid alert window have both passed", async () => {
     const winner = Keypair.generate().publicKey.toBase58();
     const { ctx, sent, warned } = context({
       pool: pool({ payoutTimeout: 30n }),
@@ -848,7 +1084,7 @@ describe("runTick", () => {
         epochId: 1n,
         status: EPOCH_STATUS.DRAWN,
         target: 42n,
-        drawnAt: NOW - 31n,
+        drawnAt: NOW - (DRAWN_UNPAID_ALERT_SECONDS + 1n),
       }),
       winner: async () => winner,
       send: async (ixs) => {
@@ -864,6 +1100,66 @@ describe("runTick", () => {
     expect(outcome.action).toBe("rollover_epoch");
     expect((sent[0] ?? []).map(label)).toEqual(["rollover_epoch"]);
     expect(warned).toHaveLength(1);
+  });
+
+  it("6. (ticket 12) withholds rolling a human winner over until the drawn-unpaid alert window has passed, even past payout_timeout", async () => {
+    const winner = Keypair.generate().publicKey.toBase58();
+    const { ctx, warned } = context({
+      pool: pool({ payoutTimeout: 30n, openRoundId: 0n, paused: true }),
+      openRound: null,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+        // Past payoutTimeout, but well inside DRAWN_UNPAID_ALERT_SECONDS.
+        drawnAt: NOW - 31n,
+      }),
+      winner: async () => winner,
+      send: async (ixs) => {
+        if (ixs.some((ix) => label(ix) === "payout")) throw new Error("AccountFrozen");
+        throw new Error("must not roll over yet");
+      },
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.action).toBeNull();
+    expect(warned).toHaveLength(1);
+  });
+
+  it("6. (ticket 12) still rolls a House win over immediately past payout_timeout: nobody is owed a Prize", async () => {
+    const housePool = pool({ payoutTimeout: 30n });
+    const { ctx, sent } = context({
+      pool: housePool,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+        drawnAt: NOW - 31n,
+      }),
+      winner: async () => housePool.house.toBase58(),
+      send: async (ixs) => {
+        if (ixs.some((ix) => label(ix) === "payout")) throw new Error("AccountFrozen");
+        sent.push(ixs);
+        return "signature";
+      },
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.action).toBe("rollover_epoch");
+  });
+
+  it("6. (ticket 12) falls back to an on-chain scan when the Read model misses, and still pays", async () => {
+    const winner = Keypair.generate().publicKey.toBase58();
+    const result = await tickLabels({
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        target: 42n,
+        drawnAt: NOW - 10n,
+      }),
+      winner: async () => null,
+      winnerOnChain: async (epochId, target) =>
+        epochId === 1n && target === 42n ? winner : null,
+    });
+    expect(result.labels).toEqual(["payout"]);
   });
 
   it("6. waits when no registered interval covers the target yet", async () => {
@@ -975,14 +1271,92 @@ describe("runTick", () => {
     );
   });
 
-  it("6b. lets any other send failure fail the tick", async () => {
+  it("6b. (ticket 06) any other failure switches to single-send mode and records the error instead of throwing", async () => {
     const { ctx } = context({
       duePendingWithdrawals: async () => pending(1),
       send: async () => {
         throw new Error("blockhash expired");
       },
     });
-    await expect(runTick(ctx)).rejects.toThrow("blockhash expired");
+    const outcome = await runTick(ctx);
+    expect(outcome.action).toBeNull();
+    expect(outcome.stepError).toMatch(/blockhash expired/);
+    expect(outcome.withdrawState?.singleMode).toBe(true);
+  });
+
+  it("6b. (ticket 06) falls back to single sends after a batch failure", async () => {
+    const owners = pending(3);
+    let attempt = 0;
+    const { ctx, sent } = context({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      duePendingWithdrawals: async () => owners,
+      send: async (ixs) => {
+        attempt += 1;
+        if (attempt === 1) throw new Error("some transient failure");
+        sent.push(ixs);
+        return "signature";
+      },
+    });
+    // First tick: the 3-owner batch fails, switches to single-send mode.
+    const first = await runTick(ctx);
+    expect(first.action).toBeNull();
+    expect(first.withdrawState?.singleMode).toBe(true);
+
+    // Second tick: pays exactly one, still in single-send mode (two remain).
+    const { ctx: ctx2 } = context({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      duePendingWithdrawals: async () => owners,
+      lastWithdrawState: first.withdrawState ?? null,
+      send: async (ixs) => {
+        sent.push(ixs);
+        return "signature";
+      },
+    });
+    const second = await runTick(ctx2);
+    expect(second.action).toBe("process_withdraw");
+    expect((sent.at(-1) ?? []).filter((ix) => label(ix) === "process_withdraw")).toHaveLength(1);
+    expect(second.withdrawState?.singleMode).toBe(true);
+  });
+
+  it("6b. (ticket 06) skips an owner for the rest of the epoch after WITHDRAW_FAILURE_LIMIT consecutive failures", async () => {
+    const [entry] = pending(1);
+    if (entry === undefined) throw new Error("test setup");
+    let state: WithdrawState | null = null;
+    let outcome;
+    for (let i = 0; i < WITHDRAW_FAILURE_LIMIT; i += 1) {
+      const { ctx, warned: w } = context({
+        pool: pool({ openRoundId: 0n, paused: true }),
+        openRound: null,
+        lastWithdrawState: i === 0 ? { epochId: 2n, singleMode: true, failures: new Map(), skipped: new Set() } : state,
+        duePendingWithdrawals: async () => [entry],
+        send: async () => {
+          throw new Error("frozen destination");
+        },
+      });
+      outcome = await runTick(ctx);
+      state = outcome.withdrawState ?? state;
+      if (i === WITHDRAW_FAILURE_LIMIT - 1) {
+        expect(w).toEqual(
+          expect.arrayContaining([expect.stringContaining("skipping for the rest of epoch")]),
+        );
+      }
+    }
+    expect(state?.skipped.has(entry.owner)).toBe(true);
+
+    // Once skipped, the owner is filtered out of the queue entirely.
+    const { ctx: finalCtx } = context({
+      pool: pool({ openRoundId: 0n, paused: true }),
+      openRound: null,
+      lastWithdrawState: state,
+      duePendingWithdrawals: async () => [entry],
+      send: () => {
+        throw new Error("must not be sent: owner is skipped");
+      },
+    });
+    const finalOutcome = await runTick(finalCtx);
+    expect(finalOutcome.action).toBeNull();
   });
 
   it("6b. reports no shortfall and reads no balance when nothing is due", async () => {
@@ -1038,6 +1412,16 @@ describe("runTick", () => {
     expect(result.transactions).toBe(0);
     // Nothing closer than the running epoch's own (far-off) end: falls back
     // to the safety interval.
+    expect(result.nextWakeAt).toBe(NOW + SAFETY_INTERVAL_SECONDS);
+  });
+
+  // game-jackpot-pause ticket 02: create_round is refused under game pause.
+  it("7. does not open a round while the game is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n, gamePaused: true }),
+      openRound: null,
+    });
+    expect(result.transactions).toBe(0);
     expect(result.nextWakeAt).toBe(NOW + SAFETY_INTERVAL_SECONDS);
   });
 
@@ -1101,6 +1485,70 @@ describe("runTick", () => {
     });
     expect(result.labels).toEqual(["create_round"]);
   });
+
+  // --- Ticket 09: epochNoProgress and drawnUnpaid are computed off the
+  // previous epoch every tick, regardless of which step (if any) acts.
+
+  it("epochNoProgress and drawnUnpaid read false on a healthy mid-round state", async () => {
+    const { ctx } = context();
+    const outcome = await runTick(ctx);
+    expect(outcome.epochNoProgress).toBe(false);
+    expect(outcome.drawnUnpaid).toBe(false);
+  });
+
+  it("epochNoProgress fires once a registering epoch outlives its window plus the slack", async () => {
+    const { ctx } = context({
+      pool: pool({ registrationWindow: 60n, vrfTimeout: 120n }),
+      previousEpoch: registering({ endsAt: NOW - (60n + 120n + 300n + 1n) }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.epochNoProgress).toBe(true);
+  });
+
+  it("epochNoProgress stays false for a registering epoch still inside its window", async () => {
+    const { ctx } = context({
+      pool: pool({ registrationWindow: 60n, vrfTimeout: 120n }),
+      previousEpoch: registering({ endsAt: NOW - (60n + 120n + 300n - 1n) }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.epochNoProgress).toBe(false);
+  });
+
+  it("epochNoProgress clears once the epoch reaches Paid or RolledOver, no matter its age", async () => {
+    const { ctx } = context({
+      previousEpoch: epoch({ status: EPOCH_STATUS.PAID, endsAt: NOW - 1_000_000n }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.epochNoProgress).toBe(false);
+  });
+
+  it("drawnUnpaid fires once a drawn epoch outlives DRAWN_UNPAID_ALERT_SECONDS, before payout_timeout does", async () => {
+    const { ctx } = context({
+      pool: pool({ payoutTimeout: 86_400n, openRoundId: 0n, paused: true }),
+      openRound: null,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        drawnAt: NOW - (DRAWN_UNPAID_ALERT_SECONDS + 1n),
+      }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.drawnUnpaid).toBe(true);
+  });
+
+  it("drawnUnpaid stays false for a drawn epoch still inside the alert window", async () => {
+    const { ctx } = context({
+      pool: pool({ payoutTimeout: 86_400n, openRoundId: 0n, paused: true }),
+      openRound: null,
+      previousEpoch: epoch({
+        epochId: 1n,
+        status: EPOCH_STATUS.DRAWN,
+        drawnAt: NOW - (DRAWN_UNPAID_ALERT_SECONDS - 1n),
+      }),
+    });
+    const outcome = await runTick(ctx);
+    expect(outcome.drawnUnpaid).toBe(false);
+  });
 });
 
 describe("instruction builders", () => {
@@ -1132,23 +1580,29 @@ describe("randomness", () => {
     );
   });
 
-  it("separates seeds by domain, pool and id", () => {
+  const NONCE_A = new Uint8Array(32).fill(1);
+  const NONCE_B = new Uint8Array(32).fill(2);
+
+  it("separates seeds by domain, pool, id and nonce", () => {
     const other = poolAddress(PROGRAM_ID, 2n);
-    const base = vrfSeed("epoch", POOL, 7n);
-    expect(Buffer.from(vrfSeed("epoch", POOL, 7n))).toEqual(Buffer.from(base));
-    expect(Buffer.from(vrfSeed("round", POOL, 7n))).not.toEqual(
+    const base = vrfSeed("epoch", POOL, 7n, NONCE_A);
+    expect(Buffer.from(vrfSeed("epoch", POOL, 7n, NONCE_A))).toEqual(Buffer.from(base));
+    expect(Buffer.from(vrfSeed("round", POOL, 7n, NONCE_A))).not.toEqual(
       Buffer.from(base),
     );
-    expect(Buffer.from(vrfSeed("epoch", other, 7n))).not.toEqual(
+    expect(Buffer.from(vrfSeed("epoch", other, 7n, NONCE_A))).not.toEqual(
       Buffer.from(base),
     );
-    expect(Buffer.from(vrfSeed("epoch", POOL, 8n))).not.toEqual(
+    expect(Buffer.from(vrfSeed("epoch", POOL, 8n, NONCE_A))).not.toEqual(
+      Buffer.from(base),
+    );
+    expect(Buffer.from(vrfSeed("epoch", POOL, 7n, NONCE_B))).not.toEqual(
       Buffer.from(base),
     );
   });
 
   it("uses this program's PDA under test-vrf and ORAO's otherwise", () => {
-    const seed = vrfSeed("round", POOL, 1n);
+    const seed = vrfSeed("round", POOL, 1n, NONCE_A);
     const test = randomnessAddress(PROGRAM_ID, seed, true);
     const orao = randomnessAddress(PROGRAM_ID, seed, false);
     expect(test.equals(orao)).toBe(false);
