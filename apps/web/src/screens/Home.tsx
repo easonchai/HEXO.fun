@@ -11,8 +11,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiBaseUrl, fetchEpochs, type CurrentEpochDto, type EpochDto } from "../api.js";
+import { JACKPOT_GATED } from "../chain.js";
 import { dhmsParts } from "../engine.js";
-import { launchCountdown, launchCountdownLabel } from "../launch.js";
+import { launchCountdown, launchCountdownLabel, prizeCardState } from "../launch.js";
 import { useApiPoll } from "../useApiPoll.js";
 
 export interface HomeProps {
@@ -118,9 +119,14 @@ export function Home({ now, currentEpoch, launchAt, jackpotPaused, onDeposit }: 
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
   const parts = remaining === null ? null : dhmsParts(remaining);
   // Ticket 05: no Epoch yet (deposit-only launch week) counts down to
-  // LAUNCH_AT instead of an Epoch's endsAt.
-  const launching = currentEpoch === null;
-  const launchLabel = launching ? launchCountdownLabel(launchCountdown(launchAt, now)) : null;
+  // LAUNCH_AT instead of an Epoch's endsAt. Ticket 02 (feature-gates): the
+  // jackpot gate takes the same "launch" branch, live epoch or not, and
+  // ignores LAUNCH_AT so it always reads "Coming soon".
+  const cardState = prizeCardState(JACKPOT_GATED, currentEpoch !== null, jackpotPaused);
+  const launchLabel =
+    cardState === "launch"
+      ? launchCountdownLabel(launchCountdown(JACKPOT_GATED ? null : launchAt, now))
+      : null;
 
   const loadEpochs = useCallback(
     (signal: AbortSignal) => fetchEpochs(apiBaseUrl(), EPOCH_LOOKBACK, signal),
@@ -164,11 +170,11 @@ export function Home({ now, currentEpoch, launchAt, jackpotPaused, onDeposit }: 
 
       <div className="home-clock">
         <div className="home-clock-label">DAILY PRIZE DRAW · NEXT DRAW IN</div>
-        {launching ? (
+        {cardState === "launch" ? (
           <div className="home-drawing" data-testid="home-launch-countdown">
             {launchLabel}
           </div>
-        ) : jackpotPaused ? (
+        ) : cardState === "paused" ? (
           <div className="home-drawing" data-testid="home-draw-paused">
             DRAW PAUSED
           </div>

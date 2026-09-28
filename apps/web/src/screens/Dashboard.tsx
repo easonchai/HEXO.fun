@@ -25,9 +25,9 @@ import {
   type EventDto,
   type PlayerDto,
 } from "../api.js";
-import { CLUSTER, GAME_GATED, eventKey } from "../chain.js";
+import { CLUSTER, GAME_GATED, JACKPOT_GATED, eventKey } from "../chain.js";
 import { dhmsParts } from "../engine.js";
-import { launchCountdown, launchCountdownLabel } from "../launch.js";
+import { launchCountdown, launchCountdownLabel, prizeCardState } from "../launch.js";
 import { formatAddress, formatMoney2 } from "../lib/money.js";
 import { useApiPoll } from "../useApiPoll.js";
 import { Star, wholeDollars } from "./Home.js";
@@ -236,9 +236,14 @@ export function Dashboard(props: DashboardScreenProps) {
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
   const parts = remaining === null ? null : dhmsParts(remaining);
   // Ticket 05: no Epoch yet (deposit-only launch week) counts down to
-  // LAUNCH_AT instead of an Epoch's endsAt.
-  const launching = currentEpoch === null;
-  const launchLabel = launching ? launchCountdownLabel(launchCountdown(launchAt, now)) : null;
+  // LAUNCH_AT instead of an Epoch's endsAt. Ticket 02 (feature-gates): the
+  // jackpot gate takes the same "launch" branch, live epoch or not, and
+  // ignores LAUNCH_AT so it always reads "Coming soon".
+  const cardState = prizeCardState(JACKPOT_GATED, currentEpoch !== null, jackpotPaused);
+  const launchLabel =
+    cardState === "launch"
+      ? launchCountdownLabel(launchCountdown(JACKPOT_GATED ? null : launchAt, now))
+      : null;
 
   // Principal drops the moment a withdrawal is requested and the USDC lands a
   // day later, so the card says where the difference went.
@@ -304,11 +309,11 @@ export function Dashboard(props: DashboardScreenProps) {
             {currentEpoch ? wholeDollars(currentEpoch.jackpotAmount) : "$—"}
           </div>
           <div className="dash-clock-label">NEXT DRAW IN</div>
-          {launching ? (
+          {cardState === "launch" ? (
             <div className="dash-drawing" data-testid="dash-launch-countdown">
               {launchLabel}
             </div>
-          ) : jackpotPaused ? (
+          ) : cardState === "paused" ? (
             <div className="dash-drawing" data-testid="dash-draw-paused">
               DRAW PAUSED
             </div>

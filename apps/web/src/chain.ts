@@ -1,5 +1,5 @@
 /** Program id, env, PDA derivation. The chain is authoritative. */
-import { clusterFrom, gameGated } from "./cluster.js";
+import { clusterFrom, gameGated, jackpotGated } from "./cluster.js";
 import idl from "./idl/hex_vault.json";
 import { BN, Program } from "@anchor-lang/core";
 import type { Idl } from "@anchor-lang/core";
@@ -131,6 +131,9 @@ export const CLUSTER = clusterFrom({
 /** Ticket 01 (feature-gates): read once here, like `CLUSTER`, so no
  *  component touches `import.meta.env` for it. */
 export const GAME_GATED = gameGated(import.meta.env.VITE_GATE_GAME);
+
+/** Ticket 02 (feature-gates): the jackpot gate, same rule as `GAME_GATED`. */
+export const JACKPOT_GATED = jackpotGated(import.meta.env.VITE_GATE_JACKPOT);
 
 /**
  * Wallet-standard chain id. Privy signs against it and registers the app's
