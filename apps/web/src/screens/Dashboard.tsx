@@ -25,7 +25,7 @@ import {
   type EventDto,
   type PlayerDto,
 } from "../api.js";
-import { CLUSTER, eventKey } from "../chain.js";
+import { CLUSTER, GAME_GATED, eventKey } from "../chain.js";
 import { dhmsParts } from "../engine.js";
 import { launchCountdown, launchCountdownLabel } from "../launch.js";
 import { formatAddress, formatMoney2 } from "../lib/money.js";
@@ -352,7 +352,11 @@ export function Dashboard(props: DashboardScreenProps) {
             type="button"
             className="dash-boost-cta"
             data-testid="dash-play"
-            onClick={onPlay}
+            // Same aria-disabled + data-tip treatment as the PLAY nav tab
+            // (App.tsx) under the game gate (ticket 01, feature-gates).
+            aria-disabled={GAME_GATED}
+            data-tip={GAME_GATED ? "Coming soon" : undefined}
+            onClick={GAME_GATED ? undefined : onPlay}
           >
             Play to boost
             <svg

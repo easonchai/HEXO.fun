@@ -3647,6 +3647,46 @@ input::placeholder {
   outline-offset: 3px;
 }
 
+/* Game gate (ticket 01, feature-gates): same aria-disabled + data-tip
+   tooltip mechanism as .nav-item above, tuned to this button's own colors. */
+.dash-boost-cta[aria-disabled="true"],
+.dash-boost-cta[aria-disabled="true"]:hover {
+  background: color-mix(in srgb, var(--brand-lime) 45%, transparent);
+  color: color-mix(in srgb, var(--brand-navy) 70%, transparent);
+  cursor: not-allowed;
+  filter: none;
+}
+
+.dash-boost-cta[data-tip] {
+  position: relative;
+}
+
+.dash-boost-cta[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: var(--bg-surface);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.dash-boost-cta[data-tip]:hover::after,
+.dash-boost-cta[data-tip]:focus-visible::after {
+  opacity: 1;
+}
+
 .dash-panel {
   border: 1px solid #1a2738;
   border-radius: 16px;
