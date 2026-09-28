@@ -335,6 +335,19 @@ describe("parseAdminCommand", () => {
     );
   });
 
+  it("parses void-round and rollover-epoch ids as bigints", () => {
+    expect(parseAdminCommand(["void-round", "--round", "17"])).toEqual({
+      kind: "void-round",
+      roundId: 17n,
+    });
+    expect(parseAdminCommand(["rollover-epoch", "--epoch", "3"])).toEqual({
+      kind: "rollover-epoch",
+      epochId: 3n,
+    });
+    expect(() => parseAdminCommand(["void-round"])).toThrow(/--round/);
+    expect(() => parseAdminCommand(["rollover-epoch", "--epoch", "-1"])).toThrow(/whole number/);
+  });
+
   it("scales a USDC amount by the mint's decimals", () => {
     expect(atomicUsdc("250", 6)).toBe(250_000_000n);
     expect(atomicUsdc("12.5", 6)).toBe(12_500_000n);

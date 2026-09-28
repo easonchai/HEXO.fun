@@ -1,7 +1,7 @@
 // One-off admin CLI: set-params, pause, unpause, pause-game, pause-jackpot,
 // start-game, start-jackpot, fund-jackpot, fund-yield,
 // grant-tickets, withdraw-principal, set-operator, propose-admin,
-// accept-admin, create-invite. Same shape as ../bootstrap.ts (plain tsx script, no command
+// accept-admin, create-invite, void-round, rollover-epoch. Same shape as ../bootstrap.ts (plain tsx script, no command
 // framework, argument parsing split into its own file for a chain-free unit
 // test) but this pool already exists, so unlike bootstrap this reuses
 // ChainService and the same full .env the backend itself runs on, instead of
@@ -43,7 +43,13 @@ import { ChainService } from "../chain/chain.service";
 import { rpcStatus, withRpcFallback } from "../chain/rpc-fallback";
 import type { HexVaultEnv } from "../config/env";
 import { validateEnv } from "../config/env";
-import { decodePool, type PoolState } from "../operator/chain-state";
+import {
+  decodeEpoch,
+  decodePool,
+  decodeRound,
+  type PoolState,
+} from "../operator/chain-state";
+import { randomnessAddress } from "../operator/vrf";
 import {
   atomicUsdc,
   checkRegistrationWindow,
@@ -633,6 +639,58 @@ async function sweepHouse(
   );
 }
 
+/** Same detection the operator uses (operator.service.ts): a test-vrf build
+ *  keeps its randomness account under this program, not ORAO's. */
+function isTestVrf(chain: ChainService): boolean {
+  return chain.program.idl.instructions.some((ix) => ix.name === "testFulfill");
+}
+
+/**
+ * Permissionless stuck-state exits (mainnet readiness 2026-09-28, blocker 4).
+ * Both sign locally with the loaded key like `emergency-crank`: the program
+ * takes any `caller` and enforces the deadline itself, so a too-early call
+ * fails with `VrfTimeoutNotElapsed` / `PayoutTimeoutNotElapsed` rather than
+ * doing anything. The randomness account is derived from the stored seed
+ * and may not exist; the program allows that.
+ */
+async function voidRound(chain: ChainService, roundId: bigint): Promise<void> {
+  const pool = await readPool(chain);
+  const address = chain.roundAddress(roundId, pool.address);
+  const info = await chain.connection.getAccountInfo(address);
+  if (!info) throw new Error(`round ${roundId} (${address.toBase58()}) not found`);
+  const round = decodeRound(chain.program, info.data);
+  const ix = await method(chain, "voidRound")
+    .accountsPartial({
+      caller: chain.keypair.publicKey,
+      pool: pool.address,
+      round: address,
+      randomness: randomnessAddress(chain.programId, round.vrfSeed, isTestVrf(chain)),
+    })
+    .instruction();
+  const signature = await chain.send([ix]);
+  log(`signature ${signature}`);
+  log(`voided round ${roundId} (status was ${round.status})`);
+}
+
+async function rolloverEpoch(chain: ChainService, epochId: bigint): Promise<void> {
+  const pool = await readPool(chain);
+  const address = chain.epochAddress(epochId, pool.address);
+  const info = await chain.connection.getAccountInfo(address);
+  if (!info) throw new Error(`epoch ${epochId} (${address.toBase58()}) not found`);
+  const epoch = decodeEpoch(chain.program, info.data);
+  const ix = await method(chain, "rolloverEpoch")
+    .accountsPartial({
+      caller: chain.keypair.publicKey,
+      pool: pool.address,
+      epoch: address,
+      randomness: randomnessAddress(chain.programId, epoch.vrfSeed, isTestVrf(chain)),
+    })
+    .instruction();
+  const signature = await chain.send([ix]);
+  log(`signature ${signature}`);
+  log(`rolled over epoch ${epochId} (status was ${epoch.status})`);
+}
+
 /** The slice of PrismaClient `createInvite` needs, so `admin.test.ts` can
  *  drive it with an in-memory fake instead of a real Postgres. */
 export interface InviteCodeStore {
@@ -758,6 +816,10 @@ export async function run(
       return emergencyCrank(chain, command.batch);
     case "sweep-house":
       return sweepHouse(chain, mode, ledger);
+    case "void-round":
+      return voidRound(chain, command.roundId);
+    case "rollover-epoch":
+      return rolloverEpoch(chain, command.epochId);
   }
 }
 

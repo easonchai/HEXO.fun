@@ -143,6 +143,13 @@ Starts with `EPOCH_NO_PROGRESS`.
    timeout (void, rollover) should already have moved it on, so treat it as "the backstop itself
    didn't fire" and check the operator logs for why: `OPERATOR_STALE`, a stuck RPC, or a bug in the
    void/rollover path.
+2. Push it by hand. Both exits are permissionless and the program enforces the deadline, so a
+   too-early call fails with `VrfTimeoutNotElapsed` and changes nothing:
+   `admin rollover-epoch --epoch N` for a Registering, Drawing or Drawn epoch past its timeout,
+   `admin void-round --round N` for an Open or Requested round past `vrf_timeout`. Ids are in
+   `GET /epochs/current` and `GET /status`. The operator today only voids a Requested round and
+   only rolls over a Drawing or Drawn epoch, so an Open round past its timeout or a Registering
+   epoch behind a stale indexer needs this step.
 
 ## Drawn epoch sitting unpaid
 

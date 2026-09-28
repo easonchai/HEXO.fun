@@ -69,7 +69,14 @@ export type AdminCommand =
   | { readonly kind: "shutdown"; readonly confirm: bigint }
   /** Permissionless: any signer may run this. */
   | { readonly kind: "emergency-crank"; readonly batch: number }
-  | { readonly kind: "sweep-house" };
+  | { readonly kind: "sweep-house" }
+  /** Permissionless stuck-state exits the operator does not yet send on its
+   *  own (mainnet readiness 2026-09-28, blocker 4): an Open or Requested
+   *  Round past `vrf_timeout`, or a Registering, Drawing or Drawn Epoch past
+   *  its own deadline. The program checks the deadline; this only names the
+   *  account. */
+  | { readonly kind: "void-round"; readonly roundId: bigint }
+  | { readonly kind: "rollover-epoch"; readonly epochId: bigint };
 
 export const USAGE = [
   "usage: admin <command> [flags]",
@@ -91,6 +98,8 @@ export const USAGE = [
   "  shutdown --confirm POOL_ID   (irreversible; POOL_ID must match the configured pool)",
   `  emergency-crank [--batch N]   (permissionless; N players per transaction, default ${DEFAULT_EMERGENCY_CRANK_BATCH})`,
   "  sweep-house",
+  "  void-round --round N   (permissionless; Open or Requested round past vrf_timeout)",
+  "  rollover-epoch --epoch N   (permissionless; Registering, Drawing or Drawn epoch past its timeout)",
 ].join("\n");
 
 function positiveInt(flag: string, raw: string): number {
@@ -442,6 +451,18 @@ export function parseAdminCommand(argv: readonly string[]): AdminCommand {
     case "sweep-house":
       rejectExtra(rest);
       return { kind: "sweep-house" };
+
+    case "void-round":
+      return {
+        kind: "void-round",
+        roundId: nonNegativeBigInt("round", oneFlag(command, "round", rest)),
+      };
+
+    case "rollover-epoch":
+      return {
+        kind: "rollover-epoch",
+        epochId: nonNegativeBigInt("epoch", oneFlag(command, "epoch", rest)),
+      };
 
     default:
       throw new Error(USAGE);
