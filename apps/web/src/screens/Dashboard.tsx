@@ -90,9 +90,6 @@ export interface DashboardScreenProps {
   onWithdraw: () => void;
   onPlay: () => void;
   onViewDraws: () => void;
-  /** beta-launch-fixes ticket 17: jumps to About and scrolls to the risk
-   *  disclosure — where "principal isn't staked" below links to. */
-  onViewRisk: () => void;
 }
 
 /** Unix seconds (decimal string) → "Sun, Sep 6". Exported for referrals.ts's
@@ -176,7 +173,6 @@ export function Dashboard(props: DashboardScreenProps) {
     onWithdraw,
     onPlay,
     onViewDraws,
-    onViewRisk,
   } = props;
   const ownerBase58 = owner?.toBase58();
   const fmt2 = (value: bigint) => formatMoney2(value, DECIMALS);
@@ -358,11 +354,7 @@ export function Dashboard(props: DashboardScreenProps) {
             </h3>
             <p>
               Use your tickets to play in games that boost your odds. Your
-              principal isn't staked in the game —{" "}
-              <button type="button" className="dash-risk-link" onClick={onViewRisk}>
-                see the risk disclosure
-              </button>
-              .
+              principal is never touched.
             </p>
           </div>
           <button

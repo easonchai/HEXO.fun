@@ -857,20 +857,6 @@ input::placeholder {
   border-radius: 0;
 }
 
-.wallet-menu-legal {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border-subtle);
-  font-size: 12px;
-}
-
-.wallet-menu-legal a {
-  color: var(--text-secondary, inherit);
-  text-decoration: underline;
-}
-
 .wallet-menu-item:disabled {
   color: var(--text-muted);
   cursor: default;
@@ -3630,16 +3616,6 @@ input::placeholder {
   color: rgba(255, 255, 255, 0.28);
 }
 
-.dash-risk-link {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--brand-lime);
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
 .dash-boost-cta {
   flex: none;
   display: inline-flex;
@@ -3997,20 +3973,6 @@ input::placeholder {
 .about-close {
   align-items: center;
   text-align: center;
-}
-
-.about-legal {
-  display: flex;
-  justify-content: center;
-  gap: 24px;
-  padding: 24px 20px 48px;
-  font-family: "Roboto Mono", monospace;
-  font-size: 13px;
-}
-
-.about-legal a {
-  color: var(--brand-lime);
-  text-decoration: underline;
 }
 
 /* The glossy Figma renders (exported at 2x, no dither) float behind the copy
@@ -5577,31 +5539,6 @@ input::placeholder {
 
 .invite-waitlist:hover,
 .invite-waitlist:focus-visible {
-  color: var(--brand-lime-text);
-}
-
-.invite-ack {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 16px;
-  color: var(--brand-white);
-  font-size: 12px;
-  line-height: 16px;
-  text-align: left;
-}
-
-.invite-ack input {
-  margin-top: 2px;
-}
-
-.invite-ack a {
-  color: var(--brand-lime);
-  text-decoration: underline;
-}
-
-.invite-ack a:hover,
-.invite-ack a:focus-visible {
   color: var(--brand-lime-text);
 }
 

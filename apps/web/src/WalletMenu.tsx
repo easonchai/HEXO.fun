@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import { apiBaseUrl, requestFaucet } from "./api.js";
 import { CLUSTER } from "./chain.js";
 import { faucetEnabled } from "./cluster.js";
-import { PRIVACY_URL, RISK_URL, TERMS_URL } from "./legal.js";
 
 type Props = {
   address: string;
@@ -175,19 +174,6 @@ export function WalletMenu({
               <span className="wallet-menu-item-label">{label}</span>
             </button>
           ))}
-          {/* beta-launch-fixes ticket 17: draft placeholder pages until the
-              human supplies final terms/risk/privacy text (legal.ts). */}
-          <div className="wallet-menu-legal" data-testid="wallet-menu-legal">
-            <a href={TERMS_URL} target="_blank" rel="noopener noreferrer">
-              Terms
-            </a>
-            <a href={RISK_URL} target="_blank" rel="noopener noreferrer">
-              Risk
-            </a>
-            <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer">
-              Privacy
-            </a>
-          </div>
           <button
             type="button"
             role="menuitem"

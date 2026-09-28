@@ -591,13 +591,6 @@ export function App() {
             }}
             onPlay={() => setTab("MINE")}
             onViewDraws={() => setTab("DAILY DRAW")}
-            onViewRisk={() => {
-              setTab("ABOUT");
-              // Rendered on the next tick once the About tab mounts.
-              requestAnimationFrame(() =>
-                document.getElementById("about-risk")?.scrollIntoView({ behavior: "smooth" }),
-              );
-            }}
           />
         ) : null}
         {tab === "MINE" ? (
@@ -743,7 +736,7 @@ export function App() {
             onDeposit={() => setTab("DASHBOARD")}
           />
         ) : null}
-        {tab === "ABOUT" ? <About pool={pool} /> : null}
+        {tab === "ABOUT" ? <About /> : null}
       </main>
     </main>
   );

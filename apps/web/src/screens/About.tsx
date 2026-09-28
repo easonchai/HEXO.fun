@@ -1,41 +1,29 @@
 /**
  * ABOUT tab: the Figma "About Page" frame (340:17234). The marketing site's
  * pitch, inside the app: hero with the self-playing board, four stats, how
- * it works, the jackpot, what you can and might lose, FAQ, closing line.
+ * it works, the jackpot, what you can and can't lose, FAQ, closing line.
  * The Figma's hero and closing buttons were dropped: the tab bar already
  * routes to PLAY and EARN.
  *
- * Copy is the Figma's, except the draw cadence, the yield and the risk
- * claims (beta-launch-fixes ticket 17: no more "never lose it" / "100%
- * protected" — principal is not staked in the game, but it does leave the
- * vault for a third-party lending venue during the day, and this is an
- * unaudited beta). Epochs are a day long (`epochSeconds` 86_400), and
- * `touch` sets `entries = principal` on every rollover, so both the draw and
- * the ticket reset are daily. The Figma's headline yield rate is gone: the
- * pool pays no rate, the whole yield becomes the day's Prize, and principal
- * leaves the vault for a lending venue during the epoch (ADR 0009, ADR 0010).
+ * Copy is the Figma's, except the draw cadence and the yield. Epochs are a
+ * day long (`epochSeconds` 86_400), and `touch` sets `entries = principal`
+ * on every rollover, so both the draw and the ticket reset are daily. The
+ * Figma's headline yield rate is gone: the pool pays no rate, the whole
+ * yield becomes the day's Prize, and principal leaves the vault for a
+ * lending venue during the epoch (ADR 0009, ADR 0010).
  */
 import { DemoBoard } from "../arena/DemoBoard.js";
 import { LogoCog, LogoWordmark } from "../arena/Arena.js";
 import { Textile } from "../arena/Textile.js";
-import { apyFromBaseRateBps } from "../buyTickets.js";
 import { Faq, type FaqItem } from "../Faq.js";
-import { PRIVACY_URL, RISK_URL, TERMS_URL } from "../legal.js";
 import { GlyphRow } from "./Home.js";
 
-/** Ticket 17: only the fields About actually reads from the Pool. */
-export interface AboutPool {
-  baseRateBps: number;
-  houseCutBps: number;
-}
-
-const statsFor = (pool: AboutPool | null) =>
-  [
-    ["0", "Fees charged on your deposit"],
-    ["1", "Jackpot draw, every day"],
-    [pool ? `${apyFromBaseRateBps(pool.baseRateBps).toFixed(1)}%` : "—", "Base yield APY on your principal"],
-    ["60s", "Mini games to boost your chances"],
-  ] as const;
+const STATS = [
+  ["0", "Fees charged on your deposit"],
+  ["1", "Jackpot draw, every day"],
+  ["100%", "Of your principal, protected"],
+  ["60s", "Mini games to boost your chances"],
+] as const;
 
 const HOW = [
   [
@@ -56,57 +44,29 @@ const HOW = [
   ],
 ] as const;
 
-/** `id` scrolls the FAQ's "Can I lose my deposit?" link (below) to this item
- *  without touching `location.hash` — the app's tab router treats any
- *  unrecognized hash as HOME (tabs.ts), so a real anchor link would navigate
- *  away instead of scrolling. */
-const RISK_ITEM_ID = "about-risk";
-
-const rulesFor = (pool: AboutPool | null) =>
+const RULES = [
   [
-    [
-      "Where your deposit sits?",
-      "During the day the admin may move the pool's principal out of the vault and lend it on a third-party venue. What it earns there is the prize, and the principal comes back to the vault before any payout goes out. That venue is someone else's code, and this is a private beta with no audit, so a failure there is a real risk to the deposit.",
-      RISK_ITEM_ID,
-    ],
-    [
-      "Withdrawals",
-      "You can ask to withdraw at any time, and the money arrives after the current day ends. Requesting it takes the amount out of your principal and out of your tickets straight away, so it stops counting toward the draw at once. Once the day is over, anyone can push the payout, including you from the vault screen.",
-    ],
-    [
-      "We play too",
-      "We hold tickets in the daily draw like everyone else. If our ticket wins, the jackpot goes to the treasury and to buying back our token. It always goes back to the community.",
-    ],
-    [
-      "House cut",
-      `The House takes ${pool ? pool.houseCutBps / 100 : "—"}% of every round pot in tickets before the winners split the rest. Your deposit is never charged.`,
-    ],
-  ] as const;
+    "Where your deposit sits?",
+    "During the day the admin may move the pool's principal out of the vault and lend it on a third-party venue. What it earns there is the prize, and the principal comes back to the vault before any payout goes out. That venue is someone else's code, and this is a private beta with no audit, so a failure there is a real risk to the deposit.",
+  ],
+  [
+    "Withdrawals",
+    "You can ask to withdraw at any time, and the money arrives after the current day ends. Requesting it takes the amount out of your principal and out of your tickets straight away, so it stops counting toward the draw at once. Once the day is over, anyone can push the payout, including you from the vault screen.",
+  ],
+  [
+    "We play too",
+    "We hold tickets in the daily draw like everyone else. If our ticket wins, the jackpot goes to the treasury and to buying back our token. It always goes back to the community.",
+  ],
+  [
+    "House cut",
+    "The House takes 6% of every round pot in tickets before the winners split the rest. Your deposit is never charged.",
+  ],
+] as const;
 
 const FAQ: readonly FaqItem[] = [
   {
     q: "Can I lose my deposit?",
-    a: (
-      <>
-        Your deposit is not staked in the hex-tile game — only Tickets are. It
-        does leave the vault for a third-party lending venue during the day,
-        and this is an unaudited beta, so that is a real risk. See{" "}
-        <a
-          href={`#${RISK_ITEM_ID}`}
-          onClick={(event) => {
-            event.preventDefault();
-            document.getElementById(RISK_ITEM_ID)?.scrollIntoView({ behavior: "smooth" });
-          }}
-        >
-          where your deposit sits
-        </a>{" "}
-        below, and the{" "}
-        <a href={RISK_URL} target="_blank" rel="noopener noreferrer">
-          risk disclosure
-        </a>
-        .
-      </>
-    ),
+    a: "No. Your deposit is never at stake. Only tickets are.",
   },
   {
     q: "Do I have to play?",
@@ -137,15 +97,11 @@ const FAQ: readonly FaqItem[] = [
 /** Numbered step: the Figma cycles a circle, star, square and plus badge. */
 const BADGES = ["circle", "star", "square", "plus"] as const;
 
-function Steps({
-  items,
-}: {
-  items: readonly (readonly [string, string] | readonly [string, string, string])[];
-}) {
+function Steps({ items }: { items: readonly (readonly [string, string])[] }) {
   return (
     <ol className="about-steps">
-      {items.map(([title, body, id], i) => (
-        <li key={title} id={id} className="about-step">
+      {items.map(([title, body], i) => (
+        <li key={title} className="about-step">
           <span className={`about-badge about-badge-${BADGES[i % 4]}`}>
             {String(i + 1).padStart(2, "0")}
           </span>
@@ -205,7 +161,7 @@ function TextileBg() {
   );
 }
 
-export function About({ pool }: { pool: AboutPool | null }) {
+export function About() {
   return (
     <div className="about" data-testid="about-screen">
       <section className="about-hero">
@@ -217,9 +173,9 @@ export function About({ pool }: { pool: AboutPool | null }) {
           <h1 className="about-h1">
             save your money, <em>play your luck</em>
           </h1>
-          <p className="about-sub">A prize-linked savings app.</p>
+          <p className="about-sub">A no-loss savings app.</p>
           <p className="about-lead">
-            Deposit USDC, keep it out of the game, win a daily prize.
+            Deposit USDC, never lose it, win a daily prize.
           </p>
         </div>
         <DemoBoard className="about-board" />
@@ -232,8 +188,8 @@ export function About({ pool }: { pool: AboutPool | null }) {
           WHY <em>HEXO?</em>
         </h2>
         <div className="about-stats">
-          {statsFor(pool).map(([value, label]) => (
-            <div key={label} className="about-stat">
+          {STATS.map(([value, label]) => (
+            <div key={value} className="about-stat">
               <strong>{value}</strong>
               <span>{label}</span>
             </div>
@@ -262,8 +218,8 @@ export function About({ pool }: { pool: AboutPool | null }) {
           <em>1 jackpot.</em>
         </h2>
         <p className="about-jackpot-body">
-          The winner takes the jackpot. Everyone else keeps their tickets and,
-          barring the risk below, their deposit.
+          The winner takes the jackpot. Everyone else keeps their deposit.
+          Nobody goes home with less than they arrived with.
         </p>
         <GlyphRow />
       </section>
@@ -272,11 +228,11 @@ export function About({ pool }: { pool: AboutPool | null }) {
         <img className="about-art about-art-shield" src="/about/shield.webp" alt="" />
         <Label>How it works</Label>
         <h2 className="about-h2">
-          What you <em>can</em> &amp; <em>might lose.</em>
+          What you <em>can</em> &amp; <em>can't lose.</em>
         </h2>
         <div className="about-lose">
           <div className="about-lose-card about-lose-safe">
-            <h3>Not staked in the game</h3>
+            <h3>You Won't Lose</h3>
             <ul>
               <li>Your USDC deposit</li>
               <li>Your right to withdraw</li>
@@ -289,11 +245,7 @@ export function About({ pool }: { pool: AboutPool | null }) {
             </ul>
           </div>
         </div>
-        <p className="about-jackpot-body">
-          Your deposit is never wagered in the hex-tile game, but it isn't
-          risk-free either — see "Where your deposit sits" just below.
-        </p>
-        <Steps items={rulesFor(pool)} />
+        <Steps items={RULES} />
       </section>
 
       <section className="about-section" id="about-faq">
@@ -314,20 +266,6 @@ export function About({ pool }: { pool: AboutPool | null }) {
         </h2>
         <GlyphRow />
       </section>
-
-      {/* beta-launch-fixes ticket 17: draft placeholder pages until the human
-          supplies final terms/risk/privacy text (legal.ts). */}
-      <footer className="about-legal" data-testid="about-legal">
-        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer">
-          Terms
-        </a>
-        <a href={RISK_URL} target="_blank" rel="noopener noreferrer">
-          Risk disclosure
-        </a>
-        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer">
-          Privacy notice
-        </a>
-      </footer>
     </div>
   );
 }

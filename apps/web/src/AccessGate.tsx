@@ -9,7 +9,6 @@ import type { ReactNode } from "react";
 
 import { apiBaseUrl } from "./api.js";
 import { LogoCog, LogoWordmark } from "./arena/Arena.js";
-import { PRIVACY_URL, RISK_URL, TERMS_URL } from "./legal.js";
 import { Star } from "./screens/Home.js";
 import { useAccessGate } from "./useAccessGate.js";
 import { useGameSigner } from "./wallets.js";
@@ -47,7 +46,7 @@ export function AccessGate({ children }: { children: ReactNode }) {
                 <br />
                 <span>Maybe Win</span>
               </p>
-              <p className="invite-tagline">SAVE YOUR MONEY, PLAY YOUR LUCK</p>
+              <p className="invite-tagline">A NO-LOSS SAVING APP</p>
             </div>
             <div className="invite-form-pane">
               <img className="invite-textile invite-textile-mobile" src="/invite-textile.svg" alt="" aria-hidden="true" />
@@ -113,38 +112,10 @@ export function AccessGate({ children }: { children: ReactNode }) {
                     Don’t have an access code?
                   </a>
                 </div>
-                {/* beta-launch-fixes ticket 17: one-time acknowledgement, required
-                    before redeeming. Hidden once this browser remembers this
-                    wallet already checked it (useAccessGate.ts). */}
-                {!gate.acknowledged ? (
-                  <label className="invite-ack" data-testid="access-gate-ack">
-                    <input
-                      type="checkbox"
-                      checked={gate.acknowledged}
-                      onChange={(event) => gate.setAcknowledged(event.target.checked)}
-                      data-testid="access-gate-ack-checkbox"
-                    />
-                    <span>
-                      I have read and accept the{" "}
-                      <a href={TERMS_URL} target="_blank" rel="noopener noreferrer">
-                        Terms
-                      </a>
-                      ,{" "}
-                      <a href={RISK_URL} target="_blank" rel="noopener noreferrer">
-                        Risk disclosure
-                      </a>{" "}
-                      and{" "}
-                      <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer">
-                        Privacy notice
-                      </a>
-                      .
-                    </span>
-                  </label>
-                ) : null}
                 <button
                   type="submit"
                   className="invite-submit"
-                  disabled={busy || gate.code.trim() === "" || !gate.acknowledged}
+                  disabled={busy || gate.code.trim() === ""}
                   data-testid="access-gate-submit"
                 >
                   {busy ? "Checking…" : "Submit"}

@@ -213,11 +213,11 @@ export function Home({ now, currentEpoch, launchAt, jackpotPaused, onDeposit }: 
       ) : null}
 
       <div className="home-footer">
-        <span>PRIZE-LINKED SAVINGS</span>
+        <span>NO-LOSS</span>
         <Star />
         <span>DAILY PRIZE DRAWS</span>
         <Star />
-        <span>PRINCIPAL ISN'T STAKED IN THE GAME</span>
+        <span>YOUR DEPOSIT IS NEVER TOUCHED</span>
       </div>
     </div>
   );

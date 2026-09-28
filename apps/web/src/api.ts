@@ -430,7 +430,6 @@ export async function redeemAccess(
   wallet: string,
   code: string,
   signature: string,
-  acknowledged: boolean,
   referralCode?: string,
   signal?: AbortSignal,
 ): Promise<RedeemAccessResult> {
@@ -440,13 +439,7 @@ export async function redeemAccess(
       method: "POST",
       signal: timeout.signal,
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        wallet,
-        code,
-        signature,
-        acknowledged,
-        ...(referralCode ? { referralCode } : {}),
-      }),
+      body: JSON.stringify({ wallet, code, signature, ...(referralCode ? { referralCode } : {}) }),
     });
     const body = (await response.json().catch(() => null)) as
       | (Partial<AccessDto> & { message?: string })

@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { applyReferral, fetchAccess, redeemAccess, type AccessDto } from "./api.js";
 import {
   accessMessage,
-  canSubmitAccess,
   classifyRedeemError,
   gateDecision,
   inviteCodeFromSearch,
@@ -29,11 +28,6 @@ export interface AccessGateState {
   /** Ticket 16: forces an immediate `GET /access` retry from the gate's own
    *  retry control, resetting the backoff. */
   retry: () => void;
-  /** beta-launch-fixes ticket 17: the one-time terms/risk/privacy checkbox.
-   *  Already true (and hidden by AccessGate.tsx) for a wallet this browser
-   *  remembers acknowledging before. */
-  acknowledged: boolean;
-  setAcknowledged: (value: boolean) => void;
 }
 
 export interface AccessGateOptions {
@@ -71,28 +65,6 @@ function rememberOwner(owner: string): void {
     window.localStorage.setItem(ACCESS_OWNER_STORAGE_KEY, owner);
   } catch {
     // Storage blocked: the next reload shows the card once more, nothing worse.
-  }
-}
-
-/** beta-launch-fixes ticket 17: the wallet that already checked the terms
- *  acknowledgement box in this browser, so a reload (or a failed redeem
- *  attempt) does not ask it to check the box again. The backend is the real
- *  record once redeemed; this is only about not re-prompting mid-flow. */
-const TERMS_ACK_STORAGE_KEY = "hexo-terms-ack-owner";
-
-function readAcknowledgedOwner(): string {
-  try {
-    return window.localStorage.getItem(TERMS_ACK_STORAGE_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function rememberAcknowledged(owner: string): void {
-  try {
-    window.localStorage.setItem(TERMS_ACK_STORAGE_KEY, owner);
-  } catch {
-    // Storage blocked: the checkbox just shows unchecked again next time.
   }
 }
 
@@ -147,14 +119,6 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   const [refCode, setRefCode] = useState(() => captureRefCode());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // beta-launch-fixes ticket 17: pre-checked (and hidden by AccessGate.tsx)
-  // once this owner is the one this browser remembers acknowledging.
-  const [acknowledged, setAcknowledged] = useState(
-    () => readAcknowledgedOwner() !== "" && readAcknowledgedOwner() === owner,
-  );
-  useEffect(() => {
-    if (owner && readAcknowledgedOwner() === owner) setAcknowledged(true);
-  }, [owner]);
   // Ticket 16: `GET /access` retries with backoff on its own; `fetchFailed`
   // only flips once ten seconds of that have passed with no answer, so
   // `gateDecision` shows a retry control instead of spinning forever on an
@@ -203,7 +167,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   const redeem = useCallback(() => {
     const wallet = owner;
     const trimmed = normalizeInviteCode(code);
-    if (!wallet || !signMessage || !canSubmitAccess(code, acknowledged)) return;
+    if (!wallet || !signMessage || !trimmed) return;
     setBusy(true);
     setError(null);
     const ref = refCode || undefined;
@@ -213,10 +177,9 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
           new TextEncoder().encode(accessMessage(wallet, trimmed, ref)),
         );
         const signature = anchorUtils.bytes.bs58.encode(bytes);
-        const result = await redeemAccess(baseUrl, wallet, trimmed, signature, true, ref);
+        const result = await redeemAccess(baseUrl, wallet, trimmed, signature, ref);
         if (result.ok) {
           setAccess(result.data);
-          rememberAcknowledged(wallet);
           if (ref) {
             clearStoredRefCode();
             setRefCode("");
@@ -230,7 +193,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
         setBusy(false);
       }
     })();
-  }, [owner, code, signMessage, baseUrl, refCode, acknowledged]);
+  }, [owner, code, signMessage, baseUrl, refCode]);
 
   // The code comes first: SUBMIT while disconnected opens the wallet, then
   // redeems once the access check says this wallet still needs a code. A
@@ -276,7 +239,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   }, [access, owner, signMessage, refCode, baseUrl]);
 
   const submit = useCallback(() => {
-    if (!canSubmitAccess(code, acknowledged)) return;
+    if (normalizeInviteCode(code) === "") return;
     if (connected) {
       redeem();
       return;
@@ -284,7 +247,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
     setError(null);
     setPending(true);
     connect();
-  }, [code, connected, redeem, connect, acknowledged]);
+  }, [code, connected, redeem, connect]);
 
   return {
     status,
@@ -295,7 +258,5 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
     connect,
     submit,
     retry: retryAccess,
-    acknowledged,
-    setAcknowledged,
   };
 }
