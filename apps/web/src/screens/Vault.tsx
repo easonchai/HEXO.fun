@@ -33,6 +33,7 @@ import {
   type SendResult,
   type TxSigner,
 } from "../actions.js";
+import { track } from "../analytics.js";
 import { apiBaseUrl, fetchPlayer, type CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
 import { apyFromBaseRateBps } from "../buyTickets.js";
@@ -41,6 +42,7 @@ import { CLUSTER, type HexVaultProgram } from "../chain.js";
 import {
   addCapped,
   clampDecimals,
+  formatAtomic,
   formatAtomic2,
   parseAtomic,
   pendingWithdrawal,
@@ -50,7 +52,9 @@ import {
   decodeErrorCode,
   decodePlayerError,
   decodeSendFailure,
+  failureReason,
   NOTHING_PENDING_CODE,
+  thrownReason,
 } from "../playerErrors.js";
 import { solRentWarning, type PoolLike } from "../read.js";
 import { SHUTDOWN_BANNER } from "../shutdown.js";
@@ -171,6 +175,7 @@ export function Vault(props: VaultScreenProps) {
 
   const connected = owner !== null && program !== null && pool !== null;
   const amount = parseAtomic(amountText, DECIMALS);
+  const amountUsdc = amount === null ? 0 : Number(formatAtomic(amount, DECIMALS));
   /**
    * What the pills clamp to: wallet on deposit, Principal on withdraw.
    * `request_withdraw` only checks Principal now (ADR 0009), so Tickets
@@ -233,9 +238,12 @@ export function Vault(props: VaultScreenProps) {
         result = await awaitSendResult(signerProgram, result);
       }
       if (result.kind !== "landed") {
+        if (label === "Deposit") track("deposit_failed", { amount_usdc: amountUsdc, reason: failureReason(result) });
         setNote({ tone: "err", text: decodeSendFailure(result) });
         return;
       }
+      if (label === "Deposit") track("deposit_confirmed", { amount_usdc: amountUsdc });
+      else track("withdraw_requested", { amount_usdc: amountUsdc, shutdown: label === "Withdraw" });
       // Deposit gets the confirmed modal; withdraw keeps the inline note.
       if (label === "Deposit" && amount !== null) {
         setConfirmed(amount);
@@ -248,6 +256,7 @@ export function Vault(props: VaultScreenProps) {
       setAmountText("");
       onDone();
     } catch (error) {
+      if (label === "Deposit") track("deposit_failed", { amount_usdc: amountUsdc, reason: thrownReason(error) });
       setNote({
         tone: "err",
         text: decodePlayerError(error),
@@ -271,6 +280,7 @@ export function Vault(props: VaultScreenProps) {
     if (!connected || !amount) return;
     const signer: TxSigner = { publicKey: owner, sendTransaction };
     if (mode === "deposit") {
+      track("deposit_submitted", { amount_usdc: amountUsdc });
       void run("Deposit", program, () => deposit(program, signer, pool, amount));
     } else if (shutdown) {
       // One transaction: request_withdraw + process_withdraw (ticket 11).
@@ -296,6 +306,7 @@ export function Vault(props: VaultScreenProps) {
         result = await awaitSendResult(program, result);
       }
       if (result.kind === "landed") {
+        track("withdraw_paid_out");
         setNote({ tone: "ok", text: "Payout sent." });
         onDone();
       } else if (result.kind === "failed" && result.code === NOTHING_PENDING_CODE) {

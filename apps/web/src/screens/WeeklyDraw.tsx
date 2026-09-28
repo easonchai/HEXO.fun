@@ -22,6 +22,7 @@ import { apiBaseUrl, fetchEpochs, type CurrentEpochDto, type EpochDto, type Play
 import type { HexVaultProgram } from "../chain.js";
 import { hmText } from "../engine.js";
 import { formatAddress } from "../lib/money.js";
+import { track } from "../analytics.js";
 import { decodePlayerError, decodeSendFailure } from "../playerErrors.js";
 import type { PoolLike } from "../read.js";
 import { PanelCard, Stat, StatGrid } from "../ui.js";
@@ -91,6 +92,7 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
         setRegisterNote(decodeSendFailure(result));
         return;
       }
+      track("draw_registered");
       setRegisterNote("registered your weight for this draw");
       onDone();
     } catch (error) {

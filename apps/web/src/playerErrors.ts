@@ -95,9 +95,27 @@ export function decodeSendFailure(
   // worth reaching the maintainers for; "expired" (a dropped confirmation,
   // the player's answer is "try again") is not.
   reportError({
-    code: result.code === null ? "unknown_error" : `program_error_${result.code}`,
+    code: failureReason(result),
     message: result.message,
     page: currentPage(),
   });
   return decodeErrorCode(result.code ?? -1);
+}
+
+/**
+ * A short machine code for analytics (posthog-analytics tickets 03/04):
+ * `program_error_N`, `expired`, or `unknown_error`. The same shape
+ * `reportError` gets, never the raw message.
+ */
+export function failureReason(
+  result: { kind: "expired" } | { kind: "failed"; code: number | null },
+): string {
+  if (result.kind === "expired") return "expired";
+  return result.code === null ? "unknown_error" : `program_error_${result.code}`;
+}
+
+/** `failureReason` for a thrown error, via the same text parsing as `decodePlayerError`. */
+export function thrownReason(error: unknown): string {
+  const code = extractCode(error instanceof Error ? error.message : String(error));
+  return failureReason({ kind: "failed", code });
 }

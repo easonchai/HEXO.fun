@@ -16,6 +16,7 @@ import { Referrals } from "./screens/Referrals.js";
 import { Vault, type VaultMode } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
 import { awaitSendResult, buyPosition, settlePosition } from "./actions.js";
+import { track } from "./analytics.js";
 import { apiBaseUrl, fetchFeed, type RoundDto } from "./api.js";
 import { PROGRAM_ID, POOL_ID, poolAddress, type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
@@ -32,7 +33,12 @@ import {
   type RoundLike,
 } from "./engine.js";
 import { formatAtomic, formatAtomic2, parseAtomic } from "./lib/money.js";
-import { decodePlayerError, decodeSendFailure } from "./playerErrors.js";
+import {
+  decodePlayerError,
+  decodeSendFailure,
+  failureReason,
+  thrownReason,
+} from "./playerErrors.js";
 import { sfx, setSoundOn, subscribeSound, isSoundOn } from "./sfx.js";
 import { SHUTDOWN_BANNER, SHUTDOWN_REASON } from "./shutdown.js";
 import { SoundIcon } from "./SoundIcon.js";
@@ -95,6 +101,12 @@ export function App() {
   const [theme] = useState<"light" | "dark">("dark");
   const [stakeText, setStakeText] = useState("1");
   const [autoRounds, setAutoRounds] = useState(0);
+  /** The panel's +/- buttons. Only a user crossing zero counts as a toggle;
+   *  the auto-rounds loop counting itself down to zero does not. */
+  const setAutoRoundsByUser = (value: number) => {
+    if (value > 0 !== autoRounds > 0) track("auto_rounds_toggled", { on: value > 0 });
+    setAutoRounds(value);
+  };
   const [addressCopied, setAddressCopied] = useState(false);
   const [deployBusy, setDeployBusy] = useState(false);
   const [deployNote, setDeployNote] = useState<string | null>(null);
@@ -281,7 +293,7 @@ export function App() {
 
   /** Places `tiles` at `stakeAmount` per tile in the open round. Returns whether the transaction landed. */
   const deploy = useCallback(
-    async (tiles: number[], stakeAmount: bigint): Promise<boolean> => {
+    async (tiles: number[], stakeAmount: bigint, autoRound = false): Promise<boolean> => {
       if (!pool || !openRound || !txSigner || !program) return false;
       if (tiles.length === 0 || stakeAmount <= 0n) return false;
       setDeployBusy(true);
@@ -302,9 +314,11 @@ export function App() {
         );
         if (result.kind === "unknown") result = await awaitSendResult(program, result);
         if (result.kind !== "landed") {
+          track("position_failed", { reason: failureReason(result) });
           setDeployNote(decodeSendFailure(result));
           return false;
         }
+        track("position_placed", { tile_count: tiles.length, stake_per_tile: Number(formatAtomic(stakeAmount, DECIMALS)), is_topup: Boolean(position), auto_round: autoRound });
         // No predicted Tickets balance: the panel shows "confirming…" (see
         // `deployNote` below) until the next poll's Position actually moves.
         setDeployNote(null);
@@ -313,13 +327,14 @@ export function App() {
         statePoll.kick();
         return true;
       } catch (error) {
+        track("position_failed", { reason: thrownReason(error) });
         setDeployNote(decodePlayerError(error));
         return false;
       } finally {
         setDeployBusy(false);
       }
     },
-    [pool, openRound, txSigner, program, statePoll.kick],
+    [pool, openRound, txSigner, program, statePoll.kick, position],
   );
 
   // Auto-rounds: re-place the last board when a fresh round opens. The
@@ -343,7 +358,7 @@ export function App() {
     if (decision.action === "skip") return;
     const { tiles, stake: stakeForRound } = decision;
     void (async () => {
-      const placed = await deploy(tiles, stakeForRound);
+      const placed = await deploy(tiles, stakeForRound, true);
       if (!placed) return;
       autoRoundRef.current = key;
       setAutoRounds((value) => value - 1);
@@ -424,6 +439,7 @@ export function App() {
         setDeployNote(decodeSendFailure(result));
         return;
       }
+      track("position_settled", { won: settleState.reward > 0n, reward: Number(formatAtomic(settleState.reward, DECIMALS)) });
       setDeployNote(
         settleState.reward > 0n
           ? `round reward settled: +${fmt(settleState.reward)} Tickets`
@@ -620,7 +636,7 @@ export function App() {
               stakeText={stakeText}
               setStakeText={setStakeText}
               autoRounds={autoRounds}
-              setAutoRounds={setAutoRounds}
+              setAutoRounds={setAutoRoundsByUser}
               canDeploy={canPick}
               deployProblems={problems}
               deployHint={deployHint}
@@ -662,7 +678,7 @@ export function App() {
                   stakeText={stakeText}
                   setStakeText={setStakeText}
                   autoRounds={autoRounds}
-                  setAutoRounds={setAutoRounds}
+                  setAutoRounds={setAutoRoundsByUser}
                   canDeploy={canPick}
                   deployProblems={problems}
                   deployHint={deployHint}
