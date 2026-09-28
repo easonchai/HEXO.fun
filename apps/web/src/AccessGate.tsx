@@ -124,6 +124,16 @@ export function AccessGate({ children }: { children: ReactNode }) {
                 >
                   {busy ? "Checking…" : "Submit"}
                 </button>
+                {gate.status === "connect" ? (
+                  <button
+                    type="button"
+                    className="invite-waitlist invite-reconnect"
+                    onClick={() => gate.connect()}
+                    data-testid="access-gate-connect"
+                  >
+                    Already have access? Connect wallet
+                  </button>
+                ) : null}
               </form>
             </div>
           </div>

@@ -5604,6 +5604,25 @@ input::placeholder {
   color: var(--brand-lime-text);
 }
 
+/* Returning-wallet escape hatch, shown only while no wallet is connected.
+   Same size as the waitlist link but in the label's muted white, so the
+   lime link stays the one secondary action. */
+.invite-reconnect {
+  padding: 0;
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 18.46px;
+  cursor: pointer;
+}
+
+.invite-reconnect:hover,
+.invite-reconnect:focus-visible {
+  color: var(--brand-white);
+}
+
 .invite-submit {
   width: 208px;
   height: 44px;
