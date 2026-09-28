@@ -1,6 +1,6 @@
 # @hexvault/web
 
-The designed HexVault UI ("HEXO" — Dark Navy & Electric Gold edition) driving
+The HEXO web app (Dark Navy & Electric Gold edition) driving
 the program from the browser: hexagon arena with animated round settles, plus
 the deposit and withdraw surface. Dark theme is primary; light mode keeps the
 blue primary. All colour flows through the token blocks at the top of

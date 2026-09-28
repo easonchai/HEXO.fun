@@ -1,18 +1,18 @@
-# HexVault
+# HEXO
 
-A no-loss lottery on Solana with a game bolted on. Deposit USDC, keep your principal, and
-your time-weighted Entries are your odds in the draw for the pool's prize. Between draws, put
-Entries on a 36-tile hex board. When your tile is drawn, the House takes a configurable cut,
-6% by default, and the rest of the pot splits among whoever covered it. Principal never moves
-except back to you.
+A no-loss savings app on Solana with a game bolted on. Deposit USDC, keep your principal, and
+your time-weighted Tickets are your odds in the daily draw for the pool's prize. Between draws,
+put Tickets on a 36-tile hex board. When your tile is drawn, the House takes a configurable
+cut, 6% by default, and the rest of the pot splits among whoever covered it. Principal never
+moves except back to you.
 
-The code, the API and this file say **Entries**; the screens currently say **Tickets**. Same
-thing. [`CONTEXT.md`](CONTEXT.md) is the arbiter and it says Entries, so the UI is the side
-that is wrong.
+HEXO is the product name. `hex_vault` is the on-chain program, and `@hexvault/*` are the
+package names; both stay as they are. The screens say **Tickets**; the code, the API and the
+program say **entries**. Same thing. [`CONTEXT.md`](CONTEXT.md) is the arbiter.
 
 > Devnet prototype. Test assets only. No audit, no legal review, do not deposit real assets.
 
-![HexVault landing page](docs/images/home.png)
+![HEXO home screen](docs/images/home.png)
 
 ## Try it
 

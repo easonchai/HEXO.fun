@@ -128,7 +128,7 @@ export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
           {currentEpoch ? wholeDollars(currentEpoch.jackpotAmount) : "$—"}
         </div>
         <p className="home-tagline">
-          Save your <em>money</em>, play with <em>luck</em>
+          Save your <em>money</em>, play your <em>luck</em>
         </p>
       </div>
 
