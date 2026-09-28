@@ -6,8 +6,9 @@ import { programIdFrom } from "./chain.js";
 import { idl } from "./idl.js";
 
 const DEV_ADDRESS = idl.address as string;
-// Ticket 06's staging program id: any valid pubkey distinct from the dev one.
-const OTHER_ADDRESS = "H2iWyng2orJpHNGGWhrR7rBQNDqixThpTpAwF4dnPXax";
+// Any valid pubkey distinct from the dev one; never a real program id, so an
+// IDL address bump can't collide with it.
+const OTHER_ADDRESS = PublicKey.unique().toBase58();
 
 describe("programIdFrom", () => {
   it("falls back to the IDL address in dev when VITE_PROGRAM_ID is unset", () => {
