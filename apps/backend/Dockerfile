@@ -6,6 +6,10 @@ FROM node:22-alpine AS build
 # node-hid and usb (Ledger signer, admin CLI only) ship no musl prebuilds, so
 # their install scripts compile from source. The server never loads them.
 RUN apk add --no-cache python3 make g++ linux-headers eudev-dev libusb-dev
+# node-gyp otherwise downloads the Node headers from unofficial-builds.nodejs.org
+# on every build, and that fetch has timed out on the VPS. The image already
+# ships them under /usr/local/include/node.
+ENV npm_config_nodedir=/usr/local
 RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
 WORKDIR /repo
 
