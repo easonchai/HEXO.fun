@@ -938,8 +938,9 @@ input::placeholder {
   z-index: 20;
   display: grid;
   place-items: center;
-  background: var(--modal-bg);
-  backdrop-filter: blur(10px);
+  /* Light tint + blur so the board still reads through. */
+  background: color-mix(in srgb, var(--modal-bg) 40%, transparent);
+  backdrop-filter: blur(4px);
 }
 
 .coming-soon-text {
