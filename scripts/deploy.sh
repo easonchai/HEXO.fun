@@ -140,6 +140,11 @@ if [ "$env_name" = "mainnet" ]; then
     exit 1
   fi
   solana-verify build -- --features mainnet
+  # solana-verify builds only the .so; target/idl keeps whatever the last
+  # `anchor build` wrote, usually the dev id. Regenerate it under the same
+  # feature so step 4's id check and --idl publish read this build, not that
+  # one (mainnet readiness 2026-09-28, blocker 3).
+  anchor idl build -o target/idl/hex_vault.json -t target/types/hex_vault.ts -- --features mainnet
 elif [ -n "$feature" ]; then
   anchor build -- --features "$feature"
 else
