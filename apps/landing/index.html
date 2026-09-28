@@ -25,7 +25,7 @@
     />
     <meta
       property="og:image"
-      content="https://hexofun.lol/og.png"
+      content="https://hexofun.lol/og-image.png"
     />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -45,7 +45,7 @@
     />
     <meta
       name="twitter:image"
-      content="https://hexofun.lol/og.png"
+      content="https://hexofun.lol/og-image.png"
     />
     <meta name="theme-color" content="#0e1b2b" />
 
@@ -675,20 +675,6 @@
         font-size: 14px;
         line-height: 1.32;
         color: var(--ink-75);
-      }
-
-      .note-share {
-        color: var(--lime);
-        text-transform: uppercase;
-        transition: opacity var(--quick) var(--ease);
-      }
-
-      .note-share:hover {
-        opacity: 0.8;
-      }
-
-      .joined .note-share {
-        display: none;
       }
 
       .form input:focus {
@@ -1696,14 +1682,6 @@
 
           <p class="form-note rv" style="--d: 280ms">
             <span data-note>Save your money. Play your luck.</span>
-            <a
-              class="note-share"
-              href="https://x.com/intent/post"
-              target="_blank"
-              rel="noopener"
-              data-share
-              >Share on X</a
-            >
           </p>
 
           <div class="proof">
@@ -2021,14 +1999,6 @@
           </div>
           <p class="form-note" style="margin-top: 8px">
             <span data-note>Save your money. Play your luck.</span>
-            <a
-              class="note-share"
-              href="https://x.com/intent/post"
-              target="_blank"
-              rel="noopener"
-              data-share
-              >Share on X</a
-            >
           </p>
         </div>
       </div>
@@ -2630,19 +2600,19 @@
         return data;
       }
 
-      // One joined state for the whole page, kept for the tab's lifetime so a
-      // refresh doesn't offer the form again. { id }
+      // One joined state for the whole page, kept in localStorage so a return
+      // visit lands on the share button with the same code. { id, code }
       const JOINED_KEY = "hexo.waitlist";
       const readJoined = () => {
         try {
-          return JSON.parse(sessionStorage.getItem(JOINED_KEY)) || null;
+          return JSON.parse(localStorage.getItem(JOINED_KEY)) || null;
         } catch {
           return null;
         }
       };
       const writeJoined = (state) => {
         try {
-          sessionStorage.setItem(JOINED_KEY, JSON.stringify(state));
+          localStorage.setItem(JOINED_KEY, JSON.stringify(state));
         } catch {}
       };
       const renderers = [];
@@ -2689,14 +2659,14 @@
           }
           note.classList.remove("form-err");
           submit.disabled = true;
-          let signupId;
+          let signup;
           try {
-            const r = await post({
+            signup = await post({
               email,
+              ref: UTM?.ref ?? null,
               referrer: document.referrer || null,
               utm: UTM,
             });
-            signupId = r.id;
           } catch (err) {
             submit.disabled = false;
             posthog.capture("waitlist_failed", {
@@ -2705,9 +2675,13 @@
             });
             return fail("Couldn't reach the list. Try again in a moment.");
           }
-          posthog.capture("waitlist_submitted", { where, has_utm: !!UTM });
-          posthog.identify(signupId, { email });
-          writeJoined({ id: signupId });
+          posthog.capture("waitlist_submitted", {
+            where,
+            has_utm: !!UTM,
+            referred: !!UTM?.ref,
+          });
+          posthog.identify(signup.id, { email });
+          writeJoined({ id: signup.id, code: signup.code });
           renderJoined();
           note.textContent = noteDefault;
         });
@@ -2715,13 +2689,19 @@
       });
 
       // ----------------------------- share on x ----------------------------
-      const SHARE_URL =
+      // Share buttons only exist inside the joined state, so a code is always
+      // there when one is clicked.
+      const shareUrl = (code) =>
         "https://x.com/intent/post?text=" +
         encodeURIComponent(
-          "Join me on the @Hexofun waitlist. https://hexofun.lol",
+          "Just signed up for @hexofun\n\n" +
+            "Use my link to increase your chances of getting early access\n\n" +
+            `https://hexofun.lol/?ref=${code}`,
         );
       document.querySelectorAll("[data-share]").forEach((a) => {
-        a.href = SHARE_URL;
+        renderers.push((s) => {
+          if (s?.code) a.href = shareUrl(s.code);
+        });
         a.addEventListener("click", () =>
           window.posthog?.capture("waitlist_shared", {
             where: a.closest("#top") ? "hero" : "closing",
