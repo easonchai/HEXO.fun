@@ -1,21 +1,31 @@
 /**
- * HOME tab: the Figma "Landing" frame. Today's prize (the epoch's
- * simulated yield, the same current-Epoch value DAILY DRAW labels "Prize")
- * as a whole-dollar hero, a DD:HH:MM:SS clock to `endsAt`, and one button
- * that jumps to the VAULT tab.
+ * HOME tab: the Figma "Landing" frame. Today's prize (the yield the pool
+ * earned this epoch, the same current-Epoch value DAILY DRAW labels
+ * "Prize") as a whole-dollar hero, a DD:HH:MM:SS clock to `endsAt`, the
+ * last few prizes paid, and one button that jumps to the VAULT tab.
  *
  * Ticket 07: `currentEpoch` comes from App's one `GET /state` poll instead
- * of a duplicate `/epochs/current` poll of its own.
+ * of a duplicate `/epochs/current` poll of its own. Epoch history is list
+ * data, so it keeps its own slower poll here, as on the other screens.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { CurrentEpochDto } from "../api.js";
+import { apiBaseUrl, fetchEpochs, type CurrentEpochDto, type EpochDto } from "../api.js";
+import { JACKPOT_GATED } from "../chain.js";
 import { dhmsParts } from "../engine.js";
+import { launchCountdown, launchCountdownLabel, prizeCardState } from "../launch.js";
+import { useApiPoll } from "../useApiPoll.js";
 
 export interface HomeProps {
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
   currentEpoch: CurrentEpochDto | null;
+  /** Ticket 05: `/state`'s `launchAt`, present only while `currentEpoch` is
+   *  null (the deposit-only launch week). */
+  launchAt: string | null;
+  /** game-jackpot-pause: the draw is held, so the clock says so instead of
+   *  counting to a draw that will not run on schedule. */
+  jackpotPaused: boolean;
   onDeposit: () => void;
 }
 
@@ -26,6 +36,10 @@ export function wholeDollars(atomic: string): string {
 }
 
 const CLOCK_LABELS = ["DAYS", "HRS", "MIN", "SEC"] as const;
+
+/** Rollovers leave `winner: null`, so look back further than the three shown. */
+const EPOCH_LOOKBACK = 20;
+const PRIZES_SHOWN = 3;
 
 /** Hand-traced from the Figma glyph row: star, square, target, cross, frame, plus. */
 const GLYPHS = [
@@ -99,11 +113,41 @@ export const Star = () => (
   </svg>
 );
 
-export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
+export function Home({ now, currentEpoch, launchAt, jackpotPaused, onDeposit }: HomeProps) {
   const remaining =
     currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : null;
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
-  const parts = remaining === null ? null : dhmsParts(remaining);
+  // No epoch and no LAUNCH_AT: the clock sits at zero. "--" is only for an
+  // unknown chain clock; "Coming soon" is the jackpot gate's.
+  const parts =
+    remaining !== null ? dhmsParts(remaining) : currentEpoch === null ? dhmsParts(0n) : null;
+  // Ticket 05: no Epoch yet (deposit-only launch week) counts down to
+  // LAUNCH_AT instead of an Epoch's endsAt. Ticket 02 (feature-gates): the
+  // jackpot gate takes the same "launch" branch, live epoch or not, and
+  // ignores LAUNCH_AT so it always reads "Coming soon".
+  const cardState = prizeCardState(
+    JACKPOT_GATED,
+    currentEpoch !== null,
+    jackpotPaused,
+    launchAt !== null,
+  );
+  const launchLabel =
+    cardState === "launch"
+      ? launchCountdownLabel(launchCountdown(JACKPOT_GATED ? null : launchAt, now))
+      : null;
+
+  const loadEpochs = useCallback(
+    (signal: AbortSignal) => fetchEpochs(apiBaseUrl(), EPOCH_LOOKBACK, signal),
+    [],
+  );
+  const epochs = useApiPoll(loadEpochs, 10_000);
+  const paid = useMemo(
+    () =>
+      (epochs.data ?? [])
+        .filter((row: EpochDto) => row.winner !== null)
+        .slice(0, PRIZES_SHOWN),
+    [epochs.data],
+  );
 
   return (
     <div className="home" data-testid="home-screen">
@@ -134,7 +178,15 @@ export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
 
       <div className="home-clock">
         <div className="home-clock-label">DAILY PRIZE DRAW · NEXT DRAW IN</div>
-        {drawing || (remaining !== null && remaining <= 0n) ? (
+        {cardState === "launch" ? (
+          <div className="home-drawing" data-testid="home-launch-countdown">
+            {launchLabel}
+          </div>
+        ) : cardState === "paused" ? (
+          <div className="home-drawing" data-testid="home-draw-paused">
+            DRAW PAUSED
+          </div>
+        ) : drawing || (remaining !== null && remaining <= 0n) ? (
           <div className="home-drawing" data-testid="home-drawing">
             DRAWING…
           </div>
@@ -162,6 +214,17 @@ export function Home({ now, currentEpoch, onDeposit }: HomeProps) {
         </button>
         <GlyphRow />
       </div>
+
+      {paid.length > 0 ? (
+        <div className="home-footer" data-testid="home-last-prizes">
+          <span>LAST PRIZES</span>
+          {paid.map((row) => (
+            <span key={row.id}>
+              DAY #{row.id} {wholeDollars(row.jackpotAmount)}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       <div className="home-footer">
         <span>NO-LOSS</span>

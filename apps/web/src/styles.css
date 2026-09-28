@@ -872,6 +872,22 @@ input::placeholder {
   color: var(--accent-text);
 }
 
+/* Phone-only copies of the INVITE / ABOUT tabs; the navbar hides its own
+   once a wallet is connected (the pill leaves no room for four tabs). */
+.wallet-menu-nav {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .wallet-menu-nav {
+    display: flex;
+  }
+
+  .topbar:has(.wallet-menu-root) .nav-item-menu {
+    display: none;
+  }
+}
+
 /* ---------- layout ---------- */
 
 .app {
@@ -911,6 +927,28 @@ input::placeholder {
   transform: translate(-50%, -50%) scale(0.82);
   transform-origin: center center;
   pointer-events: auto;
+}
+
+/* Game gate (ticket 02, feature-gates): sized by .stage-arena-wrap above,
+   already position: relative, so the board keeps its footprint. Same
+   modal-bg + blur pairing as .takeover further down. */
+.coming-soon {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  /* Light tint + blur so the board still reads through. */
+  background: color-mix(in srgb, var(--modal-bg) 40%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.coming-soon-text {
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: 0.08em;
+  color: var(--accent-text);
 }
 
 /* Standalone timer on top of the hexagon */
@@ -2921,6 +2959,52 @@ input::placeholder {
   margin: 0;
 }
 
+.vault-line-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The 414px bubble would overrun the widget from the icon's x, so it spans
+   the row instead (the row is the positioning box, not the tip), and opens
+   upward because .vault-widget clips below the CTA. */
+.vault-line:has(.info-tip) {
+  position: relative;
+}
+
+.vault-line .info-tip {
+  position: static;
+}
+
+.vault-line .info-tip-bubble {
+  top: auto;
+  bottom: calc(100% + 10px);
+  left: 0;
+  width: 100%;
+  font-weight: 400;
+  text-transform: none;
+}
+
+/* Pending withdrawal row: state text, and the payout button when it is due. */
+.vault-pending-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+}
+
+/* Dim the state label only; the payout button keeps full contrast. */
+.vault-pending-state > span {
+  opacity: 0.75;
+}
+
+.vault-payout {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
 .vault-cta {
   height: 43px;
   border: none;
@@ -3583,6 +3667,46 @@ input::placeholder {
 .dash-boost-cta:focus-visible {
   outline: 2px solid var(--brand-lime);
   outline-offset: 3px;
+}
+
+/* Game gate (ticket 01, feature-gates): same aria-disabled + data-tip
+   tooltip mechanism as .nav-item above, tuned to this button's own colors. */
+.dash-boost-cta[aria-disabled="true"],
+.dash-boost-cta[aria-disabled="true"]:hover {
+  background: color-mix(in srgb, var(--brand-lime) 45%, transparent);
+  color: color-mix(in srgb, var(--brand-navy) 70%, transparent);
+  cursor: not-allowed;
+  filter: none;
+}
+
+.dash-boost-cta[data-tip] {
+  position: relative;
+}
+
+.dash-boost-cta[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: var(--bg-surface);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.dash-boost-cta[data-tip]:hover::after,
+.dash-boost-cta[data-tip]:focus-visible::after {
+  opacity: 1;
 }
 
 .dash-panel {
@@ -4397,3 +4521,1234 @@ input::placeholder {
   }
 }
 
+
+/* ---------------------------------------------------------------------------
+   REFERRALS PAGE (Figma "Invite Page_Draft" 204:12137, channel oano454a).
+   referral-page ticket 01 builds the hero (204:12172) and this shell.
+   .referrals-row and the two full-width slots after it are where tickets
+   03-06 drop in the Bonus Rate (230:16970), Referral's Bonus (230:17196),
+   Your Team (204:12548) and FAQ (204:12299) cards; the gaps and widths are
+   set up for them but the cards themselves aren't built here.
+   --------------------------------------------------------------------------- */
+
+.referrals-page {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--brand-navy);
+  color: var(--brand-white);
+  z-index: 5;
+}
+
+.referrals-content {
+  max-width: 1102px;
+  margin: 0 auto;
+  padding: 37px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.referral-hero {
+  position: relative;
+  background: var(--brand-navy);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 16px;
+  padding: 25px;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+/* Clips the background image + glow to the card's rounded corners. Not on
+   .referral-hero itself: that would also clip the InfoTip bubble, which
+   spec.md says may overflow its card. */
+.referral-hero-bgclip {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  pointer-events: none;
+}
+
+/* image169 and Ellipse 15 carry Figma's Dither shader (gift: Bayer 8x8,
+   size 2, levels 3; glow: Bayer 16x16, size 4, levels 4, brightness 72%,
+   contrast 1.08). Both are Figma's own 2x exports, already clipped to the
+   card with their 50% / 45% fill opacity baked into the alpha, so no CSS
+   opacity or gradient here. The gift is anchored to the card's right edge
+   so it holds its place if the card is wider than the 1054px frame. */
+.referral-hero-bg {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 444px;
+  height: 415px;
+}
+
+.referral-hero-glow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 183px;
+  height: 184px;
+}
+
+.referral-hero-copy,
+.referral-hero-stats,
+.referral-hero-invite {
+  position: relative;
+  z-index: 2;
+}
+
+.referral-hero-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.referral-hero-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 64px;
+  line-height: 64px;
+  letter-spacing: -0.52px;
+  color: var(--brand-lime);
+  text-transform: lowercase;
+}
+
+.referral-hero-lead {
+  margin: 0;
+  max-width: 390px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 20.4px;
+  color: var(--brand-white);
+}
+
+.referral-hero-stats {
+  display: flex;
+  gap: 16px;
+}
+
+.referral-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.referral-stat-value {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 36px;
+  line-height: 1;
+  letter-spacing: -0.52px;
+  color: var(--brand-white);
+}
+
+.referral-stat-label {
+  font-family: "Roboto Mono", monospace;
+  font-size: 12px;
+  color: var(--brand-white);
+  text-transform: uppercase;
+}
+
+.referral-hero-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.referral-hero-invite-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.referral-hero-invite-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  color: var(--brand-white);
+  text-transform: uppercase;
+}
+
+.referral-code-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 53px;
+  padding: 0 13px;
+  border: 1px solid var(--brand-white);
+  border-radius: 16px;
+}
+
+.referral-code-value {
+  font-family: "Roboto Mono", monospace;
+  font-size: 16px;
+  line-height: 24px;
+  color: var(--brand-lime);
+  overflow-wrap: anywhere;
+}
+
+.referral-code-placeholder {
+  font-family: "Roboto Mono", monospace;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.referral-pill-btn {
+  flex: none;
+  background: var(--brand-lime);
+  color: var(--on-primary);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.9px;
+  border: none;
+  border-radius: 22px;
+  height: 39px;
+  padding: 0 26px;
+  cursor: pointer;
+  transition: filter 0.2s ease;
+}
+
+.referral-pill-btn:hover {
+  filter: brightness(0.92);
+}
+
+.referral-pill-btn:active {
+  filter: brightness(0.85);
+}
+
+/* Bonus Rate (03) + Referral's Bonus (04) drop in here, 517px each with a
+   20px gap (Figma 230:16969). Empty until then, so it takes no space. */
+.referrals-row {
+  display: flex;
+  gap: 20px;
+}
+
+.referrals-row:empty {
+  display: none;
+}
+
+/* ---------- Referral FAQ (spec.md "Shared FAQ"; Figma 272:12125 collapsed
+   / 171:28875 open, referral-page ticket 06). The title sits 4px below the
+   padding edge. A collapsed row is 22px + 23px question + 22px; an open one
+   is 20px above, 12px to the answer, 20px below. Dividers go between rows
+   only. ---------- */
+
+.referral-faq {
+  background: var(--brand-slate);
+  border-radius: 14px;
+  padding: 24px;
+}
+
+.referral-faq-title {
+  margin: 4px 0 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 17px;
+  color: var(--brand-white);
+}
+
+.referral-faq-item + .referral-faq-item {
+  border-top: 1px solid var(--brand-white-15);
+}
+
+.referral-faq-item summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 0;
+  list-style: none;
+  cursor: pointer;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 22.5px;
+  color: var(--brand-white);
+}
+
+.referral-faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.referral-faq-item-q {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.referral-faq-item-num {
+  color: var(--brand-white-55);
+}
+
+.referral-faq-item summary::after {
+  content: "+";
+  font-weight: 400;
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* Open: a 12px box holding an 8px drawn × at 30% white, not a glyph. */
+.referral-faq-item[open] summary::after {
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 12px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 2l8 8M10 2l-8 8' stroke='%23fff' stroke-opacity='.3' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")
+    center / 12px no-repeat;
+}
+
+.referral-faq-item[open] summary {
+  padding: 20px 0 12px;
+  color: var(--brand-lime);
+}
+
+.referral-faq-item-body {
+  margin: 0;
+  padding: 0 0 20px;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 22.5px;
+  color: var(--brand-white);
+  white-space: pre-line;
+}
+
+.referral-faq-item-body p {
+  margin: 0;
+}
+
+/* Figma's lettered list: "a." 24px in, its text 48px in. */
+.referral-faq-item-body ol {
+  margin: 0;
+  padding-left: 48px;
+  list-style: none;
+}
+
+.referral-faq-item-body li {
+  position: relative;
+}
+
+.referral-faq-item-body li::before {
+  content: counter(list-item, lower-alpha) ".";
+  position: absolute;
+  left: -24px;
+}
+
+/* One blank 22.5px line, as in Figma's text. */
+.referral-faq-item-body ol + p {
+  margin-top: 22.5px;
+}
+
+/* ---------- Referral's Bonus card (ticket 04; Figma 230:17196 / 230:17195).
+   Bonus Rate (03) is the sibling on the left; .referrals-row's default
+   align-items: stretch matches both cards to the taller one's height, the
+   same way Figma's two 249px-tall sibling frames do. ---------- */
+
+.referral-bonus-card {
+  flex: none;
+  width: 517px;
+  padding: 24px;
+  background: var(--brand-slate);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.referral-bonus-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.referral-bonus-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--brand-white);
+  text-transform: lowercase;
+}
+
+.referral-bonus-amount-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 19px;
+}
+
+.referral-bonus-amount {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 64px;
+  line-height: 52px;
+  letter-spacing: -0.52px;
+  color: var(--brand-lime);
+}
+
+.referral-bonus-amount-uncapped {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.referral-bonus-caption {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  letter-spacing: 0.36px;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+}
+
+.referral-bonus-hint {
+  margin: 16px 0 0;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 16.5px;
+  color: var(--brand-lime);
+}
+
+/* Same "slate 75% ground, white 30% hairline" ghost button as .dash-btn
+   (Dashboard.tsx), at this card's own Figma type size. */
+.referral-bonus-deposit {
+  width: 219px;
+  height: 44px;
+  margin-top: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(54, 62, 75, 0.75);
+  color: rgba(255, 255, 255, 0.75);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.9px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.referral-bonus-deposit:hover {
+  color: var(--brand-white);
+  background: rgba(54, 62, 75, 0.95);
+}
+
+/* ---------- Your Team (referral-page ticket 05; Figma 204:12548). Row
+   columns follow the Figma frame's own x-positions (wallet flush left, the
+   status pill at ~26% in, bonus tickets at ~45% in, JOINED flush right);
+   fluid fr/px widths stand in for Figma's literal 1005px-frame offsets so
+   the table still holds together at narrower widths. 44px rows with a 6px
+   gap, matching the frame's own row rhythm. The "→ View all draws" link in
+   the Figma frame is not rendered (spec.md). ---------- */
+
+.your-team-card {
+  background: var(--brand-slate);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 17px;
+}
+
+.your-team-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.your-team-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--brand-white);
+  text-transform: lowercase;
+}
+
+.your-team-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.your-team-row {
+  display: grid;
+  grid-template-columns: 246px 196px minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 20px 0 14px;
+  background: var(--brand-navy);
+  border-radius: 6px;
+}
+
+/* Figma 204:12548: header columns sit flush with the card's content edge
+   (REFERRALS at 0, STATUS at 260, BONUS TICKETS at 456) while the row cards
+   inset their text 14px left / 20px right; a hairline sits under the header. */
+.your-team-row-head {
+  grid-template-columns: 260px 196px minmax(0, 1fr) auto;
+  min-height: 0;
+  padding: 0 0 8px;
+  /* + the table's 6px gap = Figma's 30px from header top to first row. */
+  margin-bottom: 2px;
+  background: none;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.your-team-row-head .your-team-col-joined {
+  text-align: right;
+}
+
+.your-team-wallet {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--brand-white);
+  overflow-wrap: anywhere;
+}
+
+.your-team-pill {
+  justify-self: start;
+  box-sizing: border-box;
+  min-width: 142px;
+  height: 20px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  font-family: "Roboto Mono", monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.your-team-pill-qualified {
+  background: rgba(182, 255, 59, 0.25);
+  color: var(--brand-lime-text);
+}
+
+.your-team-pill-holding {
+  background: rgba(255, 201, 64, 0.25);
+  color: #ffc940;
+}
+
+.your-team-pill-below {
+  background: rgba(255, 65, 54, 0.25);
+  color: var(--brand-red);
+}
+
+.your-team-bonus {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.your-team-bonus-nonzero {
+  color: var(--brand-lime-text);
+}
+
+.your-team-joined {
+  font-family: "Roboto Mono", monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.your-team-col-joined {
+  text-align: right;
+}
+
+.your-team-empty {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+@media (max-width: 960px) {
+  .your-team-card {
+    padding: 20px;
+    gap: 16px;
+  }
+
+  .your-team-row,
+  .your-team-row-head {
+    grid-template-columns: minmax(0, 1fr) 92px 48px;
+    gap: 10px;
+  }
+
+  /* Fits "6 days left", the longest label, without the desktop 142px floor. */
+  .your-team-pill {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .your-team-row {
+    padding: 0 12px;
+  }
+
+  .your-team-col-joined {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .referrals-content {
+    padding: 24px 16px 48px;
+    gap: 16px;
+  }
+
+  .referral-hero {
+    padding: 20px;
+    gap: 24px;
+  }
+
+  /* Same scale as the old 300px crop (0.534); 0.7 of the baked-in 50% alpha
+     keeps the old 35% on mobile. */
+  .referral-hero-bg {
+    width: 237px;
+    height: 222px;
+    opacity: 0.7;
+  }
+
+  .referral-hero-glow {
+    width: 104px;
+    height: 104px;
+  }
+
+  .referral-hero-title {
+    font-size: 34px;
+    line-height: 1.15;
+  }
+
+  .referral-hero-lead {
+    max-width: none;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .referral-stat-value {
+    font-size: 28px;
+  }
+
+  .referral-hero-invite-title {
+    font-size: 18px;
+  }
+
+  .referral-code-field {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 53px;
+    padding: 12px 13px;
+    row-gap: 10px;
+  }
+
+  .referral-code-placeholder {
+    font-size: 12px;
+  }
+
+  .referrals-row {
+    flex-direction: column;
+  }
+
+  .referral-faq {
+    padding: 16px;
+  }
+
+  .referral-faq-title {
+    font-size: 14px;
+    margin-bottom: 12px;
+  }
+
+  .referral-faq-item summary {
+    padding: 16px 0;
+    font-size: 14px;
+  }
+
+  .referral-faq-item[open] summary {
+    padding: 16px 0 10px;
+  }
+
+  .referral-faq-item-q {
+    gap: 12px;
+  }
+
+  .referral-faq-item-num {
+    font-size: 13px;
+  }
+
+  .referral-faq-item-body {
+    padding: 0 0 16px;
+    font-size: 13px;
+  }
+}
+
+/* ---------- Bonus Rate card (referral-page ticket 03, Figma 230:16970) ----
+   517x249 fixed card; Figma's own padding is asymmetric (24 top/left/right,
+   56 bottom) since the card matches the paired Referral's Bonus card's
+   height (ticket 04) with less content of its own. min-height instead of a
+   hard height so a longer tier string never clips. ---------- */
+
+.bonus-rate-card {
+  flex: none;
+  width: 517px;
+  max-width: 100%;
+  min-height: 249px;
+  box-sizing: border-box;
+  background: var(--brand-slate);
+  border-radius: 16px;
+  padding: 24px 24px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bonus-rate-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.bonus-rate-title {
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 16.66px;
+  color: var(--brand-white);
+  text-transform: lowercase;
+}
+
+.bonus-rate-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.bonus-rate-percent {
+  font-family: "Roboto Mono", monospace;
+  font-weight: 700;
+  font-size: 64px;
+  line-height: 52px;
+  letter-spacing: -0.52px;
+  color: var(--brand-lime);
+}
+
+.bonus-rate-tier {
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 13.5px;
+  letter-spacing: 0.36px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.bonus-rate-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bonus-rate-track {
+  width: 100%;
+  height: 11px;
+  border-radius: 3px;
+  background: #07101c;
+  overflow: hidden;
+}
+
+.bonus-rate-fill {
+  height: 100%;
+  border-radius: 70px;
+  background: var(--brand-lime);
+  transition: width 0.3s ease;
+}
+
+.bonus-rate-copy {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 16.5px;
+  color: var(--brand-lime);
+}
+
+@media (max-width: 960px) {
+  .bonus-rate-card {
+    width: 100%;
+    min-height: 0;
+    padding: 20px;
+  }
+
+  .bonus-rate-percent {
+    font-size: 48px;
+    line-height: 1;
+  }
+
+  .referral-bonus-card {
+    width: 100%;
+    padding: 20px;
+  }
+
+  .referral-bonus-amount {
+    font-size: 44px;
+    line-height: 40px;
+  }
+
+  .referral-bonus-deposit {
+    width: 100%;
+  }
+}
+
+/* ---------- InfoTip (spec.md "InfoTip"; Figma tooltip 230:17717) ---------- */
+
+.info-tip {
+  position: relative;
+  display: inline-flex;
+}
+
+.info-tip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+}
+
+.info-tip-trigger:hover,
+.info-tip-trigger:focus-visible {
+  color: var(--brand-lime);
+}
+
+/* Placed as in Figma 204:15702: flush under the icon, nudged 3px right,
+   overflowing its card rather than staying inside it. */
+.info-tip-bubble {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 10px);
+  left: 3px;
+  width: 414px;
+  max-width: min(414px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 8px;
+  background: rgba(14, 27, 43, 0.9);
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 16px;
+  letter-spacing: 0.36px;
+  /* A "\n" inside one paragraph is a line break with no gap (the bullet
+     lists in Figma 230:17720). */
+  white-space: pre-line;
+  color: var(--brand-white);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.info-tip-bubble.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Figma separates paragraphs with one blank 16px line. */
+.info-tip-bubble p {
+  margin: 0 0 16px;
+}
+
+.info-tip-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+
+/* ---------------------------------------------------------------------------
+   INVITE GATE (Figma 141:52988; component 141:53126, input states 161:11865,
+   mobile 147:7608). Values are the frames' literal measurements.
+   --------------------------------------------------------------------------- */
+
+.invite-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.invite-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: min(1200px, 100%);
+  min-height: 623px;
+  overflow: hidden;
+  background: var(--brand-navy);
+  border-radius: 24px;
+  box-shadow: 0 4px 12px rgba(200, 255, 190, 0.28);
+  color: var(--brand-white);
+}
+
+.invite-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 23px;
+  padding: 0 30px 33px 33px;
+  overflow: hidden;
+}
+
+.invite-textile {
+  position: absolute;
+  top: -1px;
+  left: -421px;
+  width: 1442px;
+  height: 659.46px;
+  max-width: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+.invite-textile-mobile {
+  display: none;
+}
+
+.invite-headline,
+.invite-tagline {
+  position: relative;
+  margin: 0;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+}
+
+.invite-headline {
+  font-size: 48px;
+  line-height: 54px;
+  color: var(--brand-white);
+}
+
+.invite-headline span,
+.invite-tagline {
+  color: var(--brand-lime);
+}
+
+.invite-tagline {
+  font-size: 16px;
+  line-height: 16.66px;
+}
+
+.invite-form-pane {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 32px 22px;
+  overflow: hidden;
+}
+
+.invite-form {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(419px, 100%);
+}
+
+.invite-logo {
+  display: flex;
+  align-items: center;
+  gap: 11.87px;
+  color: var(--brand-lime);
+}
+
+.invite-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: min(398px, 100%);
+  margin-top: 32px;
+}
+
+.invite-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--brand-lime);
+}
+
+.invite-title-row svg {
+  width: 24.58px;
+  height: 24.58px;
+  flex-shrink: 0;
+}
+
+.invite-title {
+  margin: 0;
+  color: var(--brand-white);
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 36px;
+  line-height: 37.48px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.invite-title-break {
+  display: none;
+}
+
+.invite-copy {
+  margin: 0;
+  font-family: "Roboto Mono", monospace;
+  font-size: 16px;
+  line-height: 21.1px;
+  text-align: center;
+}
+
+.invite-field {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin-top: 32px;
+  font-family: "Roboto Mono", monospace;
+}
+
+.invite-label {
+  font-size: 14px;
+  line-height: 18.46px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.invite-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 54.36px;
+  margin-top: 8px;
+  padding: 0 17.18px;
+  background: transparent;
+  border: 1px solid var(--brand-lime);
+  border-radius: 10px;
+  outline: none;
+  color: var(--brand-white);
+  font-family: "Roboto Mono", monospace;
+  font-size: 18px;
+  line-height: 23.74px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.invite-input::placeholder {
+  color: #4a5d48;
+  opacity: 1;
+}
+
+.invite-input:focus-visible {
+  box-shadow: 0 0 0 3px rgba(182, 255, 59, 0.25);
+}
+
+.invite-input.error {
+  border-color: var(--brand-red);
+}
+
+.invite-input.error:focus-visible {
+  box-shadow: 0 0 0 3px rgba(255, 65, 54, 0.25);
+}
+
+.invite-error {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--brand-red);
+  font-size: 14px;
+  line-height: 18.46px;
+}
+
+.invite-waitlist {
+  align-self: center;
+  margin-top: 16px;
+  color: var(--brand-lime);
+  font-size: 14px;
+  line-height: 18.46px;
+  text-align: center;
+  text-decoration: underline;
+}
+
+/* In the error variant the message row and the link row are both 34px tall
+   with the text centred, so the link sits 8px under the message. */
+.invite-error + .invite-waitlist {
+  margin-top: 0;
+  padding: 8px 0;
+}
+
+.invite-waitlist:hover,
+.invite-waitlist:focus-visible {
+  color: var(--brand-lime-text);
+}
+
+/* Returning-wallet escape hatch, shown only while no wallet is connected.
+   Same size as the waitlist link but in the label's muted white, so the
+   lime link stays the one secondary action. */
+.invite-reconnect {
+  padding: 0;
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-family: "Roboto Mono", monospace;
+  font-size: 14px;
+  line-height: 18.46px;
+  cursor: pointer;
+}
+
+.invite-reconnect:hover,
+.invite-reconnect:focus-visible {
+  color: var(--brand-white);
+}
+
+.invite-submit {
+  width: 208px;
+  height: 44px;
+  margin-top: 32px;
+  border: none;
+  border-radius: 22px;
+  background: var(--brand-lime);
+  color: #07101c;
+  font-family: "Syncopate", sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.9px;
+  cursor: pointer;
+}
+
+.invite-submit:hover:not(:disabled) {
+  background: var(--brand-lime-text);
+}
+
+.invite-submit:focus-visible {
+  outline: 2px solid var(--brand-white);
+  outline-offset: 2px;
+}
+
+.invite-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 960px) {
+  .invite-card {
+    grid-template-columns: 1fr;
+    width: min(362px, 100%);
+    min-height: 445px;
+    border-radius: 18.39px;
+  }
+
+  .invite-hero {
+    display: none;
+  }
+
+  .invite-textile-mobile {
+    display: block;
+    top: -315px;
+    left: -555.3px;
+    width: 1472.61px;
+    height: 673.46px;
+    opacity: 0.4;
+  }
+
+  .invite-form-pane {
+    place-items: start center;
+    padding: 43.96px 20.74px 44.25px;
+  }
+
+  .invite-form {
+    width: min(321.12px, 100%);
+  }
+
+  .invite-logo {
+    gap: 9.1px;
+  }
+
+  .invite-logo svg:first-child {
+    width: 28.55px;
+    height: 31.66px;
+  }
+
+  .invite-logo svg:last-child {
+    width: 69.73px;
+    height: 12.6px;
+  }
+
+  .invite-intro {
+    gap: 10.73px;
+    width: min(305px, 100%);
+    margin-top: 24px;
+  }
+
+  .invite-title-row {
+    gap: 10.73px;
+  }
+
+  .invite-title-row svg {
+    width: 18.84px;
+    height: 18.84px;
+  }
+
+  .invite-title-break {
+    display: inline;
+  }
+
+  .invite-copy {
+    font-size: 14.01px;
+    line-height: 18.48px;
+  }
+
+  .invite-field {
+    margin-top: 24px;
+  }
+
+  .invite-label {
+    font-size: 10.73px;
+    line-height: 14.15px;
+  }
+
+  .invite-input {
+    height: 41.27px;
+    margin-top: 6.13px;
+    padding: 0 13.17px;
+    border-radius: 7.66px;
+    font-size: 13.8px;
+    line-height: 18.19px;
+  }
+
+  .invite-waitlist {
+    margin-top: 8px;
+    font-size: 14.01px;
+    line-height: 18.48px;
+  }
+
+  .invite-submit {
+    width: 215px;
+    height: 45px;
+    margin-top: 24px;
+    border-radius: 16.87px;
+    letter-spacing: 0.69px;
+  }
+}

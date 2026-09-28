@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# Ops-and-envs ticket 14: stops a test-vrf build or a failing unit test from
+# leaving the laptop. No CI, by decision, so this is the only gate.
+#
+# check-deployable.sh needs a built .so, which most pushes have not run
+# anchor build for, so a missing artifact skips the check instead of failing
+# the push. `git push --no-verify` is the documented escape hatch (runbook.md).
+
+if [ -f target/deploy/hex_vault.so ]; then
+  sh scripts/check-deployable.sh
+else
+  echo "pre-push: no target/deploy/hex_vault.so, skipping check-deployable" >&2
+fi
+
+pnpm test:unit
+
+# Production-hardening ticket 07: a provider key in the web bundle never ships.
+pnpm -C apps/web check

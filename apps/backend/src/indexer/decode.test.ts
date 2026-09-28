@@ -13,10 +13,12 @@ import { loadIdl } from "../chain/idl";
 import {
   decodeEventLogs,
   jsonify,
+  playerRow,
   poolRow,
   registrationWeight,
   ROUND_STATUS,
   roundRow,
+  type DecodedPlayer,
   type DecodedPool,
   type DecodedRound,
 } from "./decode";
@@ -84,8 +86,23 @@ interface Case {
 const CASES: Case[] = [
   {
     name: "PoolCreated",
-    fields: [key(POOL), u64(7n), key(OWNER), key(MINT)],
-    data: { pool: POOL, poolId: "7", authority: OWNER, acceptedMint: MINT },
+    fields: [key(POOL), u64(7n), key(OWNER), key(MINT), key(MINT)],
+    data: { pool: POOL, poolId: "7", admin: OWNER, operator: MINT, acceptedMint: MINT },
+  },
+  {
+    name: "OperatorChanged",
+    fields: [key(POOL), key(OWNER), key(MINT)],
+    data: { pool: POOL, previous: OWNER, operator: MINT },
+  },
+  {
+    name: "AdminProposed",
+    fields: [key(POOL), key(OWNER)],
+    data: { pool: POOL, pendingAdmin: OWNER },
+  },
+  {
+    name: "AdminChanged",
+    fields: [key(POOL), key(OWNER), key(MINT)],
+    data: { pool: POOL, previous: OWNER, admin: MINT },
   },
   {
     name: "ParamsSet",
@@ -98,6 +115,12 @@ const CASES: Case[] = [
       i64(120n),
       u64(1_000_000n),
       u16(600),
+      u64(2_000_000n),
+      i64(600n),
+      i64(86_400n),
+      u16(488),
+      u16(10),
+      u16(500),
     ],
     data: {
       pool: POOL,
@@ -108,6 +131,12 @@ const CASES: Case[] = [
       vrfTimeout: "120",
       minDeposit: "1000000",
       houseCutBps: 600,
+      minJackpot: "2000000",
+      registrationWindow: "600",
+      payoutTimeout: "86400",
+      baseRateBps: 488,
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
     },
   },
   {
@@ -116,14 +145,29 @@ const CASES: Case[] = [
     data: { pool: POOL, paused: true },
   },
   {
+    name: "FeaturePaused",
+    fields: [key(POOL), u8(1), bool(true), i64(1_700_000_000n)],
+    data: { pool: POOL, feature: { jackpot: {} }, paused: true, at: "1700000000" },
+  },
+  {
     name: "Deposited",
     fields: [key(OWNER), u64(1_000_000n), u64(3_000_000n), u64(3_000_000n)],
     data: { owner: OWNER, amount: "1000000", principal: "3000000", entries: "3000000" },
   },
   {
+    name: "WithdrawRequested",
+    fields: [key(OWNER), u64(500_000n), u64(750_000n), u64(4n)],
+    data: { owner: OWNER, amount: "500000", pending: "750000", pendingEpoch: "4" },
+  },
+  {
     name: "Withdrawn",
     fields: [key(OWNER), u64(500_000n), u64(2_500_000n), u64(2_500_000n)],
     data: { owner: OWNER, amount: "500000", principal: "2500000", entries: "2500000" },
+  },
+  {
+    name: "PrincipalDeployed",
+    fields: [key(POOL), u64(40_000_000n), u64(2_000_000n)],
+    data: { pool: POOL, amount: "40000000", vaultRemaining: "2000000" },
   },
   {
     name: "RoundOpened",
@@ -156,6 +200,11 @@ const CASES: Case[] = [
     name: "RoundVoided",
     fields: [u64(4n), u64(9_000n)],
     data: { roundId: "4", carryPot: "9000" },
+  },
+  {
+    name: "RoundClosed",
+    fields: [key(MINT), u64(4n)],
+    data: { round: MINT, roundId: "4" },
   },
   {
     name: "PositionSettled",
@@ -191,13 +240,54 @@ const CASES: Case[] = [
   },
   {
     name: "JackpotPaid",
-    fields: [u64(2n), key(OWNER), u64(10_000_000n), bool(true)],
-    data: { epochId: "2", winner: OWNER, amount: "10000000", isHouse: true },
+    fields: [u64(2n), key(OWNER), u64(10_000_000n), bool(true), bool(false)],
+    data: {
+      epochId: "2",
+      winner: OWNER,
+      amount: "10000000",
+      isHouse: true,
+      compounded: false,
+    },
   },
   {
     name: "EpochRolledOver",
     fields: [u64(2n), u64(10_000_000n)],
     data: { epochId: "2", jackpotAmount: "10000000" },
+  },
+  {
+    name: "YieldFunded",
+    fields: [u64(5_000_000n), u64(12_000_000n)],
+    data: { amount: "5000000", budget: "12000000" },
+  },
+  {
+    name: "YieldCredited",
+    fields: [u64(2n), key(OWNER), u64(1_200n), u64(300n)],
+    data: { epochId: "2", owner: OWNER, amount: "1200", shortfall: "300" },
+  },
+  {
+    name: "TicketsBought",
+    fields: [key(OWNER), u64(2n), u64(500_000n), u64(5_000_000n)],
+    data: { owner: OWNER, epochId: "2", usdc: "500000", tickets: "5000000" },
+  },
+  {
+    name: "TicketsGranted",
+    fields: [key(OWNER), u64(2n), u64(750_000n), bool(false)],
+    data: { owner: OWNER, epochId: "2", amount: "750000", byAdmin: false },
+  },
+  {
+    name: "PoolShutdown",
+    fields: [key(POOL), i64(1_700_000_000n)],
+    data: { pool: POOL, at: "1700000000" },
+  },
+  {
+    name: "EmergencyWithdrawn",
+    fields: [key(OWNER), u64(3_000_000n), u64(500_000n), u64(3_500_000n)],
+    data: { owner: OWNER, principal: "3000000", pending: "500000", total: "3500000" },
+  },
+  {
+    name: "HouseSwept",
+    fields: [u64(10_000_000n), u64(2_000_000n)],
+    data: { jackpot: "10000000", yieldBudget: "2000000" },
   },
 ];
 
@@ -272,8 +362,12 @@ describe("poolRow", () => {
   it("carries the epoch grid timestamps", () => {
     const pool: DecodedPool = {
       poolId: new BN(7),
-      authority: new PublicKey(OWNER),
+      admin: new PublicKey(OWNER),
+      operator: new PublicKey(MINT),
+      pendingAdmin: PublicKey.default,
       acceptedMint: new PublicKey(MINT),
+      pendingWithdrawals: new BN(250_000),
+      minJackpot: new BN(1_000_000),
       epochSeconds: new BN(86_400),
       epochAnchor: new BN(1_789_315_200),
       roundSeconds: new BN(60),
@@ -286,6 +380,16 @@ describe("poolRow", () => {
       previousEpochEndsAt: new BN(1_789_401_600),
       totalPrincipal: new BN(3_000_000),
       carryPot: new BN(0),
+      baseRateBps: 488,
+      yieldBudget: new BN(9_000_000),
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
+      bonusEpoch: new BN(3),
+      bonusGranted: new BN(40_000),
+      version: 1,
+      shutdown: false,
+      gamePaused: false,
+      jackpotPaused: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       epochSeconds: 86_400n,
@@ -297,6 +401,203 @@ describe("poolRow", () => {
       // the decode rather than being dropped (ticket 07).
       closeBuffer: 12n,
       minDeposit: 1_000_000n,
+    });
+  });
+
+  // Ticket 05: base yield, bought tickets and granted tickets.
+  it("carries the base yield and ticket-economy fields", () => {
+    const pool: DecodedPool = {
+      poolId: new BN(7),
+      admin: new PublicKey(OWNER),
+      operator: new PublicKey(MINT),
+      pendingAdmin: PublicKey.default,
+      acceptedMint: new PublicKey(MINT),
+      pendingWithdrawals: new BN(0),
+      minJackpot: new BN(0),
+      epochSeconds: new BN(86_400),
+      epochAnchor: new BN(0),
+      roundSeconds: new BN(90),
+      closeBuffer: new BN(12),
+      minDeposit: new BN(0),
+      houseCutBps: 0,
+      paused: false,
+      currentEpochId: new BN(3),
+      currentEpochEndsAt: new BN(0),
+      previousEpochEndsAt: new BN(0),
+      totalPrincipal: new BN(0),
+      carryPot: new BN(0),
+      baseRateBps: 488,
+      yieldBudget: new BN(9_000_000),
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
+      bonusEpoch: new BN(3),
+      bonusGranted: new BN(40_000),
+      version: 1,
+      shutdown: false,
+      gamePaused: false,
+      jackpotPaused: false,
+    };
+    expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
+      baseRateBps: 488,
+      yieldBudget: 9_000_000n,
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
+      bonusEpoch: 3n,
+      bonusGranted: 40_000n,
+    });
+  });
+
+  // Ticket 03: the old single `authority` column is gone, and /status reads
+  // what depositors are owed off this row.
+  it("splits the roles and carries the withdrawal fields", () => {
+    const pool: DecodedPool = {
+      poolId: new BN(7),
+      admin: new PublicKey(OWNER),
+      operator: new PublicKey(MINT),
+      pendingAdmin: new PublicKey(POOL),
+      acceptedMint: new PublicKey(MINT),
+      pendingWithdrawals: new BN(250_000),
+      minJackpot: new BN(1_000_000),
+      epochSeconds: new BN(86_400),
+      epochAnchor: new BN(1_789_315_200),
+      roundSeconds: new BN(90),
+      closeBuffer: new BN(12),
+      minDeposit: new BN(1_000_000),
+      houseCutBps: 600,
+      paused: false,
+      currentEpochId: new BN(3),
+      currentEpochEndsAt: new BN(1_789_488_000),
+      previousEpochEndsAt: new BN(1_789_401_600),
+      totalPrincipal: new BN(3_000_000),
+      carryPot: new BN(0),
+      baseRateBps: 488,
+      yieldBudget: new BN(0),
+      ticketsPerUsdc: 10,
+      bonusCapBps: 500,
+      bonusEpoch: new BN(0),
+      bonusGranted: new BN(0),
+      version: 1,
+      shutdown: false,
+      gamePaused: false,
+      jackpotPaused: false,
+    };
+    expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
+      admin: OWNER,
+      operator: MINT,
+      pendingAdmin: POOL,
+      pendingWithdrawals: 250_000n,
+      minJackpot: 1_000_000n,
+    });
+  });
+
+  it("reports no pending admin when the handover slot is the default key", () => {
+    const pool: DecodedPool = {
+      poolId: new BN(7),
+      admin: new PublicKey(OWNER),
+      operator: new PublicKey(MINT),
+      pendingAdmin: PublicKey.default,
+      acceptedMint: new PublicKey(MINT),
+      pendingWithdrawals: new BN(0),
+      minJackpot: new BN(0),
+      epochSeconds: new BN(86_400),
+      epochAnchor: new BN(0),
+      roundSeconds: new BN(90),
+      closeBuffer: new BN(12),
+      minDeposit: new BN(0),
+      houseCutBps: 0,
+      paused: false,
+      currentEpochId: new BN(0),
+      currentEpochEndsAt: new BN(0),
+      previousEpochEndsAt: new BN(0),
+      totalPrincipal: new BN(0),
+      carryPot: new BN(0),
+      baseRateBps: 0,
+      yieldBudget: new BN(0),
+      ticketsPerUsdc: 10,
+      bonusCapBps: 0,
+      bonusEpoch: new BN(0),
+      bonusGranted: new BN(0),
+      version: 1,
+      shutdown: false,
+      gamePaused: false,
+      jackpotPaused: false,
+    };
+    expect(poolRow(new PublicKey(POOL), pool, 9n).pendingAdmin).toBeNull();
+  });
+});
+
+describe("playerRow", () => {
+  // Ticket 03: `request_withdraw` parks the amount on the Player and the
+  // vault screen reads it back off /players/:owner, so a field dropped here
+  // is a depositor who cannot see their own pending money.
+  it("carries the pending withdrawal and the epoch it pays in", () => {
+    const player: DecodedPlayer = {
+      owner: new PublicKey(OWNER),
+      principal: new BN(3_000_000),
+      entries: new BN(3_000_000),
+      weightAcc: new BN(0),
+      lastUpdate: new BN(1_700_000_000),
+      epochId: new BN(4),
+      frozenWeight: new BN(0),
+      frozenEpoch: new BN(0),
+      regEpoch: new BN(0),
+      regStart: new BN(0),
+      regEnd: new BN(0),
+      isHouse: false,
+      pendingWithdraw: new BN(750_000),
+      pendingEpoch: new BN(4),
+      principalAcc: new BN(0),
+      frozenPrincipalAcc: new BN(0),
+      yieldEpoch: new BN(0),
+      boughtEpoch: new BN(0),
+      boughtAmount: new BN(0),
+      bonusEpoch: new BN(0),
+      bonusGranted: new BN(0),
+    };
+    expect(playerRow(player, POOL)).toMatchObject({
+      poolAddress: POOL,
+      pendingWithdraw: 750_000n,
+      pendingEpoch: 4n,
+    });
+  });
+
+  // Ticket 05: base yield's principal-seconds accumulator and the bought/
+  // granted ticket counters.
+  it("carries the base yield and ticket-economy fields", () => {
+    const player: DecodedPlayer = {
+      owner: new PublicKey(OWNER),
+      principal: new BN(3_000_000),
+      entries: new BN(3_000_000),
+      weightAcc: new BN(0),
+      lastUpdate: new BN(1_700_000_000),
+      epochId: new BN(4),
+      frozenWeight: new BN(0),
+      frozenEpoch: new BN(0),
+      regEpoch: new BN(0),
+      regStart: new BN(0),
+      regEnd: new BN(0),
+      isHouse: false,
+      pendingWithdraw: new BN(0),
+      pendingEpoch: new BN(0),
+      // A u128 past 2^64, like `Registered`'s weight fixture: proves this
+      // takes the same BN -> Decimal(40,0) string path as weightAcc, not a
+      // truncating BN -> Number one.
+      principalAcc: new BN("18446744073709551617"),
+      frozenPrincipalAcc: new BN(500),
+      yieldEpoch: new BN(3),
+      boughtEpoch: new BN(4),
+      boughtAmount: new BN(200_000),
+      bonusEpoch: new BN(4),
+      bonusGranted: new BN(50_000),
+    };
+    expect(playerRow(player, POOL)).toMatchObject({
+      principalAcc: "18446744073709551617",
+      frozenPrincipalAcc: "500",
+      yieldEpoch: 3n,
+      boughtEpoch: 4n,
+      boughtAmount: 200_000n,
+      bonusEpoch: 4n,
+      bonusGranted: 50_000n,
     });
   });
 });
@@ -314,7 +615,7 @@ describe("roundRow", () => {
       houseCut: new BN(540),
       winningTile: 35,
     };
-    expect(roundRow(round)).toMatchObject({ pot: 9_000n, houseCut: 540n });
+    expect(roundRow(round, POOL)).toMatchObject({ poolAddress: POOL, pot: 9_000n, houseCut: 540n });
   });
 });
 

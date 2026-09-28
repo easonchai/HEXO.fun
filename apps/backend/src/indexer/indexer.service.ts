@@ -4,14 +4,33 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { EventParser } from "@anchor-lang/core";
 import type { Epoch, Player, Prisma, Round } from "@prisma/client";
 import { PublicKey, type ConfirmedSignatureInfo } from "@solana/web3.js";
 import bs58 from "bs58";
 
+import { ensureReferralCode } from "../api/referral-code";
+import {
+  applyReferralEvent,
+  isQualified,
+  type ReferralPrincipalEvent,
+  type ReferralQualificationState,
+} from "../api/referral";
+import {
+  computeBonuses,
+  REFERRAL_BONUS_BASIS_CAP,
+  remainingGrantCap,
+  splitShares,
+  type ReferrerBonusInput,
+  type ShareWeight,
+} from "../api/referral-bonus";
 import { ChainService } from "../chain/chain.service";
+import { rpcStatus } from "../chain/rpc-fallback";
+import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
+  closedRound,
   decodeEventLogs,
   epochRow,
   LIVE_ROUND_STATUSES,
@@ -47,6 +66,56 @@ function eventField(event: DecodedEvent, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** True boolean fields only; `eventField` is string-only and `compounded`
+ *  jsonifies as a real boolean, not a string. */
+function eventBool(event: DecodedEvent, key: string): boolean | undefined {
+  const { data } = event;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return undefined;
+  const value = data[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * The Principal-changing events ticket 07's `Referral.aboveSince` tracker
+ * needs, paired with their owner, in the batch's own emission order (a dip
+ * and a restore in one batch must be applied as two separate crossings, not
+ * collapsed into one net delta). JackpotPaid only counts when `compounded`:
+ * a House win never compounds, and an uncompounded win pays a token account
+ * instead of moving Principal.
+ */
+function referralPrincipalEvents(
+  events: readonly DecodedEvent[],
+): { owner: string; event: ReferralPrincipalEvent }[] {
+  const result: { owner: string; event: ReferralPrincipalEvent }[] = [];
+  for (const event of events) {
+    const amount = eventField(event, "amount");
+    if (event.name === "Deposited") {
+      const owner = eventField(event, "owner");
+      const principal = eventField(event, "principal");
+      if (owner !== undefined && principal !== undefined) {
+        result.push({ owner, event: { kind: "Deposited", principal: BigInt(principal) } });
+      }
+    } else if (event.name === "WithdrawRequested") {
+      const owner = eventField(event, "owner");
+      if (owner !== undefined && amount !== undefined) {
+        result.push({ owner, event: { kind: "WithdrawRequested", amount: BigInt(amount) } });
+      }
+    } else if (event.name === "YieldCredited") {
+      const owner = eventField(event, "owner");
+      if (owner !== undefined && amount !== undefined) {
+        result.push({ owner, event: { kind: "YieldCredited", amount: BigInt(amount) } });
+      }
+    } else if (event.name === "JackpotPaid" && eventBool(event, "compounded") === true) {
+      // JackpotPaid names its player `winner`, not `owner` (see refreshFromLogs).
+      const owner = eventField(event, "winner");
+      if (owner !== undefined && amount !== undefined) {
+        result.push({ owner, event: { kind: "JackpotPaid", amount: BigInt(amount) } });
+      }
+    }
+  }
+  return result;
+}
+
 /**
  * The account sync is event driven: a confirmed program log triggers one
  * `getProgramAccountsV2` walk. This sweep is the safety net for a dropped
@@ -59,11 +128,12 @@ const SWEEP_INTERVAL_MS = 60_000;
  * last one, so this only bites once an hour instead of every minute.
  */
 const FULL_WALK_INTERVAL_MS = 60 * 60 * 1000;
-const CURSOR_ID = 1;
-// One page of `getSignaturesForAddress`. Beyond this the oldest signatures
-// behind the cursor are dropped, which only happens if the indexer was down
-// for longer than 1000 program transactions.
-// ponytail: single page, paginate with `before` if downtime gets that long.
+/** ticket 08: how long `v2Unsupported` sticks before `fetchAll` gives
+ *  `getProgramAccountsV2` another try. */
+const V2_UNSUPPORTED_RESET_MS = 60 * 60 * 1000;
+// One page of `getSignaturesForAddress`. `catchUpEvents` pages backwards
+// with `before` past as many of these as the backlog since the cursor takes,
+// so a long outage no longer loses anything older than one page.
 const SIGNATURE_PAGE = 1_000;
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
@@ -161,9 +231,15 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   private lastSyncedSlot: bigint | undefined;
   /** Wall time of the last full walk, gating `FULL_WALK_INTERVAL_MS`. */
   private lastFullWalkAt = 0;
-  /** Set once an RPC answers "method not found" for `getProgramAccountsV2`,
-   *  which a local validator and most non-Helius providers do. */
+  /** Set once the primary RPC answers "method not found" for
+   *  `getProgramAccountsV2`, which a local validator and most non-Helius
+   *  providers do. Cleared after `V2_UNSUPPORTED_RESET_MS` (ticket 08): a
+   *  provider can add the extension, or a fallback-served false positive
+   *  (see `fetchAll`'s own guard) should not degrade every later sweep for
+   *  the rest of the process's life. */
   private v2Unsupported = false;
+  /** Wall time `v2Unsupported` was last set; undefined while it is false. */
+  private v2UnsupportedSince: number | undefined;
   /**
    * Addresses the log path has written, and the slot it wrote them from.
    * `getProgramAccountsV2`'s index runs behind the chain (measured
@@ -172,12 +248,22 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * the entry is dropped once a sweep has caught up past it.
    */
   private freshWrites = new Map<string, bigint>();
+  /** Ticket 08's qualify hold period, read once at construction like every
+   *  other env-derived constant this service uses. */
+  private readonly referralQualifySeconds: number;
+  /** The Active pool's address (the `POOL_ID` PDA). Every pool-scoped row
+   *  this service reads or writes is filtered or keyed by it, so a retired
+   *  pool's rows in the same database are never read as current (ADR 0016). */
+  private readonly activePool: string;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly chain: ChainService,
+    config: ConfigService<HexVaultEnv, true>,
   ) {
     this.parser = new EventParser(this.chain.programId, this.chain.program.coder);
+    this.referralQualifySeconds = config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
+    this.activePool = this.chain.poolAddress().toBase58();
   }
 
   onModuleInit(): void {
@@ -200,27 +286,29 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   // ---------------------------------------------------------------- reads
 
   getPlayers(): Promise<Player[]> {
-    return this.prisma.player.findMany();
+    return this.prisma.player.findMany({ where: { poolAddress: this.activePool } });
   }
 
   /** The round the operator may still act on, newest first. */
   getOpenRound(): Promise<Round | null> {
     return this.prisma.round.findFirst({
-      where: { status: { in: LIVE_ROUND_STATUSES } },
+      where: { poolAddress: this.activePool, status: { in: LIVE_ROUND_STATUSES } },
       orderBy: { id: "desc" },
     });
   }
 
   getEpoch(id: bigint): Promise<Epoch | null> {
-    return this.prisma.epoch.findUnique({ where: { id } });
+    return this.prisma.epoch.findUnique({
+      where: { poolAddress_id: { poolAddress: this.activePool, id } },
+    });
   }
 
   /** Owners the operator still owes a `register` for this ended epoch. */
   async playersToRegister(epochId: bigint): Promise<string[]> {
-    const epoch = await this.prisma.epoch.findUnique({ where: { id: epochId } });
+    const epoch = await this.getEpoch(epochId);
     if (!epoch) return [];
     const players = await this.prisma.player.findMany({
-      where: { regEpoch: { not: epochId } },
+      where: { poolAddress: this.activePool, regEpoch: { not: epochId } },
     });
     return players
       .filter((player) => registrationWeight(player, epoch) > 0n)
@@ -234,13 +322,273 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    */
   async unsettledPositions(): Promise<{ address: string; owner: string; roundId: bigint }[]> {
     const terminalRounds = await this.prisma.round.findMany({
-      where: { status: { notIn: LIVE_ROUND_STATUSES } },
+      where: { poolAddress: this.activePool, status: { notIn: LIVE_ROUND_STATUSES } },
       select: { id: true },
     });
     if (terminalRounds.length === 0) return [];
     return this.prisma.position.findMany({
-      where: { roundId: { in: terminalRounds.map((round) => round.id) } },
+      where: {
+        poolAddress: this.activePool,
+        roundId: { in: terminalRounds.map((round) => round.id) },
+      },
       select: { address: true, owner: true, roundId: true },
+    });
+  }
+
+  /**
+   * Terminal Rounds (Settled, Forfeited, Voided) with no Position left on
+   * them and not yet marked closed (ops-and-envs ticket 08): what
+   * `close_round` may still reclaim rent from. Two queries for the same
+   * reason as `unsettledPositions`: Position has no Prisma relation to
+   * Round. Oldest id first, so a long backlog drains in order.
+   */
+  async roundsToClose(): Promise<bigint[]> {
+    const rounds = await this.prisma.round.findMany({
+      where: { poolAddress: this.activePool, status: { notIn: LIVE_ROUND_STATUSES }, closed: false },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    if (rounds.length === 0) return [];
+    const busyRounds = await this.prisma.position.findMany({
+      where: { poolAddress: this.activePool, roundId: { in: rounds.map((round) => round.id) } },
+      select: { roundId: true },
+      distinct: ["roundId"],
+    });
+    const busy = new Set(busyRounds.map((position) => position.roundId));
+    return rounds.map((round) => round.id).filter((id) => !busy.has(id));
+  }
+
+  /**
+   * Ticket 08's daily bonus job. Every wallet that refers at least one other
+   * wallet is a candidate; one it computes and records once for `epochId`
+   * (via `createMany({ skipDuplicates: true })`, so a referrer newly
+   * discovered on a later tick still gets a row, but an already-recorded one
+   * keeps its original amount rather than drifting as the day goes on), then
+   * hands back whatever is still unsent and not already granted on chain,
+   * re-clamped against the freshest Player data first (see the loop below).
+   */
+  async referralGrantsDue(epochId: bigint): Promise<{ referrer: string; amount: bigint }[]> {
+    const poolAddress = this.activePool;
+    const pool = await this.prisma.pool.findUnique({ where: { address: poolAddress } });
+    if (!pool) return [];
+
+    // Referral is wallet-level and outlives any one pool; everything the
+    // bonus is computed against below (Player, ReferralGrant) is the Active
+    // pool's only, so a referee with no Player here counts for nothing
+    // after a cutover (ADR 0016).
+    const referrals = await this.prisma.referral.findMany({
+      select: { referee: true, referrer: true, principal: true, aboveSince: true },
+    });
+    if (referrals.length === 0) return [];
+    const byReferrer = new Map<
+      string,
+      { referee: string; principal: bigint; aboveSince: bigint | null }[]
+    >();
+    for (const row of referrals) {
+      const list = byReferrer.get(row.referrer) ?? [];
+      list.push({ referee: row.referee, principal: row.principal, aboveSince: row.aboveSince });
+      byReferrer.set(row.referrer, list);
+    }
+
+    const referrerPlayers = await this.prisma.player.findMany({
+      where: { poolAddress, owner: { in: [...byReferrer.keys()] } },
+      select: { owner: true, principal: true, bonusEpoch: true, bonusGranted: true },
+    });
+    const playerByOwner = new Map(referrerPlayers.map((player) => [player.owner, player]));
+    const now = nowSeconds();
+
+    // Skip referrers with no Player or a Principal of 0: the operator cap on
+    // grant_tickets would refuse them anyway (docs/plan/hexo-referrals
+    // ticket 08's own instruction). alreadyGrantedToday mirrors the same
+    // lazy reset the program applies to bonus_granted: a stale bonusEpoch
+    // means today's counter has not actually been touched yet, so it reads
+    // as 0 rather than whatever a previous epoch left behind.
+    // referral-page ticket 05: each referrer's qualified referees, weighted
+    // by their own basis (the same min(Principal, REFERRAL_BONUS_BASIS_CAP)
+    // computeBonuses sums for the rate), for splitShares to divide their
+    // grant across below.
+    const qualifiedRefereesByReferrer = new Map<string, ShareWeight[]>();
+    const inputs: ReferrerBonusInput[] = [...byReferrer].map(([referrer, refs]) => {
+      const player = playerByOwner.get(referrer);
+      const qualified = refs.filter((ref) =>
+        isQualified(ref.aboveSince, now, this.referralQualifySeconds),
+      );
+      qualifiedRefereesByReferrer.set(
+        referrer,
+        qualified.map((ref) => ({
+          referee: ref.referee,
+          weight: ref.principal < REFERRAL_BONUS_BASIS_CAP ? ref.principal : REFERRAL_BONUS_BASIS_CAP,
+        })),
+      );
+      return {
+        referrer,
+        principal: player?.principal ?? 0n,
+        alreadyGrantedToday: player?.bonusEpoch === epochId ? player.bonusGranted : 0n,
+        qualifiedReferralPrincipals: qualified.map((ref) => ref.principal),
+      };
+    });
+
+    // beta-launch-fixes ticket 11: the pool-wide cap is shared across the
+    // whole epoch, so a referrer who first qualifies late in the day is
+    // scaled against the headroom earlier grants already used rather than
+    // the full cap recomputed fresh — which used to compute an amount the
+    // on-chain call then refused outright once summed with what earlier
+    // grants this epoch had already spent.
+    const recordedThisEpoch = await this.prisma.referralGrant.findMany({
+      where: { poolAddress, epochId },
+      select: { referrer: true, amount: true },
+    });
+    const alreadyGrantedThisEpoch = recordedThisEpoch.reduce(
+      (sum, grant) => sum + grant.amount,
+      0n,
+    );
+    const recordedReferrers = new Set(recordedThisEpoch.map((grant) => grant.referrer));
+    // Already-recorded referrers keep their frozen amount (see the
+    // `uncapped` comment below); only referrers with no row yet this epoch
+    // are candidates for a fresh computation against the headroom.
+    const newInputs = inputs.filter((input) => !recordedReferrers.has(input.referrer));
+
+    const bonuses = computeBonuses(
+      newInputs,
+      pool.totalPrincipal,
+      pool.bonusCapBps,
+      alreadyGrantedThisEpoch,
+    );
+    if (bonuses.length > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        // referral-page ticket 05: shares are written in the same
+        // transaction as the grant, with the same idempotency — only for a
+        // referrer whose ReferralGrant row is new this tick, so a referrer
+        // already recorded (whose amount is frozen the same way, see the
+        // comment on `uncapped` below) does not get its shares re-derived
+        // from qualified referees that may have changed since.
+        const already = await tx.referralGrant.findMany({
+          where: { poolAddress, epochId, referrer: { in: bonuses.map((bonus) => bonus.referrer) } },
+          select: { referrer: true },
+        });
+        const alreadyWritten = new Set(already.map((row) => row.referrer));
+
+        // skipDuplicates keys on (poolAddress, epochId, referrer): epoch ids
+        // restart on every pool, so without poolAddress a retired pool's
+        // epoch-1 row would silently swallow this one (ADR 0016).
+        await tx.referralGrant.createMany({
+          data: bonuses.map((bonus) => ({
+            poolAddress,
+            epochId,
+            referrer: bonus.referrer,
+            amount: bonus.amount,
+            // referral-page ticket 04: written once here, like amount/
+            // qualifiedCount/rateBps, and never touched by the re-clamp loop
+            // below — it is defined as what the referrer would get without
+            // their own Principal moving, so a later Principal change has
+            // nothing to re-derive it from.
+            uncapped: bonus.uncapped,
+            qualifiedCount: bonus.qualifiedCount,
+            rateBps: bonus.rateBps,
+          })),
+          skipDuplicates: true,
+        });
+
+        const shareRows = bonuses
+          .filter((bonus) => !alreadyWritten.has(bonus.referrer))
+          .flatMap((bonus) =>
+            splitShares(bonus.amount, qualifiedRefereesByReferrer.get(bonus.referrer) ?? []).map(
+              (share) => ({
+                poolAddress,
+                epochId,
+                referrer: bonus.referrer,
+                referee: share.referee,
+                amount: share.amount,
+              }),
+            ),
+          );
+        if (shareRows.length > 0) {
+          await tx.referralGrantShare.createMany({ data: shareRows, skipDuplicates: true });
+        }
+      });
+    }
+
+    // ticket 11: a deterministic order, so a batch built from this list is
+    // the same set on a retry regardless of Postgres's own row order.
+    const pending = await this.prisma.referralGrant.findMany({
+      where: { poolAddress, epochId, txSig: null },
+      select: { referrer: true, amount: true },
+      orderBy: { referrer: "asc" },
+    });
+
+    // Re-clamp every already-recorded grant against the freshest Player
+    // data: a referrer's Principal can move (a withdrawal) in the ticks
+    // between when their row was written and when a batch actually sends
+    // it. A stale amount above their current headroom would fail on chain
+    // every tick forever, wedging every other referrer batched alongside
+    // them (the exact failure the atomic-batch ponytail note in tick.ts
+    // warns about), so the amount actually handed back, and the row
+    // recording it, always reflect the latest Principal.
+    const due: { referrer: string; amount: bigint }[] = [];
+    const changed: { referrer: string; amount: bigint }[] = [];
+    for (const grant of pending) {
+      const player = playerByOwner.get(grant.referrer);
+      if (player?.bonusEpoch === epochId) continue; // already granted on chain
+      const cap = remainingGrantCap(player?.principal ?? 0n, 0n);
+      const amount = grant.amount < cap ? grant.amount : cap;
+      // Persisted even when it clamps all the way to 0, so a referrer whose
+      // Principal has left entirely does not leave a stale positive amount
+      // sitting on the row (ticket 11 reads this as "today's bonus").
+      if (amount !== grant.amount) changed.push({ referrer: grant.referrer, amount });
+      if (amount <= 0n) continue;
+      due.push({ referrer: grant.referrer, amount });
+    }
+    if (changed.length > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        for (const grant of changed) {
+          await tx.referralGrant.update({
+            where: {
+              poolAddress_epochId_referrer: { poolAddress, epochId, referrer: grant.referrer },
+            },
+            data: { amount: grant.amount },
+          });
+          // referral-page ticket 05: rescale this referrer's shares off
+          // their own existing amounts as the weight (they already sum to
+          // the grant's old amount), so a shrink keeps the same proportions
+          // and the shares stay exactly summed to the re-clamped amount,
+          // without re-deriving them from referee Principal data that may
+          // have moved again since they were written.
+          const shares = await tx.referralGrantShare.findMany({
+            where: { poolAddress, epochId, referrer: grant.referrer },
+            select: { referee: true, amount: true },
+          });
+          if (shares.length === 0) continue;
+          const rescaled = splitShares(
+            grant.amount,
+            shares.map((share) => ({ referee: share.referee, weight: share.amount })),
+          );
+          for (const share of rescaled) {
+            await tx.referralGrantShare.update({
+              where: {
+                poolAddress_epochId_referrer_referee: {
+                  poolAddress,
+                  epochId,
+                  referrer: grant.referrer,
+                  referee: share.referee,
+                },
+              },
+              data: { amount: share.amount },
+            });
+          }
+        }
+      });
+    }
+    return due;
+  }
+
+  async markReferralGrantsSent(
+    epochId: bigint,
+    referrers: readonly string[],
+    txSig: string,
+  ): Promise<void> {
+    await this.prisma.referralGrant.updateMany({
+      where: { poolAddress: this.activePool, epochId, referrer: { in: [...referrers] } },
+      data: { txSig },
     });
   }
 
@@ -250,11 +598,15 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      // Sync first: its full walk upserts the Active pool's Pool row, which
+      // every Event, Epoch, Round, Player, Position and Cursor row written
+      // after it references by foreign key (ADR 0016). On a brand-new pool
+      // that walk is what creates the row at all.
       await this.requestSync();
       await this.catchUpEvents();
       await this.prisma.cursor.upsert({
-        where: { id: CURSOR_ID },
-        create: { id: CURSOR_ID, updatedAt: nowSeconds() },
+        where: { poolAddress: this.activePool },
+        create: { poolAddress: this.activePool, updatedAt: nowSeconds() },
         update: { updatedAt: nowSeconds() },
       });
       this.noteRecovery();
@@ -309,11 +661,13 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * call.
    */
   private async refreshFromLogs(logs: string[], slot: bigint): Promise<void> {
+    // The Pool goes in first: `wanted` is applied in insertion order, so its
+    // row lands before the rows below that reference it (ADR 0016).
     const wanted = new Map<string, WantedAccount>();
-    wanted.set(this.chain.poolAddress().toBase58(), { kind: "pool" });
+    wanted.set(this.activePool, { kind: "pool" });
 
     const [pool, openRound] = await Promise.all([
-      this.prisma.pool.findFirst(),
+      this.prisma.pool.findUnique({ where: { address: this.activePool } }),
       this.getOpenRound(),
     ]);
     const currentEpochId = pool?.currentEpochId ?? 0n;
@@ -375,10 +729,11 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const pubkey = new PublicKey(address);
     if (data === undefined) {
       if (wanted.kind !== "position") return;
-      await this.prisma.position.deleteMany({ where: { address } });
+      await this.prisma.position.deleteMany({ where: { poolAddress: this.activePool, address } });
       this.freshWrites.set(address, slot);
       return;
     }
+    const poolAddress = this.activePool;
     switch (wanted.kind) {
       case "pool": {
         const row = poolRow(pubkey, coder.decode<DecodedPool>(ACCOUNT.pool, data), slot);
@@ -386,18 +741,30 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         break;
       }
       case "epoch": {
-        const row = epochRow(coder.decode<DecodedEpoch>(ACCOUNT.epoch, data));
-        await this.prisma.epoch.upsert({ where: { id: row.id }, create: row, update: row });
+        const row = epochRow(coder.decode<DecodedEpoch>(ACCOUNT.epoch, data), poolAddress);
+        await this.prisma.epoch.upsert({
+          where: { poolAddress_id: { poolAddress, id: row.id } },
+          create: row,
+          update: row,
+        });
         break;
       }
       case "round": {
-        const row = roundRow(coder.decode<DecodedRound>(ACCOUNT.round, data));
-        await this.prisma.round.upsert({ where: { id: row.id }, create: row, update: row });
+        const row = roundRow(coder.decode<DecodedRound>(ACCOUNT.round, data), poolAddress);
+        await this.prisma.round.upsert({
+          where: { poolAddress_id: { poolAddress, id: row.id } },
+          create: row,
+          update: row,
+        });
         break;
       }
       case "player": {
-        const row = playerRow(coder.decode<DecodedPlayer>(ACCOUNT.player, data));
-        await this.prisma.player.upsert({ where: { owner: row.owner }, create: row, update: row });
+        const row = playerRow(coder.decode<DecodedPlayer>(ACCOUNT.player, data), poolAddress);
+        await this.prisma.player.upsert({
+          where: { poolAddress_owner: { poolAddress, owner: row.owner } },
+          create: row,
+          update: row,
+        });
         break;
       }
       case "position": {
@@ -405,6 +772,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           pubkey,
           coder.decode<DecodedPosition>(ACCOUNT.position, data),
           wanted.roundId,
+          poolAddress,
         );
         await this.prisma.position.upsert({
           where: { address: row.address },
@@ -448,19 +816,23 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * by Anchor discriminator locally, then one Prisma transaction per type.
    *
    * Every account is checked against the PDA it must live at for the
-   * configured pool. Epoch, Round and Player carry no pool field, and the
-   * Postgres tables are keyed by epoch id, round id and owner, so a second
-   * pool's accounts would collide with this one's.
+   * configured pool. Epoch, Round and Player carry no pool field on chain,
+   * and the walk returns every pool the program owns, so this is what keeps
+   * a sibling pool's accounts from being written under the Active pool's
+   * address (ADR 0016).
    *
    * A closed Position never appears here to begin with on an incremental
    * walk (an absent account looks identical to an unchanged one), so a
    * settled Position is not detected by its absence any more: the
    * `PositionSettled` event `persist()` ingests removes the row instead, the
    * moment it lands, sweep or no sweep. A full walk still deletes by absence
-   * as a second guard, which is the only guard on an RPC without V2.
+   * as a second guard, which is the only guard on an RPC without V2; a
+   * missing Round account gets the same absence-based backstop, marked
+   * closed rather than deleted (ticket 06).
    */
   async syncAccounts(): Promise<void> {
     const pool = this.chain.poolAddress();
+    const poolAddress = this.activePool;
     const fullWalk =
       this.lastSyncedSlot === undefined ||
       this.v2Unsupported ||
@@ -498,8 +870,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
             !this.behindLogPath(pubkey, slot),
         )
         .map(({ account }) => {
-          const row = epochRow(account);
-          return this.prisma.epoch.upsert({ where: { id: row.id }, create: row, update: row });
+          const row = epochRow(account, poolAddress);
+          return this.prisma.epoch.upsert({
+            where: { poolAddress_id: { poolAddress, id: row.id } },
+            create: row,
+            update: row,
+          });
         }),
     );
 
@@ -512,10 +888,44 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       rounds
         .filter(({ pubkey }) => !this.behindLogPath(pubkey, slot))
         .map(({ account }) => {
-          const row = roundRow(account);
-          return this.prisma.round.upsert({ where: { id: row.id }, create: row, update: row });
+          const row = roundRow(account, poolAddress);
+          return this.prisma.round.upsert({
+            where: { poolAddress_id: { poolAddress, id: row.id } },
+            create: row,
+            update: row,
+          });
         }),
     );
+    // A full walk sees when a Round account is gone (`close_round` reclaimed
+    // its rent); an incremental walk cannot, the same reason it cannot see a
+    // gone Position (absence looks identical to unchanged). Marked closed and
+    // kept, not deleted, matching ops-and-envs ticket 08 and the `closed`
+    // column's own docs: the row keeps its last mirrored state. This is the
+    // backstop for a missed `RoundClosed` event, same as the Position delete
+    // below is the backstop for a missed `PositionSettled` (ticket 06).
+    if (fullWalk) {
+      const liveRoundIds = rounds.map(({ account }) => BigInt(account.roundId.toString()));
+      // Scoped to the Active pool: a retired pool's rounds are absent from
+      // this walk too, but they are not this walk's to mark (ADR 0016).
+      const stillOpen = await this.prisma.round.findMany({
+        where: { poolAddress, id: { notIn: liveRoundIds }, closed: false },
+        select: { id: true },
+      });
+      // The same `behindLogPath` guard as the upsert above, keyed by the
+      // round's own address rather than the id Postgres keys it by: a round
+      // just opened after this walk's stale snapshot (the V2 index runs 13
+      // to 24 seconds behind, see `fetchAll`) is not in `liveRoundIds` either,
+      // and must not be marked closed for that reason alone.
+      const toClose = stillOpen
+        .map((round) => round.id)
+        .filter((id) => !this.behindLogPath(this.chain.roundAddress(id, pool), slot));
+      if (toClose.length > 0) {
+        await this.prisma.round.updateMany({
+          where: { poolAddress, id: { in: toClose } },
+          data: { closed: true },
+        });
+      }
+    }
 
     const players = accounts.get<DecodedPlayer>(ACCOUNT.player);
     await this.prisma.$transaction(
@@ -526,14 +936,64 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
             !this.behindLogPath(pubkey, slot),
         )
         .map(({ account }) => {
-          const row = playerRow(account);
+          const row = playerRow(account, poolAddress);
           return this.prisma.player.upsert({
-            where: { owner: row.owner },
+            where: { poolAddress_owner: { poolAddress, owner: row.owner } },
             create: row,
             update: row,
           });
         }),
     );
+
+    // beta-launch-fixes ticket 08: a websocket gap can miss a
+    // WithdrawRequested/YieldCredited/JackpotPaid event for a referee, which
+    // overstates (or understates) the Referral row's own tracked Principal
+    // (see referral.ts's own docs on why that is tracked independently of
+    // Player). A full walk sees every Player fresh, so each one reconciles
+    // every Referral's principal and aboveSince against the mirrored Player,
+    // the same crossing logic `applyReferralEvent` applies to a live event
+    // (a `Deposited` carries the absolute new Principal, which is exactly
+    // what reconciling against a snapshot needs). An incremental walk only
+    // reports changed accounts, so this is skipped there rather than
+    // reconciling every Referral against a mix of fresh and stale Player
+    // rows.
+    if (fullWalk) {
+      const referrals = await this.prisma.referral.findMany({
+        select: { referee: true, principal: true, aboveSince: true },
+      });
+      if (referrals.length > 0) {
+        // Active pool only: a referee with no Player here yet keeps the
+        // Principal their last event left (spec's "Referral job" decision).
+        const referralPlayers = await this.prisma.player.findMany({
+          where: { poolAddress, owner: { in: referrals.map((referral) => referral.referee) } },
+          select: { owner: true, principal: true },
+        });
+        const principalByOwner = new Map(
+          referralPlayers.map((player) => [player.owner, player.principal]),
+        );
+        const now = nowSeconds();
+        const drifted = referrals.flatMap((referral) => {
+          const actual = principalByOwner.get(referral.referee);
+          if (actual === undefined || actual === referral.principal) return [];
+          const next = applyReferralEvent(
+            { principal: referral.principal, aboveSince: referral.aboveSince },
+            { kind: "Deposited", principal: actual },
+            now,
+          );
+          return [{ referee: referral.referee, ...next }];
+        });
+        if (drifted.length > 0) {
+          await this.prisma.$transaction(
+            drifted.map((update) =>
+              this.prisma.referral.update({
+                where: { referee: update.referee },
+                data: { principal: update.principal, aboveSince: update.aboveSince },
+              }),
+            ),
+          );
+        }
+      }
+    }
 
     // Position stores its round's address, not its id, so the ids come from
     // the rounds decoded a moment ago. Rounds are never closed, so a position
@@ -546,7 +1006,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         const roundId = roundIds.get(account.round.toBase58());
         if (roundId === undefined) return [];
         if (!pubkey.equals(this.chain.positionAddress(account.round, account.owner))) return [];
-        return [positionRow(pubkey, account, roundId)];
+        return [positionRow(pubkey, account, roundId, poolAddress)];
       },
     );
     const live = positions.map((row) => row.address);
@@ -567,8 +1027,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       // addresses are spared the same way its rows are.
       ...(fullWalk
         ? [
+            // Scoped like the Round close above: absence from this pool's
+            // walk says nothing about a retired pool's Positions.
             this.prisma.position.deleteMany({
-              where: { address: { notIn: [...live, ...this.freshWrites.keys()] } },
+              where: { poolAddress, address: { notIn: [...live, ...this.freshWrites.keys()] } },
             }),
           ]
         : []),
@@ -646,12 +1108,43 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const coder = this.chain.program.coder.accounts;
     let slot: bigint | undefined;
     let decoded: { pubkey: PublicKey; data: Buffer }[] = [];
+    // ticket 08: give getProgramAccountsV2 another try after an hour, rather
+    // than treating one "method not found" as true for the process's whole
+    // life (a provider can add the extension later; see this flag's own
+    // comment for the fallback-served false-positive case).
+    if (
+      this.v2Unsupported &&
+      this.v2UnsupportedSince !== undefined &&
+      Date.now() - this.v2UnsupportedSince >= V2_UNSUPPORTED_RESET_MS
+    ) {
+      this.v2Unsupported = false;
+      this.v2UnsupportedSince = undefined;
+    }
     if (!this.v2Unsupported) {
       const raw: RawProgramAccount[] = [];
       let paginationKey: string | undefined;
+      // Security review ticket 14: `withRpcFallback` fails over per call,
+      // with no stickiness, so a flaky primary can serve page 1 and the
+      // fallback page 2 of the same walk. The two endpoints can sit at
+      // different indexing lag, so the merged pages would not be one
+      // consistent snapshot — exactly what the full walk's absence-based
+      // Position delete and Round close (below) rely on. Pinning the whole
+      // walk to whichever endpoint served its first page, and aborting (no
+      // different than any other mid-walk failure: nothing has been written
+      // to Postgres yet) the moment a later page comes from the other one,
+      // keeps every page of one walk on one endpoint.
+      let servedBy: "primary" | "fallback" | undefined;
       try {
         do {
           const page = await this.programAccountsPage(paginationKey, changedSinceSlot);
+          const endpoint = rpcStatus(this.chain.connection).endpoint;
+          if (servedBy === undefined) {
+            servedBy = endpoint;
+          } else if (endpoint !== servedBy) {
+            throw new Error(
+              "getProgramAccountsV2 walk failed over to a different RPC endpoint mid-walk; aborting this sweep rather than mixing two providers' snapshots",
+            );
+          }
           if (slot === undefined) slot = BigInt(page.context.slot);
           raw.push(...page.value.accounts);
           // Null and absent both mean "that was the last page"; see the
@@ -660,10 +1153,22 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         } while (paginationKey !== undefined);
       } catch (error: unknown) {
         if (!(error instanceof MethodNotFound)) throw error;
-        this.logger.warn(
-          "this RPC has no getProgramAccountsV2; every sweep walks all program accounts from now on",
-        );
-        this.v2Unsupported = true;
+        // beta-launch-fixes ticket 08: `withRpcFallback` fails over per call
+        // with no stickiness, so this one call landing on the fallback (a
+        // brief primary hiccup) and getting "method not found" back does not
+        // mean the primary lacks it too. Only disable the paginated walk
+        // when the primary itself is the one that just answered that way.
+        if (rpcStatus(this.chain.connection).endpoint === "primary") {
+          this.logger.warn(
+            "this RPC has no getProgramAccountsV2; every sweep walks all program accounts for the next hour",
+          );
+          this.v2Unsupported = true;
+          this.v2UnsupportedSince = Date.now();
+        } else {
+          this.logger.debug(
+            "getProgramAccountsV2 method-not-found came from the fallback RPC, not the primary; not disabling it",
+          );
+        }
         slot = undefined;
       }
       decoded = raw.map(({ pubkey, account }) => ({
@@ -730,8 +1235,28 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     return this.persist(batch, events);
   }
 
-  private persist(batch: LogBatch, events: DecodedEvent[]): Promise<number> {
+  /**
+   * `advanceCursor` (beta-launch-fixes ticket 08, default true): the live
+   * websocket path (`subscribeToLogs`) passes `false`. Only the catch-up
+   * poll (`ingestSignature`, driven by `catchUpEvents`) is allowed to move
+   * `lastSignature`/`lastSlot`/`updatedAt`, so a gap between two live events
+   * (a dropped socket, a missed notification) is always replayed: the
+   * cursor never jumps ahead of a signature the catch-up walk has not
+   * actually confirmed. `updatedAt` on that same row is the indexer's
+   * freshness stamp (read as `cursor.ageSeconds` in api.service.ts's status
+   * snapshot) — with this change it only advances when catch-up actually
+   * consumed something, so a stalled backlog (a signature whose logs never
+   * show up) correctly stops advancing it instead of a live event down the
+   * same table masking the stall.
+   */
+  private persist(
+    batch: LogBatch,
+    events: DecodedEvent[],
+    options: { advanceCursor: boolean } = { advanceCursor: true },
+  ): Promise<number> {
+    const poolAddress = this.activePool;
     const rows = events.map((event, index) => ({
+      poolAddress,
       slot: batch.slot,
       signature: batch.signature,
       index,
@@ -748,23 +1273,90 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const closed = events
       .map((event) => settledPosition(event))
       .filter((position): position is { owner: string; roundId: bigint } => position !== null);
+    // ops-and-envs ticket 08: `close_round` closed these Round accounts; the
+    // row keeps its last mirrored state (see `closedRound`'s own docs)
+    // instead of being deleted or blanked, so this only flips one flag.
+    const closedRounds = events
+      .map((event) => closedRound(event))
+      .filter((round): round is { id: bigint } => round !== null);
+    // ticket 06: every owner this batch saw deposit, deduplicated so two
+    // Deposited events for the same wallet in one batch check only once.
+    const depositors = [
+      ...new Set(
+        events
+          .filter((event) => event.name === "Deposited")
+          .map((event) => eventField(event, "owner"))
+          .filter((owner): owner is string => owner !== undefined),
+      ),
+    ];
+    // ticket 07: this batch's Deposited/WithdrawRequested/YieldCredited/
+    // compounded-JackpotPaid events, in order, for whichever owners turn out
+    // to have a Referral row.
+    const referralEvents = referralPrincipalEvents(events);
 
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.event.createMany({ data: rows, skipDuplicates: true });
       for (const { owner, roundId } of closed) {
-        await tx.position.deleteMany({ where: { owner, roundId } });
+        await tx.position.deleteMany({ where: { poolAddress, owner, roundId } });
       }
-      const cursor = await tx.cursor.findUnique({ where: { id: CURSOR_ID } });
-      // The live socket and the catch-up poll both write; only the poll walks
-      // backwards, and it must not drag the resume point back with it.
-      const reached = cursor?.lastSlot ?? null;
-      if (reached === null || reached <= batch.slot) {
-        const at = { lastSignature: batch.signature, lastSlot: batch.slot, updatedAt: nowSeconds() };
-        await tx.cursor.upsert({
-          where: { id: CURSOR_ID },
-          create: { id: CURSOR_ID, ...at },
-          update: at,
-        });
+      for (const { id } of closedRounds) {
+        // updateMany, not update: a row this transaction has not seen yet
+        // (an out-of-order replay) is a no-op here, and the next sync or
+        // sweep still upserts the Round itself.
+        await tx.round.updateMany({ where: { poolAddress, id }, data: { closed: true } });
+      }
+      for (const owner of depositors) {
+        // ADR 0014: a wallet's first deposit gets it a ReferralCode, not a
+        // depositor-owned InviteCode; InviteCode.ownerWallet is now
+        // Admin-only. "First" means first ever, across pools: the check is
+        // on ReferralCode itself, which is wallet-level, so a depositor from
+        // a retired pool keeps the code they have and never trips the
+        // unique owner index on their first deposit into a new one (ADR 0016).
+        await ensureReferralCode(tx, owner);
+      }
+      if (referralEvents.length > 0 && created.count > 0) {
+        // `created.count === 0` means every row in this batch already
+        // existed (a replayed signature: a websocket reconnect or a
+        // catch-up overlap, see "stores each event once" above). Unlike the
+        // position-delete and invite-code create above, applying a delta
+        // twice is not naturally idempotent, so a replay must skip this
+        // block entirely rather than double-count the same Principal change.
+        //
+        // Seeded once from the DB and replayed in memory for the rest of
+        // this batch, so a referee with two Principal-changing events in one
+        // batch (a dip and a restore) chains off the first event's own
+        // result instead of the row `findMany` read before either applied.
+        const referees = [...new Set(referralEvents.map(({ owner }) => owner))];
+        const existing = await tx.referral.findMany({ where: { referee: { in: referees } } });
+        const state = new Map<string, ReferralQualificationState>(
+          existing.map((row) => [row.referee, { principal: row.principal, aboveSince: row.aboveSince }]),
+        );
+        const blockTime = batch.blockTime ?? nowSeconds();
+        for (const { owner, event } of referralEvents) {
+          const current = state.get(owner);
+          if (current === undefined) continue; // not a referee
+          state.set(owner, applyReferralEvent(current, event, blockTime));
+        }
+        for (const [referee, next] of state) {
+          await tx.referral.update({
+            where: { referee },
+            data: { principal: next.principal, aboveSince: next.aboveSince },
+          });
+        }
+      }
+      if (options.advanceCursor) {
+        const cursor = await tx.cursor.findUnique({ where: { poolAddress } });
+        // Only the catch-up poll walks backwards, and it must not drag the
+        // resume point back with it.
+        const reached = cursor?.lastSlot ?? null;
+        if (reached === null || reached <= batch.slot) {
+          const at = { lastSignature: batch.signature, lastSlot: batch.slot, updatedAt: nowSeconds() };
+          await tx.cursor.upsert({
+            where: { poolAddress },
+            create: { poolAddress, ...at },
+            update: at,
+          });
+        }
       }
       return created.count;
     });
@@ -774,23 +1366,57 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * Replays every finalized signature the cursor has not seen. Runs on the
    * sweep, not only at boot: it is what actually guarantees no event is lost
    * when the websocket is down, and it costs one RPC call when nothing moved.
+   *
+   * Pages backwards with `before` rather than bounding one call with `until`:
+   * `until` combined with `limit` only ever returns the newest `limit`
+   * signatures, so a backlog longer than one page silently dropped whatever
+   * sat between that page and the cursor (ticket 06). Paging keeps asking
+   * for the next page back until either the cursor's own signature turns up
+   * in one (the backlog ends there, exclusive) or a page comes back shorter
+   * than a full page, meaning there is nothing older left. A fresh cursor
+   * (first boot) walks all the way back to that address's first signature,
+   * which only happens once.
    */
   private async catchUpEvents(): Promise<void> {
-    const cursor = await this.prisma.cursor.findUnique({ where: { id: CURSOR_ID } });
-    const signatures = await this.chain.connection.getSignaturesForAddress(
-      this.chain.poolAddress(),
-      cursor?.lastSignature
-        ? { until: cursor.lastSignature, limit: SIGNATURE_PAGE }
-        : { limit: SIGNATURE_PAGE },
-      "finalized",
-    );
-
-    // Newest first from the RPC; replay oldest first so the cursor only moves
-    // forward.
-    for (const info of [...signatures].reverse()) {
-      const consumed = await this.enqueue(() => this.ingestSignature(info));
-      if (!consumed) return;
+    // A new pool has no Cursor row, so this walks its whole history rather
+    // than hunting for a retired pool's last signature (ADR 0016).
+    const cursor = await this.prisma.cursor.findUnique({ where: { poolAddress: this.activePool } });
+    const backlog: ConfirmedSignatureInfo[] = [];
+    let before: string | undefined;
+    for (;;) {
+      const page = await this.chain.connection.getSignaturesForAddress(
+        this.chain.poolAddress(),
+        { ...(before !== undefined ? { before } : {}), limit: SIGNATURE_PAGE },
+        "finalized",
+      );
+      const reached = cursor?.lastSignature
+        ? page.findIndex((info) => info.signature === cursor.lastSignature)
+        : -1;
+      backlog.push(...(reached === -1 ? page : page.slice(0, reached)));
+      if (reached !== -1 || page.length < SIGNATURE_PAGE) break;
+      // SAFETY: this branch only runs when `page.length >= SIGNATURE_PAGE`,
+      // so the page has at least one entry.
+      before = page[page.length - 1]!.signature;
     }
+
+    // Newest first from the RPC, across however many pages that took; replay
+    // oldest first so the cursor only moves forward. The whole backlog is one
+    // `enqueue` call, not one per signature: `enqueue` is a plain FIFO, so a
+    // live event arriving mid-page used to be able to schedule itself between
+    // two still-unprocessed backlog signatures (ticket 13's security review)
+    // once this signature's own `getTransaction` await returned control to
+    // the event loop. A referee whose Principal-changing events span both
+    // sides of that gap would then have them applied out of chronological
+    // order, which is not idempotent to reordering the way the
+    // position/invite-code side effects in `persist()` are (see
+    // `applyReferralEvent`). Wrapping the loop keeps this whole backlog as
+    // one queue slot, so nothing enqueued afterwards can land inside it.
+    await this.enqueue(async () => {
+      for (const info of [...backlog].reverse()) {
+        const consumed = await this.ingestSignature(info);
+        if (!consumed) return;
+      }
+    });
   }
 
   /**
@@ -832,6 +1458,13 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * `getBlockTime` call per event. Never wall time: a local validator's chain
    * clock runs faster than it. `undefined` (nothing has read the clock yet)
    * stores as null, same as a backfilled transaction with no block time.
+   *
+   * beta-launch-fixes ticket 08: never advances the cursor. A websocket gap
+   * between two live events used to be permanently unreplayable, because the
+   * cursor had already jumped to whichever signature happened to arrive
+   * after the gap; the next catch-up walk saw its own cursor already past
+   * the missed signature and never went looking for it. Only `ingestSignature`
+   * (the catch-up poll, via `catchUpEvents`) advances it now.
    */
   private subscribeToLogs(): void {
     this.subscriptionId = this.chain.connection.onLogs(
@@ -839,6 +1472,11 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       (logs, context) => {
         if (logs.err) return;
         void this.enqueue(async () => {
+          // Before the first sweep lands there may be no Pool row for the
+          // Event's foreign key (a fresh pool, ADR 0016). Dropping the event
+          // loses nothing: this path never moves the cursor, so catch-up
+          // replays it once the sweep has written the Pool.
+          if (this.lastSyncedSlot === undefined) return;
           const events = decodeEventLogs(this.parser, logs.logs);
           if (events.length === 0) return;
           await this.persist(
@@ -849,6 +1487,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
               logs: logs.logs,
             },
             events,
+            { advanceCursor: false },
           );
         }).catch((error: unknown) => this.noteFailure("live log ingest failed", error));
       },

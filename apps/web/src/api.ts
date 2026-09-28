@@ -23,30 +23,73 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; reason: string }
 /** VITE_API_URL, or the local backend's default port. */
 export const apiBaseUrl = (): string => API_URL;
 
+/**
+ * Ticket 16: every API fetch carries this timeout on top of whatever unmount
+ * abort the caller already passes in — a hung backend must not freeze the
+ * Vault on stale numbers forever. Plain copy, never the raw "Failed to
+ * fetch" a bare `AbortError` would otherwise surface.
+ */
+export const FETCH_TIMEOUT_MS = 8_000;
+export const TIMEOUT_MESSAGE = "Request timed out. Try again.";
+
+/** Combines the caller's own abort (component unmount) with a fresh timeout,
+ *  so either one aborts the fetch; `cancel()` releases the timer and the
+ *  listener once the request settles either way. */
+function withTimeout(
+  signal: AbortSignal | null | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; timedOut: () => boolean; cancel: () => void } {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort);
+  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cancel: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
 async function get<T>(
   baseUrl: string,
   path: string,
   signal?: AbortSignal | null,
 ): Promise<ApiResult<T>> {
+  const timeout = withTimeout(signal, FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(`${baseUrl}${path}`, {
-      signal: signal ?? null,
+      signal: timeout.signal,
       headers: { accept: "application/json" },
     });
     if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
     return { ok: true, data: (await response.json()) as T };
   } catch (error) {
+    if (timeout.timedOut()) return { ok: false, reason: TIMEOUT_MESSAGE };
     return {
       ok: false,
       reason: error instanceof Error ? error.message : "indexer offline",
     };
+  } finally {
+    timeout.cancel();
   }
 }
 
 export interface PoolDto {
   address: string;
   poolId: string;
-  authority: string;
+  admin: string;
+  operator: string;
+  pendingAdmin: string | null;
   mint: string;
   epochSeconds: string;
   epochAnchor: string;
@@ -56,7 +99,17 @@ export interface PoolDto {
   minDeposit: string;
   /** Share of a settled round's pot credited to the House, in basis points. */
   houseCutBps: number;
+  /** Base yield's APR on time-weighted Principal, in basis points (ADR 0011). */
+  baseRateBps: number;
+  /** Tickets credited per USDC spent in `buy_tickets`. */
+  ticketsPerUsdc: number;
   paused: boolean;
+  /** game-jackpot-pause: no new rounds or positions while true. A new pool
+   *  starts with it on. */
+  gamePaused: boolean;
+  /** game-jackpot-pause: no new epoch, ticket purchase or draw close while
+   *  true. A new pool starts with it on. */
+  jackpotPaused: boolean;
   currentEpochId: string;
   currentEpochEndsAt: string;
   previousEpochEndsAt: string;
@@ -110,6 +163,10 @@ export interface PlayerDto {
   regStart: string;
   regEnd: string;
   isHouse: boolean;
+  /** Requested but unpaid Principal, atomic units. "0" when nothing is pending. */
+  pendingWithdraw: string;
+  /** Epoch the pending amount was requested in; it pays out after that one ends. */
+  pendingEpoch: string;
   /** weightAcc + entries × (now − lastUpdate). */
   liveWeight: string;
   /** Share of the epoch's live weight as a percentage, two decimals: "12.34". */
@@ -121,6 +178,28 @@ export type LeaderboardRowDto = Pick<
   PlayerDto,
   "owner" | "principal" | "entries" | "isHouse" | "liveWeight" | "odds"
 >;
+
+/**
+ * `GET /players/:owner`: the Player row plus what `GET /state`'s embedded
+ * `player` does not carry (ticket 10). The backend also sends `boughtToday`
+ * and `grantedToday`; unmodeled here, since nothing in the web app reads them.
+ */
+export type PlayerExtrasDto = PlayerDto & {
+  /** What `register` credited this owner in the epoch it last credited. */
+  yieldLastEpoch: string;
+  /** Every Base yield credit this owner has ever received. */
+  yieldToDate: string;
+  /** USDC still spendable in `buy_tickets` today, capped at Principal. */
+  buyAllowanceLeft: string;
+};
+
+/** 404s with a human reason until the wallet has a Player (deposited once). */
+export const fetchPlayer = (
+  baseUrl: string,
+  owner: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<PlayerExtrasDto>> =>
+  get<PlayerExtrasDto>(baseUrl, `/players/${owner}`, signal);
 
 export interface EventDto {
   slot: string;
@@ -138,6 +217,9 @@ export interface OperatorStateDto {
    *  between ticks is only a stall once this has passed. */
   nextWakeAt: string | null;
   lastAction: string | null;
+  /** Ticket 09: a stable error code (`operatorErrorCode` in the backend's
+   *  api.service.ts), never the raw error text. `status.ts` maps it to
+   *  generic copy for the pill. */
   lastError: string | null;
   registeredCount: number | null;
   registeredTotal: number | null;
@@ -154,8 +236,15 @@ export interface StatusDto {
   };
   rpcOk: boolean;
   slot: number | null;
-  /** Simulated yield rate in basis points (500 = 5% APR). */
-  aprBps: number;
+  /** Irreversible once true (ops-and-envs ticket 08); false before the pool
+   *  is indexed. See `shutdown.ts` for what the web does with this. */
+  shutdown: boolean;
+  /** Principal pulled out and not yet returned; null when the pool or the
+   *  vault balance is not known yet. Not surfaced in this app's UI. */
+  principalOut: string | null;
+  /** Ticket 05: the deposit-only launch week's `LAUNCH_AT`, ISO, while the
+   *  pool has no Epoch yet; null once an Epoch exists or none is configured. */
+  launchAt: string | null;
 }
 
 export interface PoolSummaryDto {
@@ -192,7 +281,9 @@ export interface PositionDto {
  */
 export interface StateDto {
   pool: PoolDto;
-  currentEpoch: CurrentEpochDto;
+  /** Ticket 05: null before the Pool has ever had an Epoch (deposit-only
+   *  launch week) — see `launchAt` for the countdown target that goes with it. */
+  currentEpoch: CurrentEpochDto | null;
   openRound: RoundSummaryDto | null;
   round: RoundDto | null;
   player: PlayerDto | null;
@@ -200,6 +291,19 @@ export interface StateDto {
   status: StatusDto;
   /** Chain time as the backend last observed it, extrapolated to now (decimal, unix seconds). */
   chainTime: string;
+  /**
+   * Ticket 08: the backend's cached priority-fee estimate (production-
+   * hardening ticket 04) over the pool's hot writable accounts, in
+   * micro-lamports per compute unit. Untrusted the moment it arrives here —
+   * `/state` is unauthenticated input — so nothing signs with it directly;
+   * `read.ts`'s `poolFromDto` validates and caps it before the send helper
+   * ever sees it.
+   */
+  priorityFeeMicroLamports: number;
+  /** Ticket 05: the deposit-only launch week's `LAUNCH_AT`, ISO, present
+   *  only while `currentEpoch` is null; null once an Epoch exists or none is
+   *  configured. */
+  launchAt: string | null;
 }
 
 export const fetchPoolSummary = (
@@ -297,6 +401,165 @@ export const fetchHealth = (
   signal?: AbortSignal,
 ): Promise<ApiResult<{ ok: true }>> =>
   get<{ ok: true }>(baseUrl, "/healthz", signal);
+
+/** Ticket 09: the private-beta gate. `reason` is a short human sentence, not a code. */
+export interface AccessDto {
+  allowed: boolean;
+  reason: string;
+}
+
+export const fetchAccess = (
+  baseUrl: string,
+  wallet: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<AccessDto>> =>
+  get<AccessDto>(baseUrl, `/access/${wallet}`, signal);
+
+/**
+ * `POST /access/redeem`. "no uses left" and "wallet already redeemed" are
+ * both a 409, so telling them apart needs the backend's message text, not
+ * just the status: this returns its own result shape (carrying `status`)
+ * instead of the shared `ApiResult`, same as `FaucetResult` below.
+ */
+export type RedeemAccessResult =
+  | { ok: true; data: AccessDto }
+  | { ok: false; status: number | null; reason: string };
+
+export async function redeemAccess(
+  baseUrl: string,
+  wallet: string,
+  code: string,
+  signature: string,
+  referralCode?: string,
+  signal?: AbortSignal,
+): Promise<RedeemAccessResult> {
+  const timeout = withTimeout(signal, FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}/access/redeem`, {
+      method: "POST",
+      signal: timeout.signal,
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ wallet, code, signature, ...(referralCode ? { referralCode } : {}) }),
+    });
+    const body = (await response.json().catch(() => null)) as
+      | (Partial<AccessDto> & { message?: string })
+      | null;
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        reason: body?.message ?? `HTTP ${response.status}`,
+      };
+    }
+    return { ok: true, data: { allowed: body?.allowed ?? true, reason: body?.reason ?? "" } };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      reason: timeout.timedOut()
+        ? TIMEOUT_MESSAGE
+        : error instanceof Error
+          ? error.message
+          : "indexer offline",
+    };
+  } finally {
+    timeout.cancel();
+  }
+}
+
+/** `POST /referrals/apply` (ticket 02): applies a `?ref=CODE` for a wallet
+ *  already past the beta gate. `applied: false` is never an error and never
+ *  shown to the user (spec.md "?ref= capture"): `ok: false` here only means
+ *  the request itself failed to reach the server. */
+export async function applyReferral(
+  baseUrl: string,
+  wallet: string,
+  code: string,
+  signature: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<{ applied: boolean; reason: string }>> {
+  try {
+    const response = await fetch(`${baseUrl}/referrals/apply`, {
+      method: "POST",
+      signal: signal ?? null,
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ wallet, code, signature }),
+    });
+    if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
+    return { ok: true, data: (await response.json()) as { applied: boolean; reason: string } };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error ? error.message : "indexer offline",
+    };
+  }
+}
+
+/** One of the wallet's own Invite codes (ticket 07); no web UI shows these
+ *  yet. */
+export interface InviteCodeDto {
+  code: string;
+  redeemed: boolean;
+}
+
+/** spec.md "Referrals API response": Active / N days left / Under $50. */
+export type ReferralStatus = "qualified" | "holding" | "below";
+
+/** One Your Team row (referral-page ticket 05, Figma 204:12548); wallet
+ *  already masked server-side. */
+export interface ReferralItemDto {
+  wallet: string;
+  status: ReferralStatus;
+  /** Whole days left before qualifying; null except while `status` is
+   *  "holding". */
+  daysLeft: number | null;
+  /** Atomic Ticket decimal string: this referral's own share of the
+   *  Referrer's `bonusToday.amount` for today's draw. */
+  bonusToday: string;
+  /** Unix seconds (decimal string) the referral bound. */
+  joinedAt: string;
+}
+
+/** `referrals` (referral-page ticket 05): the web reads only the first page
+ *  (spec.md "no load-more control"), so nothing here paginates further. */
+export interface ReferralsPageDto {
+  items: ReferralItemDto[];
+  nextCursor: string | null;
+}
+
+/** A referral rate tier (referral-page ticket 03): tier 0 means no rate yet;
+ *  `maxCount` is null at the top tier (11+), which has no upper bound. */
+export interface ReferralBandDto {
+  tier: number;
+  rateBps: number;
+  minCount: number;
+  maxCount: number | null;
+}
+
+/** `GET /referrals/:wallet` (ticket 11). */
+export interface ReferralsDto {
+  /** The wallet's own Referral code (referral-page ticket 01); null before
+   *  its first deposit, since the indexer mints one on the first Deposited
+   *  event. */
+  referralCode: string | null;
+  inviteCodes: InviteCodeDto[];
+  referrals: ReferralsPageDto;
+  qualifiedCount: number;
+  /** Current band (referral-page ticket 03). */
+  band: ReferralBandDto;
+  /** The next, higher band; null at the top band (11+). */
+  nextBand: ReferralBandDto | null;
+  /** referral-page ticket 04: atomic Ticket decimal strings. `uncapped` is
+   *  what the Referrer would get without their own Principal capping it;
+   *  equal to `amount` when that cap doesn't bind. `bonusYesterday` is gone. */
+  bonusToday: { amount: string; uncapped: string };
+}
+
+export const fetchReferrals = (
+  baseUrl: string,
+  wallet: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<ReferralsDto>> => get<ReferralsDto>(baseUrl, `/referrals/${wallet}`, signal);
 
 export interface FaucetGrant {
   owner: string;

@@ -15,7 +15,12 @@ datasource db {
 model Pool {
   address             String  @id
   poolId              BigInt
-  authority           String
+  /// Squads multisig on mainnet: set_params, unpause, admin_withdraw, set_operator.
+  admin               String
+  /// The hot crank key the backend signs with.
+  operator            String
+  /// Half of a two-step admin handover; null when no handover is open.
+  pendingAdmin        String?
   mint                String
   epochSeconds        BigInt
   epochAnchor         BigInt
@@ -27,13 +32,59 @@ model Pool {
   currentEpochEndsAt  BigInt
   previousEpochEndsAt BigInt
   totalPrincipal      BigInt
+  /// Requested withdrawals the principal vault still owes.
+  pendingWithdrawals  BigInt
+  /// An epoch closing under this rolls over instead of paying a token prize.
+  minJackpot          BigInt
   carryPot            BigInt
   houseCutBps         Int
+  /// Base yield's APR on time-weighted Principal, in basis points.
+  baseRateBps         Int
+  /// USDC in the principal vault earmarked for Base yield, not yet credited.
+  yieldBudget         BigInt
+  /// Tickets credited per USDC spent in `buy_tickets`.
+  ticketsPerUsdc      Int
+  /// Share of totalPrincipal, in basis points, an operator grant_tickets
+  /// call may credit pool-wide per epoch.
+  bonusCapBps         Int
+  /// The epoch bonusGranted is counted against.
+  bonusEpoch          BigInt
+  /// Tickets an operator grant_tickets call has credited pool-wide so far
+  /// in bonusEpoch.
+  bonusGranted        BigInt
+  /// Lets a future upgrade migrate an old account lazily (ADR 0013).
+  version             Int
+  /// Admin-only and irreversible: stops every inflow, the game and the
+  /// draw, and lets withdrawals skip the epoch lock.
+  shutdown            Boolean
+  /// Game pause: no new Round or Position (game-jackpot-pause).
+  gamePaused          Boolean @default(false)
+  /// Jackpot pause: no new epoch, ticket purchase, grant or registration
+  /// close (game-jackpot-pause).
+  jackpotPaused       Boolean @default(false)
   updatedSlot         BigInt
+
+  // Back-relations for the pool-scoped tables (ADR 0016). A Pool row is
+  // never deleted, so every child relation is onDelete: Restrict.
+  epochs              Epoch[]
+  rounds              Round[]
+  players             Player[]
+  positions           Position[]
+  events              Event[]
+  cursor              Cursor?
+  operatorState       OperatorState?
+  referralGrants      ReferralGrant[]
+  referralGrantShares ReferralGrantShare[]
 }
 
+// Pool-scoped tables carry poolAddress, the Pool PDA, as part of their key so
+// the database keeps every pool it has mirrored and a Pool cutover needs no
+// wipe (ADR 0016). The backend reads and writes the Active pool's rows only.
+
 model Epoch {
-  id                BigInt   @id
+  poolAddress       String
+  pool              Pool     @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  id                BigInt
   startsAt          BigInt
   endsAt            BigInt
   status            Int
@@ -42,10 +93,15 @@ model Epoch {
   jackpotAmount     BigInt
   target            Decimal  @db.Decimal(40, 0)
   winner            String?
+
+  // Epoch ids restart at 1 on every pool (ADR 0016).
+  @@id([poolAddress, id])
 }
 
 model Round {
-  id          BigInt  @id
+  poolAddress String
+  pool        Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  id          BigInt
   epochId     BigInt
   startsAt    BigInt
   endsAt      BigInt
@@ -54,10 +110,21 @@ model Round {
   houseCut    BigInt
   winningTile Int?
   tileTotals  Json
+  /// `close_round` reclaimed this Round's rent and closed the account.
+  /// `roundRow` never carries this field, so mirroring the still-open
+  /// account never resets it back to false once the RoundClosed event has
+  /// set it; the row keeps its last mirrored state instead of being
+  /// deleted or blanked (ops-and-envs ticket 08).
+  closed      Boolean @default(false)
+
+  // Round ids restart at 1 on every pool (ADR 0016).
+  @@id([poolAddress, id])
 }
 
 model Player {
-  owner        String  @id
+  poolAddress  String
+  pool         Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  owner        String
   principal    BigInt
   entries      BigInt
   weightAcc    Decimal @db.Decimal(40, 0)
@@ -69,33 +136,72 @@ model Player {
   regStart     Decimal @db.Decimal(40, 0)
   regEnd       Decimal @db.Decimal(40, 0)
   isHouse      Boolean
+  /// Requested but not yet paid; `process_withdraw` pays it and zeroes it.
+  pendingWithdraw BigInt
+  /// The epoch the request was made in. It pays once the pool has moved past it.
+  pendingEpoch    BigInt
+  /// Σ principal × seconds within epochId. Mirrors weightAcc with Principal
+  /// in place of Entries.
+  principalAcc       Decimal @db.Decimal(40, 0)
+  /// Final principal-seconds for frozenEpoch, set alongside frozenWeight.
+  frozenPrincipalAcc Decimal @db.Decimal(40, 0)
+  /// The epoch Base yield was last credited for.
+  yieldEpoch         BigInt
+  /// The epoch boughtAmount is counted against.
+  boughtEpoch        BigInt
+  /// USDC spent in buy_tickets so far in boughtEpoch, capped at principal.
+  boughtAmount       BigInt
+  /// The epoch bonusGranted is counted against.
+  bonusEpoch         BigInt
+  /// Tickets an operator grant_tickets call has credited this Player so far
+  /// in bonusEpoch.
+  bonusGranted       BigInt
+
+  // On chain a Player is one wallet's account in one pool (ADR 0016). The
+  // owner index serves the two cross-pool "has this wallet ever deposited"
+  // checks: the beta gate and the referral apply.
+  @@id([poolAddress, owner])
+  @@index([owner])
 }
 
 model Position {
+  // The PDA is unique across pools, so it stays the key; poolAddress scopes
+  // reads to the Active pool (ADR 0016).
   address      String  @id
+  poolAddress  String
+  pool         Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
   owner        String
   roundId      BigInt
   tiles        BigInt
   stakePerTile BigInt
+
+  @@index([poolAddress, roundId])
 }
 
-// Finalized program events, decoded from `Program data:` logs.
+// Finalized program events, decoded from `Program data:` logs. The key is
+// already unique across pools; poolAddress scopes reads (ADR 0016).
 model Event {
-  slot      BigInt
-  signature String
-  index     Int
-  name      String
-  data      Json
-  blockTime BigInt?
+  slot        BigInt
+  signature   String
+  index       Int
+  poolAddress String
+  pool        Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  name        String
+  data        Json
+  blockTime   BigInt?
 
   @@id([slot, signature, index])
+  @@index([poolAddress, slot])
 }
 
-// Single row (id = 1): the indexer's signature-catch-up cursor. `updatedAt`
-// is unix seconds of the last successful sync, so GET /status can report a
-// cursor age without guessing from the newest event's block time.
+// One row per pool: the indexer's signature-catch-up cursor. A new pool has
+// no row, so the indexer walks its history from the first signature (ADR
+// 0016). `updatedAt` is unix seconds of the last successful sync, so GET
+// /status can report a cursor age without guessing from the newest event's
+// block time.
 model Cursor {
-  id            Int     @id
+  poolAddress   String  @id
+  pool          Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
   lastSignature String?
   lastSlot      BigInt?
   updatedAt     BigInt?
@@ -106,9 +212,112 @@ model FaucetClaim {
   lastClaimAt BigInt
 }
 
-// Single row (id = 1): what the operator last did, for GET /status.
+// Invite codes gate the private beta (docs/plan/hexo-referrals ticket 06).
+// ownerWallet is indexed, not unique: the admin CLI may hand one wallet
+// several codes, and the indexer only checks "does this wallet have one yet".
+model InviteCode {
+  code        String  @id
+  ownerWallet String?
+  maxUses     Int
+  uses        Int     @default(0)
+  createdAt   BigInt
+
+  @@index([ownerWallet])
+}
+
+// No relation to InviteCode (or Referral.code): deleting a code is how one
+// gets revoked, and that must leave redemptions already made intact.
+model InviteRedemption {
+  wallet     String @id
+  code       String
+  redeemedAt BigInt
+}
+
+// A depositor's own code (ADR 0014, docs/plan/referral-page ticket 01): one
+// per wallet, unlimited uses, created by the indexer on that wallet's first
+// Deposited event. Replaces the depositor-owned InviteCode ticket 06 used to
+// create; admin-issued Invite codes are unaffected. No relation to
+// InviteCode: generation checks both tables by hand (invite-code.ts) so a
+// fresh code never collides with either.
+model ReferralCode {
+  code      String @id
+  owner     String @unique
+  createdAt BigInt
+}
+
+// Referral binding and qualification (docs/plan/hexo-referrals ticket 07).
+// Written once, in the same transaction as the redeem that creates it
+// (access.controller.ts); referrer, code and boundAt are never touched again.
+model Referral {
+  referee  String @id
+  referrer String
+  code     String
+  boundAt  BigInt
+  /// Unix seconds Principal last crossed up through 50 USDC; null while
+  /// below it (or never having been above). Driven by the indexer off
+  /// Deposited, WithdrawRequested, YieldCredited and compounded JackpotPaid.
+  aboveSince BigInt?
+  /// The referee's Principal as of the last Principal-changing event the
+  /// indexer applied here. Not the live Player.principal: see referral.ts's
+  /// ReferralQualificationState for why this is tracked independently.
+  principal  BigInt  @default(0)
+
+  @@index([referrer])
+}
+
+// One referrer's computed daily bonus for one epoch (docs/plan/hexo-referrals
+// ticket 08), written before the operator sends grant_tickets. No @id: the
+// unique index is the natural key, and createMany({ skipDuplicates: true })
+// uses it to make writing a referrer's row for an epoch idempotent across
+// restarts. txSig fills in once the batch it was sent in confirms; a null
+// txSig on a row this epoch is a grant still owed. Keyed by pool as well:
+// epoch ids restart on every pool, and skipDuplicates would otherwise drop the
+// new pool's grants silently (ADR 0016).
+model ReferralGrant {
+  poolAddress    String
+  pool           Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  epochId        BigInt
+  referrer       String
+  amount         BigInt
+  /** referral-page ticket 04: `amount` without the own-Principal cap, pool
+   *  scale-down still applied. Equal to `amount` when that cap doesn't
+   *  bind. Migration 20260923020000 backfills existing rows to `amount`. */
+  uncapped       BigInt
+  qualifiedCount Int
+  rateBps        Int
+  txSig          String?
+
+  @@unique([poolAddress, epochId, referrer])
+}
+
+// One referee's share of one referrer's ReferralGrant, epoch-scoped
+// (referral-page ticket 05). Written by the same referral job, in the same
+// transaction as the ReferralGrant row and with the same idempotency
+// (createMany({ skipDuplicates: true }) against the unique index below, only
+// for a referrer whose ReferralGrant row is new this tick). Split
+// proportional to each qualified referee's own basis (min(Principal,
+// REFERRAL_BONUS_BASIS_CAP)) at grant time, floored, with the leftover
+// atomic units handed out by largest remainder (referral-bonus.ts's
+// `splitShares`), so shares always sum exactly to the grant's `amount`. The
+// indexer's re-clamp loop rescales these the same way, off each row's own
+// existing amount as its weight, whenever a grant's `amount` shrinks after
+// Principal moves. Keyed by pool like ReferralGrant (ADR 0016).
+model ReferralGrantShare {
+  poolAddress String
+  pool        Pool   @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  epochId     BigInt
+  referrer    String
+  referee     String
+  amount      BigInt
+
+  @@unique([poolAddress, epochId, referrer, referee])
+}
+
+// One row per pool: what the operator last did for it, for GET /status. A
+// new pool has no row until its first tick (ADR 0016).
 model OperatorState {
-  id               Int     @id
+  poolAddress      String  @id
+  pool             Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
   lastTickAt       BigInt?
   /** Wall-clock unix seconds of the scheduler's next planned wake, so the
    *  web status summary can read a long deadline-driven sleep as live
@@ -119,4 +328,45 @@ model OperatorState {
   lastError        String?
   registeredCount  Int?
   registeredTotal  Int?
+  /** How much the principal vault was short of the withdrawals due on the
+   *  last tick that tried to pay them. 0 when the last try covered them all,
+   *  null before any tick has looked. */
+  withdrawShortfall BigInt?
+  /** Ticket 06: owners step 6b has given up on for the rest of the epoch
+   *  after too many consecutive failures. 0 when none have been, null before
+   *  any tick has looked. */
+  withdrawSkippedCount Int?
+  /** Ticket 07: true on a tick that withheld `close_registration` for a
+   *  stale Indexer cursor; false once a later tick closes normally. Null
+   *  before any tick has ever checked. */
+  registrationIndexerStale Boolean?
+  /** Ticket 09: wall-clock unix seconds of the last tick that completed
+   *  without an error, so OPERATOR_FAILING can tell "ticks are failing"
+   *  from "ticks have stopped" (OPERATOR_STALE covers the latter). Null
+   *  before the first successful tick. */
+  lastSuccessAt    BigInt?
+  /** Ticket 09: true on a tick whose previous epoch missed its expected
+   *  deadline (epoch length + registration window + VRF timeout + slack) to
+   *  reach a terminal status; false once one does. Null before any tick has
+   *  ever looked. */
+  epochNoProgress  Boolean?
+  /** Ticket 09: true on a tick whose previous epoch drew a winner more than
+   *  a few minutes ago and still has not been paid; false once it is. Null
+   *  before any tick has ever looked. */
+  drawnUnpaid      Boolean?
+}
+
+// beta-launch-fixes ticket 16: decoded send failures and error-boundary
+// catches the web posts to POST /error-reports, so a broken money path
+// reaches the maintainers instead of only the depositor's console.
+// Write-only from the API's own perspective; nothing reads this back through
+// a route, an operator queries Postgres directly.
+model ErrorReport {
+  id        Int      @id @default(autoincrement())
+  code      String
+  message   String
+  signature String?
+  wallet    String?
+  page      String?
+  createdAt DateTime @default(now())
 }

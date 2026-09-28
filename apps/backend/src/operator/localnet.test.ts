@@ -1,7 +1,11 @@
 // End to end against a solana-test-validator running the `test-vrf` build:
 //
 //   HEXVAULT_SKIP_BUILD=1 HEXVAULT_RPC_PORT=9299 \
-//     sh tests/run-local.sh src/operator/localnet
+//     sh tests/run-local.sh --root apps/backend --config vitest.config.ts \
+//     src/operator/localnet.test.ts
+//
+// run-local.sh ends in `pnpm exec vitest` from the repo root, so `--root`
+// points vitest at this package and `--config` is then relative to it.
 //
 // Skipped everywhere else, so `pnpm test` in this package stays offline. The
 // operator drives the whole protocol here; the test only deposits, buys two
@@ -13,7 +17,7 @@ import { BN } from "@anchor-lang/core";
 import {
   createAccount,
   createMint,
-  getAccount,
+  getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
   mintTo,
   TOKEN_PROGRAM_ID,
@@ -32,7 +36,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import { playerAddress, positionAddress } from "../chain/pda";
-import type { HexVaultEnv } from "../config/env";
+import {
+  DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS,
+  DEFAULT_RPC_TIMEOUT_MS,
+  type HexVaultEnv,
+} from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   decodeEpoch,
@@ -45,8 +53,9 @@ import {
 } from "./chain-state";
 import type { IndexerQueries } from "./indexer-queries";
 import { OperatorService } from "./operator.service";
+import { ensurePoolRow } from "./pool-row.fixture";
 import type { SparringService } from "./sparring";
-import { JACKPOT_AMOUNT } from "./tick";
+
 import { randomnessAddress } from "./vrf";
 
 const RPC_URL = process.env.ANCHOR_PROVIDER_URL;
@@ -64,6 +73,9 @@ const EPOCH_SECONDS = 40;
 const ROUND_SECONDS = 15;
 const CLOSE_BUFFER = 5;
 const DEPOSIT = 5_000_000n;
+/** The prize this run funds by hand, standing in for the admin's daily
+ *  deposit of harvested yield. */
+const JACKPOT = 2_000_000n;
 const STAKE_PER_TILE = 1_000n;
 /** Tiles 0..17 and 18..35: between them the two players cover the board, so
  *  the round always settles rather than being forfeited to the House. */
@@ -92,6 +104,15 @@ interface RawPlayer {
   regStart: BN;
   regEnd: BN;
   isHouse: boolean;
+  pendingWithdraw: BN;
+  pendingEpoch: BN;
+  principalAcc: BN;
+  frozenPrincipalAcc: BN;
+  yieldEpoch: BN;
+  boughtEpoch: BN;
+  boughtAmount: BN;
+  bonusEpoch: BN;
+  bonusGranted: BN;
 }
 
 interface RawPosition {
@@ -103,6 +124,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
   // Built inside the test: `skipIf` still evaluates this block, and there is
   // no validator (and no RPC url) when the suite is skipped.
   let prisma: PrismaService | null = null;
+  let poolKey = "";
   const owners: string[] = [];
 
   afterAll(async () => {
@@ -110,6 +132,10 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
     if (owners.length > 0) {
       await prisma.player.deleteMany({ where: { owner: { in: owners } } });
     }
+    // The Pool row stays: a Pool row is never deleted (ADR 0016), and each
+    // run's pool id is fresh.
+    await prisma.cursor.deleteMany({ where: { poolAddress: poolKey } });
+    await prisma.operatorState.deleteMany({ where: { poolAddress: poolKey } });
     await prisma.$disconnect();
   });
 
@@ -135,22 +161,42 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         authority.publicKey,
         Keypair.generate(),
       );
-      // The operator mints into this when the jackpot is short; it has to
-      // exist first, which is what `bootstrap` does in production.
-      await getOrCreateAssociatedTokenAccount(connection, authority, mint, authority.publicKey);
+      // The admin's own token account, holding the prize it will hand to
+      // `fund_jackpot` below. The operator stopped minting the jackpot
+      // (ticket 03), so on a real cluster this is harvested yield; here it
+      // is minted once, up front.
+      const authorityToken = await getOrCreateAssociatedTokenAccount(
+        connection,
+        authority,
+        mint,
+        authority.publicKey,
+      );
+      await mintTo(connection, authority, mint, authorityToken.address, authority, JACKPOT);
 
       const poolId = BigInt(Date.now());
+      // run-local.sh points `loadIdl()` (via HEXVAULT_IDL_PATH) at the
+      // freshly built target/idl/hex_vault.json, so this is the id it just
+      // deployed, not whatever the committed src/idl/ snapshot carries.
       const programId = String(loadIdl().address);
       const config = stubConfig({
         DATABASE_URL: process.env.DATABASE_URL ?? "",
         RPC_URL: RPC_URL ?? "",
+        RPC_TIMEOUT_MS: DEFAULT_RPC_TIMEOUT_MS,
         PROGRAM_ID: programId,
         POOL_ID: poolId.toString(),
-        AUTHORITY_KEYPAIR: bs58.encode(authority.secretKey),
-        HEXUSDC_MINT: mint.toBase58(),
-        APR_BPS: "500",
+        CLUSTER: "devnet",
+        OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
+        ACCEPTED_MINT: mint.toBase58(),
+        OPERATOR_SOL_WARN: 0.3,
+        PRIORITY_FEE_MAX_MICROLAMPORTS: DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS,
         FAUCET_AMOUNT: "0",
         FAUCET_INTERVAL_SECONDS: "0",
+        REFERRAL_QUALIFY_SECONDS: 604_800,
+        ALERT_TICK_STALE_S: 300,
+        ALERT_INDEXER_STALE_S: 600,
+        REGISTRATION_INDEXER_FRESH_S: 60,
+        INVITE_CIRCULATION_CAP: 50,
+        INVITE_REDEEM_GRANT_COUNT: 2,
         CORS_ORIGIN: "http://localhost",
         PORT: "0",
       });
@@ -167,6 +213,9 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
       const pool = chain.poolAddress();
       await method("createPool", {
         poolId: new BN(poolId.toString()),
+        // One key plays both roles here: it pays, cranks and administers.
+        admin: authority.publicKey,
+        operator: authority.publicKey,
         vrfNetworkState: VRF_NETWORK_STATE,
         epochSeconds: new BN(86_400),
         epochAnchor: new BN(Math.floor(Date.now() / 1000)),
@@ -178,9 +227,21 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         // for the draw and can win it, and the assertions below expect exactly
         // the two depositors. tests/02-rounds covers the cut itself.
         houseCutBps: 0,
+        minJackpot: new BN(1),
+        // No window and a payout timeout well past this run, so the timing
+        // of the suite is the same as before either parameter existed.
+        registrationWindow: new BN(0),
+        payoutTimeout: new BN(86_400),
+        // Base yield and grant-tickets are off (0) so this suite's round and
+        // jackpot flow behaves exactly as it did before these params
+        // existed; `ticketsPerUsdc` only has to be positive to pass
+        // `create_pool`'s own validation and is never exercised here.
+        baseRateBps: 0,
+        ticketsPerUsdc: 10,
+        bonusCapBps: 0,
       })
         .accountsPartial({
-          authority: authority.publicKey,
+          payer: authority.publicKey,
           pool,
           acceptedMint: mint,
           principalVault: chain.principalVaultAddress(),
@@ -192,6 +253,14 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
           systemProgram: SystemProgram.programId,
         })
         .rpc();
+      // game-jackpot-pause ticket 02: create_pool leaves both switches on.
+      // Start them the way `bootstrap --start` does, jackpot first, so the
+      // operator runs this pool as it did before either switch existed.
+      for (const feature of ["jackpot", "game"]) {
+        await method("setFeaturePause", { [feature]: {} }, false)
+          .accountsPartial({ signer: authority.publicKey, pool })
+          .rpc();
+      }
 
       // Params apply to the next epoch created, so this lands before the
       // operator opens the first one.
@@ -203,8 +272,11 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         vrfTimeout: null,
         minDeposit: null,
         houseCutBps: null,
+        minJackpot: null,
+        registrationWindow: null,
+        payoutTimeout: null,
       })
-        .accountsPartial({ authority: authority.publicKey, pool })
+        .accountsPartial({ admin: authority.publicKey, pool })
         .rpc();
 
       const readPool = async (): Promise<PoolState> => {
@@ -247,16 +319,51 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
               roundId: terminal.get(position.round.toBase58()) as bigint,
             }));
         },
+        // No referral binding in this fixture, so ticket 08's step has
+        // nothing to do; it still has to be callable.
+        referralGrantsDue: async () => [],
+        markReferralGrantsSent: async () => {},
+        // Same terminal-and-clear rule as unsettledPositions above, off the
+        // chain instead of Postgres; this fixture has no `closed` flag to
+        // mirror, so a Round this validator has already closed simply stops
+        // showing up in `allRounds` at all.
+        roundsToClose: async () => {
+          const busy = new Set(
+            (await allPositions(chain)).map((position) => position.round.toBase58()),
+          );
+          return (await allRounds(chain))
+            .filter(
+              (round) =>
+                round.status !== ROUND_STATUS.OPEN &&
+                round.status !== ROUND_STATUS.REQUESTED &&
+                !busy.has(round.address.toBase58()),
+            )
+            .map((round) => round.roundId);
+        },
       };
 
       // SAFETY: the Operator only ever calls `wake()` on the Sparring player,
       // and this test drives the crank itself rather than running one.
       const sparring = { wake: () => {} } as unknown as SparringService;
       const operator = new OperatorService(chain, prisma, indexer, sparring, config);
+      // Also the indexer's job: the Pool row every pool-scoped row the
+      // operator touches references (ADR 0016), and a fresh Cursor, without
+      // which close_registration is withheld (ticket 07).
+      poolKey = pool.toBase58();
+      await ensurePoolRow(prisma, poolKey, poolId);
+      const markIndexerSynced = async (db: PrismaService): Promise<void> => {
+        const updatedAt = BigInt(Math.floor(Date.now() / 1000));
+        await db.cursor.upsert({
+          where: { poolAddress: poolKey },
+          create: { poolAddress: poolKey, updatedAt },
+          update: { updatedAt },
+        });
+      };
 
       let stopped = false;
       const crank = (async () => {
         while (!stopped) {
+          await markIndexerSynced(prisma);
           await operator.tick();
           await mirrorPlayers(chain, pool, prisma, owners);
           await fulfil(chain, method, authority);
@@ -286,9 +393,35 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
             .signers([wallet.keypair])
             .rpc();
         }
-        const balancesBefore = new Map([
-          [a.keypair.publicKey.toBase58(), await tokenBalance(connection, a.token)],
-          [b.keypair.publicKey.toBase58(), await tokenBalance(connection, b.token)],
+        // The prize. The operator stopped minting it (ticket 03), so the
+        // test funds it the way the admin does on a real cluster: one
+        // permissionless `fund_jackpot` before the epoch closes.
+        await method("fundJackpot", new BN(JACKPOT.toString()))
+          .accountsPartial({
+            sourceAuthority: authority.publicKey,
+            pool,
+            acceptedMint: mint,
+            source: getAssociatedTokenAddressSync(mint, authority.publicKey),
+            jackpotVault: chain.jackpotVaultAddress(),
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+
+        // A non-House win compounds into the winner's Principal instead of
+        // paying their token account (epochs.rs `payout`, spec's no-loss
+        // model), so the win is asserted against Principal, not a token
+        // balance.
+        const principalOf = async (wallet: PublicKey): Promise<bigint> => {
+          const info = await connection.getAccountInfo(chain.playerAddress(wallet));
+          const raw = chain.program.coder.accounts.decode<{ principal: BN }>(
+            "player",
+            info?.data ?? Buffer.alloc(0),
+          );
+          return BigInt(raw.principal.toString());
+        };
+        const principalsBefore = new Map([
+          [a.keypair.publicKey.toBase58(), await principalOf(a.keypair.publicKey)],
+          [b.keypair.publicKey.toBase58(), await principalOf(b.keypair.publicKey)],
         ]);
 
         // The operator opens rounds on its own; wait for one with enough time
@@ -339,7 +472,7 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
 
         const epoch = await readEpoch(1n);
         expect(epoch?.registeredCount).toBe(2);
-        expect(epoch?.jackpotAmount).toBe(JACKPOT_AMOUNT); // step 6b's top-up
+        expect(epoch?.jackpotAmount).toBe(JACKPOT); // whatever was funded
 
         const info = await connection.getAccountInfo(chain.epochAddress(1n));
         const winner = chain.program.coder.accounts
@@ -348,8 +481,8 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
         const winnerWallet = [a, b].find((w) => w.keypair.publicKey.toBase58() === winner);
         expect(winnerWallet, `winner ${winner} is one of the two depositors`).toBeDefined();
 
-        const after = await tokenBalance(connection, winnerWallet?.token as PublicKey);
-        expect(after - (balancesBefore.get(winner) ?? 0n)).toBe(epoch?.jackpotAmount);
+        const principalAfter = await principalOf(winnerWallet?.keypair.publicKey as PublicKey);
+        expect(principalAfter - (principalsBefore.get(winner) ?? 0n)).toBe(epoch?.jackpotAmount);
       } finally {
         stopped = true;
         await crank;
@@ -387,9 +520,6 @@ async function fundedWallet(
   await mintTo(connection, authority, mint, account.address, authority, 10_000_000n);
   return { keypair, token: account.address };
 }
-
-const tokenBalance = async (connection: Connection, address: PublicKey): Promise<bigint> =>
-  (await getAccount(connection, address)).amount;
 
 async function programAccounts<T>(
   chain: ChainService,
@@ -458,6 +588,7 @@ async function mirrorPlayers(
 ): Promise<void> {
   for (const player of await allPlayers(chain, pool)) {
     const row = {
+      poolAddress: pool.toBase58(),
       owner: player.owner.toBase58(),
       principal: BigInt(player.principal.toString()),
       entries: BigInt(player.entries.toString()),
@@ -470,9 +601,22 @@ async function mirrorPlayers(
       regStart: player.regStart.toString(),
       regEnd: player.regEnd.toString(),
       isHouse: player.isHouse,
+      pendingWithdraw: BigInt(player.pendingWithdraw.toString()),
+      pendingEpoch: BigInt(player.pendingEpoch.toString()),
+      principalAcc: player.principalAcc.toString(),
+      frozenPrincipalAcc: player.frozenPrincipalAcc.toString(),
+      yieldEpoch: BigInt(player.yieldEpoch.toString()),
+      boughtEpoch: BigInt(player.boughtEpoch.toString()),
+      boughtAmount: BigInt(player.boughtAmount.toString()),
+      bonusEpoch: BigInt(player.bonusEpoch.toString()),
+      bonusGranted: BigInt(player.bonusGranted.toString()),
     };
     if (!owners.includes(row.owner)) owners.push(row.owner);
-    await prisma.player.upsert({ where: { owner: row.owner }, create: row, update: row });
+    await prisma.player.upsert({
+      where: { poolAddress_owner: { poolAddress: row.poolAddress, owner: row.owner } },
+      create: row,
+      update: row,
+    });
   }
 }
 

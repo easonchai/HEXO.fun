@@ -7,6 +7,8 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { computeGeo } from "./geo.js";
 import { Textile } from "./Textile.js";
+import { GAME_GATED } from "../chain.js";
+import { ComingSoon } from "../ComingSoon.js";
 import { timerText } from "../engine.js";
 import { formatAtomic2 } from "../lib/money.js";
 import type { EngineOutput } from "../useRoundEngine.js";
@@ -128,6 +130,9 @@ export interface ArenaProps {
   operatorStale?: boolean;
   /** Live pool rate, for the pot tooltip. */
   houseCutBps: number;
+  /** `idleBoardLabel`'s answer: shown in the timer's spot while there is no
+   *  countdown, so an empty board says why it is empty. */
+  idleLabel?: string | null;
 }
 
 export function Arena({
@@ -136,6 +141,7 @@ export function Arena({
   onToggleTile,
   operatorStale = false,
   houseCutBps,
+  idleLabel = null,
 }: ArenaProps) {
   const {
     phase,
@@ -214,6 +220,10 @@ export function Arena({
             data-testid="round-timer"
           >
             {operatorStale ? "OPERATOR PAUSED" : timerLabel}
+          </div>
+        ) : !banner && idleLabel ? (
+          <div className="stage-timer stage-timer-stale" data-testid="board-idle-label">
+            {idleLabel}
           </div>
         ) : null}
         {banner ? (
@@ -396,6 +406,10 @@ export function Arena({
 
         <RoundPotPill value={pot} houseCutBps={houseCutBps} />
       </div>
+
+      {/* Game gate (ticket 02, feature-gates): covers the board instead of
+          consulting idleLabel; the label sits underneath, blurred out. */}
+      {GAME_GATED ? <ComingSoon /> : null}
 
       {/* Round win takeover */}
       {takeover ? (

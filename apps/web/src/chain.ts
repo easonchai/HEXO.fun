@@ -1,4 +1,5 @@
 /** Program id, env, PDA derivation. The chain is authoritative. */
+import { clusterFrom, gameGated, jackpotGated } from "./cluster.js";
 import idl from "./idl/hex_vault.json";
 import { BN, Program } from "@anchor-lang/core";
 import type { Idl } from "@anchor-lang/core";
@@ -6,7 +7,12 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { PublicKey, type Transaction, clusterApiUrl } from "@solana/web3.js";
+import {
+  PublicKey,
+  type Transaction,
+  type TransactionInstruction,
+  clusterApiUrl,
+} from "@solana/web3.js";
 
 export type HexVaultProgram = Program<Idl>;
 
@@ -14,9 +20,11 @@ export type HexVaultProgram = Program<Idl>;
 export interface TxBuilder {
   accounts(accounts: Record<string, unknown>): TxBuilder;
   preInstructions(instructions: unknown[]): TxBuilder;
-  rpc(options?: { commitment?: string }): Promise<string>;
   /** Unsigned legacy transaction; fee payer and blockhash left unset. */
   transaction(): Promise<Transaction>;
+  /** The raw instruction, for combining more than one into one transaction
+   *  (ticket 11's one-step shutdown withdraw). No RPC round trip. */
+  instruction(): Promise<TransactionInstruction>;
 }
 
 /** Decoded-account accessor for one account type. */
@@ -105,21 +113,73 @@ export function decodeEventLogs(
   return out;
 }
 
-const env = (key: string): string | undefined => {
-  const value = (import.meta.env as Record<string, string | undefined>)[key];
-  return value?.trim() || undefined;
-};
+/** Trims a static `import.meta.env.VITE_X` read; blank counts as unset. */
+const trimmed = (value: string | undefined): string | undefined =>
+  value?.trim() || undefined;
 
-/** VITE_PROGRAM_ID wins so one bundle can point at a redeployed program. */
-export const PROGRAM_ID = new PublicKey(env("VITE_PROGRAM_ID") ?? idl.address);
+/**
+ * The cluster this bundle was built for; `vite.config.ts` rejects a bad one.
+ * Read as one static `import.meta.env.VITE_X` access per variable (ticket
+ * 07): Vite only inlines what a bundle statically references, so passing the
+ * whole `import.meta.env` object through, as this used to, ships every
+ * VITE_* value the build saw, used or not — including a keyed RPC URL.
+ */
+export const CLUSTER = clusterFrom({
+  VITE_CLUSTER: import.meta.env.VITE_CLUSTER,
+});
+
+/** Ticket 01 (feature-gates): read once here, like `CLUSTER`, so no
+ *  component touches `import.meta.env` for it. */
+export const GAME_GATED = gameGated(import.meta.env.VITE_GATE_GAME);
+
+/** Ticket 02 (feature-gates): the jackpot gate, same rule as `GAME_GATED`. */
+export const JACKPOT_GATED = jackpotGated(import.meta.env.VITE_GATE_JACKPOT);
+
+/**
+ * Wallet-standard chain id. Privy signs against it and registers the app's
+ * RPC under it; a local validator answers to the devnet genesis, so it rides
+ * along with devnet.
+ */
+export const SIGNING_CHAIN =
+  CLUSTER === "devnet" ? "solana:devnet" : "solana:mainnet";
+
+/**
+ * VITE_PROGRAM_ID wins so one bundle can point at a redeployed program.
+ * `App.tsx` reads this same constant for the Anchor `Program`'s address
+ * override, so PDAs (derived here) and instructions (sent through that
+ * `Program`) can never point at two different program ids. A production
+ * build has no IDL fallback: signing against the dev address baked into the
+ * committed IDL would be a silent wrong-program bug, not a config default.
+ */
+export function programIdFrom(
+  raw: string | undefined,
+  idlAddress: string,
+  isProd: boolean,
+): PublicKey {
+  if (raw) return new PublicKey(raw);
+  if (isProd) {
+    throw new Error(
+      "VITE_PROGRAM_ID is required in a production build; refusing to fall back to the IDL's dev address.",
+    );
+  }
+  return new PublicKey(idlAddress);
+}
+
+export const PROGRAM_ID = programIdFrom(
+  trimmed(import.meta.env.VITE_PROGRAM_ID),
+  idl.address,
+  import.meta.env.PROD,
+);
 
 /** The single pool this build talks to; the demo runs pool 1. */
-export const POOL_ID = BigInt(env("VITE_POOL_ID") ?? "1");
+export const POOL_ID = BigInt(trimmed(import.meta.env.VITE_POOL_ID) ?? "1");
 
-/** Public devnet unless overridden; .env.example pins the local validator. */
-export const RPC_URL = env("VITE_PUBLIC_RPC_URL") ?? clusterApiUrl("devnet");
+/** The cluster's public endpoint unless overridden; .env.example pins the local validator. */
+export const RPC_URL =
+  trimmed(import.meta.env.VITE_PUBLIC_RPC_URL) ?? clusterApiUrl(CLUSTER);
 
-export const API_URL = env("VITE_API_URL") ?? "http://127.0.0.1:8080";
+export const API_URL =
+  trimmed(import.meta.env.VITE_API_URL) ?? "http://127.0.0.1:8080";
 
 export const bn = (value: bigint | number | string): BN =>
   new BN(value.toString());

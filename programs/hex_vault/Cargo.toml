@@ -19,9 +19,22 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 # Localnet only: compiles in `test_fulfill`, which fabricates a fulfilled
 # randomness account so the suite needs no ORAO deployment.
 test-vrf = []
+# One program ID per environment (ops-and-envs ticket 06): `declare_id!` in
+# lib.rs picks the dev, staging or mainnet keypair off these. Default (no
+# feature) is dev. `scripts/check-deployable.sh` refuses `test-vrf` combined
+# with either, and refuses `staging` combined with `mainnet`.
+staging = []
+mainnet = []
+# A second devnet ID for a fresh dev deploy that leaves the original dev
+# program (and the pools on it) untouched.
+devnew = []
 
 [dependencies]
 anchor-lang = { version = "1.1.2", features = ["init-if-needed"] }
 anchor-spl = { version = "1.1.2", features = ["token_2022"] }
 solana-keccak-hasher = "2.2.1"
 solana-sha256-hasher = "2.2.1"
+# ops-and-envs ticket 12: embeds a security.txt ELF section so researchers
+# can find a contact from the deployed program address. No default features:
+# the `parser` feature (thiserror + memchr) is only needed to read one back.
+solana-security-txt = "1.1.3"

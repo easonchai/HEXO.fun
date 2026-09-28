@@ -1,0 +1,124 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { decodeErrorCode, decodePlayerError, NOTHING_PENDING_CODE } from "./playerErrors.js";
+
+beforeEach(() => {
+  // Every path under test logs the raw error; keep it out of the test output.
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("decodeErrorCode", () => {
+  it.each([
+    [6001, "The pool is paused right now. Try again once it reopens."], // PoolPaused
+    [6003, "Enter an amount greater than zero."], // ZeroAmount
+    [6005, "You don't have enough Tickets for that."], // InsufficientEntries
+    [6012, "This round is closed to new plays. Wait for the next one."], // RoundClosed
+    [
+      6036,
+      "The vault is being topped up. Try the payout again in a few minutes.",
+    ], // InsufficientVaultLiquidity
+    [NOTHING_PENDING_CODE, "Already paid out. Refreshing your balance."], // NothingPending
+    [
+      6042,
+      "Today's draw hasn't closed registration yet. Try again in a moment.",
+    ], // RegistrationWindowOpen
+    [6051, "This pool is closed. Withdrawals still work; nothing else does."], // PoolShutDown
+    [
+      6058,
+      "The game is paused right now. Try again once it restarts.",
+    ], // GamePaused
+    [
+      6059,
+      "The daily draw is paused, so Tickets can't be bought right now.",
+    ], // JackpotPaused
+  ])("has player copy for code %i", (code, copy) => {
+    expect(decodeErrorCode(code)).toBe(copy);
+  });
+
+  it("falls back to the IDL's own message for a code with no hand-written copy", () => {
+    // Unauthorized (6034): a real program code, never hand-written.
+    expect(decodeErrorCode(6034)).toBe(
+      "signer is not authorized for this instruction",
+    );
+  });
+
+  it("falls back to a generic line for a code the IDL doesn't know either", () => {
+    expect(decodeErrorCode(99_999)).toBe(
+      "Something went wrong. Try again in a moment.",
+    );
+  });
+});
+
+describe("decodePlayerError", () => {
+  it("decodes an AnchorError's 'Error Number: N' text", () => {
+    const error = new Error(
+      "AnchorError thrown in programs/hex_vault/src/custody.rs:120. Error Code: PoolPaused. Error Number: 6001. Error Message: the pool is paused.",
+    );
+    expect(decodePlayerError(error)).toBe(
+      "The pool is paused right now. Try again once it reopens.",
+    );
+  });
+
+  it("decodes a simulation result's '\"Custom\":N' shape", () => {
+    const error = new Error(
+      '{"err":{"InstructionError":[0,{"Custom":6036}]}}',
+    );
+    expect(decodePlayerError(error)).toBe(
+      "The vault is being topped up. Try the payout again in a few minutes.",
+    );
+  });
+
+  it("decodes a bare 'custom program error: 0x...' hex code", () => {
+    // 6012 (RoundClosed) in hex.
+    const error = new Error(
+      "failed to send transaction: custom program error: 0x177c",
+    );
+    expect(decodePlayerError(error)).toBe(
+      "This round is closed to new plays. Wait for the next one.",
+    );
+  });
+
+  it("falls back to the exact error name when no code number is present", () => {
+    const error = new Error("simulation failed: RoundClosed");
+    expect(decodePlayerError(error)).toBe(
+      "This round is closed to new plays. Wait for the next one.",
+    );
+  });
+
+  it("does not let a name match a longer name it's a prefix of", () => {
+    // InsufficientVault (6054) must not steal InsufficientVaultLiquidity's (6036) text.
+    const error = new Error("custom error: InsufficientVaultLiquidity");
+    expect(decodePlayerError(error)).toBe(
+      "The vault is being topped up. Try the payout again in a few minutes.",
+    );
+  });
+
+  it("decodes the two feature-pause errors by name", () => {
+    expect(decodePlayerError(new Error("simulation failed: GamePaused"))).toBe(
+      "The game is paused right now. Try again once it restarts.",
+    );
+    expect(decodePlayerError(new Error("simulation failed: JackpotPaused"))).toBe(
+      "The daily draw is paused, so Tickets can't be bought right now.",
+    );
+  });
+
+  it("falls back to a generic line for a non-program error", () => {
+    expect(decodePlayerError(new Error("Failed to fetch"))).toBe(
+      "Something went wrong. Try again in a moment.",
+    );
+  });
+
+  it("handles a thrown non-Error value the same way", () => {
+    expect(decodePlayerError("network down")).toBe(
+      "Something went wrong. Try again in a moment.",
+    );
+  });
+
+  it("still logs the raw error for debugging", () => {
+    decodePlayerError(new Error("boom"));
+    expect(console.error).toHaveBeenCalledWith("boom");
+  });
+});

@@ -16,6 +16,8 @@ const player = (overrides: Partial<PlayerDto> = {}): PlayerDto => ({
   regStart: "0",
   regEnd: "0",
   isHouse: false,
+  pendingWithdraw: "0",
+  pendingEpoch: "0",
   liveWeight: "1000",
   odds: "50.00",
   ...overrides,
@@ -55,6 +57,13 @@ describe("snapshot", () => {
   it("notices a register, which moves nothing else on the Player", () => {
     const registered = state({ player: player({ regEpoch: "7", regStart: "0", regEnd: "1000" }) });
     expect(snapshot(registered)).not.toBe(snapshot(state()));
+  });
+
+  it("notices a process_withdraw paying out, which moves nothing else", () => {
+    // The pending amount is the only field that clears, so without it in the
+    // snapshot the Vault's "confirming…" would never come down.
+    const requested = state({ player: player({ pendingWithdraw: "500000", pendingEpoch: "7" }) });
+    expect(snapshot(requested)).not.toBe(snapshot(state()));
   });
 
   it("notices a Position bought in the tracked Round", () => {

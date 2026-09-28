@@ -10,11 +10,8 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
-import {
-  getAccount,
-  getAssociatedTokenAddressSync,
-  TokenAccountNotFoundError,
-} from "@solana/spl-token";
+import { Prisma } from "@prisma/client";
+import { getAccount, TokenAccountNotFoundError } from "@solana/spl-token";
 import { PublicKey, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
 import { ChainService } from "../chain/chain.service";
@@ -41,11 +38,17 @@ import {
   type RegisterCheck,
   type TickContext,
   type TickOutcome,
+  type WithdrawState,
 } from "./tick";
 import { isFulfilled, randomnessAddress } from "./vrf";
 
 /** How long a settled Position's address is remembered; well past any sweep lag. */
 const SETTLED_MEMORY_MS = 5 * 60_000;
+/** Ticket 12: how long a `register` attempt is remembered against
+ *  `playersToRegister`, well past the longest reasonable registration window
+ *  (an epoch's own length), so a zero-weight owner is not resent for the
+ *  whole epoch rather than just a few minutes. */
+const REGISTERED_MEMORY_MS = 24 * 60 * 60_000;
 /** The slow safety net alongside the deadline-driven sleep (ticket 03): runs
  *  regardless, so a mis-computed deadline degrades to "checked on this
  *  cadence" rather than a stall. Same cadence `nextWakeAt` falls back to. */
@@ -62,18 +65,18 @@ interface OperatorTickResult extends TickOutcome {
 export class OperatorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OperatorService.name);
   private readonly instructions: OperatorInstructions;
-  private readonly mint: PublicKey;
   private readonly testVrf: boolean;
   /** Single-flight: an overrunning tick skips the one that would overlap it. */
   private running = false;
+  /** The in-flight tick, if any (ticket 10): `onModuleDestroy` awaits this
+   *  so a restart does not cut a send in half. */
+  private currentTick: Promise<OperatorTickResult> | null = null;
   /** The self-rescheduling deadline sleep; cleared and replaced on every
    *  tick, on `wake()`, and on shutdown. */
   private deadlineTimer: NodeJS.Timeout | null = null;
   /** Ticket 04: whether `playersToRegister` came back empty last tick, and
    *  for which Epoch, so step 4 can require two consecutive empty ticks. */
   private lastRegisterCheck: RegisterCheck | null = null;
-  /** Step 6b's tries against one Epoch; resets when the Epoch changes. */
-  private topUp: { epochId: bigint; attempts: number } | null = null;
   /**
    * Positions this operator has already settled, by address, with when. The
    * indexer's sweep can re-insert one for a few seconds after the close: the
@@ -82,6 +85,30 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    * address is always safe; the timestamp only bounds the map.
    */
   private settled = new Map<string, number>();
+  /** Same idea as `settled`, for Rounds `close_round` was just sent for
+   *  (ops-and-envs ticket 08): keeps an immediate next tick from resending
+   *  it before the indexer's `RoundClosed` mirror lands. */
+  private closingRounds = new Map<bigint, number>();
+  /** Ticket 12: owners a `register` send was just confirmed for, by when
+   *  (same idea as `settled`): dropped from `playersToRegister` results for a
+   *  while, so a zero-weight owner (a no-op on chain) is not resent forever
+   *  and a Read-model lag cannot resend a batch that already landed. */
+  private registeredRecently = new Map<string, number>();
+  /** Ticket 06: withdrawal-cranking state across ticks (see `WithdrawState`). */
+  private lastWithdrawState: WithdrawState | null = null;
+  /** Ticket 12: expected-error repeat counts across ticks, by `action:target`. */
+  private lastExpectedErrors = new Map<string, number>();
+  /** Ticket 07: how young the Indexer cursor must be for `close_registration`
+   *  to trust it. */
+  private readonly registrationIndexerFreshSeconds: bigint;
+  /** Ticket 05: holds step 3's very first `begin_epoch` back until this chain
+   *  timestamp; null when `LAUNCH_AT` is unset. */
+  private readonly launchAt: bigint | null;
+  /** Logged once, the first tick that sees the pool shut down, so the
+   *  epoch and registration loops stopping is announced instead of just
+   *  going quiet (ops-and-envs ticket 08). Shutdown is irreversible, so
+   *  this never needs to reset. */
+  private shutdownAnnounced = false;
   /**
    * The Round randomness address currently watched via subscription, and its
    * websocket subscription id (ticket 04): kept in sync with `openRound` on
@@ -99,8 +126,14 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     private readonly sparring: SparringService,
     config: ConfigService<HexVaultEnv, true>,
   ) {
-    this.mint = new PublicKey(config.get("HEXUSDC_MINT", { infer: true }));
-
+    this.registrationIndexerFreshSeconds = BigInt(
+      config.get("REGISTRATION_INDEXER_FRESH_S", { infer: true }),
+    );
+    const launchAtIso = config.get("LAUNCH_AT", { infer: true });
+    this.launchAt =
+      typeof launchAtIso === "string" && launchAtIso.length > 0
+        ? BigInt(Math.floor(Date.parse(launchAtIso) / 1000))
+        : null;
     // Which randomness account the program expects depends on how it was
     // compiled, and the IDL is the only thing that travels with the build.
     this.testVrf = chain.program.idl.instructions.some(
@@ -121,11 +154,22 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    void this.runAndScheduleNext();
+    this.runAndScheduleNext().catch((cause) =>
+      this.logger.error("scheduling failed", cause as Error),
+    );
   }
 
+  /** Ticket 10: awaits the in-flight tick, so a deploy or restart does not
+   *  cut a send in half. Nest only calls this when `enableShutdownHooks()`
+   *  has been called (main.ts). */
   async onModuleDestroy(): Promise<void> {
     this.clearDeadlineTimer();
+    if (this.currentTick) {
+      await this.currentTick.catch(() => {
+        // runOnce() never rejects (see tick()'s comment); this is just in
+        // case a future change makes it, so shutdown still proceeds.
+      });
+    }
     if (this.randomnessWatch) {
       await this.chain.connection.removeAccountChangeListener(
         this.randomnessWatch.subscriptionId,
@@ -139,7 +183,11 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    *  degrades to a delay rather than a stall. */
   @Interval(SAFETY_INTERVAL_MS)
   async safetyTick(): Promise<void> {
-    await this.runAndScheduleNext();
+    try {
+      await this.runAndScheduleNext();
+    } catch (cause) {
+      this.logger.error("safety tick failed", cause as Error);
+    }
   }
 
   /** For a subscription (ticket 04) to call once it notices something the
@@ -147,7 +195,9 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    *  and looks now instead of waiting for it. */
   wake(): void {
     this.clearDeadlineTimer();
-    void this.runAndScheduleNext();
+    this.runAndScheduleNext().catch((cause) =>
+      this.logger.error("scheduling failed", cause as Error),
+    );
   }
 
   private clearDeadlineTimer(): void {
@@ -166,10 +216,11 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     // null: another caller already owns `running` and will reschedule once
     // it finishes, so scheduling here too would double the pending sleep.
     if (result === null) return;
-    this.deadlineTimer = setTimeout(
-      () => void this.runAndScheduleNext(),
-      result.waitMs,
-    );
+    this.deadlineTimer = setTimeout(() => {
+      this.runAndScheduleNext().catch((cause) =>
+        this.logger.error("scheduling failed", cause as Error),
+      );
+    }, result.waitMs);
   }
 
   /** Single-flight: an overrunning tick is skipped rather than queued behind
@@ -177,10 +228,13 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   async tick(): Promise<OperatorTickResult | null> {
     if (this.running) return null;
     this.running = true;
+    const inFlight = this.runOnce();
+    this.currentTick = inFlight;
     try {
-      return await this.runOnce();
+      return await inFlight;
     } finally {
       this.running = false;
+      if (this.currentTick === inFlight) this.currentTick = null;
     }
   }
 
@@ -189,15 +243,25 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     let ctx: TickContext | undefined;
     try {
       ctx = await this.context();
+      if (ctx.pool.shutdown && !this.shutdownAnnounced) {
+        this.shutdownAnnounced = true;
+        this.logger.log(
+          "pool is shut down: the epoch and new-round loops have stopped; " +
+            "settling already-open rounds, paying an already-drawn epoch and processing withdrawals continue",
+        );
+      }
       const outcome = await runTick(ctx);
       this.syncRandomnessWatch(ctx.openRound);
       if (outcome.registerCheck) this.lastRegisterCheck = outcome.registerCheck;
+      if (outcome.withdrawState) this.lastWithdrawState = outcome.withdrawState;
+      if (outcome.expectedErrors) this.lastExpectedErrors = new Map(outcome.expectedErrors);
       if (outcome.action) this.logger.log(`sent ${outcome.action}`);
+      if (outcome.stepError) this.logger.warn(`tick step failed: ${outcome.stepError}`);
       // A new Round exists on chain now; the Sparring player buys in without
       // waiting for its own (much slower) safety tick to notice.
       if (outcome.action === "create_round") this.sparring.wake();
       const waitMs = msUntilWake(ctx.now, outcome.nextWakeAt);
-      await this.writeState(outcome, null, waitMs);
+      await this.writeState(outcome, outcome.stepError ?? null, waitMs);
       return { ...outcome, waitMs };
     } catch (cause) {
       const error =
@@ -210,7 +274,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
         // Lost a race with someone else's transaction (or our own, confirmed
         // after we read). The next tick reads the newer state and moves on.
         this.logger.debug(`skipped: ${error.message}`);
-        await this.writeState({ action: null }, null, waitMs);
+        await this.safeWriteState({ action: null }, null, waitMs);
         return { action: null, nextWakeAt, waitMs };
       }
       // Anchor and web3 hang the program logs off the cause; they name the
@@ -220,8 +284,27 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
         `tick failed: ${error.message}${logs ? `\n${logs.join("\n")}` : ""}`,
         error.stack,
       );
-      await this.writeState({ action: null }, error.message, waitMs);
+      await this.safeWriteState({ action: null }, error.message, waitMs);
       return { action: null, nextWakeAt, waitMs };
+    }
+  }
+
+  /**
+   * `writeState` wrapped so a Postgres blip on the catch path (a failing
+   * tick, of all times) cannot reject out of `runOnce` and crash the process
+   * (ticket 10). The success path's own `writeState` call is left as is:
+   * failing to record a *successful* tick's outcome is a real bug worth
+   * surfacing, not something to swallow silently.
+   */
+  private async safeWriteState(
+    outcome: Pick<TickOutcome, "action" | "progress" | "withdrawShortfall">,
+    error: string | null,
+    waitMs: number,
+  ): Promise<void> {
+    try {
+      await this.writeState(outcome, error, waitMs);
+    } catch (cause) {
+      this.logger.error("failed to record tick state", cause as Error);
     }
   }
 
@@ -253,17 +336,29 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       lastRound,
       ix: this.instructions,
       lastRegisterCheck: this.lastRegisterCheck,
-      topUpAttempts:
-        this.topUp?.epochId === pool.currentEpochId ? this.topUp.attempts : 0,
+      lastWithdrawState: this.lastWithdrawState,
+      indexerCursor: await this.indexerCursorInfo(),
+      indexerFreshThresholdSeconds: this.registrationIndexerFreshSeconds,
+      lastExpectedErrors: this.lastExpectedErrors,
+      launchAt: this.launchAt,
       fulfilled: (seed) => this.fulfilled(seed),
-      authorityBalance: () => this.authorityBalance(),
-      jackpotBalance: () => this.jackpotBalance(),
-      recordTopUpAttempt: (epochId) => {
-        const attempts =
-          this.topUp?.epochId === epochId ? this.topUp.attempts + 1 : 1;
-        this.topUp = { epochId, attempts };
+      principalVaultBalance: () => this.principalVaultBalance(),
+      duePendingWithdrawals: (currentEpochId) =>
+        this.duePendingWithdrawals(currentEpochId),
+      playersToRegister: async (epochId) => {
+        const owners = await this.indexer.playersToRegister(epochId);
+        return owners.filter((owner) => !this.registeredRecently.has(owner));
       },
-      playersToRegister: (epochId) => this.indexer.playersToRegister(epochId),
+      forgetRegistered: async (owners) => {
+        const now = Date.now();
+        for (const [owner, at] of this.registeredRecently) {
+          if (now - at > REGISTERED_MEMORY_MS) this.registeredRecently.delete(owner);
+        }
+        for (const owner of owners) this.registeredRecently.set(owner, now);
+      },
+      referralGrantsDue: (epochId) => this.indexer.referralGrantsDue(epochId),
+      markReferralGrantsSent: (epochId, referrers, txSig) =>
+        this.indexer.markReferralGrantsSent(epochId, referrers, txSig),
       unsettledPositions: async () =>
         (await this.indexer.unsettledPositions()).filter(
           (position) => !this.settled.has(position.address),
@@ -275,8 +370,19 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
         }
         for (const address of addresses) this.settled.set(address, now);
       },
+      roundsToClose: async () =>
+        (await this.indexer.roundsToClose()).filter((id) => !this.closingRounds.has(id)),
+      forgetRound: (id) => {
+        const now = Date.now();
+        for (const [closedId, at] of this.closingRounds) {
+          if (now - at > SETTLED_MEMORY_MS) this.closingRounds.delete(closedId);
+        }
+        this.closingRounds.set(id, now);
+      },
       winner: (epochId, target) => this.winner(epochId, target),
+      winnerOnChain: (epochId, target) => this.winnerOnChain(epochId, target),
       send: (instructions) => this.chain.send(instructions),
+      warn: (message) => this.logger.warn(message),
     };
   }
 
@@ -375,17 +481,14 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     this.randomnessWatch = { address: wanted, subscriptionId };
   }
 
-  private async authorityBalance(): Promise<bigint> {
-    const address = getAssociatedTokenAddressSync(
-      this.mint,
-      this.chain.keypair.publicKey,
-    );
+  private async principalVaultBalance(): Promise<bigint> {
+    const address = this.chain.principalVaultAddress();
     try {
       return (await getAccount(this.chain.connection, address)).amount;
     } catch (cause) {
       if (cause instanceof TokenAccountNotFoundError) {
         throw new Error(
-          `authority hexUSDC account ${address.toBase58()} does not exist; run bootstrap first`,
+          `principal vault ${address.toBase58()} does not exist; run bootstrap first`,
           { cause },
         );
       }
@@ -393,20 +496,24 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async jackpotBalance(): Promise<bigint> {
-    try {
-      return (
-        await getAccount(this.chain.connection, this.chain.jackpotVaultAddress())
-      ).amount;
-    } catch (cause) {
-      if (cause instanceof TokenAccountNotFoundError) {
-        throw new Error(
-          `jackpot vault ${this.chain.jackpotVaultAddress().toBase58()} does not exist; run bootstrap first`,
-          { cause },
-        );
-      }
-      throw cause;
-    }
+  /** Step 6b's queue, straight off the Player mirror. Oldest request first,
+   *  so a batch that only covers part of the queue still drains it in order. */
+  private async duePendingWithdrawals(
+    currentEpochId: bigint,
+  ): Promise<{ owner: string; amount: bigint }[]> {
+    const players = await this.prisma.player.findMany({
+      where: {
+        poolAddress: this.chain.poolAddress().toBase58(),
+        pendingWithdraw: { gt: 0 },
+        pendingEpoch: { lt: currentEpochId },
+      },
+      orderBy: { pendingEpoch: "asc" },
+      select: { owner: true, pendingWithdraw: true },
+    });
+    return players.map((player) => ({
+      owner: player.owner,
+      amount: player.pendingWithdraw,
+    }));
   }
 
   /** The registered interval containing `target` (spec §3.4 step 6). */
@@ -416,6 +523,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   ): Promise<string | null> {
     const player = await this.prisma.player.findFirst({
       where: {
+        poolAddress: this.chain.poolAddress().toBase58(),
         regEpoch: epochId,
         regStart: { lte: target.toString() },
         regEnd: { gt: target.toString() },
@@ -423,6 +531,58 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       select: { owner: true },
     });
     return player?.owner ?? null;
+  }
+
+  /**
+   * Ticket 12: same lookup as `winner`, scanning every Player account on
+   * chain instead of the Read model, for when it misses — a mirror gap must
+   * never cost a winner their Prize. Only asked on a miss, so this is rare;
+   * ponytail: scans the whole program's Player accounts (fine at beta
+   * scale, same trade `ApiService.liveWeights` already makes), add a
+   * `getProgramAccounts` memcmp filter on `reg_epoch` if it ever grows.
+   */
+  private async winnerOnChain(epochId: bigint, target: bigint): Promise<string | null> {
+    interface DecodedPlayer {
+      owner: PublicKey;
+      regEpoch: { toString(): string };
+      regStart: { toString(): string };
+      regEnd: { toString(): string };
+    }
+    // SAFETY: `program.account` is keyed by plain strings in `Program<Idl>`
+    // (no generated per-account types), same reason `instructions.ts`'s
+    // `method()` casts; the shape is checked structurally by `DecodedPlayer`.
+    const accountNamespace = this.chain.program.account as unknown as Record<
+      string,
+      { all(): Promise<{ account: DecodedPlayer }[]> } | undefined
+    >;
+    const playerAccounts = accountNamespace.player;
+    if (!playerAccounts) throw new Error("player account namespace is missing from the IDL");
+    const accounts = await playerAccounts.all();
+    const hit = accounts.find(({ account }) => {
+      const regEpoch = BigInt(account.regEpoch.toString());
+      const regStart = BigInt(account.regStart.toString());
+      const regEnd = BigInt(account.regEnd.toString());
+      return regEpoch === epochId && target >= regStart && target < regEnd;
+    });
+    return hit ? hit.account.owner.toBase58() : null;
+  }
+
+  /** Ticket 07: the Indexer cursor's own staleness, straight off its row.
+   *  The Active pool's row only (ADR 0016): a retired pool's cursor can be
+   *  fresh while this pool's mirror has not synced once. */
+  private async indexerCursorInfo(): Promise<{
+    ageSeconds: number | null;
+    updatedAt: bigint | null;
+  }> {
+    const cursor = await this.prisma.cursor.findUnique({
+      where: { poolAddress: this.chain.poolAddress().toBase58() },
+    });
+    if (cursor?.updatedAt == null) return { ageSeconds: null, updatedAt: null };
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
+    return {
+      ageSeconds: Number(nowSeconds - cursor.updatedAt),
+      updatedAt: cursor.updatedAt,
+    };
   }
 
   /**
@@ -436,7 +596,16 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
    * and the web summary never have to reason about chain time (ticket 03).
    */
   private async writeState(
-    outcome: Pick<TickOutcome, "action" | "progress">,
+    outcome: Pick<
+      TickOutcome,
+      | "action"
+      | "progress"
+      | "withdrawShortfall"
+      | "withdrawState"
+      | "indexerStale"
+      | "epochNoProgress"
+      | "drawnUnpaid"
+    >,
     error: string | null,
     waitMs: number,
   ): Promise<void> {
@@ -445,6 +614,10 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       lastTickAt: nowSeconds,
       nextWakeAt: nowSeconds + BigInt(Math.round(waitMs / 1000)),
       lastError: error,
+      // Ticket 09: written only on a tick that completed without error, so
+      // OPERATOR_FAILING can tell "still ticking, still failing" from "just
+      // recovered".
+      ...(error === null ? { lastSuccessAt: nowSeconds } : {}),
       ...(outcome.action === null ? {} : { lastAction: outcome.action }),
       ...(outcome.progress === undefined
         ? {}
@@ -452,11 +625,45 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
             registeredCount: outcome.progress.count,
             registeredTotal: outcome.progress.total,
           }),
+      // Absent on a tick that acted before step 6b: nothing looked, so the
+      // last reported figure is still the best one /status has.
+      ...(outcome.withdrawShortfall === undefined
+        ? {}
+        : { withdrawShortfall: outcome.withdrawShortfall }),
+      // Ticket 06: how many owners step 6b has given up on for the epoch,
+      // for the new alert condition naming the count.
+      ...(outcome.withdrawState === undefined
+        ? {}
+        : { withdrawSkippedCount: outcome.withdrawState.skipped.size }),
+      // Ticket 07: only ever true on the tick that withheld `close_registration`
+      // for it; the next tick that does not hit the same wait clears it.
+      ...(outcome.indexerStale === undefined ? {} : { registrationIndexerStale: outcome.indexerStale }),
+      // Ticket 09: present on every tick that reaches decide(), so these
+      // always reflect the freshest read.
+      ...(outcome.epochNoProgress === undefined ? {} : { epochNoProgress: outcome.epochNoProgress }),
+      ...(outcome.drawnUnpaid === undefined ? {} : { drawnUnpaid: outcome.drawnUnpaid }),
     };
-    await this.prisma.operatorState.upsert({
-      where: { id: 1 },
-      create: { id: 1, ...fields },
-      update: fields,
-    });
+    const poolAddress = this.chain.poolAddress().toBase58();
+    try {
+      await this.prisma.operatorState.upsert({
+        where: { poolAddress },
+        create: { poolAddress, ...fields },
+        update: fields,
+      });
+    } catch (cause) {
+      // OperatorState references the Pool row (ADR 0016), and the indexer,
+      // not the operator, writes that row. On a fresh database the first
+      // tick can land before the indexer's first sync, and a pool that is
+      // not bootstrapped has no row at all. Nothing is lost by skipping: the
+      // next tick writes the whole state again. P2003 is the only foreign
+      // key this upsert has, so anything else still throws.
+      if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2003") {
+        this.logger.warn(
+          `tick state not recorded: the indexer has not mirrored pool ${poolAddress} yet`,
+        );
+        return;
+      }
+      throw cause;
+    }
   }
 }

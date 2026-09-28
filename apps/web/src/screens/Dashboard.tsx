@@ -25,18 +25,21 @@ import {
   type EventDto,
   type PlayerDto,
 } from "../api.js";
-import { eventKey } from "../chain.js";
+import { CLUSTER, GAME_GATED, JACKPOT_GATED, eventKey } from "../chain.js";
 import { dhmsParts } from "../engine.js";
-import { estimatedYield, formatAddress, formatMoney2 } from "../lib/money.js";
+import { launchCountdown, launchCountdownLabel, prizeCardState } from "../launch.js";
+import { formatAddress, formatMoney2 } from "../lib/money.js";
 import { useApiPoll } from "../useApiPoll.js";
 import { Star, wholeDollars } from "./Home.js";
 
 const DECIMALS = 6;
 const SYMBOL = "USDC";
 const CLOCK_LABELS = ["DAYS", "HRS", "MIN", "SEC"] as const;
-/** Every environment signs on devnet (see SIGNING_CHAIN in wallets.tsx). */
+/** Mainnet is the explorer's default; every other cluster needs the query. */
 const txExplorerUrl = (signature: string) =>
-  `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+  `https://explorer.solana.com/tx/${signature}${
+    CLUSTER === "devnet" ? "?cluster=devnet" : ""
+  }`;
 
 /** Atomic (6dp) string → "$2,423.55". */
 const dollars = (atomic: string) =>
@@ -72,18 +75,24 @@ export interface DashboardScreenProps {
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
   currentEpoch: CurrentEpochDto | null;
+  /** Ticket 05: `/state`'s `launchAt`, present only while `currentEpoch` is
+   *  null (the deposit-only launch week). */
+  launchAt: string | null;
+  /** game-jackpot-pause: the draw is held, so the clock says so instead of
+   *  counting to a draw that will not run on schedule. */
+  jackpotPaused: boolean;
   /** Null until the owner's Player is indexed, or no wallet is connected. */
   player: PlayerDto | null;
-  /** Basis points from GET /state's status; null while the backend is unreachable. */
-  aprBps: number | null;
   onDeposit: () => void;
   onWithdraw: () => void;
   onPlay: () => void;
   onViewDraws: () => void;
 }
 
-/** Unix seconds (decimal string) → "Sun, Sep 6". */
-function shortDate(unixSeconds: string | null): string {
+/** Unix seconds (decimal string) → "Sun, Sep 6". Exported for referrals.ts's
+ *  Your Team JOINED column (referral-page ticket 05), which wants the exact
+ *  same format. */
+export function shortDate(unixSeconds: string | null): string {
   if (unixSeconds === null) return "—";
   const ms = Number(unixSeconds) * 1000;
   if (!Number.isFinite(ms) || ms <= 0) return "—";
@@ -153,8 +162,9 @@ export function Dashboard(props: DashboardScreenProps) {
     entries,
     now,
     currentEpoch,
+    launchAt,
+    jackpotPaused,
     player,
-    aprBps,
     onDeposit,
     onWithdraw,
     onPlay,
@@ -224,10 +234,28 @@ export function Dashboard(props: DashboardScreenProps) {
   const remaining =
     currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : null;
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
-  const parts = remaining === null ? null : dhmsParts(remaining);
+  // No epoch and no LAUNCH_AT: the clock sits at zero. "--" is only for an
+  // unknown chain clock; "Coming soon" is the jackpot gate's.
+  const parts =
+    remaining !== null ? dhmsParts(remaining) : currentEpoch === null ? dhmsParts(0n) : null;
+  // Ticket 05: no Epoch yet (deposit-only launch week) counts down to
+  // LAUNCH_AT instead of an Epoch's endsAt. Ticket 02 (feature-gates): the
+  // jackpot gate takes the same "launch" branch, live epoch or not, and
+  // ignores LAUNCH_AT so it always reads "Coming soon".
+  const cardState = prizeCardState(
+    JACKPOT_GATED,
+    currentEpoch !== null,
+    jackpotPaused,
+    launchAt !== null,
+  );
+  const launchLabel =
+    cardState === "launch"
+      ? launchCountdownLabel(launchCountdown(JACKPOT_GATED ? null : launchAt, now))
+      : null;
 
-  const yieldText =
-    aprBps === null ? "—" : `$${fmt2(estimatedYield(principal, aprBps))} / yr`;
+  // Principal drops the moment a withdrawal is requested and the USDC lands a
+  // day later, so the card says where the difference went.
+  const pendingWithdraw = player ? BigInt(player.pendingWithdraw) : 0n;
   // Odds need the pool-wide weight denominator, so they only exist once the
   // backend knows this wallet. Before the first deposit the whole strip goes.
   const showBoost = entries > 0n;
@@ -249,10 +277,14 @@ export function Dashboard(props: DashboardScreenProps) {
                 {(entries / 10n ** BigInt(DECIMALS)).toLocaleString("en-US")}
               </dd>
             </div>
-            <div>
-              <dt>Estimated Yield</dt>
-              <dd>{yieldText}</dd>
-            </div>
+            {pendingWithdraw > 0n ? (
+              <div>
+                <dt>Withdrawing</dt>
+                <dd data-testid="dash-pending-withdraw">
+                  ${fmt2(pendingWithdraw)}
+                </dd>
+              </div>
+            ) : null}
           </dl>
           <div className="dash-card-actions">
             <button
@@ -285,7 +317,15 @@ export function Dashboard(props: DashboardScreenProps) {
             {currentEpoch ? wholeDollars(currentEpoch.jackpotAmount) : "$—"}
           </div>
           <div className="dash-clock-label">NEXT DRAW IN</div>
-          {drawing || (remaining !== null && remaining <= 0n) ? (
+          {cardState === "launch" ? (
+            <div className="dash-drawing" data-testid="dash-launch-countdown">
+              {launchLabel}
+            </div>
+          ) : cardState === "paused" ? (
+            <div className="dash-drawing" data-testid="dash-draw-paused">
+              DRAW PAUSED
+            </div>
+          ) : drawing || (remaining !== null && remaining <= 0n) ? (
             <div className="dash-drawing" data-testid="dash-drawing">
               DRAWING…
             </div>
@@ -325,7 +365,11 @@ export function Dashboard(props: DashboardScreenProps) {
             type="button"
             className="dash-boost-cta"
             data-testid="dash-play"
-            onClick={onPlay}
+            // Same aria-disabled + data-tip treatment as the PLAY nav tab
+            // (App.tsx) under the game gate (ticket 01, feature-gates).
+            aria-disabled={GAME_GATED}
+            data-tip={GAME_GATED ? "Coming soon" : undefined}
+            onClick={GAME_GATED ? undefined : onPlay}
           >
             Play to boost
             <svg

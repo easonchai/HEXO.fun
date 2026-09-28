@@ -3,7 +3,8 @@
 //!
 //! This module only declares instructions and delegates to their owning
 //! module. Custody (`create_pool`, `set_params`, `set_pause`, `deposit`,
-//! `withdraw`) is implemented in `custody.rs`. Rounds and epochs are stubs
+//! `request_withdraw`, `process_withdraw`, `admin_withdraw`) is implemented
+//! in `custody.rs`. Rounds and epochs are stubs
 //! here on purpose: their accounts are final so the IDL does not churn, but
 //! their bodies land in tickets 03 and 04, entirely inside `rounds.rs` and
 //! `epochs.rs` so this file never needs to change again for them.
@@ -29,7 +30,51 @@ use rounds::*;
 #[cfg(feature = "test-vrf")]
 use test_vrf::*;
 
+// One program ID per environment (ops-and-envs ticket 06): dev keeps the
+// original devnet/localnet id, staging and mainnet each get their own
+// keypair under `keys/`, gitignored. `scripts/check-deployable.sh` refuses
+// `test-vrf` built together with either, and this refuses both at once.
+#[cfg(all(feature = "staging", feature = "mainnet"))]
+compile_error!("features `staging` and `mainnet` are mutually exclusive");
+#[cfg(all(feature = "devnew", any(feature = "staging", feature = "mainnet")))]
+compile_error!("feature `devnew` cannot combine with `staging` or `mainnet`");
+// beta-launch-fixes ticket 03 / production-hardening ticket 02: a `test-vrf`
+// build fabricates its own "fulfilled" randomness instead of ever calling
+// ORAO, so it must never be deployable to a real cluster even if someone
+// skips `scripts/deploy.sh`'s runtime check.
+#[cfg(all(feature = "test-vrf", any(feature = "staging", feature = "mainnet")))]
+compile_error!("feature `test-vrf` cannot combine with `staging` or `mainnet`");
+
+#[cfg(feature = "mainnet")]
+declare_id!("EwqRKGqnH7dGwL5ERMGQc2tsLKwT3duzKWPcCDphyPCH");
+#[cfg(feature = "staging")]
+declare_id!("H2iWyng2orJpHNGGWhrR7rBQNDqixThpTpAwF4dnPXax");
+#[cfg(feature = "devnew")]
+declare_id!("8JVqp7anmrrE5ZvJPnz9jimbZDHotMT8aq877Xgg7Aih");
+#[cfg(not(any(feature = "staging", feature = "mainnet", feature = "devnew")))]
 declare_id!("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
+
+// ops-and-envs ticket 12: a security.txt ELF section so a researcher can go
+// from the deployed program address to a contact. Gated on `no-entrypoint`
+// per the crate's own rule for library authors: a consumer building this
+// crate as a CPI dependency (the `cpi` feature, which implies
+// `no-entrypoint`) must not get a second `security_txt` symbol linked in
+// alongside its own program's.
+//
+// project_url and contacts are TODO: the user owns the live app URL and the
+// real contact channels (see spec.md "Open items the user owns"). Fill them
+// in before the mainnet deploy; a placeholder security.txt is worse than
+// none, since it earns a wasted report to a dead inbox.
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "HexVault",
+    // TODO(user): replace with the live app URL once deployed.
+    project_url: "TODO: https://hexvault.example",
+    // TODO(user): replace with a real, monitored contact before mainnet.
+    contacts: "email:TODO@hexvault.example",
+    policy: "We do not currently pay a bug bounty. Report vulnerabilities responsibly to the contact above; do not disclose or exploit before we confirm a fix.",
+    source_code: "https://github.com/easonchai/HexVault"
+}
 
 #[program]
 pub mod hex_vault {
@@ -49,12 +94,69 @@ pub mod hex_vault {
         custody::set_pause(ctx, paused)
     }
 
+    /// Sets the game or the jackpot switch on its own (game-jackpot-pause
+    /// ticket 01), same role rule as `set_pause`.
+    pub fn set_feature_pause(
+        ctx: Context<SetFeaturePause>,
+        feature: PauseFeature,
+        paused: bool,
+    ) -> Result<()> {
+        custody::set_feature_pause(ctx, feature, paused)
+    }
+
+    /// Admin-only and irreversible (ops-and-envs ticket 02, spec
+    /// "Shutdown"). Stops every inflow, the game and the draw, and lets
+    /// withdrawals skip the epoch lock.
+    pub fn shutdown(ctx: Context<Shutdown>) -> Result<()> {
+        custody::shutdown(ctx)
+    }
+
+    /// Permissionless, only valid once shut down (ops-and-envs ticket 03):
+    /// pays one Player's whole balance to their own USDC ATA.
+    pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
+        custody::emergency_withdraw(ctx)
+    }
+
+    /// Admin-only, only valid once shut down (ops-and-envs ticket 04): moves
+    /// the jackpot and any unspent yield budget to `pool.treasury`.
+    pub fn sweep_house(ctx: Context<SweepHouse>) -> Result<()> {
+        custody::sweep_house(ctx)
+    }
+
+    pub fn set_operator(ctx: Context<SetOperator>, new_operator: Pubkey) -> Result<()> {
+        custody::set_operator(ctx, new_operator)
+    }
+
+    pub fn propose_admin(ctx: Context<ProposeAdmin>, new_admin: Pubkey) -> Result<()> {
+        custody::propose_admin(ctx, new_admin)
+    }
+
+    pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
+        custody::accept_admin(ctx)
+    }
+
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         custody::deposit(ctx, amount)
     }
 
-    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
-        custody::withdraw(ctx, amount)
+    pub fn request_withdraw(ctx: Context<RequestWithdraw>, amount: u64) -> Result<()> {
+        custody::request_withdraw(ctx, amount)
+    }
+
+    pub fn process_withdraw(ctx: Context<ProcessWithdraw>) -> Result<()> {
+        custody::process_withdraw(ctx)
+    }
+
+    pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
+        custody::admin_withdraw(ctx, amount)
+    }
+
+    pub fn buy_tickets(ctx: Context<BuyTickets>, amount: u64) -> Result<()> {
+        custody::buy_tickets(ctx, amount)
+    }
+
+    pub fn grant_tickets(ctx: Context<GrantTickets>, amount: u64) -> Result<()> {
+        custody::grant_tickets(ctx, amount)
     }
 
     // Rounds (spec §2.3 "Rounds") - stubs, ticket 03 implements these.
@@ -67,8 +169,11 @@ pub mod hex_vault {
         rounds::buy_position(ctx, tiles, stake_per_tile)
     }
 
-    pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<()> {
-        rounds::request_round_randomness(ctx)
+    pub fn request_round_randomness(
+        ctx: Context<RequestRoundRandomness>,
+        nonce: [u8; 32],
+    ) -> Result<()> {
+        rounds::request_round_randomness(ctx, nonce)
     }
 
     pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
@@ -81,6 +186,12 @@ pub mod hex_vault {
 
     pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
         rounds::void_round(ctx)
+    }
+
+    /// Permissionless (ops-and-envs ticket 05): reclaims a finished Round's
+    /// rent for the operator once every Position on it has settled.
+    pub fn close_round(ctx: Context<CloseRound>) -> Result<()> {
+        rounds::close_round(ctx)
     }
 
     // Epochs (spec §2.3 "Epochs") - stubs, ticket 04 implements these.
@@ -97,8 +208,12 @@ pub mod hex_vault {
         epochs::fund_jackpot(ctx, amount)
     }
 
-    pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
-        epochs::close_registration(ctx)
+    pub fn fund_yield(ctx: Context<FundYield>, amount: u64) -> Result<()> {
+        epochs::fund_yield(ctx, amount)
+    }
+
+    pub fn close_registration(ctx: Context<CloseRegistration>, nonce: [u8; 32]) -> Result<()> {
+        epochs::close_registration(ctx, nonce)
     }
 
     pub fn draw(ctx: Context<Draw>) -> Result<()> {

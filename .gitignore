@@ -14,8 +14,9 @@ playwright-report/
 # Local secrets and deployment authority
 .env
 .env.*
-!.env.example
+!.env*.example
 *.keypair.json
+keys/
 
 # Editor / OS
 .DS_Store
@@ -36,3 +37,4 @@ docs/plan/
 operator.json
 
 .vercel
+operator-*.json

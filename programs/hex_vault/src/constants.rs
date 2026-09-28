@@ -2,8 +2,17 @@
 pub const TILE_COUNT: u8 = 36;
 pub const TILE_MASK: u64 = (1u64 << TILE_COUNT) - 1;
 
-/// 100% in basis points. `Pool::house_cut_bps` is capped at this.
+/// 100% in basis points. `Pool::house_cut_bps` and `Pool::base_rate_bps` are
+/// capped at this.
 pub const BPS_DENOMINATOR: u16 = 10_000;
+
+/// Written to `version` on a freshly created `Pool`, `Epoch` or `Player`.
+/// There is no migration code yet, since nothing has shipped an older
+/// version; see ADR 0013.
+pub const CURRENT_VERSION: u8 = 1;
+
+/// Denominator for `base_rate_bps`, an APR: seconds in a 365-day year.
+pub const SECONDS_PER_YEAR: u128 = 31_536_000;
 
 pub const SEED_POOL: &[u8] = b"pool";
 pub const SEED_PRINCIPAL: &[u8] = b"principal";

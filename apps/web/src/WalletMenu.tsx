@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
+import { track } from "./analytics.js";
 import { apiBaseUrl, requestFaucet } from "./api.js";
+import { CLUSTER } from "./chain.js";
+import { faucetEnabled } from "./cluster.js";
 
 type Props = {
   address: string;
@@ -12,6 +15,8 @@ type Props = {
   /** Called after the faucet lands so the balance row re-reads the chain. */
   onFunded: () => void;
   onDisconnect: () => void;
+  /** INVITE / ABOUT, shown in the menu on phones where the navbar drops them. */
+  onNavigate: (tab: "REFERRALS" | "ABOUT") => void;
 };
 
 /** Faucet button label state. `wait` counts down the per-owner cooldown. */
@@ -27,6 +32,9 @@ type Faucet =
  * its `Copy <address>` title because demo.spec.ts reads the address off it.
  * Closes on outside click, Escape, and after Disconnect; Copy and Faucet keep
  * it open so the "Copied" / "Sent" flip is visible.
+ *
+ * The faucet item is devnet-only: on mainnet the backend route is gone and
+ * there is no test mint to hand out (see `faucetEnabled` in chain.ts).
  */
 export function WalletMenu({
   address,
@@ -37,6 +45,7 @@ export function WalletMenu({
   onCopy,
   onFunded,
   onDisconnect,
+  onNavigate,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [faucet, setFaucet] = useState<Faucet>({ kind: "idle" });
@@ -60,6 +69,7 @@ export function WalletMenu({
     setFaucet({ kind: "busy" });
     const result = await requestFaucet(apiBaseUrl(), address);
     if (result.ok) {
+      track("faucet_claimed");
       setFaucet({ kind: "sent" });
       onFunded();
     } else if ("retryAfterSeconds" in result) {
@@ -133,17 +143,39 @@ export function WalletMenu({
             <span className="wallet-menu-row-label">{symbol}</span>
             <span className="wallet-menu-row-value">{balance}</span>
           </div>
-          <button
-            type="button"
-            role="menuitem"
-            className="wallet-menu-item"
-            data-testid="faucet"
-            disabled={faucet.kind === "busy" || faucet.kind === "wait"}
-            onClick={() => void pullFaucet()}
-          >
-            <FaucetIcon />
-            <span className="wallet-menu-item-label">{faucetLabel}</span>
-          </button>
+          {faucetEnabled(CLUSTER) ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="wallet-menu-item"
+              data-testid="faucet"
+              disabled={faucet.kind === "busy" || faucet.kind === "wait"}
+              onClick={() => void pullFaucet()}
+            >
+              <FaucetIcon />
+              <span className="wallet-menu-item-label">{faucetLabel}</span>
+            </button>
+          ) : null}
+          {(
+            [
+              ["REFERRALS", "Invite"],
+              ["ABOUT", "About"],
+            ] as const
+          ).map(([tab, label]) => (
+            <button
+              key={tab}
+              type="button"
+              role="menuitem"
+              className="wallet-menu-item wallet-menu-nav"
+              data-testid={`wallet-menu-${tab.toLowerCase()}`}
+              onClick={() => {
+                setOpen(false);
+                onNavigate(tab);
+              }}
+            >
+              <span className="wallet-menu-item-label">{label}</span>
+            </button>
+          ))}
           <button
             type="button"
             role="menuitem"

@@ -4,7 +4,6 @@
 import { BN, type Idl, type Program } from "@anchor-lang/core";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
@@ -19,12 +18,14 @@ import {
   jackpotVaultAddress,
   playerAddress,
   positionAddress,
+  principalVaultAddress,
   roundAddress,
 } from "../chain/pda";
 import type { EpochState, PoolState, RoundState } from "./chain-state";
 import {
   ORAO_VRF_PROGRAM_ID,
   ORAO_VRF_TREASURY,
+  randomNonce,
   randomnessAddress,
   vrfSeed,
 } from "./vrf";
@@ -44,7 +45,7 @@ export class OperatorInstructions {
   constructor(
     private readonly program: Program<Idl>,
     private readonly programId: PublicKey,
-    private readonly authority: PublicKey,
+    private readonly operator: PublicKey,
     /**
      * True when the deployed program is a `test-vrf` build, which puts the
      * randomness account at a PDA of this program instead of ORAO's. Read off
@@ -88,12 +89,17 @@ export class OperatorInstructions {
   async beginEpoch(pool: PoolState): Promise<TransactionInstruction[]> {
     // `current_epoch` does not exist before the first epoch; the program skips
     // it in that case, but the address still has to be supplied.
+    // `epochTwoBehind` (beta-launch-fixes ticket 03) is likewise only read
+    // once `current_epoch_id >= 2`; the address still has to be supplied, and
+    // clamping at 0 keeps it in range for the two calls before that.
+    const twoBehindId = pool.currentEpochId > 0n ? pool.currentEpochId - 1n : 0n;
     return [
       await this.method("beginEpoch")
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           currentEpoch: this.epoch(pool, pool.currentEpochId),
+          epochTwoBehind: this.epoch(pool, twoBehindId),
           newEpoch: this.epoch(pool, pool.currentEpochId + 1n),
           systemProgram: SystemProgram.programId,
         })
@@ -120,56 +126,88 @@ export class OperatorInstructions {
   }
 
   /**
-   * Step 6b: top the authority's own hexUSDC up when it is short (it is the
-   * mint authority) and move `amount` into the jackpot vault, in one
-   * transaction so a mint can never land without its funding.
+   * Step 3b (docs/plan/hexo-referrals ticket 08): one `grant_tickets` per
+   * referrer, batched into one transaction the way `register` batches
+   * owners. Signed by the operator, so every grant is capped on chain per
+   * Player per day at their own Principal and pool-wide at `bonus_cap_bps`
+   * of `total_principal` (`grant_tickets`' operator path).
    */
-  async fundJackpot(
+  async grantTickets(
     pool: PoolState,
-    amount: bigint,
-    shortfall: bigint,
+    grants: readonly { referrer: string; amount: bigint }[],
   ): Promise<TransactionInstruction[]> {
-    const source = getAssociatedTokenAddressSync(pool.acceptedMint, this.authority);
-    const mintTo =
-      shortfall > 0n
-        ? [
-            createMintToInstruction(
-              pool.acceptedMint,
-              source,
-              this.authority,
-              shortfall,
-            ),
-          ]
-        : [];
-
-    const fund = await this.method("fundJackpot", bn(amount))
-      .accountsPartial({
-        sourceAuthority: this.authority,
-        pool: pool.address,
-        acceptedMint: pool.acceptedMint,
-        source,
-        jackpotVault: jackpotVaultAddress(this.programId, pool.address),
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .instruction();
-
-    return [...mintTo, fund];
+    return Promise.all(
+      grants.map((grant) =>
+        this.method("grantTickets", bn(grant.amount))
+          .accountsPartial({
+            signer: this.operator,
+            pool: pool.address,
+            player: this.player(pool, new PublicKey(grant.referrer)),
+          })
+          .instruction(),
+      ),
+    );
   }
 
-  /** Step 4's tail: the epoch draws on whatever the jackpot vault holds. */
+  /**
+   * Step 6b: pay one batch of due withdrawal requests. `process_withdraw`
+   * takes no signer, so the operator is here only as the fee payer and as
+   * the payer of the owner token accounts it creates. Each payout is
+   * preceded by an idempotent ATA creation: the program transfers to a
+   * token account of the accepted mint owned by `player.owner`, and a
+   * depositor who closed theirs between the request and the payout would
+   * otherwise block their own money.
+   */
+  async processWithdrawals(
+    pool: PoolState,
+    owners: readonly { owner: string }[],
+  ): Promise<TransactionInstruction[]> {
+    const principalVault = principalVaultAddress(this.programId, pool.address);
+    const batches = await Promise.all(
+      owners.map(async (entry) => {
+        const owner = new PublicKey(entry.owner);
+        const ownerToken = getAssociatedTokenAddressSync(pool.acceptedMint, owner);
+        return [
+          createAssociatedTokenAccountIdempotentInstruction(
+            this.operator,
+            ownerToken,
+            owner,
+            pool.acceptedMint,
+          ),
+          await this.method("processWithdraw")
+            .accountsPartial({
+              pool: pool.address,
+              player: this.player(pool, owner),
+              acceptedMint: pool.acceptedMint,
+              ownerToken,
+              principalVault,
+              tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .instruction(),
+        ];
+      }),
+    );
+    return batches.flat();
+  }
+
+  /**
+   * Step 4's tail: the epoch draws on whatever the jackpot vault holds. A
+   * fresh nonce is generated per call and mixed into the seed
+   * (beta-launch-fixes ticket 02), so the randomness address is derived here
+   * rather than read back off the Epoch, and is unknowable before this call.
+   */
   async closeRegistration(
     pool: PoolState,
     epochId: bigint,
   ): Promise<TransactionInstruction[]> {
-    const close = await this.method("closeRegistration")
+    const nonce = randomNonce();
+    const close = await this.method("closeRegistration", Array.from(nonce))
       .accountsPartial({
-        authority: this.authority,
+        operator: this.operator,
         pool: pool.address,
         epoch: this.epoch(pool, epochId),
         jackpotVault: jackpotVaultAddress(this.programId, pool.address),
-        // The seed is computed inside the same instruction, so it has to be
-        // derived here rather than read back off the Epoch.
-        randomness: this.randomnessFor(vrfSeed("epoch", pool.address, epochId)),
+        randomness: this.randomnessFor(vrfSeed("epoch", pool.address, epochId, nonce)),
         vrfNetworkState: pool.vrfNetworkState,
         vrfTreasury: ORAO_VRF_TREASURY,
         vrfProgram: ORAO_VRF_PROGRAM_ID,
@@ -180,11 +218,13 @@ export class OperatorInstructions {
     return [close];
   }
 
+  /** Permissionless (production-hardening ticket 01): the operator still
+   *  cranks it, but the first account is `caller`, not `operator`. */
   async draw(pool: PoolState, epoch: EpochState): Promise<TransactionInstruction[]> {
     return [
       await this.method("draw")
         .accountsPartial({
-          authority: this.authority,
+          caller: this.operator,
           pool: pool.address,
           epoch: this.epoch(pool, epoch.epochId),
           randomness: this.randomnessFor(epoch.vrfSeed),
@@ -193,41 +233,46 @@ export class OperatorInstructions {
     ];
   }
 
-  async rolloverEpoch(pool: PoolState, epochId: bigint): Promise<TransactionInstruction[]> {
+  /**
+   * Takes the Epoch rather than its id: the program checks the randomness
+   * account against the epoch's own seed before it will roll over.
+   * Permissionless (production-hardening ticket 01): first account is
+   * `caller`, not `operator`.
+   */
+  async rolloverEpoch(pool: PoolState, epoch: EpochState): Promise<TransactionInstruction[]> {
     return [
       await this.method("rolloverEpoch")
         .accountsPartial({
-          authority: this.authority,
+          caller: this.operator,
           pool: pool.address,
-          epoch: this.epoch(pool, epochId),
+          epoch: this.epoch(pool, epoch.epochId),
+          randomness: this.randomnessFor(epoch.vrfSeed),
         })
         .instruction(),
     ];
   }
 
-  /** The winner's token account may not exist yet, so create it idempotently. */
+  /**
+   * Permissionless: the instruction takes no signer, so the operator is here
+   * only as the fee payer. A non-House winner needs no token account of
+   * their own any more (docs/plan/hexo-referrals ticket 02): the prize
+   * compounds into `principal_vault` and the winner's Principal instead of
+   * being paid to a token account, so there is nothing to create first.
+   */
   async payout(
     pool: PoolState,
     epochId: bigint,
     winner: PublicKey,
   ): Promise<TransactionInstruction[]> {
-    const winnerToken = getAssociatedTokenAddressSync(pool.acceptedMint, winner);
     return [
-      createAssociatedTokenAccountIdempotentInstruction(
-        this.authority,
-        winnerToken,
-        winner,
-        pool.acceptedMint,
-      ),
       await this.method("payout")
         .accountsPartial({
-          authority: this.authority,
           pool: pool.address,
           acceptedMint: pool.acceptedMint,
           epoch: this.epoch(pool, epochId),
           winner: this.player(pool, winner),
           jackpotVault: jackpotVaultAddress(this.programId, pool.address),
-          winnerToken,
+          principalVault: principalVaultAddress(this.programId, pool.address),
           treasury: pool.treasury,
           buybackReserve: pool.buybackReserve,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -236,17 +281,25 @@ export class OperatorInstructions {
     ];
   }
 
+  /**
+   * A fresh nonce is generated per call and mixed into the seed
+   * (beta-launch-fixes ticket 02), so the randomness address is derived here
+   * from `round.roundId` rather than read back off `round.vrfSeed` (still
+   * `[0; 32]` before the first successful request), and is unknowable before
+   * this call.
+   */
   async requestRoundRandomness(
     pool: PoolState,
     round: RoundState,
   ): Promise<TransactionInstruction[]> {
+    const nonce = randomNonce();
     return [
-      await this.method("requestRoundRandomness")
+      await this.method("requestRoundRandomness", Array.from(nonce))
         .accountsPartial({
-          payer: this.authority,
+          payer: this.operator,
           pool: pool.address,
           round: this.round(pool, round.roundId),
-          randomness: this.randomnessFor(round.vrfSeed),
+          randomness: this.randomnessFor(vrfSeed("round", pool.address, round.roundId, nonce)),
           vrfNetworkState: pool.vrfNetworkState,
           vrfTreasury: ORAO_VRF_TREASURY,
           vrfProgram: ORAO_VRF_PROGRAM_ID,
@@ -256,11 +309,13 @@ export class OperatorInstructions {
     ];
   }
 
+  /** Permissionless (production-hardening ticket 01): first account is
+   *  `caller`, not `operator`; `house` still pins to `pool.house`. */
   async settleRound(pool: PoolState, round: RoundState): Promise<TransactionInstruction[]> {
     return [
       await this.method("settleRound")
         .accountsPartial({
-          authority: this.authority,
+          caller: this.operator,
           pool: pool.address,
           round: this.round(pool, round.roundId),
           randomness: this.randomnessFor(round.vrfSeed),
@@ -270,13 +325,20 @@ export class OperatorInstructions {
     ];
   }
 
-  async voidRound(pool: PoolState, roundId: bigint): Promise<TransactionInstruction[]> {
+  /**
+   * Takes the Round rather than its id: the program checks the randomness
+   * account against the round's own seed before it will void. Permissionless
+   * (production-hardening ticket 01): first account is `caller`, not
+   * `operator`.
+   */
+  async voidRound(pool: PoolState, round: RoundState): Promise<TransactionInstruction[]> {
     return [
       await this.method("voidRound")
         .accountsPartial({
-          authority: this.authority,
+          caller: this.operator,
           pool: pool.address,
-          round: this.round(pool, roundId),
+          round: this.round(pool, round.roundId),
+          randomness: this.randomnessFor(round.vrfSeed),
         })
         .instruction(),
     ];
@@ -306,7 +368,7 @@ export class OperatorInstructions {
 
   /**
    * Permissionless, and the only builder here whose signer is not the
-   * authority: the Sparring player buys for itself, so the owner is passed in
+   * operator: the Sparring player buys for itself, so the owner is passed in
    * and `ChainService.send` gets its keypair.
    */
   async buyPosition(
@@ -331,6 +393,24 @@ export class OperatorInstructions {
     ];
   }
 
+  /**
+   * Permissionless (ops-and-envs ticket 08): reclaims a terminal Round's
+   * rent for the operator once nothing settled on it is still owed. The
+   * operator is both the fee payer and the rent destination, so it is
+   * passed once for both roles.
+   */
+  async closeRound(pool: PoolState, roundId: bigint): Promise<TransactionInstruction[]> {
+    return [
+      await this.method("closeRound")
+        .accountsPartial({
+          pool: pool.address,
+          operator: this.operator,
+          round: this.round(pool, roundId),
+        })
+        .instruction(),
+    ];
+  }
+
   async createRound(
     pool: PoolState,
     startsAt: bigint,
@@ -339,7 +419,7 @@ export class OperatorInstructions {
     return [
       await this.method("createRound", bn(startsAt), bn(endsAt))
         .accountsPartial({
-          authority: this.authority,
+          operator: this.operator,
           pool: pool.address,
           currentEpoch: this.epoch(pool, pool.currentEpochId),
           round: this.round(pool, pool.nextRoundId),

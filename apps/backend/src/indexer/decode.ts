@@ -110,6 +110,23 @@ export function settledPosition(event: DecodedEvent): { owner: string; roundId: 
   return { owner, roundId: BigInt(roundId) };
 }
 
+/**
+ * `close_round` reclaimed this Round's rent and closed the account
+ * (ops-and-envs ticket 08). The account read that follows this event in
+ * `refreshFromLogs` comes back missing, and `applyAccount` already leaves a
+ * missing Round row alone rather than deleting or blanking it, so this is
+ * the only place the row learns it is gone: `persist()` flips `closed` on
+ * the id this event names.
+ */
+export function closedRound(event: DecodedEvent): { id: bigint } | null {
+  if (event.name !== "RoundClosed") return null;
+  const { data } = event;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+  const { roundId } = data;
+  if (typeof roundId !== "string") return null;
+  return { id: BigInt(roundId) };
+}
+
 const big = (value: BN): bigint => BigInt(value.toString());
 const isUnset = (key: PublicKey): boolean => key.equals(PublicKey.default);
 
@@ -119,8 +136,12 @@ const isUnset = (key: PublicKey): boolean => key.equals(PublicKey.default);
 // listed; the rest of each account is decoded and dropped.
 export interface DecodedPool {
   poolId: BN;
-  authority: PublicKey;
+  admin: PublicKey;
+  operator: PublicKey;
+  pendingAdmin: PublicKey;
   acceptedMint: PublicKey;
+  pendingWithdrawals: BN;
+  minJackpot: BN;
   epochSeconds: BN;
   epochAnchor: BN;
   roundSeconds: BN;
@@ -133,6 +154,30 @@ export interface DecodedPool {
   previousEpochEndsAt: BN;
   totalPrincipal: BN;
   carryPot: BN;
+  /** Base yield's APR on time-weighted Principal, in basis points. */
+  baseRateBps: number;
+  /** USDC in the principal vault earmarked for Base yield, not yet credited. */
+  yieldBudget: BN;
+  /** Tickets credited per USDC spent in `buy_tickets`. */
+  ticketsPerUsdc: number;
+  /** Share of `total_principal`, in basis points, an operator `grant_tickets`
+   *  call may credit pool-wide per epoch. */
+  bonusCapBps: number;
+  /** The epoch `bonusGranted` is counted against. */
+  bonusEpoch: BN;
+  /** Tickets an operator `grant_tickets` call has credited pool-wide so far
+   *  in `bonusEpoch`. */
+  bonusGranted: BN;
+  /** Lets a future upgrade migrate an old account lazily (ADR 0013). */
+  version: number;
+  /** Admin-only and irreversible: stops every inflow, the game and the
+   *  draw, and lets withdrawals skip the epoch lock. */
+  shutdown: boolean;
+  /** Game pause (game-jackpot-pause ticket 02): no new Round or Position. */
+  gamePaused: boolean;
+  /** Jackpot pause (game-jackpot-pause ticket 02): no new epoch, ticket
+   *  purchase, grant or registration close. */
+  jackpotPaused: boolean;
 }
 
 export interface DecodedEpoch {
@@ -172,6 +217,24 @@ export interface DecodedPlayer {
   regStart: BN;
   regEnd: BN;
   isHouse: boolean;
+  pendingWithdraw: BN;
+  pendingEpoch: BN;
+  /** Σ principal × seconds within `epochId`. Mirrors `weightAcc` with
+   *  Principal in place of Entries. */
+  principalAcc: BN;
+  /** Final principal-seconds for `frozenEpoch`, set alongside `frozenWeight`. */
+  frozenPrincipalAcc: BN;
+  /** The epoch Base yield was last credited for. */
+  yieldEpoch: BN;
+  /** The epoch `boughtAmount` is counted against. */
+  boughtEpoch: BN;
+  /** USDC spent in `buy_tickets` so far in `boughtEpoch`, capped at `principal`. */
+  boughtAmount: BN;
+  /** The epoch `bonusGranted` is counted against. */
+  bonusEpoch: BN;
+  /** Tickets an operator `grant_tickets` call has credited this Player so
+   *  far in `bonusEpoch`. */
+  bonusGranted: BN;
 }
 
 export interface DecodedPosition {
@@ -189,8 +252,13 @@ export function poolRow(
   return {
     address: address.toBase58(),
     poolId: big(pool.poolId),
-    authority: pool.authority.toBase58(),
+    admin: pool.admin.toBase58(),
+    operator: pool.operator.toBase58(),
+    // The default key means no handover is open.
+    pendingAdmin: isUnset(pool.pendingAdmin) ? null : pool.pendingAdmin.toBase58(),
     mint: pool.acceptedMint.toBase58(),
+    pendingWithdrawals: big(pool.pendingWithdrawals),
+    minJackpot: big(pool.minJackpot),
     epochSeconds: big(pool.epochSeconds),
     epochAnchor: big(pool.epochAnchor),
     roundSeconds: big(pool.roundSeconds),
@@ -203,12 +271,25 @@ export function poolRow(
     previousEpochEndsAt: big(pool.previousEpochEndsAt),
     totalPrincipal: big(pool.totalPrincipal),
     carryPot: big(pool.carryPot),
+    baseRateBps: pool.baseRateBps,
+    yieldBudget: big(pool.yieldBudget),
+    ticketsPerUsdc: pool.ticketsPerUsdc,
+    bonusCapBps: pool.bonusCapBps,
+    bonusEpoch: big(pool.bonusEpoch),
+    bonusGranted: big(pool.bonusGranted),
+    version: pool.version,
+    shutdown: pool.shutdown,
+    gamePaused: pool.gamePaused,
+    jackpotPaused: pool.jackpotPaused,
     updatedSlot: slot,
   };
 }
 
-export function epochRow(epoch: DecodedEpoch): Prisma.EpochCreateInput {
+// The account bytes carry no pool, so the caller passes the Active pool's
+// address for the row's key (ADR 0016).
+export function epochRow(epoch: DecodedEpoch, poolAddress: string): Prisma.EpochUncheckedCreateInput {
   return {
+    poolAddress,
     id: big(epoch.epochId),
     startsAt: big(epoch.startsAt),
     endsAt: big(epoch.endsAt),
@@ -222,8 +303,9 @@ export function epochRow(epoch: DecodedEpoch): Prisma.EpochCreateInput {
   };
 }
 
-export function roundRow(round: DecodedRound): Prisma.RoundCreateInput {
+export function roundRow(round: DecodedRound, poolAddress: string): Prisma.RoundUncheckedCreateInput {
   return {
+    poolAddress,
     id: big(round.roundId),
     epochId: big(round.epochId),
     startsAt: big(round.startsAt),
@@ -237,8 +319,9 @@ export function roundRow(round: DecodedRound): Prisma.RoundCreateInput {
   };
 }
 
-export function playerRow(player: DecodedPlayer): Prisma.PlayerCreateInput {
+export function playerRow(player: DecodedPlayer, poolAddress: string): Prisma.PlayerUncheckedCreateInput {
   return {
+    poolAddress,
     owner: player.owner.toBase58(),
     principal: big(player.principal),
     entries: big(player.entries),
@@ -251,6 +334,15 @@ export function playerRow(player: DecodedPlayer): Prisma.PlayerCreateInput {
     regStart: player.regStart.toString(),
     regEnd: player.regEnd.toString(),
     isHouse: player.isHouse,
+    pendingWithdraw: big(player.pendingWithdraw),
+    pendingEpoch: big(player.pendingEpoch),
+    principalAcc: player.principalAcc.toString(),
+    frozenPrincipalAcc: player.frozenPrincipalAcc.toString(),
+    yieldEpoch: big(player.yieldEpoch),
+    boughtEpoch: big(player.boughtEpoch),
+    boughtAmount: big(player.boughtAmount),
+    bonusEpoch: big(player.bonusEpoch),
+    bonusGranted: big(player.bonusGranted),
   };
 }
 
@@ -258,9 +350,11 @@ export function positionRow(
   address: PublicKey,
   position: DecodedPosition,
   roundId: bigint,
-): Prisma.PositionCreateInput {
+  poolAddress: string,
+): Prisma.PositionUncheckedCreateInput {
   return {
     address: address.toBase58(),
+    poolAddress,
     owner: position.owner.toBase58(),
     roundId,
     tiles: big(position.tiles),

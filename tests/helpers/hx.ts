@@ -137,8 +137,138 @@ export function randomnessFor(value: bigint | number): Uint8Array {
   return bytes;
 }
 
+// --- vrf_seed(domain, pool, id, nonce) --------------------------------------
+//
+// `request_round_randomness` and `close_registration` (beta-launch-fixes
+// ticket 02) mix a 32-byte nonce into the seed, so a test has to derive the
+// same seed client-side to know which randomness account to pass -- the
+// address is unknowable from public inputs alone any more. No dependency in
+// this workspace carries Solana's pre-standard Keccak (differs from SHA3-256
+// only in the padding byte), so it is duplicated here from
+// `apps/backend/src/operator/vrf.ts`'s own copy, for the same reason that
+// file gives: it runs once or twice per test on 48-80 bytes, so speed is
+// irrelevant and a real dependency is not worth adding for it.
+
+function u64le64(n: bigint | number): Buffer {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(BigInt(n));
+  return buf;
+}
+
+const KECCAK_RATE = 136;
+const KECCAK_ROUNDS = 24;
+
+const KECCAK_ROUND_CONSTANTS = new BigUint64Array([
+  0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n,
+  0x000000000000808bn, 0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n,
+  0x000000000000008an, 0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
+  0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n,
+  0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an,
+  0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+]);
+
+const KECCAK_ROTATIONS = new BigUint64Array([
+  0n, 1n, 62n, 28n, 27n, 36n, 44n, 6n, 55n, 20n, 3n, 10n, 43n, 25n, 39n, 41n, 45n, 15n,
+  21n, 8n, 18n, 2n, 61n, 56n, 14n,
+]);
+
+const rotl = (x: bigint, n: bigint): bigint => (n === 0n ? x : (x << n) | (x >> (64n - n)));
+
+function keccakPermute(lanes: BigUint64Array): void {
+  const c = new BigUint64Array(5);
+  const b = new BigUint64Array(25);
+  for (let round = 0; round < KECCAK_ROUNDS; round += 1) {
+    for (let x = 0; x < 5; x += 1) {
+      c[x] = (lanes[x] as bigint) ^ (lanes[x + 5] as bigint) ^ (lanes[x + 10] as bigint) ^
+        (lanes[x + 15] as bigint) ^ (lanes[x + 20] as bigint);
+    }
+    for (let x = 0; x < 5; x += 1) {
+      const d = (c[(x + 4) % 5] as bigint) ^ rotl(c[(x + 1) % 5] as bigint, 1n);
+      for (let y = 0; y < 25; y += 5) lanes[x + y] = (lanes[x + y] as bigint) ^ d;
+    }
+    for (let x = 0; x < 5; x += 1) {
+      for (let y = 0; y < 5; y += 1) {
+        b[y + 5 * ((2 * x + 3 * y) % 5)] = rotl(
+          lanes[x + 5 * y] as bigint,
+          KECCAK_ROTATIONS[x + 5 * y] as bigint,
+        );
+      }
+    }
+    for (let y = 0; y < 25; y += 5) {
+      for (let x = 0; x < 5; x += 1) {
+        lanes[x + y] = (b[x + y] as bigint) ^ (~(b[((x + 1) % 5) + y] as bigint) & (b[((x + 2) % 5) + y] as bigint));
+      }
+    }
+    lanes[0] = (lanes[0] as bigint) ^ (KECCAK_ROUND_CONSTANTS[round] as bigint);
+  }
+}
+
+function keccak256(input: Uint8Array): Uint8Array {
+  const padded = new Uint8Array((Math.floor(input.length / KECCAK_RATE) + 1) * KECCAK_RATE);
+  padded.set(input);
+  padded[input.length] = 0x01;
+  padded[padded.length - 1] = (padded[padded.length - 1] ?? 0) | 0x80;
+
+  const lanes = new BigUint64Array(25);
+  const view = new DataView(padded.buffer, padded.byteOffset, padded.byteLength);
+  for (let offset = 0; offset < padded.length; offset += KECCAK_RATE) {
+    for (let lane = 0; lane < KECCAK_RATE / 8; lane += 1) {
+      lanes[lane] = (lanes[lane] as bigint) ^ view.getBigUint64(offset + lane * 8, true);
+    }
+    keccakPermute(lanes);
+  }
+
+  const digest = new Uint8Array(32);
+  const out = new DataView(digest.buffer);
+  for (let lane = 0; lane < 4; lane += 1) out.setBigUint64(lane * 8, lanes[lane] as bigint, true);
+  return digest;
+}
+
+/** `utils::vrf_seed`: keccak256(domain || pool || id_le || nonce). */
+export function vrfSeed(
+  domain: "round" | "epoch",
+  pool: PublicKey,
+  id: bigint,
+  nonce: Uint8Array,
+): Uint8Array {
+  return keccak256(
+    Buffer.concat([Buffer.from(domain), pool.toBuffer(), u64le64(id), Buffer.from(nonce)]),
+  );
+}
+
+/** A fixed, non-zero nonce: tests don't need real unpredictability, just a
+ *  value that isn't the account's zero-initialized default. */
+export function testNonce(fill = 1): Uint8Array {
+  return new Uint8Array(32).fill(fill);
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retries `fn` until it stops throwing. The localnet validator's on-chain
+ * clock does not track wall-clock time closely enough to compute a sleep
+ * duration from an `i64` unix-seconds deadline and `Date.now()` (observed
+ * lagging real time by a few seconds over a short epoch), so every
+ * time-gated instruction (an epoch or round boundary, a vrf timeout) is
+ * driven by polling instead of a single calculated sleep.
+ */
+export async function retryUntilOk<T>(
+  fn: () => Promise<T>,
+  intervalMs = 750,
+  maxAttempts = 120,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      await sleep(intervalMs);
+    }
+  }
+  throw lastError;
 }
 
 /** The validator's actual on-chain clock (not `Date.now()`, which drifts a
@@ -149,6 +279,13 @@ export async function onChainNowSeconds(): Promise<number> {
     const time = await connection.getBlockTime(slot);
     if (time !== null) return time;
     await sleep(200);
+  }
+}
+
+/** Blocks until the validator's own clock reaches `targetUnixSeconds`. */
+export async function sleepUntilOnChain(targetUnixSeconds: number): Promise<void> {
+  while ((await onChainNowSeconds()) < targetUnixSeconds) {
+    await sleep(500);
   }
 }
 
@@ -174,12 +311,17 @@ async function airdrop(to: PublicKey, sol: number): Promise<void> {
   await connection.confirmTransaction(sig, "confirmed");
 }
 
-// Unique per process, not per wall-clock second, so a test file that calls
-// setupPool() several times never collides on the same PDA.
+// Unique per call and per process. Vitest gives each test file its own
+// worker, and two workers reaching setupPool() in the same millisecond used
+// to derive the same pool PDA: preflight passed for both, then the second
+// `create_pool` failed on chain with the account already in use.
+const poolNonce = BigInt(process.pid % 1_000);
 let poolCounter = 0;
-function nextPoolId(): bigint {
+/** Exported for the few tests that call `create_pool` themselves instead of
+ *  going through `setupPool`. */
+export function nextPoolId(): bigint {
   poolCounter += 1;
-  return BigInt(Date.now()) * 1_000n + BigInt(poolCounter);
+  return BigInt(Date.now()) * 1_000_000n + poolNonce * 1_000n + BigInt(poolCounter);
 }
 
 export interface PoolParamsOverrides {
@@ -196,9 +338,31 @@ export interface PoolParamsOverrides {
   /** House cut in basis points, 0..=10_000. Defaults to the bootstrap rate,
    * so every round test settles against the cut the product ships with. */
   houseCutBps?: number;
+  /** Jackpot floor below which `close_registration` rolls the epoch over.
+   * Defaults to 0 (no floor) so a test that never funds the jackpot still
+   * reaches the draw; the low-jackpot test sets it. */
+  minJackpot?: number;
+  /** Seconds past `ends_at` before `close_registration` is accepted.
+   * Defaults to 0, so every suite keeps the timing it had before the window
+   * existed; the window test sets it. */
+  registrationWindow?: number;
+  /** Seconds a Drawn epoch waits for its payout before `rollover_epoch` will
+   * take it. Defaults to a day, well past any test's run. */
+  payoutTimeout?: number;
+  /** Base yield's APR in basis points. Defaults to the bootstrap rate
+   * (~5% APY with daily compounding); `yield_budget` starts at 0 regardless,
+   * so no test is credited yield unless it also calls `fund_yield`. */
+  baseRateBps?: number;
+  /** Tickets credited per USDC spent in `buy_tickets`. Defaults to the
+   * bootstrap rate. */
+  ticketsPerUsdc?: number;
+  /** Share of `total_principal`, in basis points, an operator `grant_tickets`
+   * call may credit pool-wide per epoch. Defaults to the bootstrap rate
+   * (5%). */
+  bonusCapBps?: number;
   /** Reuse an existing mint instead of creating a fresh one (e.g. to test
    * two pools sharing an accepted asset). The caller must not rely on this
-   * pool's authority being the mint authority when a shared mint is passed. */
+   * pool's operator being the mint authority when a shared mint is passed. */
   mint?: PublicKey;
 }
 
@@ -210,6 +374,16 @@ const DEFAULT_PARAMS = {
   vrfTimeout: 120,
   minDeposit: 1_000_000, // 1 hexUSDC at 6 decimals
   houseCutBps: 600, // 6%, the bootstrap default
+  minJackpot: 0,
+  registrationWindow: 0,
+  // Strictly less than epochSeconds: set_params requires payout_timeout <
+  // epoch_seconds (beta-launch-fixes ticket 03), so a pool bootstrapped here
+  // has to satisfy that from the start or its very first set_params call
+  // (even a no-op one, just testing who may call it) would refuse.
+  payoutTimeout: 82_800,
+  baseRateBps: 488, // spec §7: ~5% APY with daily compounding
+  ticketsPerUsdc: 10,
+  bonusCapBps: 500, // spec: default 5%
 };
 
 export interface PoolCtx {
@@ -218,7 +392,10 @@ export interface PoolCtx {
   mint: PublicKey;
   epochSeconds: number;
   epochAnchor: number;
-  authority: Keypair;
+  /** Signs set_params, unpause, set_operator and propose_admin. */
+  admin: Keypair;
+  /** Signs every crank, owns the House, funds the wallets, mints the asset. */
+  operator: Keypair;
   treasury: PublicKey;
   buybackReserve: PublicKey;
   principalVault: PublicKey;
@@ -226,52 +403,59 @@ export interface PoolCtx {
   house: PublicKey;
   minDeposit: bigint;
   houseCutBps: number;
+  baseRateBps: number;
+  ticketsPerUsdc: number;
+  bonusCapBps: number;
   /** A fresh funded keypair with `amount` hexUSDC already in its ATA. */
   fundedWallet(amount: bigint): Promise<{ keypair: Keypair; tokenAccount: PublicKey }>;
 }
 
 /**
  * Airdrops, mints a fresh hexUSDC mint, wires up treasury/buyback token
- * accounts, and calls `create_pool`. The authority is its own fresh keypair
- * (not the test wallet), so authority-only instructions can be tested for
- * rejection from an unrelated signer too.
+ * accounts, and calls `create_pool`. Admin and operator are two distinct
+ * fresh keypairs (neither is the test wallet), so every role-gated
+ * instruction can be tested with the right key and with the wrong one.
  */
 export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<PoolCtx> {
   const params = { ...DEFAULT_PARAMS, ...overrides };
   const poolId = nextPoolId();
 
-  const authority = Keypair.generate();
-  await airdrop(authority.publicKey, 10);
+  const admin = Keypair.generate();
+  const operator = Keypair.generate();
+  await airdrop(admin.publicKey, 10);
+  await airdrop(operator.publicKey, 10);
 
-  const mint = overrides.mint ?? (await createMint(connection, authority, authority.publicKey, null, 6));
-  // Two independent token accounts, both owned by authority. They must be
+  const mint = overrides.mint ?? (await createMint(connection, operator, operator.publicKey, null, 6));
+  // Two independent token accounts, both owned by the operator. They must be
   // plain accounts with their own keypairs: `createAccount` without one
   // derives the ATA, and treasury and buyback_reserve share (mint, owner),
   // so the second call would land on the address the first already took.
   const treasury = await createAccount(
     connection,
-    authority,
+    operator,
     mint,
-    authority.publicKey,
+    operator.publicKey,
     Keypair.generate(),
   );
   const buybackReserve = await createAccount(
     connection,
-    authority,
+    operator,
     mint,
-    authority.publicKey,
+    operator.publicKey,
     Keypair.generate(),
   );
 
   const pool = poolPda(poolId);
   const principalVault = principalVaultPda(pool);
   const jackpotVault = jackpotVaultPda(pool);
-  const house = playerPda(pool, authority.publicKey);
+  const house = playerPda(pool, operator.publicKey);
   const epochAnchor = overrides.epochAnchor ?? (await onChainNowSeconds());
 
   await program.methods
     .createPool({
       poolId: new BN(poolId.toString()),
+      admin: admin.publicKey,
+      operator: operator.publicKey,
       vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
       epochSeconds: new BN(params.epochSeconds),
       epochAnchor: new BN(epochAnchor),
@@ -280,9 +464,15 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       vrfTimeout: new BN(params.vrfTimeout),
       minDeposit: new BN(params.minDeposit),
       houseCutBps: params.houseCutBps,
+      minJackpot: new BN(params.minJackpot),
+      registrationWindow: new BN(params.registrationWindow),
+      payoutTimeout: new BN(params.payoutTimeout),
+      baseRateBps: params.baseRateBps,
+      ticketsPerUsdc: params.ticketsPerUsdc,
+      bonusCapBps: params.bonusCapBps,
     })
     .accountsPartial({
-      authority: authority.publicKey,
+      payer: operator.publicKey,
       pool,
       acceptedMint: mint,
       principalVault,
@@ -293,15 +483,31 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
-    .signers([authority])
+    .signers([operator])
+    .rpc();
+
+  // A new pool starts with both the game and the jackpot paused (spec
+  // "game-jackpot-pause"): the admin has to explicitly start each one. Every
+  // suite's fixture starts both right here, right after create_pool, so the
+  // rest of the tests see the pool the way they did before either switch
+  // existed -- running from the moment `setupPool` returns.
+  await program.methods
+    .setFeaturePause({ game: {} }, false)
+    .accountsPartial({ signer: admin.publicKey, pool })
+    .signers([admin])
+    .rpc();
+  await program.methods
+    .setFeaturePause({ jackpot: {} }, false)
+    .accountsPartial({ signer: admin.publicKey, pool })
+    .signers([admin])
     .rpc();
 
   async function fundedWallet(amount: bigint) {
     const keypair = Keypair.generate();
     await airdrop(keypair.publicKey, 5);
-    const ata = await getOrCreateAssociatedTokenAccount(connection, authority, mint, keypair.publicKey);
+    const ata = await getOrCreateAssociatedTokenAccount(connection, operator, mint, keypair.publicKey);
     if (amount > 0n) {
-      await mintTo(connection, authority, mint, ata.address, authority, amount);
+      await mintTo(connection, operator, mint, ata.address, operator, amount);
     }
     return { keypair, tokenAccount: ata.address };
   }
@@ -312,7 +518,8 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
     mint,
     epochSeconds: params.epochSeconds,
     epochAnchor,
-    authority,
+    admin,
+    operator,
     treasury,
     buybackReserve,
     principalVault,
@@ -320,6 +527,9 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
     house,
     minDeposit: BigInt(params.minDeposit),
     houseCutBps: params.houseCutBps,
+    baseRateBps: params.baseRateBps,
+    ticketsPerUsdc: params.ticketsPerUsdc,
+    bonusCapBps: params.bonusCapBps,
     fundedWallet,
   };
 }

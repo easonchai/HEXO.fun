@@ -1,30 +1,64 @@
 /**
  * VAULT tab: the Figma "Deposit" frame. One widget with DEPOSIT / WITHDRAW
- * tabs on the HOME halftone background. The program is the custody boundary:
- * Principal and Tickets move together, so a withdrawal needs both.
+ * tabs on the HOME halftone background. The program is the custody boundary.
+ * WITHDRAW sends `request_withdraw`, which deducts Principal and Tickets now
+ * and pays out after the epoch ends (ADR 0009). The pending row below the
+ * widget carries that wait: the amount, the day it pays in, and a "pay out
+ * now" button that sends the permissionless `process_withdraw` when the
+ * operator has not.
  *
  * Ticket 07: `currentEpoch` comes from App's one `GET /state` poll instead
  * of a duplicate `/epochs/current` poll of its own; `onDone` tightens that
  * poll (see `useStatePoll.ts` `kick`) instead of triggering a chain re-read.
+ *
+ * Ticket 10: base yield is placeholder UI (plain elements, no Figma styling
+ * yet), unlike the deposit/withdraw widget above it. Buy Tickets is hidden for
+ * now; its markup was removed but buyTickets.ts and useBuyTickets.ts stay, so
+ * bringing it back is markup only. The math split mirrors how ticket 09
+ * split access.ts / useAccessGate.ts / AccessGate.tsx, so the designer's
+ * restyle only touches this file's markup. `buyAllowanceLeft`/yield figures
+ * are not on `GET /state`'s embedded Player, so this screen polls
+ * `GET /players/:owner` on its own slower interval, same as Dashboard.tsx and
+ * WeeklyDraw.tsx already do for their own list data.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PublicKey } from "@solana/web3.js";
 
-import { deposit, withdraw, type TxSigner } from "../actions.js";
-import type { CurrentEpochDto } from "../api.js";
+import {
+  awaitSendResult,
+  deposit,
+  processWithdraw,
+  requestWithdraw,
+  shutdownWithdraw,
+  type SendResult,
+  type TxSigner,
+} from "../actions.js";
+import { track } from "../analytics.js";
+import { apiBaseUrl, fetchPlayer, type CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
-import type { HexVaultProgram } from "../chain.js";
-import { hmText } from "../engine.js";
+import { apyFromBaseRateBps } from "../buyTickets.js";
+import { InfoTip } from "../InfoTip.js";
+import { CLUSTER, type HexVaultProgram } from "../chain.js";
 import {
   addCapped,
   clampDecimals,
-  estimatedYield,
+  formatAtomic,
   formatAtomic2,
   parseAtomic,
+  pendingWithdrawal,
   previewWithdraw,
-  withdrawable,
 } from "../lib/money.js";
-import type { PoolLike } from "../read.js";
+import {
+  decodeErrorCode,
+  decodePlayerError,
+  decodeSendFailure,
+  failureReason,
+  NOTHING_PENDING_CODE,
+  thrownReason,
+} from "../playerErrors.js";
+import { solRentWarning, type PoolLike } from "../read.js";
+import { SHUTDOWN_BANNER } from "../shutdown.js";
+import { useApiPoll } from "../useApiPoll.js";
 import { GlyphRow } from "./Home.js";
 
 const DECIMALS = 6;
@@ -39,6 +73,29 @@ const INPUT_DECIMALS = 2;
 /** The Figma quick pills: each adds this many whole USDC. */
 const QUICK_ADDS = [50n, 100n, 500n] as const;
 
+const YIELD_TIP = [
+  "Base yield is paid into your deposit once a day, so it compounds. The estimate is a year at today's rate.",
+];
+
+/** A year of compounded Base yield on `amount` at `apy` percent, in atomic
+ *  units. Display only: floats are fine at these magnitudes. */
+const yearlyYield = (amount: bigint, apy: number): bigint =>
+  BigInt(Math.floor((Number(amount) * apy) / 100));
+
+/**
+ * `NothingPending` (playerErrors.ts, ticket 09 — this used to be this file's
+ * own `payoutError`): the operator's crank paid this withdrawal before the
+ * click landed. `payOutNow` below treats that as a success, not an error.
+ */
+const NOTHING_PENDING_NOTE = decodeErrorCode(NOTHING_PENDING_CODE);
+
+/** Ticket 15: shown while an `"unknown"` `SendResult` is being polled to a
+ *  real outcome, with a link so the depositor can check for themselves too. */
+const explorerUrl = (signature: string): string =>
+  `https://explorer.solana.com/tx/${signature}${CLUSTER === "devnet" ? "?cluster=devnet" : ""}`;
+
+const CHECKING_NOTE = "Checking your transaction…";
+
 export type VaultMode = "deposit" | "withdraw";
 type Mode = VaultMode;
 
@@ -51,13 +108,20 @@ export interface VaultScreenProps {
   pool: PoolLike | null;
   principal: bigint;
   entries: bigint;
-  walletBalance: bigint;
+  /** Null when the chain read failed (ticket 15): a stuttering RPC must
+   *  never look like an empty wallet and block a deposit as over balance. */
+  walletBalance: bigint | null;
+  /** Connected wallet's own SOL, for the rent warning below; null while
+   *  unread or unavailable. */
+  solBalance: bigint | null;
   paused: boolean;
-  /** Chain clock seconds, for the "rest unlocks in HH:MM" countdown. */
-  now: bigint | null;
+  /** ticket 11: irreversible. Withdraw goes one-step; everything else refuses. */
+  shutdown: boolean;
   currentEpoch: CurrentEpochDto | null;
-  /** Basis points from GET /state's status; null while the backend is unreachable. */
-  aprBps: number | null;
+  /** Requested but unpaid Principal; 0 when nothing is pending. */
+  pendingWithdraw: bigint;
+  /** The epoch that pending amount was requested in, so the day it pays after. */
+  pendingEpoch: bigint;
   /**
    * Which tab the widget opens on. The dashboard's two buttons are the only
    * way in, and they arrive with an intent already; App unmounts the screen on
@@ -79,10 +143,12 @@ export function Vault(props: VaultScreenProps) {
     principal,
     entries,
     walletBalance,
+    solBalance,
     paused,
-    now,
+    shutdown,
     currentEpoch,
-    aprBps,
+    pendingWithdraw,
+    pendingEpoch,
     initialMode,
     onConnect,
     onDone,
@@ -95,17 +161,55 @@ export function Vault(props: VaultScreenProps) {
   const [mode, setMode] = useState<Mode>(initialMode ?? "deposit");
   const [amountText, setAmountText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ tone: "ok" | "err"; text: string } | null>(
-    null,
-  );
+  const [note, setNote] = useState<
+    { tone: "ok" | "err"; text: string; href?: string } | null
+  >(null);
   /** Atomic amount of the deposit that just landed; null closes the modal. */
   const [confirmed, setConfirmed] = useState<bigint | null>(null);
+  /**
+   * A `process_withdraw` has been sent and the read model has not caught up.
+   * Keyed on the pending amount so the flag clears itself the moment the
+   * payout lands (or a fresh request books a different amount).
+   */
+  const [payoutSent, setPayoutSent] = useState<bigint | null>(null);
 
   const connected = owner !== null && program !== null && pool !== null;
-  const matched = withdrawable(principal, entries);
   const amount = parseAtomic(amountText, DECIMALS);
-  /** What the pills clamp to: wallet on deposit, matched on withdraw. */
-  const cap = mode === "deposit" ? walletBalance : matched;
+  const amountUsdc = amount === null ? 0 : Number(formatAtomic(amount, DECIMALS));
+  /**
+   * What the pills clamp to: wallet on deposit, Principal on withdraw.
+   * `request_withdraw` only checks Principal now (ADR 0009), so Tickets
+   * spent in the game no longer hold any of it back. Null only on deposit,
+   * when the wallet balance read failed (ticket 15) — the pills and the
+   * over-balance check both stand down rather than guess.
+   */
+  const cap = mode === "deposit" ? walletBalance : principal;
+  const balanceUnavailable = mode === "deposit" && walletBalance === null;
+  const rentWarning = solRentWarning(solBalance, { sponsored: sendTransaction !== undefined });
+
+  const ownerBase58 = owner?.toBase58();
+  const loadPlayerExtras = useCallback(
+    (signal: AbortSignal) =>
+      ownerBase58
+        ? fetchPlayer(apiBaseUrl(), ownerBase58, signal)
+        : Promise.resolve({ ok: false as const, reason: "no wallet connected" }),
+    [ownerBase58],
+  );
+  const playerExtras = useApiPoll(loadPlayerExtras, 10_000);
+
+  // The payout landed (or the request was never there): drop the flag, so a
+  // later request for the same amount does not inherit this one's state.
+  useEffect(() => {
+    if (pendingWithdraw === 0n) setPayoutSent(null);
+  }, [pendingWithdraw]);
+
+  const pending = pendingWithdrawal(
+    pendingWithdraw,
+    pendingEpoch,
+    currentEpoch ? BigInt(currentEpoch.id) : null,
+    payoutSent !== null && payoutSent === pendingWithdraw,
+    shutdown,
+  );
 
   const switchMode = (next: Mode) => {
     if (next === mode) return;
@@ -117,55 +221,109 @@ export function Vault(props: VaultScreenProps) {
   const addQuick = (units: bigint) =>
     setAmountText(fmt2(addCapped(amount ?? 0n, units * ONE, connected ? cap : null)));
 
-  const run = async (label: string, action: () => Promise<string>) => {
+  const run = async (
+    label: string,
+    signerProgram: HexVaultProgram,
+    action: () => Promise<SendResult>,
+  ) => {
     setBusy(true);
     setNote(null);
     try {
-      const signature = await action();
+      let result = await action();
+      if (result.kind === "unknown") {
+        // Ticket 15: the confirmation itself failed, not the transaction — a
+        // retry here could double-send. Money buttons (`busy`) stay disabled
+        // while this polls the signature to a real outcome.
+        setNote({ tone: "ok", text: CHECKING_NOTE, href: explorerUrl(result.signature) });
+        result = await awaitSendResult(signerProgram, result);
+      }
+      if (result.kind !== "landed") {
+        if (label === "Deposit") track("deposit_failed", { amount_usdc: amountUsdc, reason: failureReason(result) });
+        setNote({ tone: "err", text: decodeSendFailure(result) });
+        return;
+      }
+      if (label === "Deposit") track("deposit_confirmed", { amount_usdc: amountUsdc });
+      else track("withdraw_requested", { amount_usdc: amountUsdc, shutdown: label === "Withdraw" });
       // Deposit gets the confirmed modal; withdraw keeps the inline note.
       if (label === "Deposit" && amount !== null) {
         setConfirmed(amount);
       } else {
         setNote({
           tone: "ok",
-          text: `${label} confirmed: ${signature.slice(0, 16)}…`,
+          text: `${label}: ${result.signature.slice(0, 16)}…`,
         });
       }
       setAmountText("");
       onDone();
     } catch (error) {
+      if (label === "Deposit") track("deposit_failed", { amount_usdc: amountUsdc, reason: thrownReason(error) });
       setNote({
         tone: "err",
-        text: error instanceof Error ? error.message : String(error),
+        text: decodePlayerError(error),
       });
     } finally {
       setBusy(false);
     }
   };
 
-  // Entries lost to the game (principal > entries) come back at the next
-  // epoch reset, not before. See CONTEXT.md "Entries".
-  const locked = principal > entries ? principal - entries : 0n;
-  const resetsIn =
-    currentEpoch && now !== null ? hmText(BigInt(currentEpoch.endsAt) - now) : null;
-
-  const overCap = connected && amount !== null && amount > cap;
+  // `cap` is null only on deposit with an unavailable balance read (ticket
+  // 15): unknown is not "over balance", so this stands down rather than
+  // guess — `balanceUnavailable`'s own note carries the warning instead.
+  const overCap = connected && amount !== null && cap !== null && amount > cap;
+  const apy = pool ? apyFromBaseRateBps(pool.baseRateBps) : null;
   const underMin =
     mode === "deposit" && pool !== null && amount !== null && amount < pool.minDeposit;
-  const yearlyYield =
-    amount !== null && aprBps !== null ? estimatedYield(amount, aprBps) : null;
   const withdrawPreview =
-    mode === "withdraw" && amount !== null
-      ? previewWithdraw(principal, entries, amount)
-      : null;
+    mode === "withdraw" && amount !== null ? previewWithdraw(entries, amount) : null;
 
   const submit = () => {
     if (!connected || !amount) return;
     const signer: TxSigner = { publicKey: owner, sendTransaction };
     if (mode === "deposit") {
-      void run("Deposit", () => deposit(program, signer, pool, amount));
+      track("deposit_submitted", { amount_usdc: amountUsdc });
+      void run("Deposit", program, () => deposit(program, signer, pool, amount));
+    } else if (shutdown) {
+      // One transaction: request_withdraw + process_withdraw (ticket 11).
+      void run("Withdraw", program, () =>
+        shutdownWithdraw(program, signer, pool, amount, pendingWithdraw),
+      );
     } else {
-      void run("Withdraw", () => withdraw(program, signer, pool, amount));
+      void run("Withdraw requested", program, () =>
+        requestWithdraw(program, signer, pool, amount),
+      );
+    }
+  };
+
+  const payOutNow = async () => {
+    if (!connected) return;
+    setBusy(true);
+    setNote(null);
+    setPayoutSent(pendingWithdraw);
+    try {
+      let result = await processWithdraw(program, { publicKey: owner, sendTransaction }, pool);
+      if (result.kind === "unknown") {
+        setNote({ tone: "ok", text: CHECKING_NOTE, href: explorerUrl(result.signature) });
+        result = await awaitSendResult(program, result);
+      }
+      if (result.kind === "landed") {
+        track("withdraw_paid_out");
+        setNote({ tone: "ok", text: "Payout sent." });
+        onDone();
+      } else if (result.kind === "failed" && result.code === NOTHING_PENDING_CODE) {
+        // Already paid by the operator: the read model is stale, so refresh
+        // it the same way a successful payout does instead of offering the
+        // button again.
+        setNote({ tone: "ok", text: NOTHING_PENDING_NOTE });
+        onDone();
+      } else {
+        setPayoutSent(null);
+        setNote({ tone: "err", text: decodeSendFailure(result) });
+      }
+    } catch (error) {
+      setPayoutSent(null);
+      setNote({ tone: "err", text: decodePlayerError(error) });
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -182,9 +340,11 @@ export function Vault(props: VaultScreenProps) {
     ? "CONNECT WALLET"
     : busy
       ? "SIGNING…"
-      : mode === "deposit" && paused
-        ? "POOL PAUSED"
-        : mode.toUpperCase();
+      : mode === "deposit" && shutdown
+        ? "POOL CLOSED"
+        : mode === "deposit" && paused
+          ? "POOL PAUSED"
+          : mode.toUpperCase();
 
   return (
     <div className="vault" data-testid="vault-screen">
@@ -236,14 +396,11 @@ export function Vault(props: VaultScreenProps) {
               <span className="vault-amount-symbol">{SYMBOL}</span>
               <span className="vault-amount-available" data-testid="withdrawable-now">
                 {mode === "deposit"
-                  ? `Available ${fmt2(walletBalance)} ${SYMBOL}`
-                  : `Available ${fmt2(matched)} tickets`}
+                  ? walletBalance === null
+                    ? "Balance unavailable"
+                    : `Available ${fmt2(walletBalance)} ${SYMBOL}`
+                  : `Withdrawable at day end ${fmt2(principal)} ${SYMBOL}`}
               </span>
-              {mode === "withdraw" && locked > 0n ? (
-                <span className="vault-amount-locked" data-testid="unlock-note">
-                  Principal {fmt2(principal)} · rest unlocks in {resetsIn ?? "--:--"}
-                </span>
-              ) : null}
             </label>
 
             <div className="vault-quick">
@@ -260,7 +417,10 @@ export function Vault(props: VaultScreenProps) {
               <button
                 type="button"
                 className="vault-pill"
-                onClick={() => setAmountText(fmt2(cap))}
+                disabled={cap === null}
+                onClick={() => {
+                  if (cap !== null) setAmountText(fmt2(cap));
+                }}
               >
                 MAX
               </button>
@@ -273,19 +433,22 @@ export function Vault(props: VaultScreenProps) {
                     <dt>Tickets</dt>
                     <dd>{fmt2(amount ?? 0n)}</dd>
                   </div>
-                  <div className="vault-line">
-                    <dt>Estimated yield</dt>
+                  <div className="vault-line" data-testid="estimated-yield">
+                    <dt className="vault-line-label">
+                      Estimated yield
+                      <InfoTip id="estimated-yield-tip" paragraphs={YIELD_TIP} />
+                    </dt>
                     <dd>
-                      {yearlyYield === null
+                      {apy === null
                         ? "—"
-                        : `$${fmt2(yearlyYield)} (${aprBps! / 100}% APR)`}
+                        : `$${fmt2(yearlyYield(amount ?? 0n, apy))} (${Number(apy.toFixed(2))}% APY)`}
                     </dd>
                   </div>
                 </>
               ) : (
                 <>
                   <div className="vault-line">
-                    <dt>You receive</dt>
+                    <dt>You receive at day end</dt>
                     <dd>
                       {fmt2(amount ?? 0n)} {SYMBOL}
                     </dd>
@@ -297,6 +460,33 @@ export function Vault(props: VaultScreenProps) {
                     </dd>
                   </div>
                 </>
+              )}
+              {pending.kind === "none" ? null : (
+                <div className="vault-line" data-testid="pending-withdraw">
+                  <dt>
+                    Pending {fmt2(pending.amount)} {SYMBOL}
+                  </dt>
+                  <dd className="vault-pending-state">
+                    <span data-testid="pending-withdraw-state">
+                      {pending.kind === "pending"
+                        ? `pays out after day #${pending.epoch} ends`
+                        : pending.kind === "processing"
+                          ? "paying out…"
+                          : "ready"}
+                    </span>
+                    {pending.kind === "due" ? (
+                      <button
+                        type="button"
+                        className="vault-pill vault-payout"
+                        data-testid="pay-out-now"
+                        disabled={busy}
+                        onClick={() => void payOutNow()}
+                      >
+                        PAY OUT NOW
+                      </button>
+                    ) : null}
+                  </dd>
+                </div>
               )}
             </dl>
 
@@ -311,16 +501,37 @@ export function Vault(props: VaultScreenProps) {
             </button>
 
             <div className="vault-notes">
-              {mode === "deposit" && paused ? (
+              {mode === "deposit" && shutdown ? (
+                <span className="vault-note" data-testid="deposit-shutdown-note">
+                  {SHUTDOWN_BANNER}
+                </span>
+              ) : mode === "deposit" && paused ? (
                 <span className="vault-note">
                   Pool is paused: deposits are blocked; withdrawals stay live.
+                </span>
+              ) : null}
+              {mode === "withdraw" ? (
+                <span className="vault-note" data-testid="withdraw-lock-note">
+                  {shutdown
+                    ? "Principal and Tickets leave your account now. The pool is closed, so the payout lands in this same transaction."
+                    : "Principal and Tickets leave your account now. The USDC pays out once today's draw is over."}
                 </span>
               ) : null}
               {overCap ? (
                 <span className="vault-note" data-testid={`${mode}-over-balance`}>
                   {mode === "deposit"
                     ? "Amount is more than your wallet balance."
-                    : "Amount is more than what you can withdraw right now."}
+                    : "Amount is more than your Principal."}
+                </span>
+              ) : null}
+              {balanceUnavailable ? (
+                <span className="vault-note" data-testid="deposit-balance-unavailable">
+                  Balance unavailable right now. Try again in a moment.
+                </span>
+              ) : null}
+              {mode === "deposit" && rentWarning ? (
+                <span className="vault-note" data-testid="sol-rent-warning">
+                  {rentWarning}
                 </span>
               ) : null}
               {mode === "deposit" && pool ? (
@@ -331,6 +542,14 @@ export function Vault(props: VaultScreenProps) {
               {note ? (
                 <span className={`vault-note ${note.tone}`} data-testid="vault-note">
                   {note.text}
+                  {note.href ? (
+                    <>
+                      {" "}
+                      <a href={note.href} target="_blank" rel="noopener noreferrer">
+                        View on explorer
+                      </a>
+                    </>
+                  ) : null}
                 </span>
               ) : null}
             </div>
@@ -338,6 +557,37 @@ export function Vault(props: VaultScreenProps) {
         </section>
         <GlyphRow />
       </div>
+
+      {/* Ticket 10: placeholder UI. Plain elements, no Figma styling yet;
+          see this file's header comment for where the math lives. */}
+      {/* <section data-testid="vault-yield" aria-label="Base yield"> */}
+      {/*   <h2>Base yield</h2> */}
+      {/*   <dl> */}
+      {/*     <div> */}
+      {/*       <dt>Rate</dt> */}
+      {/*       <dd data-testid="yield-apy"> */}
+      {/*         {pool ? `${apyFromBaseRateBps(pool.baseRateBps).toFixed(2)}% APY` : "—"} */}
+      {/*       </dd> */}
+      {/*     </div> */}
+      {/*     <div> */}
+      {/*       <dt>Yield yesterday</dt> */}
+      {/*       <dd data-testid="yield-yesterday"> */}
+      {/*         {playerExtras.data */}
+      {/*           ? `${fmt2(BigInt(playerExtras.data.yieldLastEpoch))} ${SYMBOL}` */}
+      {/*           : "—"} */}
+      {/*       </dd> */}
+      {/*     </div> */}
+      {/*     <div> */}
+      {/*       <dt>Yield to date</dt> */}
+      {/*       <dd data-testid="yield-to-date"> */}
+      {/*         {playerExtras.data */}
+      {/*           ? `${fmt2(BigInt(playerExtras.data.yieldToDate))} ${SYMBOL}` */}
+      {/*           : "—"} */}
+      {/*       </dd> */}
+      {/*     </div> */}
+      {/*   </dl> */}
+      {/* </section> */}
+
       {confirmed !== null ? (
         <DepositConfirmed
           amount={`$${fmt2(confirmed)} ${SYMBOL}`}

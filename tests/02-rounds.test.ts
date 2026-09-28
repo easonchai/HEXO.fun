@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import { BN } from "@anchor-lang/core";
-import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   DEVNET_VRF_NETWORK_STATE,
@@ -25,6 +25,8 @@ import {
   roundPda,
   setupPool,
   sleep,
+  testNonce,
+  vrfSeed,
   type PoolCtx,
 } from "./helpers/hx.js";
 
@@ -70,16 +72,24 @@ async function setHouseCutBps(pool: PoolCtx, houseCutBps: number) {
       minDeposit: null,
       houseCutBps,
     })
-    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
-    .signers([pool.authority])
+    .accountsPartial({ admin: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
     .rpc();
 }
 
 async function setPause(pool: PoolCtx, paused: boolean) {
   return program.methods
     .setPause(paused)
-    .accountsPartial({ authority: pool.authority.publicKey, pool: pool.pool })
-    .signers([pool.authority])
+    .accountsPartial({ signer: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
+    .rpc();
+}
+
+async function setGamePaused(pool: PoolCtx, paused: boolean) {
+  return program.methods
+    .setFeaturePause({ game: {} }, paused)
+    .accountsPartial({ signer: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
     .rpc();
 }
 
@@ -116,13 +126,13 @@ async function createRound(
   await program.methods
     .createRound(new BN(startsAt), new BN(endsAt))
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      operator: pool.operator.publicKey,
       pool: pool.pool,
       currentEpoch,
       round,
       systemProgram: SystemProgram.programId,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 
   return { roundId, round, startsAt, endsAt };
@@ -149,13 +159,20 @@ async function buyPosition(
     .rpc();
 }
 
+/**
+ * `nonce` is mixed into the seed (beta-launch-fixes ticket 02); a fixed test
+ * nonce is fine, since tests need no real unpredictability. Returns the seed
+ * actually used, since `round.vrfSeed` is `[0; 32]` until this succeeds.
+ */
 async function requestRandomness(
   pool: PoolCtx,
   round: PublicKey,
-  seed: Uint8Array,
-) {
-  return program.methods
-    .requestRoundRandomness()
+  roundId: bigint,
+  nonce: Uint8Array = testNonce(),
+): Promise<Uint8Array> {
+  const seed = vrfSeed("round", pool.pool, roundId, nonce);
+  await program.methods
+    .requestRoundRandomness(Array.from(nonce))
     .accountsPartial({
       payer: provider.wallet.publicKey,
       pool: pool.pool,
@@ -167,19 +184,20 @@ async function requestRandomness(
       systemProgram: SystemProgram.programId,
     })
     .rpc();
+  return seed;
 }
 
 async function settleRound(pool: PoolCtx, round: PublicKey, seed: Uint8Array) {
   return program.methods
     .settleRound()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      caller: pool.operator.publicKey,
       pool: pool.pool,
       round,
       randomness: randomnessPda(seed),
       house: pool.house,
     })
-    .signers([pool.authority])
+    .signers([pool.operator])
     .rpc();
 }
 
@@ -200,15 +218,28 @@ async function settlePosition(
     .rpc();
 }
 
-async function voidRound(pool: PoolCtx, round: PublicKey) {
+/**
+ * `seed` is the Round's own `vrfSeed` once requested (unused, any value
+ * works, when voiding a still-OPEN round that was never requested at all).
+ * The program checks the randomness account against it and refuses to void a
+ * request that was fulfilled. Permissionless (production-hardening ticket
+ * 01): the first account is `caller`, not `operator`.
+ */
+async function voidRound(
+  pool: PoolCtx,
+  round: PublicKey,
+  seed: Uint8Array,
+  caller: Keypair = pool.operator,
+) {
   return program.methods
     .voidRound()
     .accountsPartial({
-      authority: pool.authority.publicKey,
+      caller: caller.publicKey,
       pool: pool.pool,
       round,
+      randomness: randomnessPda(seed),
     })
-    .signers([pool.authority])
+    .signers([caller])
     .rpc();
 }
 
@@ -222,8 +253,7 @@ async function playToSettlement(
 ) {
   await waitUntil(endsAt);
   const roundBefore = await program.account.round.fetch(round);
-  const seed = Uint8Array.from(roundBefore.vrfSeed);
-  await requestRandomness(pool, round, seed);
+  const seed = await requestRandomness(pool, round, BigInt(roundBefore.roundId.toString()));
   await fulfillRandomness(seed, randomnessFor(winningTile));
   await settleRound(pool, round, seed);
   return program.account.round.fetch(round);
@@ -575,10 +605,11 @@ describe("rounds", () => {
       const { round } = await createRound(pool, 20);
 
       const roundBefore = await program.account.round.fetch(round);
-      const seed = Uint8Array.from(roundBefore.vrfSeed);
       // Well before ends_at - close_buffer (20 - 14 = 6s in): the round is
       // still open to Positions, so the draw window has not started yet.
-      await expect(requestRandomness(pool, round, seed)).rejects.toThrow();
+      await expect(
+        requestRandomness(pool, round, BigInt(roundBefore.roundId.toString())),
+      ).rejects.toThrow();
 
       const roundAfter = await program.account.round.fetch(round);
       expect(roundAfter.status).toBe(0); // still Open
@@ -613,8 +644,7 @@ describe("rounds", () => {
       ).rejects.toThrow();
 
       const roundBefore = await program.account.round.fetch(round);
-      const seed = Uint8Array.from(roundBefore.vrfSeed);
-      await requestRandomness(pool, round, seed);
+      const seed = await requestRandomness(pool, round, BigInt(roundBefore.roundId.toString()));
 
       const requested = await program.account.round.fetch(round);
       expect(requested.status).toBe(1); // Requested
@@ -715,12 +745,11 @@ describe("rounds", () => {
 
       await waitUntil(endsAt);
       const roundBefore = await program.account.round.fetch(round);
-      const seed = Uint8Array.from(roundBefore.vrfSeed);
-      await requestRandomness(pool, round, seed);
+      const seed = await requestRandomness(pool, round, BigInt(roundBefore.roundId.toString()));
       const requested = await program.account.round.fetch(round);
 
       await waitUntil(Number(requested.requestedAt.toString()) + 2); // past vrf_timeout
-      await voidRound(pool, round);
+      await voidRound(pool, round, seed);
 
       const voided = await program.account.round.fetch(round);
       expect(voided.status).toBe(4); // Voided
@@ -756,16 +785,263 @@ describe("rounds", () => {
   );
 
   it(
-    "create_round rejects a paused pool and a second open round",
+    "void_round is refused once the randomness has been fulfilled",
+    async () => {
+      const pool = await setupPool({
+        roundSeconds: 4,
+        closeBuffer: 1,
+        vrfTimeout: 2,
+      });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      // Round 1: the oracle answers, and only then does the timeout pass.
+      // Reading the tile and voiding the round is the move this blocks.
+      const first = await createRound(pool, 4);
+      await buyPosition(pool, alice, first.round, 1n << 0n, 1_000_000n);
+      await waitUntil(first.endsAt);
+      const firstRoundBefore = await program.account.round.fetch(first.round);
+      const firstSeed = await requestRandomness(
+        pool,
+        first.round,
+        BigInt(firstRoundBefore.roundId.toString()),
+      );
+      await fulfillRandomness(firstSeed, randomnessFor(1)); // alice loses
+      const requested = await program.account.round.fetch(first.round);
+      await waitUntil(Number(requested.requestedAt.toString()) + 2);
+
+      await expect(voidRound(pool, first.round, firstSeed)).rejects.toThrow(
+        /RandomnessAlreadyFulfilled/,
+      );
+      // The only way out of a fulfilled request is the settlement it drew.
+      await settleRound(pool, first.round, firstSeed);
+      expect((await program.account.round.fetch(first.round)).status).toBe(3); // Forfeited
+
+      // Round 2: nothing ever answers, so the same timeout still voids.
+      const second = await createRound(pool, 4);
+      await buyPosition(pool, alice, second.round, 1n << 0n, 1_000_000n);
+      await waitUntil(second.endsAt);
+      const secondRoundBefore = await program.account.round.fetch(second.round);
+      const secondSeed = await requestRandomness(
+        pool,
+        second.round,
+        BigInt(secondRoundBefore.roundId.toString()),
+      );
+      const secondRequested = await program.account.round.fetch(second.round);
+      await waitUntil(Number(secondRequested.requestedAt.toString()) + 2);
+      await voidRound(pool, second.round, secondSeed);
+      expect((await program.account.round.fetch(second.round)).status).toBe(4); // Voided
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "pre-creating the randomness account for the seed no longer blocks a request",
+    async () => {
+      // beta-launch-fixes ticket 02: the seed is unknowable before the
+      // request (it depends on the Operator's own nonce), so nobody can
+      // grief a Round by pre-creating ORAO's request account for it. Proven
+      // here as: two different nonces for the same Round land at two
+      // different addresses, so "pre-creating the seed's account" isn't even
+      // a coherent attack any more -- there is no address to target ahead of
+      // time.
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const { round, endsAt } = await createRound(pool, 6);
+      await waitUntil(endsAt);
+
+      const roundBefore = await program.account.round.fetch(round);
+      const roundId = BigInt(roundBefore.roundId.toString());
+      const seedA = vrfSeed("round", pool.pool, roundId, testNonce(1));
+      const seedB = vrfSeed("round", pool.pool, roundId, testNonce(2));
+      expect(Buffer.from(seedA)).not.toEqual(Buffer.from(seedB));
+
+      // A stranger's own would-be griefing "pre-create" pass over seedA's
+      // address before the real request is exactly what the real request
+      // (with a different, Operator-chosen nonce) never collides with.
+      const seed = await requestRandomness(pool, round, roundId, testNonce(2));
+      expect(Buffer.from(seed)).toEqual(Buffer.from(seedB));
+      const requested = await program.account.round.fetch(round);
+      expect(requested.status).toBe(1); // Requested
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a Round left OPEN past ends_at + vrf_timeout can be voided by the Operator, and its pot carries",
+    async () => {
+      // beta-launch-fixes ticket 02: a Round that never even got its
+      // randomness request through (e.g. the Operator crashed before
+      // calling request_round_randomness) is not stuck forever.
+      const pool = await setupPool({ roundSeconds: 4, closeBuffer: 1, vrfTimeout: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 4);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
+
+      // Never requested at all: still OPEN past ends_at + vrf_timeout.
+      await waitUntil(endsAt + 2 + 1);
+      // Any placeholder randomness account: the OPEN branch never reads it.
+      await voidRound(pool, round, new Uint8Array(32));
+
+      const voided = await program.account.round.fetch(round);
+      expect(voided.status).toBe(4); // Voided
+      const poolAfterVoid = await program.account.pool.fetch(pool.pool);
+      expect(poolAfterVoid.carryPot.toString()).toBe("1000000");
+
+      const { round: round2 } = await createRound(pool, 4);
+      const round2Account = await program.account.round.fetch(round2);
+      expect(round2Account.pot.toString()).toBe("1000000");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "buy_position refuses while the pool is paused",
+    async () => {
+      // production-hardening ticket 02: pause stops all Ticket movement.
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+      const { round } = await createRound(pool, 6);
+
+      await setPause(pool, true);
+      await expect(
+        buyPosition(pool, alice, round, 1n << 0n, 1_000_000n),
+      ).rejects.toThrow(/PoolPaused/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "the House cannot buy a position with the Entries it just won",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 6);
+      await buyPosition(pool, alice, round, 1n << 2n, 1_000_000n); // tile 2 only
+      await playToSettlement(pool, round, endsAt, 7); // nobody on tile 7
+      const house = await program.account.player.fetch(pool.house);
+      expect(house.entries.toString()).toBe("1000000");
+
+      const { round: next } = await createRound(pool, 6);
+      await expect(
+        buyPosition(
+          pool,
+          { keypair: pool.operator, tokenAccount: PublicKey.default },
+          next,
+          1n << 0n,
+          1_000n,
+        ),
+      ).rejects.toThrow(/HouseCannotPlay/);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "create_round rejects a paused pool, a game-paused pool, and a second open round",
     async () => {
       const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
 
       await setPause(pool, true);
-      await expect(createRound(pool, 6)).rejects.toThrow();
+      await expect(createRound(pool, 6)).rejects.toThrow(/PoolPaused/);
       await setPause(pool, false);
+
+      await setGamePaused(pool, true);
+      await expect(createRound(pool, 6)).rejects.toThrow(/GamePaused/);
+      await setGamePaused(pool, false);
 
       await createRound(pool, 6); // now open
       await expect(createRound(pool, 6)).rejects.toThrow(); // still open
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "buy_position rejects a game-paused pool",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const { round } = await createRound(pool, 6);
+      await setGamePaused(pool, true);
+      await expect(
+        buyPosition(pool, alice, round, 1n << 0n, 1_000_000n),
+      ).rejects.toThrow(/GamePaused/);
+
+      await setGamePaused(pool, false);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n); // clears once unpaused
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a round opened before the game is paused still settles, its position still settles, and it still closes",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      const bob = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+      await deposit(pool, bob, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 6);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
+
+      await setGamePaused(pool, true);
+      // create_round and buy_position are refused, but nothing that finishes
+      // this already-open round is gated (spec: game pause never blocks
+      // request_round_randomness, settle_round, settle_position or
+      // close_round). Bob, not Alice, tries to buy: Alice's Position already
+      // exists, so her second buy fails its `init` before the pause check.
+      await expect(createRound(pool, 6)).rejects.toThrow(/GamePaused/);
+      await expect(
+        buyPosition(pool, bob, round, 1n << 1n, 1n),
+      ).rejects.toThrow(/GamePaused/);
+
+      const settled = await playToSettlement(pool, round, endsAt, 0);
+      expect(settled.status).toBe(2); // Settled
+
+      await settlePosition(pool, round, alice.keypair.publicKey);
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
+      // 5M - 1M staked + the 1M pot back net of the 60k House cut.
+      expect(aliceAfter.entries.toString()).toBe("4940000");
+
+      const positionPdaAddr = positionPda(round, alice.keypair.publicKey);
+      await expectClosed(positionPdaAddr);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "voiding an already-open round after the vrf timeout still works while the game is paused",
+    async () => {
+      const pool = await setupPool({
+        roundSeconds: 4,
+        closeBuffer: 1,
+        vrfTimeout: 2,
+      });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 4);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
+      await setGamePaused(pool, true);
+
+      await waitUntil(endsAt);
+      const roundBefore = await program.account.round.fetch(round);
+      const seed = await requestRandomness(pool, round, BigInt(roundBefore.roundId.toString()));
+      const requested = await program.account.round.fetch(round);
+
+      await waitUntil(Number(requested.requestedAt.toString()) + 2);
+      await voidRound(pool, round, seed);
+
+      const voided = await program.account.round.fetch(round);
+      expect(voided.status).toBe(4); // Voided
     },
     TIMEOUT,
   );
@@ -782,8 +1058,7 @@ describe("rounds", () => {
 
       await waitUntil(endsAt);
       const roundBefore = await program.account.round.fetch(round);
-      const seed = Uint8Array.from(roundBefore.vrfSeed);
-      await requestRandomness(pool, round, seed);
+      const seed = await requestRandomness(pool, round, BigInt(roundBefore.roundId.toString()));
       await fulfillRandomness(seed, randomnessFor(0));
 
       // A real Player PDA, just not the House's.
@@ -794,13 +1069,13 @@ describe("rounds", () => {
         program.methods
           .settleRound()
           .accountsPartial({
-            authority: pool.authority.publicKey,
+            caller: pool.operator.publicKey,
             pool: pool.pool,
             round,
             randomness: randomnessPda(seed),
             house: playerPda(pool.pool, impostor.keypair.publicKey),
           })
-          .signers([pool.authority])
+          .signers([pool.operator])
           .rpc(),
       ).rejects.toThrow();
 
@@ -819,13 +1094,16 @@ describe("rounds", () => {
         await program.methods
           .beginEpoch()
           .accountsPartial({
-            authority: pool.authority.publicKey,
+            operator: pool.operator.publicKey,
             pool: pool.pool,
             currentEpoch: epochPda(pool.pool, 0n),
+            // Never read at current_epoch_id 0 (< 2); the address still has
+            // to be supplied.
+            epochTwoBehind: epochPda(pool.pool, 0n),
             newEpoch: epochPda(pool.pool, 1n),
             systemProgram: SystemProgram.programId,
           })
-          .signers([pool.authority])
+          .signers([pool.operator])
           .rpc();
       } catch (err) {
         // `begin_epoch` (ticket 04) is being implemented concurrently and is
@@ -847,7 +1125,7 @@ describe("rounds", () => {
         program.methods
           .createRound(startsAt, endsAt)
           .accountsPartial({
-            authority: pool.authority.publicKey,
+            operator: pool.operator.publicKey,
             pool: pool.pool,
             currentEpoch: epochPda(
               pool.pool,
@@ -859,7 +1137,7 @@ describe("rounds", () => {
             ),
             systemProgram: SystemProgram.programId,
           })
-          .signers([pool.authority])
+          .signers([pool.operator])
           .rpc(),
       ).rejects.toThrow();
     },

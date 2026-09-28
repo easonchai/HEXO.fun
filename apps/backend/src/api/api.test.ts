@@ -10,17 +10,45 @@ import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
 import { Prisma, type Player } from "@prisma/client";
-import { Keypair, type PublicKey, type TransactionInstruction } from "@solana/web3.js";
+import {
+  ACCOUNT_SIZE,
+  AccountLayout,
+  MINT_SIZE,
+  MintLayout,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import {
+  Keypair,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+  type AccountInfo,
+  type TransactionInstruction,
+} from "@solana/web3.js";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { ChainModule } from "../chain/chain.module";
 import { ChainService } from "../chain/chain.service";
 import { ConfigModule } from "../config/config.module";
 import { HealthController } from "../health/health.controller";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
+import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { ApiModule } from "./api.module";
-import { CHAIN_CLOCK_TTL_MS, JACKPOT_BALANCE_TTL_MS, oddsPercent, weightAt } from "./api.service";
+import { FaucetController } from "./faucet.controller";
+import {
+  BALANCES_TTL_MS,
+  CHAIN_CLOCK_TTL_MS,
+  JACKPOT_BALANCE_TTL_MS,
+  oddsPercent,
+  oneDayYieldCost,
+  operatorErrorCode,
+  playerTicketExtras,
+  poolBonusCap,
+  principalOut,
+  weightAt,
+} from "./api.service";
 
 const NOW = BigInt(Math.floor(Date.now() / 1000));
 const EPOCH_LENGTH = 86_400n;
@@ -38,6 +66,19 @@ const ALICE = Keypair.generate().publicKey.toBase58();
 const BOB = Keypair.generate().publicKey.toBase58();
 const HOUSE = Keypair.generate().publicKey.toBase58();
 
+/** A pool the database still holds after a Pool cutover (ADR 0016). The seed
+ *  gives it rows that collide with the Active pool's ids (epoch 7, round
+ *  100, Alice) or sort ahead of them, so every exact-match assertion in this
+ *  file also proves the route ignores it. */
+const RETIRED_POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
+/** Only ever deposited in the retired pool. */
+const CAROL = Keypair.generate().publicKey.toBase58();
+
+/** Player's composite key in the Active pool, for `update` calls. */
+const activePlayer = (owner: string) => ({
+  poolAddress_owner: { poolAddress: POOL_ADDRESS, owner },
+});
+
 // Both sit past 2^53, so a route that leaked a JSON number would round the
 // value rather than return these digits. u64 columns cannot take the u128 one.
 const HUGE_U64 = "9007199254740993";
@@ -46,10 +87,37 @@ const HUGE_U128 = "123456789012345678901234567890";
 const FAKE_SIGNATURE = "FakeSignature1111111111111111111111111111111";
 /** What the fake RPC says sits in the jackpot vault while epoch 7 is open. */
 const VAULT_BALANCE = 5_000_000n;
+/** GET /state's ticket 08 field: the fake `priorityFeeMicroLamports`'s
+ *  canned answer. */
+const FAKE_PRIORITY_FEE = 4_242;
 /** The seeded Pool row's `closeBuffer`/`minDeposit`, which the browser reads
  *  off `/state` rather than off the chain (ticket 07). */
 const POOL_CLOSE_BUFFER = 15n;
 const POOL_MIN_DEPOSIT = 1_000_000n;
+
+/** Ticket 03's `/status` figures: what the pool owes, what the principal
+ *  vault holds against it, and what the operator has left for fees. */
+const POOL_PENDING_WITHDRAWALS = 3_000_000n;
+const PRINCIPAL_VAULT_BALANCE = 9_000_000n;
+const OPERATOR_LAMPORTS = 2 * LAMPORTS_PER_SOL;
+
+/** Ticket 05's `/status`, `/pool` and `/players/:owner` figures: base yield,
+ *  bought tickets and granted tickets. */
+const POOL_BASE_RATE_BPS = 488;
+// Far under one day's yield cost at that rate against HUGE_U64's Principal,
+// so the low-budget warning is exercised by the default seed.
+const POOL_YIELD_BUDGET = 5_000_000n;
+const POOL_TICKETS_PER_USDC = 10;
+const POOL_BONUS_CAP_BPS = 500;
+const POOL_BONUS_GRANTED = 250_000n;
+const ALICE_BOUGHT_AMOUNT = 200_000n;
+const ALICE_BONUS_GRANTED = 50_000n;
+
+/** The operator key, which is also the authority of the mint the faucet
+ *  mints from; the faucet resolves that at boot. */
+const OPERATOR = Keypair.generate();
+const ACCEPTED_MINT = new PublicKey(process.env.ACCEPTED_MINT as string);
+const PRINCIPAL_VAULT = Keypair.generate().publicKey;
 
 /** A Clock sysvar account's data, `unix_timestamp` at byte offset 32 (see
  *  operator/chain-state.ts `clockUnixTimestamp`). The other fields are unused. */
@@ -59,14 +127,67 @@ function clockSysvarData(unixTimestamp: bigint): Buffer {
   return data;
 }
 
+/** An SPL mint account whose authority is `mintAuthority`, as the faucet's
+ *  boot check reads it. */
+function mintAccount(mintAuthority: PublicKey): AccountInfo<Buffer> {
+  const data = Buffer.alloc(MINT_SIZE);
+  MintLayout.encode(
+    {
+      mintAuthorityOption: 1,
+      mintAuthority,
+      supply: 0n,
+      decimals: 6,
+      isInitialized: true,
+      freezeAuthorityOption: 0,
+      freezeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return accountInfo(data, TOKEN_PROGRAM_ID);
+}
+
+/** An SPL token account holding `amount`, as `/status`'s liquidity read
+ *  unpacks it. */
+function tokenAccount(amount: bigint): AccountInfo<Buffer> {
+  const data = Buffer.alloc(ACCOUNT_SIZE);
+  AccountLayout.encode(
+    {
+      mint: ACCEPTED_MINT,
+      owner: PublicKey.default,
+      amount,
+      delegateOption: 0,
+      delegate: PublicKey.default,
+      delegatedAmount: 0n,
+      state: 1,
+      isNativeOption: 0,
+      isNative: 0n,
+      closeAuthorityOption: 0,
+      closeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return accountInfo(data, TOKEN_PROGRAM_ID);
+}
+
+const accountInfo = (data: Buffer, owner: PublicKey): AccountInfo<Buffer> => ({
+  data,
+  owner,
+  executable: false,
+  lamports: 1,
+  rentEpoch: 0,
+});
+
 const sentInstructions: TransactionInstruction[][] = [];
 
 /** Counts calls the caching tests assert against, so they check the chain
  *  seam rather than the response body. */
 let clockReads = 0;
 let jackpotReads = 0;
+let balanceReads = 0;
 /** When set, the next `getTokenAccountBalance` call throws once and resets it. */
 let failNextJackpotRead = false;
+/** Same, for the paired vault/operator balance read behind /status. */
+let failNextBalanceRead = false;
 /** What the fake Clock sysvar reads. Mutable so a test can make the chain
  *  clock regress the way a real one does when it drifts behind wall time. */
 let chainClockValue = CHAIN_NOW;
@@ -75,9 +196,26 @@ const fakeChain = {
   connection: {
     rpcEndpoint: "http://127.0.0.1:8899",
     getSlot: async (): Promise<number> => 1234,
-    getAccountInfo: async (): Promise<{ data: Buffer }> => {
+    // The mint for the faucet's boot check, the Clock sysvar for everything
+    // else: those are the only two accounts this suite reads one at a time.
+    getAccountInfo: async (address: PublicKey): Promise<AccountInfo<Buffer>> => {
+      if (address.equals(ACCEPTED_MINT)) return mintAccount(OPERATOR.publicKey);
       clockReads += 1;
-      return { data: clockSysvarData(chainClockValue) };
+      return accountInfo(clockSysvarData(chainClockValue), SystemProgram.programId);
+    },
+    getMultipleAccountsInfo: async (
+      addresses: PublicKey[],
+    ): Promise<(AccountInfo<Buffer> | null)[]> => {
+      balanceReads += 1;
+      if (failNextBalanceRead) {
+        failNextBalanceRead = false;
+        throw new Error("simulated balance read failure");
+      }
+      return addresses.map((address) =>
+        address.equals(PRINCIPAL_VAULT)
+          ? tokenAccount(PRINCIPAL_VAULT_BALANCE)
+          : { ...accountInfo(Buffer.alloc(0), SystemProgram.programId), lamports: OPERATOR_LAMPORTS },
+      );
     },
     getTokenAccountBalance: async (): Promise<{ value: { amount: string } }> => {
       jackpotReads += 1;
@@ -88,15 +226,20 @@ const fakeChain = {
       return { value: { amount: VAULT_BALANCE.toString() } };
     },
   },
+  poolAddress: (): PublicKey => new PublicKey(POOL_ADDRESS),
   jackpotVaultAddress: (): PublicKey => Keypair.generate().publicKey,
-  keypair: Keypair.generate(),
+  principalVaultAddress: (): PublicKey => PRINCIPAL_VAULT,
+  roundAddress: (): PublicKey => Keypair.generate().publicKey,
+  priorityFeeMicroLamports: async (): Promise<number> => FAKE_PRIORITY_FEE,
+  keypair: OPERATOR,
   send: async (instructions: TransactionInstruction[]): Promise<string> => {
     sentInstructions.push(instructions);
     return FAKE_SIGNATURE;
   },
 };
 
-const emptyPlayer = (owner: string): Player => ({
+const emptyPlayer = (owner: string, poolAddress: string = POOL_ADDRESS): Player => ({
+  poolAddress,
   owner,
   principal: 0n,
   entries: 0n,
@@ -109,6 +252,15 @@ const emptyPlayer = (owner: string): Player => ({
   regStart: new Prisma.Decimal(0),
   regEnd: new Prisma.Decimal(0),
   isHouse: false,
+  pendingWithdraw: 0n,
+  pendingEpoch: 0n,
+  principalAcc: new Prisma.Decimal(0),
+  frozenPrincipalAcc: new Prisma.Decimal(0),
+  yieldEpoch: 0n,
+  boughtEpoch: 0n,
+  boughtAmount: 0n,
+  bonusEpoch: 0n,
+  bonusGranted: 0n,
 });
 
 const MAX_JSON_SAFE = 2 ** 53;
@@ -134,7 +286,7 @@ function assertNoLargeNumbers(value: unknown, path: string): void {
 
 async function truncate(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE "Pool", "Epoch", "Round", "Player", "Position", "Event", "Cursor", "FaucetClaim", "OperatorState"',
+    'TRUNCATE "Pool", "Epoch", "Round", "Player", "Position", "Event", "Cursor", "FaucetClaim", "OperatorState" CASCADE',
   );
 }
 
@@ -198,7 +350,111 @@ describe("oddsPercent", () => {
   });
 });
 
-describe("API routes", () => {
+describe("oneDayYieldCost", () => {
+  it("matches register's per-second rate over a full day", () => {
+    // 1,000 USDC at 500 bps (5%) for a year is 50 USDC; one 365th of that,
+    // atomic (6 decimals), is what one day costs the whole pool.
+    expect(oneDayYieldCost(1_000_000_000n, 500)).toBe(136_986n);
+  });
+
+  it("is zero at a zero rate or with no Principal", () => {
+    expect(oneDayYieldCost(1_000_000_000n, 0)).toBe(0n);
+    expect(oneDayYieldCost(0n, 500)).toBe(0n);
+  });
+});
+
+describe("poolBonusCap", () => {
+  it("mirrors the on-chain pool_bonus_cap", () => {
+    expect(poolBonusCap(1_000_000_000n, 500)).toBe(50_000_000n);
+  });
+
+  it("is zero at a zero cap", () => {
+    expect(poolBonusCap(1_000_000_000n, 0)).toBe(0n);
+  });
+});
+
+describe("principalOut", () => {
+  const OWED = { totalPrincipal: 3_000_000n, pendingWithdrawals: 250_000n, yieldBudget: 100_000n };
+
+  it("is the gap between what the pool owes and what the vault holds", () => {
+    expect(principalOut({ ...OWED, vaultAmount: 1_000_000n })).toBe(2_350_000n);
+  });
+
+  it("is zero once the vault covers everything owed, never negative", () => {
+    expect(principalOut({ ...OWED, vaultAmount: 3_350_000n })).toBe(0n);
+    // A deposit landed after vaultAmount was read: more than owed sits in
+    // the vault, which is a stale read, not principal out.
+    expect(principalOut({ ...OWED, vaultAmount: 5_000_000n })).toBe(0n);
+  });
+});
+
+describe("playerTicketExtras", () => {
+  const ALICE_ADDRESS = Keypair.generate().publicKey.toBase58();
+  const player = (over: Partial<Player>): Player => ({
+    ...emptyPlayer(ALICE_ADDRESS),
+    principal: 1_000_000n,
+    ...over,
+  });
+
+  it("reads today's counters live when their epoch matches the current one", () => {
+    const extras = playerTicketExtras(
+      player({ boughtEpoch: 7n, boughtAmount: 300_000n, bonusEpoch: 7n, bonusGranted: 40_000n }),
+      7n,
+    );
+    expect(extras).toEqual({
+      boughtToday: 300_000n,
+      buyAllowanceLeft: 700_000n,
+      grantedToday: 40_000n,
+    });
+  });
+
+  it("reads a counter from a past epoch as already reset to 0", () => {
+    // The on-chain reset only happens the next time buy_tickets/grant_tickets
+    // actually runs for the new epoch, so a leftover epoch=6 value must not
+    // leak into epoch 7's figures.
+    const extras = playerTicketExtras(
+      player({ boughtEpoch: 6n, boughtAmount: 300_000n, bonusEpoch: 6n, bonusGranted: 40_000n }),
+      7n,
+    );
+    expect(extras).toEqual({ boughtToday: 0n, buyAllowanceLeft: 1_000_000n, grantedToday: 0n });
+  });
+
+  it("floors buyAllowanceLeft at zero once bought spend reaches or passes Principal", () => {
+    expect(
+      playerTicketExtras(player({ principal: 1_000n, boughtEpoch: 7n, boughtAmount: 1_000n }), 7n)
+        .buyAllowanceLeft,
+    ).toBe(0n);
+    // Reads 0, not negative, even if a drifted row somehow has more spent
+    // than the current Principal covers.
+    expect(
+      playerTicketExtras(player({ principal: 500n, boughtEpoch: 7n, boughtAmount: 1_000n }), 7n)
+        .buyAllowanceLeft,
+    ).toBe(0n);
+  });
+});
+
+describe("operatorErrorCode", () => {
+  it("is null when there is no error", () => {
+    expect(operatorErrorCode(null)).toBeNull();
+  });
+
+  it("passes a bare IDL/Anchor error name through unchanged", () => {
+    expect(operatorErrorCode("InsufficientVaultLiquidity")).toBe("InsufficientVaultLiquidity");
+  });
+
+  it("collapses anything else to one generic code, so a hostname or path never reaches a client", () => {
+    expect(operatorErrorCode("RPC getMultipleAccountsInfo timed out after 10000ms")).toBe(
+      "OPERATOR_TICK_FAILED",
+    );
+    expect(
+      operatorErrorCode("principal vault Ax1...9Z does not exist; run bootstrap first"),
+    ).toBe("OPERATOR_TICK_FAILED");
+  });
+});
+
+const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
+
+describe.skipIf(!DB_AVAILABLE)("API routes", () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let http: ReturnType<typeof request>;
@@ -206,8 +462,12 @@ describe("API routes", () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       // HealthController rides along to prove the global throttler guard
-      // leaves the container probe alone.
-      imports: [ConfigModule, PrismaModule, ApiModule],
+      // leaves the container probe alone. It needs ChainModule imported
+      // here too, same as AppModule does at the real root: ApiModule
+      // importing ChainModule only makes ChainService visible inside
+      // ApiModule's own controllers, not to a controller declared on this
+      // root test module.
+      imports: [ConfigModule, PrismaModule, ChainModule, ApiModule],
       controllers: [HealthController],
     })
       .overrideProvider(PrismaService)
@@ -217,7 +477,11 @@ describe("API routes", () => {
       .useValue(fakeChain)
       .compile();
 
-    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    // trustProxy (ticket 13): the API sits behind Traefik, so the throttler
+    // must key on the forwarded client address, not Traefik's own.
+    app = moduleRef.createNestApplication<NestFastifyApplication>(
+      new FastifyAdapter({ trustProxy: true }),
+    );
     prisma = app.get(PrismaService);
     await truncate(prisma);
     await seed(prisma);
@@ -243,6 +507,11 @@ describe("API routes", () => {
       epochAnchor: String(CURRENT_START),
       currentEpochEndsAt: String(CURRENT_START + EPOCH_LENGTH),
       previousEpochEndsAt: String(CURRENT_START),
+      // Ticket 05: the whole Pool row rides along, so these need no route
+      // change to show up.
+      baseRateBps: POOL_BASE_RATE_BPS,
+      ticketsPerUsdc: POOL_TICKETS_PER_USDC,
+      bonusCapBps: POOL_BONUS_CAP_BPS,
     });
     expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
     expect(body.openRound).toEqual({
@@ -317,6 +586,38 @@ describe("API routes", () => {
     assertNoLargeNumbers(body, "/players/:owner");
   });
 
+  it("GET /players/:owner reports today's bought and granted tickets, and Base yield earned", async () => {
+    const { body } = await http.get(`/players/${ALICE}`).expect(200);
+    // bonusEpoch/boughtEpoch both equal the current epoch (7) in the seed,
+    // so both counters read live rather than reset to 0.
+    expect(body.boughtToday).toBe(ALICE_BOUGHT_AMOUNT.toString());
+    expect(body.buyAllowanceLeft).toBe((1_000_000n - ALICE_BOUGHT_AMOUNT).toString());
+    expect(body.grantedToday).toBe(ALICE_BONUS_GRANTED.toString());
+    // yieldEpoch is the previous epoch (6): only that epoch's YieldCredited
+    // row counts toward yieldLastEpoch, but every epoch's counts toward
+    // yieldToDate.
+    expect(body.yieldLastEpoch).toBe("12000");
+    expect(body.yieldToDate).toBe("20000");
+    assertNoLargeNumbers(body, "/players/:owner (yield/tickets)");
+  });
+
+  it("GET /players/:owner floors buyAllowanceLeft at zero once bought spend reaches Principal", async () => {
+    await prisma.player.update({
+      where: activePlayer(BOB),
+      data: { principal: 1_000n, boughtEpoch: CURRENT_EPOCH, boughtAmount: 1_000n },
+    });
+    try {
+      const { body } = await http.get(`/players/${BOB}`).expect(200);
+      expect(body.boughtToday).toBe("1000");
+      expect(body.buyAllowanceLeft).toBe("0");
+    } finally {
+      await prisma.player.update({
+        where: activePlayer(BOB),
+        data: { principal: 0n, boughtEpoch: 0n, boughtAmount: 0n },
+      });
+    }
+  });
+
   it("GET /players/:owner gives zero odds to a player with no entries", async () => {
     const { body } = await http.get(`/players/${BOB}`).expect(200);
     expect(body.liveWeight).toBe("0");
@@ -346,11 +647,11 @@ describe("API routes", () => {
     // the draw. Alice's seeded head start is dropped so Bob's share is not
     // rounded to zero.
     await prisma.player.update({
-      where: { owner: ALICE },
+      where: activePlayer(ALICE),
       data: { weightAcc: new Prisma.Decimal(0) },
     });
     await prisma.player.update({
-      where: { owner: BOB },
+      where: activePlayer(BOB),
       data: { principal: 1_000_000n, entries: 1_000_000n, lastUpdate: CHAIN_NOW },
     });
     try {
@@ -362,11 +663,11 @@ describe("API routes", () => {
       expect(body.odds).toBe(oddsPercent(bobAtDraw, bobAtDraw + aliceAtDraw));
     } finally {
       await prisma.player.update({
-        where: { owner: ALICE },
+        where: activePlayer(ALICE),
         data: { weightAcc: HUGE_U128 },
       });
       await prisma.player.update({
-        where: { owner: BOB },
+        where: activePlayer(BOB),
         data: { principal: 0n, entries: 0n, lastUpdate: CURRENT_START },
       });
     }
@@ -421,6 +722,7 @@ describe("API routes", () => {
           slot: 20n,
           signature: "sig20",
           index: 0,
+          poolAddress: POOL_ADDRESS,
           name: "PositionBought",
           data: { roundId: "99", owner: ALICE, tiles: "1", stakePerTile: "100", total: "100" },
           blockTime: NOW - 20n,
@@ -429,6 +731,7 @@ describe("API routes", () => {
           slot: 21n,
           signature: "sig21",
           index: 0,
+          poolAddress: POOL_ADDRESS,
           name: "PositionBought",
           data: { roundId: "100", owner: ALICE, tiles: "1", stakePerTile: "100", total: "100" },
           blockTime: NOW - 10n,
@@ -437,6 +740,7 @@ describe("API routes", () => {
           slot: 22n,
           signature: "sig22",
           index: 0,
+          poolAddress: POOL_ADDRESS,
           name: "PositionBought",
           data: { roundId: "99", owner: CARL, tiles: "1", stakePerTile: "50", total: "50" },
           blockTime: NOW - 5n,
@@ -465,8 +769,209 @@ describe("API routes", () => {
     expect(body.cursor.ageSeconds).toBeLessThan(120);
     expect(body.rpcOk).toBe(true);
     expect(body.slot).toBe(1234);
-    expect(body.aprBps).toBe(500);
     assertNoLargeNumbers(body, "/status");
+  });
+
+  it("GET /status reports the withdrawal queue, the vault's liquidity and the operator's SOL", async () => {
+    const { body } = await http.get("/status").expect(200);
+    // u64 amounts as decimal strings, same as every other money field.
+    expect(body.pendingWithdrawals).toBe(POOL_PENDING_WITHDRAWALS.toString());
+    expect(body.vaultLiquidity).toBe(PRINCIPAL_VAULT_BALANCE.toString());
+    // Seeded on the OperatorState row, in atomic units like the rest.
+    expect(body.withdrawShortfall).toBe("250000");
+    // SOL, not lamports, so the warning threshold reads in the same unit.
+    expect(body.operatorSol).toBe(2);
+    expect(body.operatorSolLow).toBe(false);
+    // total_principal + pending_withdrawals + yield_budget - vault, past
+    // 2^53 like the seeded totalPrincipal itself, so a truncating path here
+    // would show up the same way `assertNoLargeNumbers` catches one below.
+    expect(body.principalOut).toBe(
+      (BigInt(HUGE_U64) + POOL_PENDING_WITHDRAWALS + POOL_YIELD_BUDGET - PRINCIPAL_VAULT_BALANCE).toString(),
+    );
+    expect(body.shutdown).toBe(false);
+  });
+
+  // Ticket 05: `/status` carries the same launch time `/state` does, null
+  // once the seeded Pool already has an Epoch (every other test in this file).
+  it("GET /status carries a null launchAt once the pool has an epoch", async () => {
+    const { body } = await http.get("/status").expect(200);
+    expect(body.launchAt).toBeNull();
+  });
+
+  it("GET /status carries the configured launch time before Epoch 1", async () => {
+    await prisma.pool.update({ where: { address: POOL_ADDRESS }, data: { currentEpochId: 0n } });
+    try {
+      const { body } = await http.get("/status").expect(200);
+      expect(body.launchAt).toBe(process.env.LAUNCH_AT);
+    } finally {
+      await prisma.pool.update({
+        where: { address: POOL_ADDRESS },
+        data: { currentEpochId: CURRENT_EPOCH },
+      });
+    }
+  });
+
+  it("GET /healthz reports the operator's SOL and its own status, separate from /status", async () => {
+    const { body } = await http.get("/healthz").expect(200);
+    expect(body.ok).toBe(true);
+    expect(body.operatorSol).toBe(2);
+    expect(body.status).toBe("ok");
+  });
+
+  it("GET /status reports the yield budget, bonus grants and the low-budget warning", async () => {
+    const { body } = await http.get("/status").expect(200);
+    expect(body.yieldBudget).toBe(POOL_YIELD_BUDGET.toString());
+    // Only epoch 6's YieldCredited rows count (Alice 500 + Bob 300); epoch
+    // 5's 999 is a different epoch and must not be added in.
+    expect(body.yieldShortfall).toBe("800");
+    expect(body.bonusGrantedToday).toBe(POOL_BONUS_GRANTED.toString());
+    expect(body.bonusCap).toBe(
+      poolBonusCap(BigInt(HUGE_U64), POOL_BONUS_CAP_BPS).toString(),
+    );
+    // HUGE_U64's Principal makes one day of yield dwarf the seeded budget.
+    expect(
+      POOL_YIELD_BUDGET < oneDayYieldCost(BigInt(HUGE_U64), POOL_BASE_RATE_BPS),
+    ).toBe(true);
+    expect(body.yieldBudgetLow).toBe(true);
+    assertNoLargeNumbers(body, "/status (yield)");
+  });
+
+  // pool-cutover ticket 02: the seed also holds a retired pool's rows (see
+  // `seedRetiredPool`). Every other test here already fails if a route reads
+  // them; these name the ticket's routes outright.
+  describe("with a retired pool in the database (ADR 0016)", () => {
+    it("GET /epochs and /rounds return only the Active pool's rows", async () => {
+      const epochs = await http.get("/epochs").expect(200);
+      expect(epochs.body.map((epoch: { id: string }) => epoch.id)).toEqual(["7", "6"]);
+      const rounds = await http.get("/rounds").expect(200);
+      expect(rounds.body.map((round: { id: string }) => round.id)).toEqual(["100", "99"]);
+      const round = await http.get("/rounds/100").expect(200);
+      expect(round.body.pot).toBe("5000");
+      await http.get("/rounds/101").expect(404);
+    });
+
+    it("GET /players/:owner reads the Active pool's Player only", async () => {
+      const alice = await http.get(`/players/${ALICE}`).expect(200);
+      expect(alice.body.principal).toBe("1000000");
+      await http.get(`/players/${CAROL}`).expect(404);
+    });
+
+    it("GET /state reads the Active pool's Pool, Epoch, Round and Player", async () => {
+      const { body } = await http.get(`/state?owner=${CAROL}`).expect(200);
+      expect(body.pool.address).toBe(POOL_ADDRESS);
+      expect(body.currentEpoch.id).toBe("7");
+      expect(body.openRound.id).toBe("100");
+      expect(body.player).toBeNull();
+    });
+
+    it("GET /status reports the Active pool's operator and cursor", async () => {
+      const { body } = await http.get("/status").expect(200);
+      expect(body.operator.lastAction).toBe("settle_round");
+      expect(body.cursor.lastSlot).toBe("15");
+      expect(body.pendingWithdrawals).toBe(POOL_PENDING_WITHDRAWALS.toString());
+    });
+
+    it("GET /status reads a null operator and cursor for an Active pool with no rows yet", async () => {
+      // A fresh cutover: the retired pool's rows are there, the Active
+      // pool's are not until the first tick and sync.
+      const operator = await prisma.operatorState.findUniqueOrThrow({ where: { poolAddress: POOL_ADDRESS } });
+      const cursor = await prisma.cursor.findUniqueOrThrow({ where: { poolAddress: POOL_ADDRESS } });
+      await prisma.operatorState.delete({ where: { poolAddress: POOL_ADDRESS } });
+      await prisma.cursor.delete({ where: { poolAddress: POOL_ADDRESS } });
+      try {
+        const { body } = await http.get("/status").expect(200);
+        expect(body.operator).toBeNull();
+        expect(body.cursor).toEqual({ lastSlot: null, lastSignature: null, ageSeconds: null });
+      } finally {
+        await prisma.operatorState.create({ data: operator });
+        await prisma.cursor.create({ data: cursor });
+      }
+    });
+  });
+
+  describe("GET /alerts", () => {
+    // The default seed's OperatorState.withdrawShortfall is 250_000n (see
+    // "GET /status reports the withdrawal queue..." above), and every other
+    // condition reads healthy against it except YIELD_BUDGET_LOW — the same
+    // seed's HUGE_U64 totalPrincipal dwarfs its yieldBudget (see "GET /status
+    // reports the yield budget..." above) — so the untouched seed already
+    // proves the wiring for exactly these two codes without any setup of its
+    // own.
+    it("is 503 with exactly WITHDRAW_SHORTFALL and YIELD_BUDGET_LOW against the seeded rows", async () => {
+      const { body } = await http.get("/alerts").expect(503);
+      expect(body).toEqual({
+        alerts: [
+          { code: "WITHDRAW_SHORTFALL", message: expect.any(String) },
+          { code: "YIELD_BUDGET_LOW", message: expect.any(String) },
+        ],
+      });
+    });
+
+    it("is 503 with exactly YIELD_BUDGET_LOW once the withdraw shortfall clears", async () => {
+      await prisma.operatorState.update({
+        where: { poolAddress: POOL_ADDRESS },
+        data: { withdrawShortfall: 0n },
+      });
+      try {
+        const { body } = await http.get("/alerts").expect(503);
+        expect(body).toEqual({
+          alerts: [{ code: "YIELD_BUDGET_LOW", message: expect.any(String) }],
+        });
+      } finally {
+        await prisma.operatorState.update({
+          where: { poolAddress: POOL_ADDRESS },
+          data: { withdrawShortfall: 250_000n },
+        });
+      }
+    });
+
+    it("is 503 with ROUND_VOIDED_RECENTLY and EPOCH_ROLLED_OVER_RECENTLY, from Event rows in the last hour", async () => {
+      await prisma.operatorState.update({
+        where: { poolAddress: POOL_ADDRESS },
+        data: { withdrawShortfall: 0n },
+      });
+      await prisma.event.createMany({
+        data: [
+          {
+            slot: 900n,
+            signature: "sigAlertsVoided",
+            index: 0,
+            poolAddress: POOL_ADDRESS,
+            name: "RoundVoided",
+            data: { roundId: "101" },
+            blockTime: NOW - 60n,
+          },
+          {
+            slot: 901n,
+            signature: "sigAlertsRolledOver",
+            index: 0,
+            poolAddress: POOL_ADDRESS,
+            name: "EpochRolledOver",
+            data: { epochId: "7" },
+            blockTime: NOW - 30n,
+          },
+        ],
+      });
+      try {
+        const { body } = await http.get("/alerts").expect(503);
+        expect(body.alerts).toEqual([
+          { code: "ROUND_VOIDED_RECENTLY", message: expect.any(String) },
+          { code: "EPOCH_ROLLED_OVER_RECENTLY", message: expect.any(String) },
+          // The seeded pool's yield budget is already below one epoch's Base
+          // yield (same fixture the two tests above account for); this test
+          // only clears withdrawShortfall, not that.
+          { code: "YIELD_BUDGET_LOW", message: expect.any(String) },
+        ]);
+      } finally {
+        await prisma.event.deleteMany({
+          where: { signature: { in: ["sigAlertsVoided", "sigAlertsRolledOver"] } },
+        });
+        await prisma.operatorState.update({
+          where: { poolAddress: POOL_ADDRESS },
+          data: { withdrawShortfall: 250_000n },
+        });
+      }
+    });
   });
 
   describe("GET /state", () => {
@@ -476,6 +981,9 @@ describe("API routes", () => {
       // The browser needs both and no longer reads the Pool account itself.
       expect(body.pool.closeBuffer).toBe(POOL_CLOSE_BUFFER.toString());
       expect(body.pool.minDeposit).toBe(POOL_MIN_DEPOSIT.toString());
+      // game-jackpot-pause ticket 02: the web reads both switches off here.
+      expect(body.pool.gamePaused).toBe(false);
+      expect(body.pool.jackpotPaused).toBe(false);
       expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
       // Open epoch: same live-vault-balance rule as GET /epochs/current.
       expect(body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
@@ -505,6 +1013,8 @@ describe("API routes", () => {
       expect(body.status.operator).toMatchObject({ lastAction: "settle_round" });
       expect(body.status.cursor.lastSlot).toBe("15");
       expect(BigInt(body.chainTime)).toBeGreaterThanOrEqual(CHAIN_NOW);
+      // Ticket 08: the cached estimate over the pool's hot writable accounts.
+      expect(body.priorityFeeMicroLamports).toBe(FAKE_PRIORITY_FEE);
       assertNoLargeNumbers(body, "/state?owner");
     });
 
@@ -556,12 +1066,39 @@ describe("API routes", () => {
     });
 
     it("returns a null open Round once the epoch has none open", async () => {
-      await prisma.round.update({ where: { id: 100n }, data: { status: 2 } });
+      await prisma.round.update({ where: { poolAddress_id: { poolAddress: POOL_ADDRESS, id: 100n } }, data: { status: 2 } });
       try {
         const { body } = await http.get("/state").expect(200);
         expect(body.openRound).toBeNull();
       } finally {
-        await prisma.round.update({ where: { id: 100n }, data: { status: 0 } });
+        await prisma.round.update({ where: { poolAddress_id: { poolAddress: POOL_ADDRESS, id: 100n } }, data: { status: 0 } });
+      }
+    });
+
+    // Ticket 05: the deposit-only launch week. currentEpochId 0 with no
+    // Epoch row is not the indexer falling behind (that only applies once an
+    // Epoch id exists to mirror); `/state` returns a null Epoch and the
+    // configured launch time instead of 404ing.
+    it("returns a null current epoch and the launch time before Epoch 1, instead of 404", async () => {
+      // game-jackpot-pause ticket 02: a new pool sits here, both switches on,
+      // for as long as the deposit-only week lasts.
+      await prisma.pool.update({
+        where: { address: POOL_ADDRESS },
+        data: { currentEpochId: 0n, gamePaused: true, jackpotPaused: true },
+      });
+      try {
+        const { body } = await http.get(`/state?owner=${ALICE}`).expect(200);
+        expect(body.pool).toMatchObject({ gamePaused: true, jackpotPaused: true });
+        expect(body.currentEpoch).toBeNull();
+        expect(body.launchAt).toBe(process.env.LAUNCH_AT);
+        // Deposits still show the depositor's real Principal even with no Epoch.
+        expect(body.player).toMatchObject({ owner: ALICE, principal: "1000000" });
+        assertNoLargeNumbers(body, "/state (no epoch)");
+      } finally {
+        await prisma.pool.update({
+          where: { address: POOL_ADDRESS },
+          data: { currentEpochId: CURRENT_EPOCH, gamePaused: false, jackpotPaused: false },
+        });
       }
     });
 
@@ -665,6 +1202,29 @@ describe("API routes", () => {
       expect(jackpotReads).toBe(before + 2);
     });
 
+    it("reports the balances as unknown on a failed read, without caching that", async () => {
+      vi.setSystemTime(Date.now() + BALANCES_TTL_MS + 1);
+      const before = balanceReads;
+      failNextBalanceRead = true;
+
+      const { body } = await http.get("/status").expect(200);
+      expect(body.vaultLiquidity).toBeNull();
+      expect(body.operatorSol).toBeNull();
+      // Null, not false: a failed read is not evidence of a funded key, and
+      // false would keep the "operator is running dry" banner off for as
+      // long as the RPC stayed down.
+      expect(body.operatorSolLow).toBeNull();
+      expect(balanceReads).toBe(before + 1);
+
+      // Still inside the window the failed read opened. A slot left holding
+      // the failure would serve nulls for the whole TTL; it has to have
+      // been cleared, so this retries the chain.
+      const recovered = await http.get("/status").expect(200);
+      expect(recovered.body.vaultLiquidity).toBe(PRINCIPAL_VAULT_BALANCE.toString());
+      expect(recovered.body.operatorSolLow).toBe(false);
+      expect(balanceReads).toBe(before + 2);
+    });
+
     it("GET /state advances the cached chain time by the wall time elapsed since it was observed, with no extra clock read", async () => {
       vi.setSystemTime(Date.now() + CHAIN_CLOCK_TTL_MS + 1);
       const before = clockReads;
@@ -696,6 +1256,28 @@ describe("API routes", () => {
     });
   });
 
+  // ticket 13: Fastify trusts Traefik's forwarded address, so the throttler
+  // (which is otherwise IP-keyed) gives each real client its own bucket
+  // instead of one shared bucket for every request Traefik forwards.
+  describe("GET /access/:wallet throttling keys on the forwarded address", () => {
+    it("throttles one forwarded address without touching another's budget", async () => {
+      const wallet = Keypair.generate().publicKey.toBase58();
+      for (let i = 0; i < 10; i += 1) {
+        await http
+          .get(`/access/${wallet}`)
+          .set("x-forwarded-for", "203.0.113.11")
+          .expect(200);
+      }
+      const throttled = await http
+        .get(`/access/${wallet}`)
+        .set("x-forwarded-for", "203.0.113.11");
+      expect(throttled.status).toBe(429);
+
+      // A different forwarded client has its own, untouched budget.
+      await http.get(`/access/${wallet}`).set("x-forwarded-for", "203.0.113.12").expect(200);
+    });
+  });
+
   describe("POST /faucet", () => {
     it("rejects a body without a usable owner", async () => {
       await http.post("/faucet").send({}).expect(400);
@@ -721,6 +1303,22 @@ describe("API routes", () => {
       expect(sentInstructions).toHaveLength(before + 1);
     });
 
+    it("is 404 when the operator is not the mint authority", async () => {
+      // What mainnet looks like: the accepted mint is real USDC and nobody
+      // here can mint it, so the route is not there at all.
+      const faucet = app.get(FaucetController);
+      const resolved = faucet.isMintAuthority;
+      expect(resolved).toBe(true);
+      faucet.isMintAuthority = false;
+      try {
+        const before = sentInstructions.length;
+        await http.post("/faucet").send({ owner: ALICE }).expect(404);
+        expect(sentInstructions).toHaveLength(before);
+      } finally {
+        faucet.isMintAuthority = resolved;
+      }
+    });
+
     // Last in the file: it deliberately burns the caller's per-IP budget.
     it("rate limits the caller by IP", async () => {
       let throttled = false;
@@ -741,31 +1339,46 @@ describe("API routes", () => {
 });
 
 async function seed(prisma: PrismaService): Promise<void> {
-  await prisma.pool.create({
-    data: {
-      address: POOL_ADDRESS,
-      poolId: 1n,
-      authority: HOUSE,
-      mint: Keypair.generate().publicKey.toBase58(),
-      epochSeconds: EPOCH_LENGTH,
-      epochAnchor: CURRENT_START,
-      roundSeconds: 60n,
-      closeBuffer: POOL_CLOSE_BUFFER,
-      minDeposit: POOL_MIN_DEPOSIT,
-      houseCutBps: 600,
-      paused: false,
-      currentEpochId: CURRENT_EPOCH,
-      currentEpochEndsAt: CURRENT_START + EPOCH_LENGTH,
-      previousEpochEndsAt: CURRENT_START,
-      totalPrincipal: BigInt(HUGE_U64),
-      carryPot: 0n,
-      updatedSlot: 15n,
-    },
-  });
+  const activePool: Prisma.PoolUncheckedCreateInput = {
+    address: POOL_ADDRESS,
+    poolId: 1n,
+    admin: HOUSE,
+    operator: HOUSE,
+    pendingAdmin: null,
+    mint: Keypair.generate().publicKey.toBase58(),
+    pendingWithdrawals: POOL_PENDING_WITHDRAWALS,
+    minJackpot: 1_000_000n,
+    epochSeconds: EPOCH_LENGTH,
+    epochAnchor: CURRENT_START,
+    roundSeconds: 60n,
+    closeBuffer: POOL_CLOSE_BUFFER,
+    minDeposit: POOL_MIN_DEPOSIT,
+    houseCutBps: 600,
+    paused: false,
+    currentEpochId: CURRENT_EPOCH,
+    currentEpochEndsAt: CURRENT_START + EPOCH_LENGTH,
+    previousEpochEndsAt: CURRENT_START,
+    totalPrincipal: BigInt(HUGE_U64),
+    carryPot: 0n,
+    baseRateBps: POOL_BASE_RATE_BPS,
+    yieldBudget: POOL_YIELD_BUDGET,
+    ticketsPerUsdc: POOL_TICKETS_PER_USDC,
+    bonusCapBps: POOL_BONUS_CAP_BPS,
+    bonusEpoch: CURRENT_EPOCH,
+    bonusGranted: POOL_BONUS_GRANTED,
+    version: 1,
+    shutdown: false,
+    updatedSlot: 15n,
+  };
+  // The retired pool first, so an unscoped `findFirst` would most likely
+  // land on it rather than on the Active pool by luck of insertion order.
+  await seedRetiredPool(prisma, activePool);
+  await prisma.pool.create({ data: activePool });
 
   await prisma.epoch.createMany({
     data: [
       {
+        poolAddress: POOL_ADDRESS,
         id: PREVIOUS_EPOCH,
         startsAt: PREVIOUS_START,
         endsAt: CURRENT_START,
@@ -777,6 +1390,7 @@ async function seed(prisma: PrismaService): Promise<void> {
         winner: null,
       },
       {
+        poolAddress: POOL_ADDRESS,
         id: CURRENT_EPOCH,
         startsAt: CURRENT_START,
         endsAt: CURRENT_START + EPOCH_LENGTH,
@@ -793,6 +1407,7 @@ async function seed(prisma: PrismaService): Promise<void> {
   await prisma.round.createMany({
     data: [
       {
+        poolAddress: POOL_ADDRESS,
         id: 99n,
         epochId: CURRENT_EPOCH,
         startsAt: CURRENT_START - 60n,
@@ -804,6 +1419,7 @@ async function seed(prisma: PrismaService): Promise<void> {
         tileTotals: { "17": "4000" },
       },
       {
+        poolAddress: POOL_ADDRESS,
         id: 100n,
         epochId: CURRENT_EPOCH,
         startsAt: CURRENT_START,
@@ -829,6 +1445,11 @@ async function seed(prisma: PrismaService): Promise<void> {
         regEpoch: PREVIOUS_EPOCH,
         regStart: "0",
         regEnd: HUGE_U128,
+        yieldEpoch: PREVIOUS_EPOCH,
+        boughtEpoch: CURRENT_EPOCH,
+        boughtAmount: ALICE_BOUGHT_AMOUNT,
+        bonusEpoch: CURRENT_EPOCH,
+        bonusGranted: ALICE_BONUS_GRANTED,
       },
       // Withdrew everything, so no entries and no weight this epoch.
       emptyPlayer(BOB),
@@ -842,6 +1463,7 @@ async function seed(prisma: PrismaService): Promise<void> {
       // `round` query param needed to find it.
       {
         address: Keypair.generate().publicKey.toBase58(),
+        poolAddress: POOL_ADDRESS,
         owner: ALICE,
         roundId: 100n,
         tiles: 7n,
@@ -851,6 +1473,7 @@ async function seed(prisma: PrismaService): Promise<void> {
       // naming it explicitly with `round=99`, since it is not `openRound`.
       {
         address: Keypair.generate().publicKey.toBase58(),
+        poolAddress: POOL_ADDRESS,
         owner: BOB,
         roundId: 99n,
         tiles: 3n,
@@ -869,21 +1492,133 @@ async function seed(prisma: PrismaService): Promise<void> {
       // Reward stored as a JSON number rather than a string, which the feed
       // filter has to accept just the same.
       { slot: 15n, signature: "sig15", index: 0, name: "PositionSettled", data: { owner: ALICE, reward: 7 }, blockTime: NOW - 50n },
-    ],
+      // Ticket 05: yieldLastEpoch/yieldToDate (/players/:owner) sum these by
+      // owner; yieldShortfall (/status) sums the previous epoch's by epochId
+      // alone, across every owner. Epoch 5's row is outside that epoch and
+      // must not be counted.
+      { slot: 16n, signature: "sig16", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH - 1n), owner: ALICE, amount: "8000", shortfall: "999" }, blockTime: NOW - 45n },
+      { slot: 17n, signature: "sig17", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH), owner: ALICE, amount: "12000", shortfall: "500" }, blockTime: NOW - 40n },
+      { slot: 18n, signature: "sig18", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH), owner: BOB, amount: "700", shortfall: "300" }, blockTime: NOW - 35n },
+    ].map((row) => ({ ...row, poolAddress: POOL_ADDRESS })),
   });
 
   await prisma.cursor.create({
-    data: { id: 1, lastSignature: "sig15", lastSlot: 15n, updatedAt: NOW - 42n },
+    data: { poolAddress: POOL_ADDRESS, lastSignature: "sig15", lastSlot: 15n, updatedAt: NOW - 42n },
   });
 
   await prisma.operatorState.create({
     data: {
-      id: 1,
+      poolAddress: POOL_ADDRESS,
       lastTickAt: NOW - 2n,
       lastAction: "settle_round",
       lastError: null,
       registeredCount: 1,
       registeredTotal: 3,
+      withdrawShortfall: 250_000n,
+    },
+  });
+}
+
+/**
+ * A retired pool's rows, left behind by a Pool cutover (ADR 0016). Each one
+ * collides with an Active-pool key (epoch 7, round 100, Alice's Player and
+ * Position) or sorts ahead of the Active pool's rows (epoch 9, open round
+ * 101, event slots 30+), so a route that forgot its `poolAddress` filter
+ * returns something the exact-match assertions above do not expect.
+ */
+async function seedRetiredPool(
+  prisma: PrismaService,
+  activePool: Prisma.PoolUncheckedCreateInput,
+): Promise<void> {
+  const retiredEpoch = CURRENT_EPOCH + 2n;
+  await prisma.pool.create({
+    data: {
+      ...activePool,
+      address: RETIRED_POOL_ADDRESS,
+      poolId: 0n,
+      currentEpochId: retiredEpoch,
+      totalPrincipal: 1n,
+      pendingWithdrawals: 0n,
+      updatedSlot: 1n,
+    },
+  });
+  await prisma.epoch.createMany({
+    data: [CURRENT_EPOCH, CURRENT_EPOCH + 1n, retiredEpoch].map((id) => ({
+      poolAddress: RETIRED_POOL_ADDRESS,
+      id,
+      startsAt: 0n,
+      endsAt: 1n,
+      status: 3,
+      registeredWeight: "1",
+      registeredCount: 9,
+      jackpotAmount: 1n,
+      target: "0",
+      winner: null,
+    })),
+  });
+  await prisma.round.createMany({
+    data: [
+      {
+        poolAddress: RETIRED_POOL_ADDRESS,
+        id: 100n,
+        epochId: CURRENT_EPOCH,
+        startsAt: 0n,
+        endsAt: 1n,
+        status: 2,
+        pot: 1n,
+        houseCut: 0n,
+        winningTile: 3,
+        tileTotals: { "3": "1" },
+      },
+      {
+        poolAddress: RETIRED_POOL_ADDRESS,
+        id: 101n,
+        epochId: retiredEpoch,
+        startsAt: 0n,
+        endsAt: 1n,
+        status: 0, // Open, and newer than the Active pool's open round
+        pot: 1n,
+        houseCut: 0n,
+        winningTile: null,
+        tileTotals: {},
+      },
+    ],
+  });
+  await prisma.player.createMany({
+    data: [
+      { ...emptyPlayer(ALICE, RETIRED_POOL_ADDRESS), principal: 777n },
+      // Holds entries, so an unscoped scan would hand her a share of the odds.
+      { ...emptyPlayer(CAROL, RETIRED_POOL_ADDRESS), principal: 5n, entries: 5n },
+    ],
+  });
+  await prisma.position.create({
+    data: {
+      address: Keypair.generate().publicKey.toBase58(),
+      poolAddress: RETIRED_POOL_ADDRESS,
+      owner: ALICE,
+      roundId: 100n,
+      tiles: 99n,
+      stakePerTile: 1n,
+    },
+  });
+  await prisma.event.createMany({
+    data: [
+      { slot: 30n, signature: "retired30", index: 0, name: "Deposited", data: { owner: ALICE, amount: "777" }, blockTime: NOW - 20n },
+      { slot: 31n, signature: "retired31", index: 0, name: "YieldCredited", data: { epochId: String(PREVIOUS_EPOCH), owner: ALICE, amount: "1", shortfall: "1" }, blockTime: NOW - 15n },
+      { slot: 32n, signature: "retired32", index: 0, name: "PositionBought", data: { roundId: "555", owner: ALICE, tiles: "1", stakePerTile: "1", total: "1" }, blockTime: NOW - 10n },
+      { slot: 33n, signature: "retired33", index: 0, name: "RoundVoided", data: { roundId: "101" }, blockTime: NOW - 5n },
+    ].map((row) => ({ ...row, poolAddress: RETIRED_POOL_ADDRESS })),
+  });
+  await prisma.cursor.create({
+    data: { poolAddress: RETIRED_POOL_ADDRESS, lastSignature: "retired33", lastSlot: 999n, updatedAt: NOW - 5_000n },
+  });
+  await prisma.operatorState.create({
+    data: {
+      poolAddress: RETIRED_POOL_ADDRESS,
+      lastTickAt: NOW - 9_000n,
+      lastAction: "retired_tick",
+      lastError: null,
+      withdrawShortfall: 0n,
     },
   });
 }

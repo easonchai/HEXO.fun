@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { AnchorProvider, BN, Program, Wallet } from "@anchor-lang/core";
 import {
   TOKEN_PROGRAM_ID,
+  getMint,
   getOrCreateAssociatedTokenAccount,
   mintTo,
 } from "@solana/spl-token";
@@ -29,7 +30,6 @@ import bs58 from "bs58";
 
 import { loadIdl } from "./chain/idl";
 import { playerAddress, poolAddress, principalVaultAddress } from "./chain/pda";
-import { DEFAULT_PROGRAM_ID } from "./config/env";
 
 /** 1000 hexUSDC. The mint has 6 decimals (spec.md §3.6, bootstrap.ts). */
 const DEPOSIT = 1_000_000_000n;
@@ -63,11 +63,13 @@ async function main(): Promise<void> {
 
   const connection = new Connection(requireEnv("RPC_URL"), "confirmed");
   const authority = Keypair.fromSecretKey(
-    bs58.decode(requireEnv("AUTHORITY_KEYPAIR")),
+    bs58.decode(requireEnv("OPERATOR_KEYPAIR")),
   );
-  const mint = new PublicKey(requireEnv("HEXUSDC_MINT"));
-  const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
-  const poolId = BigInt(process.env.POOL_ID ?? "1");
+  const mint = new PublicKey(
+    process.env.ACCEPTED_MINT ?? requireEnv("HEXUSDC_MINT"),
+  );
+  const programId = new PublicKey(requireEnv("PROGRAM_ID"));
+  const poolId = BigInt(requireEnv("POOL_ID"));
 
   // Step 1. An absent SPARRING_KEYPAIR means the wallet does not exist yet;
   // the generated secret is printed once and never written to disk here.
@@ -86,7 +88,8 @@ async function main(): Promise<void> {
     );
   }
   log(
-    `authority ${authority.publicKey.toBase58()} on ${connection.rpcEndpoint}`,
+    // Host only: a keyed RPC URL carries its api key in the query string.
+    `authority ${authority.publicKey.toBase58()} on ${new URL(connection.rpcEndpoint).host}`,
   );
 
   // The env-resolved program id wins over the checked-in IDL snapshot's
@@ -102,7 +105,7 @@ async function main(): Promise<void> {
   );
 
   // Existence only. The Pool is not decoded, so the script keeps working when
-  // the deployed layout lags the IDL snapshot; a wrong HEXUSDC_MINT fails in
+  // the deployed layout lags the IDL snapshot; a wrong ACCEPTED_MINT fails in
   // the deposit instead.
   const pool = poolAddress(programId, poolId);
   await step("reading the pool account", async () => {
@@ -160,21 +163,27 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Step 3. The authority is the mint authority (see the faucet route), so
-  // this needs no running API.
-  const tokenAccount = await step("minting hexUSDC to the Sparring wallet", async () => {
+  // Step 3. Minting only works where this key is the mint authority, which
+  // is the test mint and nothing else. On a real mint the wallet has to be
+  // funded by hand first, so a wallet that is short stops the script here
+  // rather than failing in the deposit with a token-program error.
+  const tokenAccount = await step("funding the Sparring wallet", async () => {
     const ata = await getOrCreateAssociatedTokenAccount(
       connection,
       authority,
       mint,
       sparring.publicKey,
     );
-    log(
-      `hexUSDC account ${ata.address.toBase58()} holds ${hexusdc(ata.amount)}`,
-    );
+    log(`token account ${ata.address.toBase58()} holds ${hexusdc(ata.amount)}`);
     if (ata.amount >= DEPOSIT) {
       log(`skipped the mint: the wallet already holds ${hexusdc(DEPOSIT)}`);
       return ata.address;
+    }
+    const info = await getMint(connection, mint);
+    if (!info.mintAuthority?.equals(authority.publicKey)) {
+      throw new Error(
+        `mint ${mint.toBase58()} is controlled by ${info.mintAuthority?.toBase58() ?? "nobody"}, not by this key: send ${hexusdc(DEPOSIT)} to ${ata.address.toBase58()} and run this again`,
+      );
     }
     await mintTo(
       connection,

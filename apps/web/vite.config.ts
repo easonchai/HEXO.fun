@@ -1,7 +1,28 @@
 import react from "@vitejs/plugin-react";
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
+
+import { clusterFrom } from "./src/cluster.js";
+import { validateProdEnv } from "./src/env.js";
+
+/**
+ * Fails the build, not the first page load, on a VITE_CLUSTER typo or a
+ * missing production value (ticket 14). A plugin rather than a callback
+ * config because vitest.config.ts merges this file, and `mergeConfig`
+ * refuses a config in callback form. Vercel hands its variables in through
+ * process.env, which loadEnv picks up along with the .env files a local
+ * build reads. `vite build` runs in "production" mode unless `--mode`
+ * overrides it, which is what "a production build" means here.
+ */
+const validateCluster: Plugin = {
+  name: "hexvault:validate-cluster",
+  config(_config, { mode }) {
+    const env = loadEnv(mode, process.cwd(), "VITE_");
+    clusterFrom(env);
+    if (mode === "production") validateProdEnv(env);
+  },
+};
 
 /**
  * The Solana packages need the Node `Buffer` global in the browser. `buffer` is
@@ -30,7 +51,7 @@ function bufferPackagePath(): string {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [validateCluster, react()],
   resolve: {
     alias: {
       buffer: bufferPackagePath(),

@@ -1,5 +1,5 @@
 {
-  "address": "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6",
+  "address": "H2iWyng2orJpHNGGWhrR7rBQNDqixThpTpAwF4dnPXax",
   "metadata": {
     "name": "hex_vault",
     "version": "0.1.0",
@@ -7,6 +7,142 @@
     "description": "HexVault no-loss lottery with zero-sum hex rounds"
   },
   "instructions": [
+    {
+      "name": "accept_admin",
+      "discriminator": [
+        112,
+        42,
+        45,
+        90,
+        116,
+        181,
+        13,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "pending_admin",
+          "docs": [
+            "Checked in the handler against `pool.pending_admin`, so an unset",
+            "proposal fails with `NoPendingAdmin` instead of a constraint error."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "admin_withdraw",
+      "discriminator": [
+        160,
+        166,
+        147,
+        222,
+        46,
+        220,
+        75,
+        224
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "admin_token",
+          "docs": [
+            "Checked by address, not just by owner: a fat-fingered destination",
+            "fails here rather than landing somewhere the admin has to chase."
+          ],
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
     {
       "name": "begin_epoch",
       "discriminator": [
@@ -21,7 +157,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "writable": true,
           "signer": true,
           "relations": [
@@ -77,6 +213,37 @@
               {
                 "kind": "account",
                 "path": "pool.current_epoch_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_two_behind",
+          "docs": [
+            "deserialized) only when `pool.current_epoch_id >= 2`, i.e. when such",
+            "an epoch could exist at all. `saturating_sub` keeps the seed in range",
+            "on the two calls before that, where it is never read."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.current_epoch_id.saturating_sub(1)",
                 "account": "Pool"
               }
             ]
@@ -232,6 +399,118 @@
       ]
     },
     {
+      "name": "buy_tickets",
+      "discriminator": [
+        48,
+        16,
+        122,
+        137,
+        24,
+        214,
+        198,
+        58
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "docs": [
+            "Must already exist: a Player only has a cap to buy against once it",
+            "holds Principal."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "owner_token",
+          "writable": true
+        },
+        {
+          "name": "jackpot_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  97,
+                  99,
+                  107,
+                  112,
+                  111,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "close_registration",
       "discriminator": [
         44,
@@ -245,7 +524,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "docs": [
             "Pays ORAO's request fee and the request account's rent, so it must be",
             "writable."
@@ -258,6 +537,7 @@
         },
         {
           "name": "pool",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -330,9 +610,9 @@
         {
           "name": "randomness",
           "docs": [
-            "depends on the seed this instruction computes, so unlike `draw`",
-            "(which reads `epoch.vrf_seed` back) there is nothing to check it",
-            "against yet; `draw` is what actually verifies it."
+            "against `vrf::randomness_address(&seed)` in the handler once the seed",
+            "is computed from the instruction's own `nonce` argument",
+            "(production-hardening ticket 02)."
           ],
           "writable": true
         },
@@ -360,6 +640,91 @@
           "address": "11111111111111111111111111111111"
         }
       ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "close_round",
+      "docs": [
+        "Permissionless (ops-and-envs ticket 05): reclaims a finished Round's",
+        "rent for the operator once every Position on it has settled."
+      ],
+      "discriminator": [
+        149,
+        14,
+        81,
+        88,
+        230,
+        226,
+        234,
+        37
+      ],
+      "accounts": [
+        {
+          "name": "pool",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "operator",
+          "writable": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "round",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "round.round_id",
+                "account": "Round"
+              }
+            ]
+          }
+        }
+      ],
       "args": []
     },
     {
@@ -376,7 +741,10 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "payer",
+          "docs": [
+            "Pays rent only. The admin and operator come in through `params`."
+          ],
           "writable": true,
           "signer": true
         },
@@ -475,8 +843,8 @@
                 "path": "pool"
               },
               {
-                "kind": "account",
-                "path": "authority"
+                "kind": "arg",
+                "path": "params.operator"
               }
             ]
           }
@@ -520,7 +888,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "operator",
           "writable": true,
           "signer": true,
           "relations": [
@@ -729,11 +1097,8 @@
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "caller",
+          "signer": true
         },
         {
           "name": "pool",
@@ -785,6 +1150,115 @@
         },
         {
           "name": "randomness"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "emergency_withdraw",
+      "docs": [
+        "Permissionless, only valid once shut down (ops-and-envs ticket 03):",
+        "pays one Player's whole balance to their own USDC ATA."
+      ],
+      "discriminator": [
+        239,
+        45,
+        203,
+        64,
+        150,
+        73,
+        218,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "owner_token",
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
         }
       ],
       "args": []
@@ -871,6 +1345,169 @@
       ]
     },
     {
+      "name": "fund_yield",
+      "discriminator": [
+        114,
+        176,
+        26,
+        168,
+        64,
+        230,
+        10,
+        223
+      ],
+      "accounts": [
+        {
+          "name": "source_authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "source",
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "grant_tickets",
+      "discriminator": [
+        134,
+        102,
+        146,
+        11,
+        63,
+        173,
+        148,
+        116
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "docs": [
+            "Must already exist, like `BuyTickets`': a Player only has a Principal",
+            "cap to grant against once it holds one."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "payout",
       "discriminator": [
         149,
@@ -883,13 +1520,6 @@
         239
       ],
       "accounts": [
-        {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
-        },
         {
           "name": "pool",
           "writable": true,
@@ -995,8 +1625,30 @@
           }
         },
         {
-          "name": "winner_token",
-          "writable": true
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
         },
         {
           "name": "treasury",
@@ -1019,6 +1671,162 @@
       "args": []
     },
     {
+      "name": "process_withdraw",
+      "discriminator": [
+        166,
+        189,
+        47,
+        170,
+        19,
+        135,
+        210,
+        19
+      ],
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "docs": [
+            "Seeded from its own `owner`, which is what makes this safe without a",
+            "signer: the destination below has to belong to that same owner."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "player.owner",
+                "account": "Player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "owner_token",
+          "writable": true
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "propose_admin",
+      "discriminator": [
+        121,
+        214,
+        199,
+        212,
+        87,
+        39,
+        117,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_admin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "register",
       "discriminator": [
         211,
@@ -1033,6 +1841,7 @@
       "accounts": [
         {
           "name": "pool",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1207,7 +2016,91 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "nonce",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "request_withdraw",
+      "discriminator": [
+        137,
+        95,
+        187,
+        96,
+        250,
+        138,
+        31,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "rollover_epoch",
@@ -1223,14 +2116,12 @@
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "caller",
+          "signer": true
         },
         {
           "name": "pool",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1276,9 +2167,126 @@
               }
             ]
           }
+        },
+        {
+          "name": "randomness",
+          "docs": [
+            "`vrf::randomness_address` in the handler the same way `draw` does.",
+            "Only read on the Drawing branch, where an unfulfilled (or absent)",
+            "account is the normal case."
+          ]
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_feature_pause",
+      "docs": [
+        "Sets the game or the jackpot switch on its own (game-jackpot-pause",
+        "ticket 01), same role rule as `set_pause`."
+      ],
+      "discriminator": [
+        29,
+        249,
+        82,
+        247,
+        108,
+        216,
+        30,
+        168
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "feature",
+          "type": {
+            "defined": {
+              "name": "PauseFeature"
+            }
+          }
+        },
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_operator",
+      "discriminator": [
+        238,
+        153,
+        101,
+        169,
+        243,
+        131,
+        36,
+        1
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_operator",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "set_params",
@@ -1294,7 +2302,7 @@
       ],
       "accounts": [
         {
-          "name": "authority",
+          "name": "admin",
           "signer": true,
           "relations": [
             "pool"
@@ -1348,11 +2356,12 @@
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "signer",
+          "docs": [
+            "Admin or operator. Which one is allowed depends on the direction, so",
+            "the handler checks it rather than a `has_one` here."
+          ],
+          "signer": true
         },
         {
           "name": "pool",
@@ -1420,6 +2429,7 @@
         },
         {
           "name": "round",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1523,11 +2533,8 @@
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "caller",
+          "signer": true
         },
         {
           "name": "pool",
@@ -1616,6 +2623,168 @@
       "args": []
     },
     {
+      "name": "shutdown",
+      "docs": [
+        "Admin-only and irreversible (ops-and-envs ticket 02, spec",
+        "\"Shutdown\"). Stops every inflow, the game and the draw, and lets",
+        "withdrawals skip the epoch lock."
+      ],
+      "discriminator": [
+        146,
+        204,
+        241,
+        213,
+        86,
+        21,
+        253,
+        211
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "sweep_house",
+      "docs": [
+        "Admin-only, only valid once shut down (ops-and-envs ticket 04): moves",
+        "the jackpot and any unspent yield budget to `pool.treasury`."
+      ],
+      "discriminator": [
+        76,
+        35,
+        116,
+        215,
+        96,
+        66,
+        224,
+        19
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accepted_mint"
+        },
+        {
+          "name": "jackpot_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  97,
+                  99,
+                  107,
+                  112,
+                  111,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "principal_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  110,
+                  99,
+                  105,
+                  112,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "relations": [
+            "pool"
+          ]
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "void_round",
       "discriminator": [
         102,
@@ -1629,11 +2798,8 @@
       ],
       "accounts": [
         {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "caller",
+          "signer": true
         },
         {
           "name": "pool",
@@ -1683,120 +2849,17 @@
               }
             ]
           }
+        },
+        {
+          "name": "randomness",
+          "docs": [
+            "`vrf::randomness_address` in the handler the same way `settle_round`",
+            "does. It need not exist: an unfulfilled request is the normal case",
+            "here."
+          ]
         }
       ],
       "args": []
-    },
-    {
-      "name": "withdraw",
-      "discriminator": [
-        183,
-        18,
-        70,
-        156,
-        148,
-        109,
-        161,
-        34
-      ],
-      "accounts": [
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "pool",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  111,
-                  111,
-                  108
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "pool.pool_id",
-                "account": "Pool"
-              }
-            ]
-          }
-        },
-        {
-          "name": "player",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  108,
-                  97,
-                  121,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "pool"
-              },
-              {
-                "kind": "account",
-                "path": "owner"
-              }
-            ]
-          }
-        },
-        {
-          "name": "accepted_mint"
-        },
-        {
-          "name": "owner_token",
-          "writable": true
-        },
-        {
-          "name": "principal_vault",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  105,
-                  110,
-                  99,
-                  105,
-                  112,
-                  97,
-                  108
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "pool"
-              }
-            ]
-          }
-        },
-        {
-          "name": "token_program"
-        }
-      ],
-      "args": [
-        {
-          "name": "amount",
-          "type": "u64"
-        }
-      ]
     }
   ],
   "accounts": [
@@ -1868,6 +2931,32 @@
   ],
   "events": [
     {
+      "name": "AdminChanged",
+      "discriminator": [
+        232,
+        34,
+        31,
+        226,
+        62,
+        18,
+        19,
+        114
+      ]
+    },
+    {
+      "name": "AdminProposed",
+      "discriminator": [
+        129,
+        249,
+        226,
+        227,
+        199,
+        82,
+        110,
+        243
+      ]
+    },
+    {
       "name": "Deposited",
       "discriminator": [
         111,
@@ -1878,6 +2967,19 @@
         35,
         100,
         57
+      ]
+    },
+    {
+      "name": "EmergencyWithdrawn",
+      "discriminator": [
+        116,
+        226,
+        36,
+        3,
+        37,
+        92,
+        138,
+        76
       ]
     },
     {
@@ -1920,6 +3022,32 @@
       ]
     },
     {
+      "name": "FeaturePaused",
+      "discriminator": [
+        231,
+        161,
+        209,
+        49,
+        122,
+        135,
+        2,
+        148
+      ]
+    },
+    {
+      "name": "HouseSwept",
+      "discriminator": [
+        250,
+        129,
+        1,
+        141,
+        68,
+        131,
+        89,
+        0
+      ]
+    },
+    {
       "name": "JackpotFunded",
       "discriminator": [
         120,
@@ -1943,6 +3071,19 @@
         247,
         26,
         76
+      ]
+    },
+    {
+      "name": "OperatorChanged",
+      "discriminator": [
+        231,
+        79,
+        62,
+        226,
+        190,
+        139,
+        176,
+        51
       ]
     },
     {
@@ -1985,6 +3126,19 @@
       ]
     },
     {
+      "name": "PoolShutdown",
+      "discriminator": [
+        139,
+        213,
+        75,
+        224,
+        207,
+        153,
+        29,
+        7
+      ]
+    },
+    {
       "name": "PositionBought",
       "discriminator": [
         195,
@@ -2011,6 +3165,19 @@
       ]
     },
     {
+      "name": "PrincipalDeployed",
+      "discriminator": [
+        246,
+        19,
+        6,
+        131,
+        183,
+        199,
+        220,
+        131
+      ]
+    },
+    {
       "name": "Registered",
       "discriminator": [
         11,
@@ -2021,6 +3188,19 @@
         110,
         165,
         227
+      ]
+    },
+    {
+      "name": "RoundClosed",
+      "discriminator": [
+        45,
+        243,
+        28,
+        22,
+        132,
+        70,
+        175,
+        226
       ]
     },
     {
@@ -2063,6 +3243,45 @@
       ]
     },
     {
+      "name": "TicketsBought",
+      "discriminator": [
+        204,
+        103,
+        221,
+        60,
+        70,
+        142,
+        88,
+        233
+      ]
+    },
+    {
+      "name": "TicketsGranted",
+      "discriminator": [
+        240,
+        242,
+        30,
+        236,
+        182,
+        73,
+        155,
+        215
+      ]
+    },
+    {
+      "name": "WithdrawRequested",
+      "discriminator": [
+        114,
+        16,
+        240,
+        206,
+        93,
+        128,
+        151,
+        39
+      ]
+    },
+    {
       "name": "Withdrawn",
       "discriminator": [
         20,
@@ -2073,6 +3292,32 @@
         124,
         219,
         13
+      ]
+    },
+    {
+      "name": "YieldCredited",
+      "discriminator": [
+        169,
+        232,
+        146,
+        128,
+        99,
+        163,
+        114,
+        110
+      ]
+    },
+    {
+      "name": "YieldFunded",
+      "discriminator": [
+        6,
+        69,
+        199,
+        236,
+        23,
+        178,
+        100,
+        64
       ]
     }
   ],
@@ -2246,9 +3491,175 @@
       "code": 6033,
       "name": "VrfTimeoutNotElapsed",
       "msg": "the randomness timeout has not elapsed"
+    },
+    {
+      "code": 6034,
+      "name": "Unauthorized",
+      "msg": "signer is not authorized for this instruction"
+    },
+    {
+      "code": 6035,
+      "name": "NoPendingAdmin",
+      "msg": "no admin handover is pending"
+    },
+    {
+      "code": 6036,
+      "name": "InsufficientVaultLiquidity",
+      "msg": "the principal vault cannot cover this payout yet"
+    },
+    {
+      "code": 6037,
+      "name": "WithdrawalNotDue",
+      "msg": "the withdrawal's epoch has not ended yet"
+    },
+    {
+      "code": 6038,
+      "name": "NothingPending",
+      "msg": "no withdrawal is pending for this player"
+    },
+    {
+      "code": 6039,
+      "name": "BelowPendingWithdrawals",
+      "msg": "the pull would leave the vault below its pending withdrawals"
+    },
+    {
+      "code": 6040,
+      "name": "InvalidAdminTokenAccount",
+      "msg": "destination is not the admin's associated token account"
+    },
+    {
+      "code": 6041,
+      "name": "RandomnessAlreadyFulfilled",
+      "msg": "randomness for this request has already been fulfilled"
+    },
+    {
+      "code": 6042,
+      "name": "RegistrationWindowOpen",
+      "msg": "the registration window has not closed yet"
+    },
+    {
+      "code": 6043,
+      "name": "HouseCannotPlay",
+      "msg": "the House cannot buy a position"
+    },
+    {
+      "code": 6044,
+      "name": "UnsupportedMint",
+      "msg": "the accepted mint is not owned by the SPL Token program"
+    },
+    {
+      "code": 6045,
+      "name": "PayoutTimeoutNotElapsed",
+      "msg": "the payout timeout has not elapsed"
+    },
+    {
+      "code": 6046,
+      "name": "HouseCannotBuyTickets",
+      "msg": "the House cannot buy tickets"
+    },
+    {
+      "code": 6047,
+      "name": "DailyBuyCapExceeded",
+      "msg": "this purchase would exceed today's cap of principal"
+    },
+    {
+      "code": 6048,
+      "name": "HouseCannotBeGranted",
+      "msg": "the House cannot receive an operator grant"
+    },
+    {
+      "code": 6049,
+      "name": "DailyPlayerGrantCapExceeded",
+      "msg": "this grant would exceed the player's daily cap of principal"
+    },
+    {
+      "code": 6050,
+      "name": "DailyPoolGrantCapExceeded",
+      "msg": "this grant would exceed the pool's daily bonus cap"
+    },
+    {
+      "code": 6051,
+      "name": "PoolShutDown",
+      "msg": "the pool is shut down"
+    },
+    {
+      "code": 6052,
+      "name": "PoolNotShutDown",
+      "msg": "the pool is not shut down"
+    },
+    {
+      "code": 6053,
+      "name": "HouseCannotEmergencyWithdraw",
+      "msg": "the House exits through sweep_house, not emergency_withdraw"
+    },
+    {
+      "code": 6054,
+      "name": "InsufficientVault",
+      "msg": "the principal vault cannot cover this payout"
+    },
+    {
+      "code": 6055,
+      "name": "RoundHasOpenPositions",
+      "msg": "the round still has unsettled positions"
+    },
+    {
+      "code": 6056,
+      "name": "PreviousEpochStillDrawing",
+      "msg": "an earlier epoch has not finished drawing yet"
+    },
+    {
+      "code": 6057,
+      "name": "NoEpochYet",
+      "msg": "no epoch exists yet"
+    },
+    {
+      "code": 6058,
+      "name": "GamePaused",
+      "msg": "the game is paused"
+    },
+    {
+      "code": 6059,
+      "name": "JackpotPaused",
+      "msg": "the jackpot is paused"
     }
   ],
   "types": [
+    {
+      "name": "AdminChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "previous",
+            "type": "pubkey"
+          },
+          {
+            "name": "admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
     {
       "name": "CreatePoolParams",
       "type": {
@@ -2257,6 +3668,18 @@
           {
             "name": "pool_id",
             "type": "u64"
+          },
+          {
+            "name": "admin",
+            "docs": [
+              "Role keys, not accounts: neither has to sign `create_pool`, and on",
+              "mainnet the admin is a multisig that cannot."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
           },
           {
             "name": "vrf_network_state",
@@ -2289,6 +3712,41 @@
           {
             "name": "house_cut_bps",
             "type": "u16"
+          },
+          {
+            "name": "min_jackpot",
+            "type": "u64"
+          },
+          {
+            "name": "registration_window",
+            "type": "i64"
+          },
+          {
+            "name": "payout_timeout",
+            "type": "i64"
+          },
+          {
+            "name": "base_rate_bps",
+            "docs": [
+              "Base yield's APR in basis points, capped at `BPS_DENOMINATOR`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "tickets_per_usdc",
+            "docs": [
+              "Tickets credited per USDC spent in `buy_tickets`. Must be > 0."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bonus_cap_bps",
+            "docs": [
+              "Share of `total_principal`, in basis points, an operator",
+              "`grant_tickets` call may credit pool-wide per epoch. Capped at",
+              "`BPS_DENOMINATOR`."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -2312,6 +3770,34 @@
           },
           {
             "name": "entries",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EmergencyWithdrawn",
+      "docs": [
+        "Permissionless: `emergency_withdraw` paid one Player's whole balance to",
+        "its own USDC ATA once the pool was shut down."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "pending",
+            "type": "u64"
+          },
+          {
+            "name": "total",
             "type": "u64"
           }
         ]
@@ -2386,6 +3872,45 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "drawn_at",
+            "docs": [
+              "When `draw` landed. 0 until then. `rollover_epoch` measures",
+              "`Pool.payout_timeout` from here."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "registration_opened_at",
+            "docs": [
+              "When `begin_epoch` moved this epoch to Registering, which is when",
+              "anyone could first register for it. 0 until then.",
+              "`close_registration` measures `Pool.registration_window` from the",
+              "later of this and `ends_at`, so an operator who delays `begin_epoch`",
+              "cannot bundle the whole registration window into one transaction."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "version",
+            "docs": [
+              "Set to [`CURRENT_VERSION`] by `begin_epoch`. See `Pool::version`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Take new fields from here. Their zero value must be the safe default,",
+              "or bump `version` and migrate on first touch. See ADR 0013."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
           }
         ]
       }
@@ -2447,6 +3972,60 @@
       }
     },
     {
+      "name": "FeaturePaused",
+      "docs": [
+        "`set_feature_pause` changed the game or the jackpot switch",
+        "(game-jackpot-pause ticket 01). `set_pause` keeps its own `Paused` event,",
+        "unchanged."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "feature",
+            "type": {
+              "defined": {
+                "name": "PauseFeature"
+              }
+            }
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "HouseSwept",
+      "docs": [
+        "Admin-only: `sweep_house` moved the whole jackpot and any unspent yield",
+        "budget to `pool.treasury` once the pool was shut down. Principal is never",
+        "swept."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "jackpot",
+            "type": "u64"
+          },
+          {
+            "name": "yield_budget",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "JackpotFunded",
       "type": {
         "kind": "struct",
@@ -2482,6 +4061,35 @@
           {
             "name": "is_house",
             "type": "bool"
+          },
+          {
+            "name": "compounded",
+            "docs": [
+              "True for a non-House winner: the prize was moved into the principal",
+              "vault and added to the winner's Principal instead of paid to a token",
+              "account. Always false for a House win, which keeps its 50/30/20 split."
+            ],
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OperatorChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "previous",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
           }
         ]
       }
@@ -2522,6 +4130,48 @@
           {
             "name": "house_cut_bps",
             "type": "u16"
+          },
+          {
+            "name": "min_jackpot",
+            "type": "u64"
+          },
+          {
+            "name": "registration_window",
+            "type": "i64"
+          },
+          {
+            "name": "payout_timeout",
+            "type": "i64"
+          },
+          {
+            "name": "base_rate_bps",
+            "type": "u16"
+          },
+          {
+            "name": "tickets_per_usdc",
+            "type": "u16"
+          },
+          {
+            "name": "bonus_cap_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PauseFeature",
+      "docs": [
+        "Which switch `set_feature_pause` changes (game-jackpot-pause ticket 01).",
+        "`set_pause`'s own `paused` field is untouched by either variant."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Game"
+          },
+          {
+            "name": "Jackpot"
           }
         ]
       }
@@ -2620,6 +4270,113 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "pending_withdraw",
+            "docs": [
+              "Principal already deducted and waiting for `process_withdraw` to move",
+              "the USDC. 0 when nothing is owed."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pending_epoch",
+            "docs": [
+              "The epoch the pending amount was requested in. It pays out once",
+              "`pool.current_epoch_id` is past it."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "requested_at",
+            "docs": [
+              "When `request_withdraw` booked the pending amount. The second way a",
+              "request matures, so a stalled operator who never calls `begin_epoch`",
+              "cannot freeze a depositor's money."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "principal_acc",
+            "docs": [
+              "Σ principal × seconds within `epoch_id`. Mirrors `weight_acc` with",
+              "Principal in place of Entries."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "frozen_principal_acc",
+            "docs": [
+              "Final principal-seconds for `frozen_epoch`, set by",
+              "[`crate::touch::touch`] alongside `frozen_weight`."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "yield_epoch",
+            "docs": [
+              "The epoch Base yield was last credited for. Guards `register` against",
+              "crediting the same epoch twice, independent of `reg_epoch` (which a",
+              "zero-weight registration never sets)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bought_epoch",
+            "docs": [
+              "The epoch `bought_amount` is counted against. `buy_tickets` resets",
+              "`bought_amount` to 0 when this no longer matches the pool's current",
+              "epoch."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bought_amount",
+            "docs": [
+              "USDC spent in `buy_tickets` so far in `bought_epoch`, capped at",
+              "`principal`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bonus_epoch",
+            "docs": [
+              "The epoch `bonus_granted` is counted against. Separate from",
+              "`bought_epoch` so an operator grant and a bought-tickets purchase",
+              "don't share a cap."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bonus_granted",
+            "docs": [
+              "Tickets an operator `grant_tickets` call has credited this Player so",
+              "far in `bonus_epoch`, capped at `principal`. An admin grant does not",
+              "count against it."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "version",
+            "docs": [
+              "Set to [`CURRENT_VERSION`] by `Player::init_if_fresh`. See",
+              "`Pool::version`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Take new fields from here. Their zero value must be the safe default,",
+              "or bump `version` and migrate on first touch. See ADR 0013. Smaller",
+              "than `Pool`'s and `Epoch`'s: Player rent is paid by the depositor."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
           }
         ]
       }
@@ -2638,9 +4395,25 @@
             "type": "u64"
           },
           {
-            "name": "authority",
+            "name": "admin",
             "docs": [
-              "Operator key. Also the House Player's owner and the mint authority."
+              "Changes parameters, unpauses, rotates the operator, and hands its own",
+              "role on. A multisig on mainnet."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "The hot key the operator service cranks with. Also the House Player's",
+              "owner and, on devnet, the mint authority."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "docs": [
+              "Proposed next admin. `Pubkey::default()` means no handover is open."
             ],
             "type": "pubkey"
           },
@@ -2659,14 +4432,14 @@
           {
             "name": "treasury",
             "docs": [
-              "Authority-owned token account: 20% of a jackpot the House wins."
+              "Token account that takes 20% of a jackpot the House wins."
             ],
             "type": "pubkey"
           },
           {
             "name": "buyback_reserve",
             "docs": [
-              "Authority-owned token account: 50% of a jackpot the House wins."
+              "Token account that takes 50% of a jackpot the House wins."
             ],
             "type": "pubkey"
           },
@@ -2806,6 +4579,155 @@
           {
             "name": "jackpot_vault_bump",
             "type": "u8"
+          },
+          {
+            "name": "pending_withdrawals",
+            "docs": [
+              "Σ `Player.pending_withdraw` across the pool. `admin_withdraw` refuses",
+              "to leave the principal vault holding less than this."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "min_jackpot",
+            "docs": [
+              "An epoch whose jackpot vault holds less than this at",
+              "`close_registration` rolls over instead of paying out dust."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "registration_window",
+            "docs": [
+              "Seconds after an epoch's `ends_at` during which `close_registration`",
+              "is refused, so the operator cannot draw before everyone who earned",
+              "weight in that epoch has been registered. `0 <= this < epoch_seconds`."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "payout_timeout",
+            "docs": [
+              "Seconds after `Epoch.drawn_at` before a Drawn epoch may be rolled",
+              "over unpaid. The escape hatch for a winner nobody can pay."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "jackpot_reserved",
+            "docs": [
+              "Jackpot already promised to an epoch that is Drawing or Drawn and has",
+              "not paid yet. `close_registration` snapshots the vault minus this, so",
+              "the next epoch cannot take a prize the previous one still owes.",
+              "Released on `payout` and on either branch of `rollover_epoch`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "base_rate_bps",
+            "docs": [
+              "Base yield's APR on time-weighted Principal, in basis points, capped",
+              "at `BPS_DENOMINATOR`. An admin parameter, so it can change without a",
+              "program upgrade."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "yield_budget",
+            "docs": [
+              "USDC already in the principal vault, earmarked for Base yield and not",
+              "yet credited to anyone. `fund_yield` raises it; `register` draws it",
+              "down and never credits past what it holds."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "tickets_per_usdc",
+            "docs": [
+              "Tickets credited per USDC spent in `buy_tickets`. An admin parameter,",
+              "always greater than zero."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bonus_cap_bps",
+            "docs": [
+              "Share of `total_principal`, in basis points, an operator",
+              "`grant_tickets` call may credit pool-wide per epoch. An admin",
+              "parameter, capped at `BPS_DENOMINATOR`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bonus_epoch",
+            "docs": [
+              "The epoch `bonus_granted` is counted against, reset the same way as",
+              "`Player.bought_epoch`/`bought_amount`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bonus_granted",
+            "docs": [
+              "Tickets an operator `grant_tickets` call has credited pool-wide so far",
+              "in `bonus_epoch`, capped at `total_principal * bonus_cap_bps /",
+              "10_000`. An admin grant does not count against it."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "version",
+            "docs": [
+              "Set to [`CURRENT_VERSION`] by `create_pool`. Lets a future upgrade",
+              "tell an old account apart from a freshly created one and migrate it",
+              "lazily on first touch."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "shutdown",
+            "docs": [
+              "Admin-only and irreversible (spec \"Shutdown\"). Stops every inflow,",
+              "the game and the draw, and lets withdrawals skip the epoch lock.",
+              "Carved from the front of `_reserved` (ops-and-envs ticket 02),",
+              "exercising the ADR 0013 rule once: `false` is the safe zero value."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "game_paused",
+            "docs": [
+              "Stops `create_round` and `buy_position` (game-jackpot-pause ticket",
+              "01). `create_pool` sets this `true`; the zero value stays the safe",
+              "default for a pool that predates this field. Carved from",
+              "`_reserved` alongside `jackpot_paused`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "jackpot_paused",
+            "docs": [
+              "Stops the epoch cycle's next step: `begin_epoch`, `buy_tickets`,",
+              "`grant_tickets` and `close_registration` (game-jackpot-pause ticket",
+              "01). An epoch already Drawing or Drawn still finishes. `create_pool`",
+              "sets this `true`; the zero value stays the safe default for a pool",
+              "that predates this field. Carved from `_reserved` alongside",
+              "`game_paused`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Take new fields from here. Their zero value must be the safe default,",
+              "or bump `version` and migrate on first touch. See ADR 0013."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                125
+              ]
+            }
           }
         ]
       }
@@ -2824,12 +4746,36 @@
             "type": "u64"
           },
           {
-            "name": "authority",
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
             "type": "pubkey"
           },
           {
             "name": "accepted_mint",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolShutdown",
+      "docs": [
+        "Admin-only and irreversible (spec \"Shutdown\"). Stops every inflow, the",
+        "game and the draw, and lets withdrawals skip the epoch lock."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "at",
+            "type": "i64"
           }
         ]
       }
@@ -2911,6 +4857,30 @@
           },
           {
             "name": "reward",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PrincipalDeployed",
+      "docs": [
+        "The admin pulled principal out to a yield venue. Coming back is a plain",
+        "SPL transfer into the vault, so there is no matching event for the return."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "vault_remaining",
             "type": "u64"
           }
         ]
@@ -3020,6 +4990,38 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "open_positions",
+            "docs": [
+              "Positions bought on this round still open (not yet settled).",
+              "Incremented in `buy_position`, decremented when `settle_position`",
+              "closes its Position. `close_round` refuses while this is nonzero.",
+              "No `_reserved` to carve this from: Round has none by design (spec),",
+              "since it is short-lived and reclaimed by `close_round` (ops-and-envs",
+              "ticket 05), so a layout change here only affects in-flight rounds."
+            ],
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoundClosed",
+      "docs": [
+        "Permissionless: `close_round` reclaimed a finished Round's rent for",
+        "`pool.operator` once every Position on it had settled."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "round",
+            "type": "pubkey"
+          },
+          {
+            "name": "round_id",
+            "type": "u64"
           }
         ]
       }
@@ -3154,12 +5156,132 @@
             "type": {
               "option": "u16"
             }
+          },
+          {
+            "name": "min_jackpot",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "registration_window",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "payout_timeout",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "base_rate_bps",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "tickets_per_usdc",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "bonus_cap_bps",
+            "type": {
+              "option": "u16"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TicketsBought",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "usdc",
+            "type": "u64"
+          },
+          {
+            "name": "tickets",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TicketsGranted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "by_admin",
+            "docs": [
+              "True for the uncapped admin path; false for the capped operator path."
+            ],
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WithdrawRequested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "This request alone."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pending",
+            "docs": [
+              "Everything the player now has waiting, this request included."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pending_epoch",
+            "type": "u64"
           }
         ]
       }
     },
     {
       "name": "Withdrawn",
+      "docs": [
+        "A `Withdrawn` event follows once `process_withdraw` moves the USDC."
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -3177,6 +5299,50 @@
           },
           {
             "name": "entries",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldCredited",
+      "docs": [
+        "`shortfall` is what `base_rate_bps` would have credited beyond what",
+        "`yield_budget` could cover, 0 when the budget paid in full."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch_id",
+            "type": "u64"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "shortfall",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldFunded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "budget",
             "type": "u64"
           }
         ]

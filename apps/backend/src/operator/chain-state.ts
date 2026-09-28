@@ -23,7 +23,8 @@ export const ROUND_STATUS = {
 
 export interface PoolState {
   readonly address: PublicKey;
-  readonly authority: PublicKey;
+  readonly admin: PublicKey;
+  readonly operator: PublicKey;
   readonly acceptedMint: PublicKey;
   readonly treasury: PublicKey;
   readonly buybackReserve: PublicKey;
@@ -33,11 +34,26 @@ export interface PoolState {
   readonly roundSeconds: bigint;
   readonly closeBuffer: bigint;
   readonly vrfTimeout: bigint;
+  /** Seconds past an epoch's `endsAt` before `close_registration` is allowed. */
+  readonly registrationWindow: bigint;
+  /** Seconds past an epoch's `drawnAt` before an unpaid Drawn epoch may roll over. */
+  readonly payoutTimeout: bigint;
   readonly paused: boolean;
   readonly currentEpochId: bigint;
   readonly nextRoundId: bigint;
   readonly openRoundId: bigint;
   readonly totalPrincipal: bigint;
+  /** Admin-only and irreversible: stops every inflow, the game and the
+   *  draw, and lets withdrawals skip the epoch lock (ops-and-envs ticket
+   *  02). The operator reads this to stop the epoch and round loops. */
+  readonly shutdown: boolean;
+  /** Game pause (game-jackpot-pause ticket 02): the tick opens no Round
+   *  while this is set. A new pool starts with it on. */
+  readonly gamePaused: boolean;
+  /** Jackpot pause (game-jackpot-pause ticket 02): the tick skips
+   *  begin_epoch, grant_tickets and close_registration while this is set.
+   *  A new pool starts with it on. */
+  readonly jackpotPaused: boolean;
 }
 
 export interface EpochState {
@@ -50,6 +66,12 @@ export interface EpochState {
   readonly vrfSeed: Uint8Array;
   readonly requestedAt: bigint;
   readonly target: bigint;
+  /** When `draw` landed, 0 until then. */
+  readonly drawnAt: bigint;
+  /** When `begin_epoch` moved this epoch to Registering, 0 until then. The
+   *  program measures `registrationWindow` from the later of this and
+   *  `endsAt`, so a late `begin_epoch` still owes the whole window. */
+  readonly registrationOpenedAt: bigint;
 }
 
 export interface RoundState {
@@ -81,7 +103,8 @@ export function decodePool(
   const raw = program.coder.accounts.decode<Decoded>("pool", data);
   return {
     address,
-    authority: raw.authority as PublicKey,
+    admin: raw.admin as PublicKey,
+    operator: raw.operator as PublicKey,
     acceptedMint: raw.acceptedMint as PublicKey,
     treasury: raw.treasury as PublicKey,
     buybackReserve: raw.buybackReserve as PublicKey,
@@ -91,11 +114,16 @@ export function decodePool(
     roundSeconds: big(raw.roundSeconds),
     closeBuffer: big(raw.closeBuffer),
     vrfTimeout: big(raw.vrfTimeout),
+    registrationWindow: big(raw.registrationWindow),
+    payoutTimeout: big(raw.payoutTimeout),
     paused: raw.paused === true,
     currentEpochId: big(raw.currentEpochId),
     nextRoundId: big(raw.nextRoundId),
     openRoundId: big(raw.openRoundId),
     totalPrincipal: big(raw.totalPrincipal),
+    shutdown: raw.shutdown === true,
+    gamePaused: raw.gamePaused === true,
+    jackpotPaused: raw.jackpotPaused === true,
   };
 }
 
@@ -111,6 +139,8 @@ export function decodeEpoch(program: Program<Idl>, data: Buffer): EpochState {
     vrfSeed: Uint8Array.from(raw.vrfSeed as number[]),
     requestedAt: big(raw.requestedAt),
     target: big(raw.target),
+    drawnAt: big(raw.drawnAt),
+    registrationOpenedAt: big(raw.registrationOpenedAt),
   };
 }
 

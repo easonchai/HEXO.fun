@@ -17,6 +17,9 @@
 // `getLatestBlockhash`, `sendRawTransaction`), plus `fireLogs`/
 // `fireAccountChange` test hooks so a suite can simulate the RPC pushing a
 // notification instead of waiting on a real subscription.
+//
+// Ops-and-envs ticket 10 added `getRecentPrioritizationFees`, which
+// `ChainService.send` now calls on every send to price its priority fee.
 import { PublicKey } from "@solana/web3.js";
 
 /** Shape `onLogs`'s callback receives; mirrors web3.js's `Logs`. */
@@ -131,10 +134,67 @@ export class CountingConnection {
     return Promise.resolve(data ? { data } : null);
   }
 
-  getSignaturesForAddress(address: PublicKey): Promise<never[]> {
+  /** Samples `getRecentPrioritizationFees` answers with (ticket 10's
+   *  operator priority fee). Empty by default, the same as an idle cluster. */
+  prioritizationFees: { slot: number; prioritizationFee: number }[] = [];
+
+  getRecentPrioritizationFees(
+    config?: { lockedWritableAccounts?: PublicKey[] },
+  ): Promise<{ slot: number; prioritizationFee: number }[]> {
+    this.record("getRecentPrioritizationFees", config?.lockedWritableAccounts);
+    return Promise.resolve(this.prioritizationFees);
+  }
+
+  /** Signatures `getSignaturesForAddress` answers with, newest first as the
+   *  real RPC orders them. Empty by default, matching the old unconditional
+   *  `[]` stub; a test drives the indexer's finalized catch-up path (ticket
+   *  13) by populating this and `setTransaction` below. `getSignaturesForAddress`
+   *  pages this array with `before`/`limit` the same way the real RPC pages a
+   *  long backlog (ticket 06). */
+  signaturesForAddress: { signature: string; slot: number; err: unknown; blockTime?: number }[] =
+    [];
+  private readonly transactions = new Map<
+    string,
+    { meta: { logMessages: string[] } } | undefined
+  >();
+  /** `getTransaction` for a signature configured here resolves after this
+   *  many milliseconds instead of immediately, opening a window a test can
+   *  fire a live event into (the race `catchUpEvents`'s single-enqueue fix
+   *  closes, ticket 13). 0 by default: immediate, like every other fake here. */
+  getTransactionDelayMs = 0;
+
+  /** The finalized logs `getTransaction(signature)` answers with. */
+  setTransaction(signature: string, logMessages: string[]): void {
+    this.transactions.set(signature, { meta: { logMessages } });
+  }
+
+  getSignaturesForAddress(
+    address: PublicKey,
+    options?: { before?: string; until?: string; limit?: number },
+  ): Promise<{ signature: string; slot: number; err: unknown; blockTime?: number }[]> {
     this.record("getSignaturesForAddress");
     this.watched = [...this.watched, address];
-    return Promise.resolve([]);
+    // `before`: start just past that signature (older). `until`: stop just
+    // before it (newer). Both default to the whole array, same as no option.
+    const beforeIndex = options?.before
+      ? this.signaturesForAddress.findIndex((info) => info.signature === options.before)
+      : -1;
+    const untilIndex = options?.until
+      ? this.signaturesForAddress.findIndex((info) => info.signature === options.until)
+      : -1;
+    const start = beforeIndex === -1 ? 0 : beforeIndex + 1;
+    const end = untilIndex === -1 ? this.signaturesForAddress.length : untilIndex;
+    const page = this.signaturesForAddress.slice(start, end);
+    return Promise.resolve(options?.limit ? page.slice(0, options.limit) : page);
+  }
+
+  getTransaction(
+    signature: string,
+  ): Promise<{ meta: { logMessages: string[] } } | null> {
+    this.record("getTransaction");
+    const tx = this.transactions.get(signature) ?? null;
+    if (this.getTransactionDelayMs <= 0) return Promise.resolve(tx);
+    return new Promise((resolve) => setTimeout(() => resolve(tx), this.getTransactionDelayMs));
   }
 
   /** The plain call the sweep falls back to when the RPC has no V2. Always
@@ -211,9 +271,48 @@ export class CountingConnection {
     });
   }
 
-  sendRawTransaction(_rawTransaction: Buffer | Uint8Array | number[]): Promise<string> {
-    this.record("sendRawTransaction");
-    if (this.autoConfirmSignature) {
+  /** `simulateTransaction`'s `unitsConsumed`/error (production-hardening
+   *  ticket 04's compute-limit simulation). Defaults to a clean simulation
+   *  reporting 5,000 units, same order of magnitude as a real instruction. */
+  simulateUnitsConsumed: number | undefined = 5_000;
+  simulateError: unknown = undefined;
+
+  simulateTransaction(): Promise<{
+    value: { err: unknown; unitsConsumed?: number; logs: string[] | null };
+  }> {
+    this.record("simulateTransaction");
+    if (this.simulateError) {
+      return Promise.resolve({ value: { err: this.simulateError, logs: null } });
+    }
+    return Promise.resolve({
+      value: {
+        err: null,
+        logs: [],
+        ...(this.simulateUnitsConsumed === undefined
+          ? {}
+          : { unitsConsumed: this.simulateUnitsConsumed }),
+      },
+    });
+  }
+
+  /** `getPriorityFeeEstimate`'s answer (ticket 04's Helius estimate), served
+   *  through `_rpcRequest` the same way the real Helius method arrives.
+   *  Undefined (the default) makes `_rpcRequest` answer "unexpected RPC
+   *  method", the same as a non-Helius endpoint, so `send` falls back to the
+   *  p75 method below without a test having to opt in. */
+  priorityFeeEstimateMicroLamports: number | undefined = undefined;
+
+  /** `sendRawTransaction` calls, by 1-based count, that land no landing
+   *  notification (simulates a dropped packet); every other call still
+   *  notifies via `autoConfirmSignature`, same as today (ticket 04's
+   *  rebroadcast loop). */
+  dropSendsBeforeCall = 0;
+
+  sendRawTransaction(rawTransaction: Buffer | Uint8Array | number[]): Promise<string> {
+    // Params recorded (not just tallied) so a test can decode what was
+    // actually sent, e.g. ticket 10's prepended compute-budget instruction.
+    const count = this.record("sendRawTransaction", [rawTransaction]);
+    if (this.autoConfirmSignature && count > this.dropSendsBeforeCall) {
       const listeners = this.signatureListeners;
       this.signatureListeners = [];
       queueMicrotask(() => {
@@ -269,6 +368,17 @@ export class CountingConnection {
     const count = this.record(method, params);
     if (this.failOnCallNumber?.method === method && this.failOnCallNumber.number === count) {
       return Promise.reject(new Error(`CountingConnection: forced failure on ${method} call ${count}`));
+    }
+    if (method === "getPriorityFeeEstimate") {
+      // Undefined answers "method not found", the same shape a non-Helius
+      // endpoint returns, so `heliusPriorityFeeEstimate` falls back to
+      // `getRecentPrioritizationFees` without a test having to opt in.
+      if (this.priorityFeeEstimateMicroLamports === undefined) {
+        return Promise.resolve({ error: { code: -32601, message: "Method not found" } });
+      }
+      return Promise.resolve({
+        result: { priorityFeeEstimate: this.priorityFeeEstimateMicroLamports },
+      });
     }
     if (method !== "getProgramAccountsV2") {
       return Promise.reject(new Error(`CountingConnection: unexpected RPC method ${method}`));

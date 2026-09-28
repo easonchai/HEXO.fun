@@ -1,19 +1,31 @@
 import type { ConfigService } from "@nestjs/config";
 import { Test } from "@nestjs/testing";
 import {
+  ComputeBudgetInstruction,
+  ComputeBudgetProgram,
   Connection,
   Keypair,
   PublicKey,
+  Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ConfigModule } from "../config/config.module";
-import { DEFAULT_PROGRAM_ID, type HexVaultEnv } from "../config/env";
+import {
+  DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS,
+  DEFAULT_PROGRAM_ID,
+  type HexVaultEnv,
+} from "../config/env";
 import { CountingConnection } from "../test-utils/counting-connection";
 import { ChainModule } from "./chain.module";
-import { CONFIRM_TIMEOUT_MS, ChainService, SOLANA_CONNECTION } from "./chain.service";
+import {
+  CONFIRM_TIMEOUT_MS,
+  ChainService,
+  REBROADCAST_INTERVAL_MS,
+  SOLANA_CONNECTION,
+} from "./chain.service";
 import { poolAddress } from "./pda";
 
 describe("ChainModule", () => {
@@ -57,11 +69,12 @@ describe("ChainService.send", () => {
 
   function chainWith(connection: CountingConnection): ChainService {
     const env: Partial<HexVaultEnv> = {
-      AUTHORITY_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
+      OPERATOR_KEYPAIR: bs58.encode(Keypair.generate().secretKey),
       POOL_ID: "1",
       PROGRAM_ID: DEFAULT_PROGRAM_ID,
+      PRIORITY_FEE_MAX_MICROLAMPORTS: DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS,
     };
-    // SAFETY: ChainService only reads those three keys through `get`.
+    // SAFETY: ChainService only reads those four keys through `get`.
     const config = {
       get: (key: keyof HexVaultEnv) => env[key],
     } as unknown as ConfigService<HexVaultEnv, true>;
@@ -140,5 +153,165 @@ describe("ChainService.send", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Production-hardening ticket 04: rebroadcasts the identical signed bytes
+  // every REBROADCAST_INTERVAL_MS while waiting for confirmation, instead of
+  // trusting the RPC node's own retry queue.
+  it("lands once a resend gets through, after the first two sends are dropped", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = new CountingConnection();
+      // Call 1 (the initial send) and call 2 (the first rebroadcast, at
+      // t=2s) are dropped; call 3 (the second rebroadcast, at t=4s) lands.
+      connection.dropSendsBeforeCall = 2;
+      const chain = chainWith(connection);
+
+      const sent = chain.send(noop);
+      await vi.advanceTimersByTimeAsync(REBROADCAST_INTERVAL_MS * 2 + 50);
+
+      await expect(sent).resolves.toBeDefined();
+      expect(connection.callsTo("sendRawTransaction")).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Production-hardening ticket 04: the compute-unit limit comes from
+  // simulating first, not the runtime's 200k-per-instruction default.
+  describe("compute unit limit", () => {
+    /** The compute-budget limit instruction `send` put on the wire, or
+     *  undefined when simulation failed and none was prepended. */
+    function sentComputeLimit(connection: CountingConnection): number | undefined {
+      const raw = connection.lastParams("sendRawTransaction")?.[0] as Buffer;
+      const maybeLimitIx = Transaction.from(raw).instructions[1];
+      if (
+        !maybeLimitIx ||
+        !maybeLimitIx.programId.equals(ComputeBudgetProgram.programId)
+      ) {
+        return undefined;
+      }
+      return Number(
+        ComputeBudgetInstruction.decodeSetComputeUnitLimit(maybeLimitIx).units,
+      );
+    }
+
+    it("sizes the limit from the simulation, plus a 10% margin", async () => {
+      const connection = new CountingConnection();
+      connection.simulateUnitsConsumed = 10_000;
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+
+      expect(connection.callsTo("simulateTransaction")).toBe(1);
+      expect(sentComputeLimit(connection)).toBe(11_000); // ceil(10_000 * 1.1)
+    });
+
+    it("sends without a limit when simulation fails, same as before this ticket", async () => {
+      const connection = new CountingConnection();
+      connection.simulateError = { InstructionError: [0, "ProgramFailedToComplete"] };
+      const chain = chainWith(connection);
+
+      await expect(chain.send(noop)).resolves.toBeDefined();
+
+      expect(sentComputeLimit(connection)).toBeUndefined();
+    });
+  });
+
+  // Ticket 10: every send prepends a priority fee, priced off
+  // getRecentPrioritizationFees over the transaction's own writable accounts.
+  // Production-hardening ticket 04: the fee now prefers Helius's own
+  // `getPriorityFeeEstimate`, over `getRecentPrioritizationFees`'s floor.
+  // Every test below leaves `priorityFeeEstimateMicroLamports` unset, so
+  // Helius answers "method not found" and each one also proves the fallback.
+  describe("priority fee", () => {
+    /** The compute-budget instruction `send` actually put on the wire, decoded
+     *  from the raw bytes handed to `sendRawTransaction`. */
+    function sentPriceInstruction(connection: CountingConnection): number {
+      const raw = connection.lastParams("sendRawTransaction")?.[0] as Buffer;
+      const priceIx = Transaction.from(raw).instructions[0];
+      // SAFETY: `send` always prepends the compute-budget instruction, so a
+      // transaction it built always has at least this one.
+      return Number(
+        ComputeBudgetInstruction.decodeSetComputeUnitPrice(priceIx as TransactionInstruction)
+          .microLamports,
+      );
+    }
+
+    it("prices the fee at the 75th percentile of the writable accounts' recent samples", async () => {
+      const connection = new CountingConnection();
+      connection.prioritizationFees = [100, 400, 200, 300].map((prioritizationFee, i) => ({
+        slot: i,
+        prioritizationFee,
+      }));
+      const chain = chainWith(connection);
+      const writable = Keypair.generate().publicKey;
+      const ix = new TransactionInstruction({
+        programId: PublicKey.default,
+        keys: [{ pubkey: writable, isSigner: false, isWritable: true }],
+        data: Buffer.alloc(0),
+      });
+
+      await chain.send([ix]);
+
+      expect(connection.lastParams("getRecentPrioritizationFees")).toEqual([writable]);
+      expect(sentPriceInstruction(connection)).toBe(300);
+    });
+
+    it("caps the fee at PRIORITY_FEE_MAX_MICROLAMPORTS", async () => {
+      const connection = new CountingConnection();
+      connection.prioritizationFees = [
+        { slot: 0, prioritizationFee: DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS + 10_000 },
+      ];
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+
+      expect(sentPriceInstruction(connection)).toBe(DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS);
+    });
+
+    it("prices at 0 with no samples, rather than failing the send", async () => {
+      const connection = new CountingConnection();
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+
+      expect(sentPriceInstruction(connection)).toBe(0);
+    });
+
+    it("caches the fee per writable-account set, so a burst of sends costs one read", async () => {
+      const connection = new CountingConnection();
+      connection.prioritizationFees = [{ slot: 0, prioritizationFee: 500 }];
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+      await chain.send(noop);
+
+      expect(connection.callsTo("getRecentPrioritizationFees")).toBe(1);
+    });
+
+    it("prefers the Helius estimate over the p75 fallback when it is available", async () => {
+      const connection = new CountingConnection();
+      connection.priorityFeeEstimateMicroLamports = 4_200;
+      // Would win if the fallback ran instead: proves Helius short-circuits it.
+      connection.prioritizationFees = [{ slot: 0, prioritizationFee: 999_999 }];
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+
+      expect(sentPriceInstruction(connection)).toBe(4_200);
+      expect(connection.callsTo("getRecentPrioritizationFees")).toBe(0);
+    });
+
+    it("caps the Helius estimate at PRIORITY_FEE_MAX_MICROLAMPORTS too", async () => {
+      const connection = new CountingConnection();
+      connection.priorityFeeEstimateMicroLamports =
+        DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS + 10_000;
+      const chain = chainWith(connection);
+
+      await chain.send(noop);
+
+      expect(sentPriceInstruction(connection)).toBe(DEFAULT_PRIORITY_FEE_MAX_MICROLAMPORTS);
+    });
   });
 });

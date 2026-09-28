@@ -3,7 +3,7 @@
 // nothing and prints the same block.
 //
 // Deliberately a plain tsx script, not a Nest standalone context: ConfigModule
-// validates HEXUSDC_MINT as required at boot and this is the command that
+// validates ACCEPTED_MINT as required at boot and this is the command that
 // creates that mint, so a Nest context cannot start on a fresh cluster. It
 // still imports the pure chain modules rather than re-deriving seeds.
 //
@@ -17,6 +17,7 @@ import {
   TOKEN_PROGRAM_ID,
   createInitializeAccount3Instruction,
   createMint,
+  getAccount,
   getMint,
   getOrCreateAssociatedTokenAccount,
 } from "@solana/spl-token";
@@ -30,7 +31,11 @@ import {
 } from "@solana/web3.js";
 import bs58 from "bs58";
 
-import { parsePoolParams, type PoolParams } from "./bootstrap/params";
+import {
+  assertMainnetSafe,
+  parsePoolParams,
+  type PoolParams,
+} from "./bootstrap/params";
 import { loadIdl } from "./chain/idl";
 import {
   jackpotVaultAddress,
@@ -38,7 +43,6 @@ import {
   poolAddress,
   principalVaultAddress,
 } from "./chain/pda";
-import { DEFAULT_PROGRAM_ID } from "./config/env";
 
 /** spec.md §2.5. Pinned on the Pool; the localnet test-vrf build ignores it. */
 const DEVNET_VRF_NETWORK_STATE = new PublicKey(
@@ -49,10 +53,13 @@ const HEXUSDC_DECIMALS = 6;
 
 /** Only the Pool fields this script reads back on a re-run. */
 interface PoolAccount {
-  authority: PublicKey;
+  admin: PublicKey;
+  operator: PublicKey;
   acceptedMint: PublicKey;
   treasury: PublicKey;
   buybackReserve: PublicKey;
+  gamePaused: boolean;
+  jackpotPaused: boolean;
 }
 
 const log = (message: string): void => {
@@ -86,8 +93,13 @@ async function step<T>(what: string, run: () => Promise<T>): Promise<T> {
 
 /**
  * The mint is the one piece that must survive between runs, and this script
- * writes no keypair file, so `HEXUSDC_MINT` is the input whenever it is set
+ * writes no keypair file, so `ACCEPTED_MINT` is the input whenever it is set
  * and a freshly generated mint is only printed for the caller to save.
+ *
+ * Creating one needs this key to be the mint authority; taking one that
+ * already exists does not. Real USDC on mainnet has an authority nobody here
+ * holds, and that is the normal case, not an error: it only means the faucet
+ * and every other mint call stay off.
  */
 async function ensureMint(
   connection: Connection,
@@ -102,30 +114,29 @@ async function ensureMint(
       authority.publicKey,
       HEXUSDC_DECIMALS,
     );
-    log(`created hexUSDC mint ${mint.toBase58()}`);
+    log(`created mint ${mint.toBase58()}`);
     return mint;
   }
 
   const mint = new PublicKey(envMint);
   const info = await getMint(connection, mint).catch((cause: unknown) => {
     throw new Error(
-      `HEXUSDC_MINT ${envMint} is not a mint on this cluster; unset it to create a fresh one`,
+      `ACCEPTED_MINT ${envMint} is not a mint on this cluster; unset it to create a fresh one`,
       { cause },
     );
   });
   if (info.decimals !== HEXUSDC_DECIMALS) {
     throw new Error(
-      `HEXUSDC_MINT ${envMint} has ${info.decimals} decimals, expected ${HEXUSDC_DECIMALS}`,
+      `ACCEPTED_MINT ${envMint} has ${info.decimals} decimals, expected ${HEXUSDC_DECIMALS}`,
     );
   }
-  // The operator mints the faucet and the simulated yield, so an authority it
-  // does not control is a dead pool rather than a warning.
   if (!info.mintAuthority?.equals(authority.publicKey)) {
-    throw new Error(
-      `HEXUSDC_MINT ${envMint} mint authority is ${info.mintAuthority?.toBase58() ?? "none"}, expected ${authority.publicKey.toBase58()}`,
+    log(
+      `mint ${envMint} is controlled by ${info.mintAuthority?.toBase58() ?? "nobody"}, not by this key: no faucet, no minting`,
     );
+    return mint;
   }
-  log(`hexUSDC mint ${envMint} already exists`);
+  log(`mint ${envMint} already exists`);
   return mint;
 }
 
@@ -133,20 +144,19 @@ async function ensureMint(
  * Treasury and buyback_reserve share (mint, owner), so they cannot both be
  * the ATA. `createWithSeed` gives each a deterministic address instead of the
  * random keypair the test helper uses, which is what makes a re-run a no-op.
+ * The seed carries the Pool PDA, not just POOL_ID: the same authority
+ * bootstrapping pool 1 on a second program ID would otherwise land on the
+ * first program's treasury, whose mint differs (MintMismatch in create_pool).
  */
 async function ensureSeededTokenAccount(
   connection: Connection,
   authority: Keypair,
   mint: PublicKey,
   label: string,
-  poolId: bigint,
+  pool: PublicKey,
 ): Promise<PublicKey> {
-  const seed = `hexvault-${label}-${poolId}`;
-  if (Buffer.byteLength(seed) > 32) {
-    throw new Error(
-      `POOL_ID ${poolId} makes the ${label} seed "${seed}" longer than 32 bytes`,
-    );
-  }
+  // Seeds cap at 32 bytes: "treasury-" plus 16 base58 chars of the pool.
+  const seed = `${label}-${pool.toBase58().slice(0, 16)}`;
   const address = await PublicKey.createWithSeed(
     authority.publicKey,
     seed,
@@ -183,9 +193,38 @@ async function ensureSeededTokenAccount(
   return address;
 }
 
+/**
+ * Takes an explicit `--treasury`/`--buyback-reserve` address as is, rather
+ * than creating one: checked to exist and to hold the accepted mint, so a
+ * typo'd address fails here instead of as an opaque MintMismatch inside
+ * `create_pool`.
+ */
+async function ensureExplicitTokenAccount(
+  connection: Connection,
+  flag: string,
+  address: PublicKey,
+  mint: PublicKey,
+): Promise<PublicKey> {
+  const account = await getAccount(connection, address).catch(
+    (cause: unknown) => {
+      throw new Error(
+        `--${flag} ${address.toBase58()} is not a token account on this cluster`,
+        { cause },
+      );
+    },
+  );
+  if (!account.mint.equals(mint)) {
+    throw new Error(
+      `--${flag} ${address.toBase58()} holds mint ${account.mint.toBase58()}, expected ${mint.toBase58()}`,
+    );
+  }
+  return address;
+}
+
 async function createPool(
   program: Program<Idl>,
-  authority: Keypair,
+  payer: Keypair,
+  roles: { admin: PublicKey; operator: PublicKey },
   poolId: bigint,
   pool: PublicKey,
   mint: PublicKey,
@@ -204,6 +243,8 @@ async function createPool(
 
   await createPoolMethod({
     poolId: new BN(poolId.toString()),
+    admin: roles.admin,
+    operator: roles.operator,
     vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
     epochSeconds: new BN(params.epochSeconds),
     epochAnchor: new BN(params.epochAnchor),
@@ -212,20 +253,26 @@ async function createPool(
     vrfTimeout: new BN(params.vrfTimeout),
     minDeposit: new BN(params.minDeposit.toString()),
     houseCutBps: params.houseCutBps,
+    minJackpot: new BN(params.minJackpot.toString()),
+    registrationWindow: new BN(params.registrationWindow),
+    payoutTimeout: new BN(params.payoutTimeout),
+    baseRateBps: params.baseRateBps,
+    ticketsPerUsdc: params.ticketsPerUsdc,
+    bonusCapBps: params.bonusCapBps,
   })
     .accountsPartial({
-      authority: authority.publicKey,
+      payer: payer.publicKey,
       pool,
       acceptedMint: mint,
       principalVault: principalVaultAddress(program.programId, pool),
       jackpotVault: jackpotVaultAddress(program.programId, pool),
-      house: playerAddress(program.programId, pool, authority.publicKey),
+      house: playerAddress(program.programId, pool, roles.operator),
       treasury,
       buybackReserve,
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
-    .signers([authority])
+    .signers([payer])
     .rpc();
   log(
     `created pool ${pool.toBase58()} (epoch ${params.epochSeconds}s, round ${params.roundSeconds}s)`,
@@ -245,6 +292,42 @@ async function createPool(
   }
 }
 
+/**
+ * game-jackpot-pause ticket 02: `--start`. Jackpot first, then game, the
+ * order the spec asks for. Reads the pool first and sends only for a switch
+ * still on, so a re-run starts nothing twice.
+ */
+async function startPool(
+  program: Program<Idl>,
+  admin: Keypair,
+  pool: PublicKey,
+): Promise<void> {
+  const setFeaturePause = program.methods.setFeaturePause;
+  if (!setFeaturePause) {
+    throw new Error(
+      "the IDL has no set_feature_pause instruction; run `pnpm --filter @hexvault/backend sync-idl`",
+    );
+  }
+  const info = await program.provider.connection.getAccountInfo(pool);
+  if (!info) throw new Error(`pool ${pool.toBase58()} not found after create_pool`);
+  const state = program.coder.accounts.decode<PoolAccount>("pool", info.data);
+  const switches = [
+    { feature: "jackpot", paused: state.jackpotPaused },
+    { feature: "game", paused: state.gamePaused },
+  ];
+  for (const { feature, paused } of switches) {
+    if (!paused) {
+      log(`${feature} already started`);
+      continue;
+    }
+    await setFeaturePause({ [feature]: {} }, false)
+      .accountsPartial({ signer: admin.publicKey, pool })
+      .signers([admin])
+      .rpc();
+    log(`started the ${feature}`);
+  }
+}
+
 async function main(): Promise<void> {
   // Same file and precedence as Nest's ConfigModule: process.env wins.
   if (existsSync(".env")) process.loadEnvFile();
@@ -252,13 +335,71 @@ async function main(): Promise<void> {
   const params = parsePoolParams(process.argv.slice(2));
   const connection = new Connection(requireEnv("RPC_URL"), "confirmed");
   const authority = Keypair.fromSecretKey(
-    bs58.decode(requireEnv("AUTHORITY_KEYPAIR")),
+    bs58.decode(requireEnv("OPERATOR_KEYPAIR")),
   );
-  const programId = new PublicKey(process.env.PROGRAM_ID ?? DEFAULT_PROGRAM_ID);
-  const poolId = BigInt(process.env.POOL_ID ?? "1");
+  // The loaded key pays, mints and owns the token accounts unless overridden.
+  // `explicitAdmin` stays undefined when it would default to the hot key, so
+  // the mainnet guard below can tell "given" from "defaulted".
+  const explicitAdmin =
+    params.admin ??
+    (process.env.ADMIN_ADDRESS
+      ? new PublicKey(process.env.ADMIN_ADDRESS)
+      : undefined);
+  const roles = {
+    admin: explicitAdmin ?? authority.publicKey,
+    operator: params.operator ?? authority.publicKey,
+  };
+  const programId = new PublicKey(requireEnv("PROGRAM_ID"));
+  const poolId = BigInt(requireEnv("POOL_ID"));
   log(
-    `authority ${authority.publicKey.toBase58()} on ${connection.rpcEndpoint}`,
+    // Host only: a keyed RPC URL carries its api key in the query string.
+    `signer ${authority.publicKey.toBase58()} on ${new URL(connection.rpcEndpoint).host}`,
   );
+  log(
+    `admin ${roles.admin.toBase58()}, operator ${roles.operator.toBase58()}`,
+  );
+
+  // spec.md: mainnet refuses every hot-key default. Read before anything is
+  // created, so a forgotten flag costs nothing on mainnet.
+  const envMint = process.env.ACCEPTED_MINT ?? process.env.HEXUSDC_MINT;
+  const genesisHash = await step("reading the genesis hash", () =>
+    connection.getGenesisHash(),
+  );
+  assertMainnetSafe({
+    genesisHash,
+    admin: explicitAdmin,
+    operator: roles.operator,
+    treasury: params.treasury,
+    buybackReserve: params.buybackReserve,
+    acceptedMint: envMint,
+  });
+  // game-jackpot-pause ticket 02: starting is admin only on chain, so a
+  // --start this key cannot sign fails before anything is created.
+  if (params.start && !roles.admin.equals(authority.publicKey)) {
+    throw new Error(
+      `--start needs the admin key, but the admin is ${roles.admin.toBase58()}; start the pool with the admin CLI's start-jackpot and start-game instead`,
+    );
+  }
+  if (!explicitAdmin) {
+    log(
+      `warning: no --admin/ADMIN_ADDRESS given; defaulting Admin to the operator hot key ${authority.publicKey.toBase58()}`,
+    );
+  }
+  if (!params.treasury) {
+    log(
+      "warning: no --treasury given; bootstrap will create one owned by the operator hot key",
+    );
+  }
+  if (!params.buybackReserve) {
+    log(
+      "warning: no --buyback-reserve given; bootstrap will create one owned by the operator hot key",
+    );
+  }
+  if (!envMint) {
+    log(
+      "warning: no ACCEPTED_MINT given; bootstrap will create a fresh mint controlled by the operator hot key",
+    );
+  }
 
   // The env-resolved program id wins over the checked-in IDL snapshot's
   // address, same as ChainService.
@@ -279,27 +420,26 @@ async function main(): Promise<void> {
       ? program.coder.accounts.decode<PoolAccount>("pool", info.data)
       : null;
   });
-  if (existing && !existing.authority.equals(authority.publicKey)) {
+  if (existing && !existing.operator.equals(roles.operator)) {
     throw new Error(
-      `pool ${pool.toBase58()} belongs to ${existing.authority.toBase58()}, not to AUTHORITY_KEYPAIR`,
+      `pool ${pool.toBase58()} is cranked by ${existing.operator.toBase58()}, not by ${roles.operator.toBase58()}`,
     );
   }
 
   // An existing pool has already recorded which mint and which token accounts
   // it accepts, so those win over anything this run would otherwise derive.
-  const envMint = process.env.HEXUSDC_MINT;
   if (
     existing &&
     envMint &&
     !existing.acceptedMint.equals(new PublicKey(envMint))
   ) {
     throw new Error(
-      `pool ${pool.toBase58()} accepts ${existing.acceptedMint.toBase58()}, but HEXUSDC_MINT is ${envMint}`,
+      `pool ${pool.toBase58()} accepts ${existing.acceptedMint.toBase58()}, but ACCEPTED_MINT is ${envMint}`,
     );
   }
   const mint = existing
     ? existing.acceptedMint
-    : await step("creating the hexUSDC mint", () =>
+    : await step("resolving the accepted mint", () =>
         ensureMint(connection, authority, envMint),
       );
 
@@ -318,26 +458,43 @@ async function main(): Promise<void> {
 
   const treasury = existing
     ? existing.treasury
-    : await step("creating the treasury", () =>
-        ensureSeededTokenAccount(
-          connection,
-          authority,
-          mint,
-          "treasury",
-          poolId,
-        ),
-      );
+    : params.treasury
+      ? await step("checking --treasury", () =>
+          ensureExplicitTokenAccount(connection, "treasury", params.treasury!, mint),
+        )
+      : await step("creating the treasury", () =>
+          ensureSeededTokenAccount(
+            connection,
+            authority,
+            mint,
+            "treasury",
+            pool,
+          ),
+        );
   const buybackReserve = existing
     ? existing.buybackReserve
-    : await step("creating the buyback reserve", () =>
-        ensureSeededTokenAccount(
-          connection,
-          authority,
-          mint,
-          "buyback",
-          poolId,
-        ),
-      );
+    : params.buybackReserve
+      ? await step("checking --buyback-reserve", () =>
+          ensureExplicitTokenAccount(
+            connection,
+            "buyback-reserve",
+            params.buybackReserve!,
+            mint,
+          ),
+        )
+      : await step("creating the buyback reserve", () =>
+          ensureSeededTokenAccount(
+            connection,
+            authority,
+            mint,
+            "buyback",
+            pool,
+          ),
+        );
+
+  if (treasury.equals(buybackReserve)) {
+    throw new Error("treasury and buyback reserve must differ");
+  }
 
   if (existing) {
     log(`pool ${pool.toBase58()} already exists`);
@@ -346,6 +503,7 @@ async function main(): Promise<void> {
       createPool(
         program,
         authority,
+        roles,
         poolId,
         pool,
         mint,
@@ -355,10 +513,26 @@ async function main(): Promise<void> {
       ),
     );
   }
+  if (params.start) {
+    await step("starting the jackpot and the game", () =>
+      startPool(program, authority, pool),
+    );
+  } else if (!existing) {
+    log("the game and the jackpot start paused; run the admin CLI's start-jackpot and start-game, or pass --start");
+  }
+
+  // The inline line above scrolls away behind create_pool's output, and a
+  // wrong ACCEPTED_MINT on devnet costs a faucet and every mint call, so the
+  // authority is repeated once more at the end where it is read.
+  const mintAuthority = await step(
+    "reading the mint authority",
+    async () => (await getMint(connection, mint)).mintAuthority,
+  );
 
   process.stdout.write(
     [
-      `HEXUSDC_MINT=${mint.toBase58()}`,
+      `ACCEPTED_MINT=${mint.toBase58()}`,
+      `MINT_AUTHORITY=${mintAuthority?.toBase58() ?? "none"}`,
       `PROGRAM_ID=${programId.toBase58()}`,
       `POOL_ID=${poolId}`,
       `POOL_ADDRESS=${pool.toBase58()}`,
@@ -370,6 +544,12 @@ async function main(): Promise<void> {
       "",
     ].join("\n"),
   );
+
+  if (!mintAuthority?.equals(authority.publicKey)) {
+    log(
+      `mint ${mint.toBase58()} is controlled by ${mintAuthority?.toBase58() ?? "nobody"}, not by ${authority.publicKey.toBase58()}: no faucet, no minting`,
+    );
+  }
 }
 
 main().catch((error: unknown) => {

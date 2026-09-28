@@ -1,14 +1,22 @@
 //! Round lifecycle (spec §2.3 "Rounds").
 //!
-//! `create_round`, `settle_round` and `void_round` are authority-only via
-//! `has_one = authority` on the Pool account. `buy_position`,
-//! `request_round_randomness` and `settle_position` are permissionless.
+//! `create_round` is operator-only via `has_one = operator` on the Pool
+//! account. `buy_position`, `request_round_randomness`, `settle_position` and
+//! `close_round` are permissionless.
+//!
+//! `settle_round` and `void_round` are permissionless too
+//! (production-hardening ticket 01): the first account, `caller`, is any
+//! signer, so an operator that stops cranking cannot withhold a fulfilled
+//! result or leave a timed-out request stuck. `settle_round`'s House account
+//! stays pinned to the Player PDA of `pool.operator`, never the caller.
 
 use anchor_lang::prelude::*;
 
 use crate::constants::{round_status, BPS_DENOMINATOR, SEED_EPOCH, SEED_PLAYER, SEED_POOL, SEED_POSITION, SEED_ROUND, TILE_COUNT};
 use crate::errors::HexVaultError;
-use crate::events::{PositionBought, PositionSettled, RoundOpened, RoundSettled, RoundVoided};
+use crate::events::{
+    PositionBought, PositionSettled, RoundClosed, RoundOpened, RoundSettled, RoundVoided,
+};
 use crate::state::{Epoch, Player, Pool, Position, Round};
 use crate::touch::touch;
 use crate::utils;
@@ -17,7 +25,9 @@ use crate::vrf;
 pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
 
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(!pool.paused, HexVaultError::PoolPaused);
+    require!(!pool.game_paused, HexVaultError::GamePaused);
     require!(pool.open_round_id == 0, HexVaultError::RoundAlreadyOpen);
     require!(
         ends_at.checked_sub(starts_at) == Some(pool.round_seconds),
@@ -57,7 +67,6 @@ pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> 
     pool.carry_pot = 0;
     pool.open_round_id = round_id;
     let epoch_id = pool.current_epoch_id;
-    let vrf_seed = utils::vrf_seed(b"round", &pool.key(), round_id);
 
     let round = &mut ctx.accounts.round;
     round.round_id = round_id;
@@ -68,10 +77,15 @@ pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> 
     round.tile_totals = [0; TILE_COUNT as usize];
     round.pot = pot;
     round.house_cut = 0;
-    round.vrf_seed = vrf_seed;
+    // Unknowable until `request_round_randomness` mixes in the Operator's
+    // nonce (beta-launch-fixes ticket 02): a seed precomputed here, from
+    // public inputs alone, could be griefed by pre-creating ORAO's request
+    // account for it before the Operator ever asks.
+    round.vrf_seed = [0u8; 32];
     round.requested_at = 0;
     round.winning_tile = 0;
     round.bump = ctx.bumps.round;
+    round.open_positions = 0;
 
     emit!(RoundOpened {
         round_id,
@@ -88,6 +102,17 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
     let pool = &ctx.accounts.pool;
     let player = &mut ctx.accounts.player;
     touch(player, pool, now)?;
+
+    require!(!pool.shutdown, HexVaultError::PoolShutDown);
+    // Pause stops all Ticket movement (production-hardening ticket 02); an
+    // already-open round can still finish (settle_round, settle_position,
+    // close_round all stay open while paused).
+    require!(!pool.paused, HexVaultError::PoolPaused);
+    require!(!pool.game_paused, HexVaultError::GamePaused);
+    // The House is the counterparty, not a participant: it takes forfeited
+    // pots and the cut, so letting the operator stake those Entries back on
+    // tiles would be playing against the depositors with their own money.
+    require!(!player.is_house, HexVaultError::HouseCannotPlay);
 
     let round = &mut ctx.accounts.round;
     require!(round.status == round_status::OPEN, HexVaultError::RoundNotOpen);
@@ -134,6 +159,10 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
         .pot
         .checked_add(total)
         .ok_or(HexVaultError::ArithmeticOverflow)?;
+    round.open_positions = round
+        .open_positions
+        .checked_add(1)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
 
     let round_id = round.round_id;
     let round_key = round.key();
@@ -155,7 +184,11 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
     Ok(())
 }
 
-pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<()> {
+/// `nonce` is a 32-byte value the Operator generates fresh for this request
+/// and mixes into the seed (beta-launch-fixes ticket 02), so the resulting
+/// randomness address is unknowable before this instruction runs and cannot
+/// be griefed by pre-creating ORAO's request account for it.
+pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>, nonce: [u8; 32]) -> Result<()> {
     let now = utils::now()?;
     let pool = &ctx.accounts.pool;
     let round = &mut ctx.accounts.round;
@@ -169,9 +202,10 @@ pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<
         .ok_or(HexVaultError::ArithmeticOverflow)?;
     require!(now >= close_at, HexVaultError::RoundNotEnded);
 
+    let seed = utils::vrf_seed(b"round", &pool.key(), round.round_id, &nonce);
     require_keys_eq!(
         ctx.accounts.randomness.key(),
-        vrf::randomness_address(&round.vrf_seed),
+        vrf::randomness_address(&seed),
         HexVaultError::InvalidRandomnessAccount
     );
 
@@ -182,9 +216,10 @@ pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<
         &ctx.accounts.randomness.to_account_info(),
         &ctx.accounts.vrf_program.to_account_info(),
         &ctx.accounts.system_program.to_account_info(),
-        round.vrf_seed,
+        seed,
     )?;
 
+    round.vrf_seed = seed;
     round.status = round_status::REQUESTED;
     round.requested_at = now;
     Ok(())
@@ -271,7 +306,7 @@ pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
 pub fn settle_position(ctx: Context<SettlePosition>) -> Result<()> {
     let now = utils::now()?;
     let pool = &ctx.accounts.pool;
-    let round = &ctx.accounts.round;
+    let round = &mut ctx.accounts.round;
     let player = &mut ctx.accounts.player;
     touch(player, pool, now)?;
 
@@ -318,6 +353,11 @@ pub fn settle_position(ctx: Context<SettlePosition>) -> Result<()> {
             .ok_or(HexVaultError::ArithmeticOverflow)?;
     }
 
+    round.open_positions = round
+        .open_positions
+        .checked_sub(1)
+        .ok_or(HexVaultError::ArithmeticOverflow)?;
+
     emit!(PositionSettled {
         round_id: round.round_id,
         owner: position.owner,
@@ -332,14 +372,39 @@ pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
     let round = &mut ctx.accounts.round;
 
     require!(
-        round.status == round_status::REQUESTED,
+        matches!(round.status, round_status::REQUESTED | round_status::OPEN),
         HexVaultError::RoundNotRequested
     );
-    let timeout_at = round
-        .requested_at
-        .checked_add(pool.vrf_timeout)
-        .ok_or(HexVaultError::ArithmeticOverflow)?;
-    require!(now > timeout_at, HexVaultError::VrfTimeoutNotElapsed);
+
+    if round.status == round_status::REQUESTED {
+        // A fulfilled request has to go through `settle_round`. Without this
+        // a caller could read the drawn tile, dislike it, and sit out the
+        // timeout to void the round instead.
+        require_keys_eq!(
+            ctx.accounts.randomness.key(),
+            vrf::randomness_address(&round.vrf_seed),
+            HexVaultError::InvalidRandomnessAccount
+        );
+        require!(
+            !vrf::is_fulfilled(&ctx.accounts.randomness.to_account_info(), &round.vrf_seed),
+            HexVaultError::RandomnessAlreadyFulfilled
+        );
+        let timeout_at = round
+            .requested_at
+            .checked_add(pool.vrf_timeout)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        require!(now > timeout_at, HexVaultError::VrfTimeoutNotElapsed);
+    } else {
+        // Still OPEN past its own end plus the VRF timeout: nobody ever
+        // requested randomness for it at all (beta-launch-fixes ticket 02),
+        // so there is no request to check a fulfilled/unfulfilled state
+        // against.
+        let timeout_at = round
+            .ends_at
+            .checked_add(pool.vrf_timeout)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        require!(now > timeout_at, HexVaultError::VrfTimeoutNotElapsed);
+    }
 
     // Same evaporation rule as `settle_round`: once the Round's Epoch has
     // rolled over, the Entries that funded this pot are already back with
@@ -359,16 +424,46 @@ pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
     Ok(())
 }
 
+/// Permissionless: reclaims a finished Round's rent for the operator once
+/// every Position on it has settled (spec "close_round", ops-and-envs
+/// ticket 05; supersedes `docs/plan/mainnet/issues/09`, where devnet
+/// measured about 2.5 SOL a day of unreclaimed Round rent at 90s rounds).
+///
+/// The Round PDA's seeds (`SEED_ROUND`, pool, `round_id`) can never be
+/// replayed: `create_round` always mints the next id off `pool.next_round_id`,
+/// which only increases, so a closed Round's address can never be
+/// re-initialised with an old id.
+pub fn close_round(ctx: Context<CloseRound>) -> Result<()> {
+    let round = &ctx.accounts.round;
+    require!(
+        matches!(
+            round.status,
+            round_status::SETTLED | round_status::FORFEITED | round_status::VOIDED
+        ),
+        HexVaultError::RoundNotSettled
+    );
+    require!(
+        round.open_positions == 0,
+        HexVaultError::RoundHasOpenPositions
+    );
+
+    emit!(RoundClosed {
+        round: round.key(),
+        round_id: round.round_id,
+    });
+    Ok(())
+}
+
 #[derive(Accounts)]
 pub struct CreateRound<'info> {
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
+        has_one = operator,
     )]
     pub pool: Account<'info, Pool>,
 
@@ -380,7 +475,7 @@ pub struct CreateRound<'info> {
 
     #[account(
         init,
-        payer = authority,
+        payer = operator,
         seeds = [SEED_ROUND, pool.key().as_ref(), &pool.next_round_id.to_le_bytes()],
         bump,
         space = 8 + Round::INIT_SPACE,
@@ -390,27 +485,31 @@ pub struct CreateRound<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// Boxed: unboxed, this struct's `try_accounts` overflows the BPF stack frame
+// (Pool and Player's ticket ops-and-envs/01 padding pushed it over, on top of
+// Round's 36-tile array), the same issue `SettleRound` and `SettlePosition`
+// already work around.
 #[derive(Accounts)]
 pub struct BuyPosition<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
 
     #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
-    pub pool: Account<'info, Pool>,
+    pub pool: Box<Account<'info, Pool>>,
 
     #[account(
         mut,
         seeds = [SEED_PLAYER, pool.key().as_ref(), owner.key().as_ref()],
         bump = player.bump,
     )]
-    pub player: Account<'info, Player>,
+    pub player: Box<Account<'info, Player>>,
 
     #[account(
         mut,
         seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
         bump = round.bump,
     )]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
 
     #[account(
         init,
@@ -462,24 +561,30 @@ pub struct RequestRoundRandomness<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// Boxed: unboxed, this struct's `try_accounts` overflows the BPF stack frame
+// (Pool, Round's 36-tile array and Player combined), the same issue
+// `Payout` in `epochs.rs` already works around.
+/// Permissionless (production-hardening ticket 01): `caller` may be any
+/// signer, only paying the transaction's fee. Every precondition below
+/// (status, fulfilled randomness) is unchanged, and `house` still pins to
+/// `pool.operator`'s Player, never to `caller`.
 #[derive(Accounts)]
 pub struct SettleRound<'info> {
-    pub authority: Signer<'info>,
+    pub caller: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
     )]
-    pub pool: Account<'info, Pool>,
+    pub pool: Box<Account<'info, Pool>>,
 
     #[account(
         mut,
         seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
         bump = round.bump,
     )]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
 
     /// CHECK: ORAO randomness account for this round's seed, verified
     /// against `vrf::randomness_address` (via `vrf::read_fulfilled`).
@@ -491,26 +596,33 @@ pub struct SettleRound<'info> {
         bump = house.bump,
         constraint = house.key() == pool.house @ HexVaultError::InvalidParameter,
     )]
-    pub house: Account<'info, Player>,
+    pub house: Box<Account<'info, Player>>,
 }
 
+// Boxed: Pool and Player's growth in hexo-referrals ticket 04 (bonus_*
+// fields) tipped this struct's `try_accounts` over the BPF stack frame, the
+// same issue `SettleRound` above already works around.
 #[derive(Accounts)]
 pub struct SettlePosition<'info> {
     #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
-    pub pool: Account<'info, Pool>,
+    pub pool: Box<Account<'info, Pool>>,
 
+    // Mut: `settle_position` decrements `open_positions` (ops-and-envs
+    // ticket 05), so `close_round` can tell when every Position on this
+    // Round has settled.
     #[account(
+        mut,
         seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
         bump = round.bump,
     )]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
 
     #[account(
         mut,
         seeds = [SEED_PLAYER, pool.key().as_ref(), player.owner.as_ref()],
         bump = player.bump,
     )]
-    pub player: Account<'info, Player>,
+    pub player: Box<Account<'info, Player>>,
 
     /// CHECK: rent destination for the closed Position; must be its owner.
     #[account(mut, address = position.owner)]
@@ -526,20 +638,45 @@ pub struct SettlePosition<'info> {
     pub position: Account<'info, Position>,
 }
 
+/// Permissionless (production-hardening ticket 01): `caller` may be any
+/// signer, only paying the transaction's fee.
 #[derive(Accounts)]
 pub struct VoidRound<'info> {
-    pub authority: Signer<'info>,
+    pub caller: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = authority,
     )]
     pub pool: Account<'info, Pool>,
 
     #[account(
         mut,
+        seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
+        bump = round.bump,
+    )]
+    pub round: Account<'info, Round>,
+
+    /// CHECK: ORAO randomness account for this round's seed, matched against
+    /// `vrf::randomness_address` in the handler the same way `settle_round`
+    /// does. It need not exist: an unfulfilled request is the normal case
+    /// here.
+    pub randomness: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseRound<'info> {
+    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = operator)]
+    pub pool: Account<'info, Pool>,
+
+    /// CHECK: rent destination; the `has_one` above pins it to `pool.operator`.
+    #[account(mut)]
+    pub operator: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        close = operator,
         seeds = [SEED_ROUND, pool.key().as_ref(), &round.round_id.to_le_bytes()],
         bump = round.bump,
     )]

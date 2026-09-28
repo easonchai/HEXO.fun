@@ -10,9 +10,12 @@ import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { AccessGate } from "./AccessGate.js";
+import { initAnalytics } from "./analytics.js";
 import { App } from "./App.js";
 import { RPC_URL } from "./chain.js";
 import { BurnerWalletAdapter, burnerEnabled } from "./dev-burner.js";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 import {
   GameSignerProvider,
   WalletLayer,
@@ -34,26 +37,33 @@ const ENV: Record<string, string | undefined> = {
   VITE_PUBLIC_RPC_URL: RPC_URL,
 };
 
-const mode = walletModeFor(ENV);
+const mode = walletModeFor(ENV, import.meta.env.PROD);
 
 // Dev-only burner wallet: opt-in via env, local RPC only (see dev-burner.ts).
 // It augments (never replaces) the standard wallets in the fallback path.
 const wallets = burnerEnabled(ENV) ? [new BurnerWalletAdapter()] : [];
 
+// No-op without VITE_POSTHOG_KEY (posthog-analytics ticket 02).
+initAnalytics();
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <WalletLayer env={ENV}>
-      <ConnectionProvider endpoint={RPC_URL}>
-        <WalletProvider wallets={wallets} autoConnect>
-          <WalletModalProvider>
-            <WalletModeProvider mode={mode}>
-              <GameSignerProvider>
-                <App />
-              </GameSignerProvider>
-            </WalletModeProvider>
-          </WalletModalProvider>
-        </WalletProvider>
-      </ConnectionProvider>
-    </WalletLayer>
+    <ErrorBoundary>
+      <WalletLayer env={ENV}>
+        <ConnectionProvider endpoint={RPC_URL}>
+          <WalletProvider wallets={wallets} autoConnect>
+            <WalletModalProvider>
+              <WalletModeProvider mode={mode}>
+                <GameSignerProvider>
+                  <AccessGate>
+                    <App />
+                  </AccessGate>
+                </GameSignerProvider>
+              </WalletModeProvider>
+            </WalletModalProvider>
+          </WalletProvider>
+        </ConnectionProvider>
+      </WalletLayer>
+    </ErrorBoundary>
   </StrictMode>,
 );

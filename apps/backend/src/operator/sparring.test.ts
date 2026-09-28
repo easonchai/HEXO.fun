@@ -61,7 +61,8 @@ const NOW = 1_800_000_000n;
 
 const pool = (over: Partial<PoolState> = {}): PoolState => ({
   address: POOL,
-  authority: AUTHORITY,
+  admin: AUTHORITY,
+  operator: AUTHORITY,
   acceptedMint: Keypair.generate().publicKey,
   treasury: Keypair.generate().publicKey,
   buybackReserve: Keypair.generate().publicKey,
@@ -71,11 +72,16 @@ const pool = (over: Partial<PoolState> = {}): PoolState => ({
   roundSeconds: 60n,
   closeBuffer: 5n,
   vrfTimeout: 120n,
+  registrationWindow: 0n,
+  payoutTimeout: 86_400n,
   paused: false,
   currentEpochId: 2n,
   nextRoundId: 4n,
   openRoundId: 3n,
   totalPrincipal: 1_000_000_000n,
+  shutdown: false,
+  gamePaused: false,
+  jackpotPaused: false,
   ...over,
 });
 

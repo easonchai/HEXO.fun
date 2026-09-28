@@ -13,6 +13,9 @@ hex_vault = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6"
 [programs.devnet]
 hex_vault = "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6"
 
+[programs.mainnet]
+hex_vault = "EwqRKGqnH7dGwL5ERMGQc2tsLKwT3duzKWPcCDphyPCH"
+
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"

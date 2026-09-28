@@ -3,12 +3,35 @@
 
 use anchor_lang::prelude::*;
 
+use crate::custody::PauseFeature;
+
 #[event]
 pub struct PoolCreated {
     pub pool: Pubkey,
     pub pool_id: u64,
-    pub authority: Pubkey,
+    pub admin: Pubkey,
+    pub operator: Pubkey,
     pub accepted_mint: Pubkey,
+}
+
+#[event]
+pub struct OperatorChanged {
+    pub pool: Pubkey,
+    pub previous: Pubkey,
+    pub operator: Pubkey,
+}
+
+#[event]
+pub struct AdminProposed {
+    pub pool: Pubkey,
+    pub pending_admin: Pubkey,
+}
+
+#[event]
+pub struct AdminChanged {
+    pub pool: Pubkey,
+    pub previous: Pubkey,
+    pub admin: Pubkey,
 }
 
 #[event]
@@ -21,12 +44,29 @@ pub struct ParamsSet {
     pub vrf_timeout: i64,
     pub min_deposit: u64,
     pub house_cut_bps: u16,
+    pub min_jackpot: u64,
+    pub registration_window: i64,
+    pub payout_timeout: i64,
+    pub base_rate_bps: u16,
+    pub tickets_per_usdc: u16,
+    pub bonus_cap_bps: u16,
 }
 
 #[event]
 pub struct Paused {
     pub pool: Pubkey,
     pub paused: bool,
+}
+
+/// `set_feature_pause` changed the game or the jackpot switch
+/// (game-jackpot-pause ticket 01). `set_pause` keeps its own `Paused` event,
+/// unchanged.
+#[event]
+pub struct FeaturePaused {
+    pub pool: Pubkey,
+    pub feature: PauseFeature,
+    pub paused: bool,
+    pub at: i64,
 }
 
 #[event]
@@ -38,11 +78,31 @@ pub struct Deposited {
 }
 
 #[event]
+pub struct WithdrawRequested {
+    pub owner: Pubkey,
+    /// This request alone.
+    pub amount: u64,
+    /// Everything the player now has waiting, this request included.
+    pub pending: u64,
+    pub pending_epoch: u64,
+}
+
+/// A `Withdrawn` event follows once `process_withdraw` moves the USDC.
+#[event]
 pub struct Withdrawn {
     pub owner: Pubkey,
     pub amount: u64,
     pub principal: u64,
     pub entries: u64,
+}
+
+/// The admin pulled principal out to a yield venue. Coming back is a plain
+/// SPL transfer into the vault, so there is no matching event for the return.
+#[event]
+pub struct PrincipalDeployed {
+    pub pool: Pubkey,
+    pub amount: u64,
+    pub vault_remaining: u64,
 }
 
 #[event]
@@ -80,6 +140,14 @@ pub struct RoundSettled {
 pub struct RoundVoided {
     pub round_id: u64,
     pub carry_pot: u64,
+}
+
+/// Permissionless: `close_round` reclaimed a finished Round's rent for
+/// `pool.operator` once every Position on it had settled.
+#[event]
+pub struct RoundClosed {
+    pub round: Pubkey,
+    pub round_id: u64,
 }
 
 #[event]
@@ -124,10 +192,74 @@ pub struct JackpotPaid {
     pub winner: Pubkey,
     pub amount: u64,
     pub is_house: bool,
+    /// True for a non-House winner: the prize was moved into the principal
+    /// vault and added to the winner's Principal instead of paid to a token
+    /// account. Always false for a House win, which keeps its 50/30/20 split.
+    pub compounded: bool,
 }
 
 #[event]
 pub struct EpochRolledOver {
     pub epoch_id: u64,
     pub jackpot_amount: u64,
+}
+
+#[event]
+pub struct YieldFunded {
+    pub amount: u64,
+    pub budget: u64,
+}
+
+/// `shortfall` is what `base_rate_bps` would have credited beyond what
+/// `yield_budget` could cover, 0 when the budget paid in full.
+#[event]
+pub struct YieldCredited {
+    pub epoch_id: u64,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub shortfall: u64,
+}
+
+#[event]
+pub struct TicketsBought {
+    pub owner: Pubkey,
+    pub epoch_id: u64,
+    pub usdc: u64,
+    pub tickets: u64,
+}
+
+#[event]
+pub struct TicketsGranted {
+    pub owner: Pubkey,
+    pub epoch_id: u64,
+    pub amount: u64,
+    /// True for the uncapped admin path; false for the capped operator path.
+    pub by_admin: bool,
+}
+
+/// Admin-only and irreversible (spec "Shutdown"). Stops every inflow, the
+/// game and the draw, and lets withdrawals skip the epoch lock.
+#[event]
+pub struct PoolShutdown {
+    pub pool: Pubkey,
+    pub at: i64,
+}
+
+/// Permissionless: `emergency_withdraw` paid one Player's whole balance to
+/// its own USDC ATA once the pool was shut down.
+#[event]
+pub struct EmergencyWithdrawn {
+    pub owner: Pubkey,
+    pub principal: u64,
+    pub pending: u64,
+    pub total: u64,
+}
+
+/// Admin-only: `sweep_house` moved the whole jackpot and any unspent yield
+/// budget to `pool.treasury` once the pool was shut down. Principal is never
+/// swept.
+#[event]
+pub struct HouseSwept {
+    pub jackpot: u64,
+    pub yield_budget: u64,
 }

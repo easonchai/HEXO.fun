@@ -78,4 +78,76 @@ pub enum HexVaultError {
     RandomnessRejection,
     #[msg("the randomness timeout has not elapsed")]
     VrfTimeoutNotElapsed,
+
+    // Roles. Appended, never inserted: every variant above keeps its code.
+    #[msg("signer is not authorized for this instruction")]
+    Unauthorized,
+    #[msg("no admin handover is pending")]
+    NoPendingAdmin,
+
+    // Epoch-locked withdrawals and deployed principal. Appended too.
+    #[msg("the principal vault cannot cover this payout yet")]
+    InsufficientVaultLiquidity,
+    #[msg("the withdrawal's epoch has not ended yet")]
+    WithdrawalNotDue,
+    #[msg("no withdrawal is pending for this player")]
+    NothingPending,
+    #[msg("the pull would leave the vault below its pending withdrawals")]
+    BelowPendingWithdrawals,
+    #[msg("destination is not the admin's associated token account")]
+    InvalidAdminTokenAccount,
+
+    // Operator trust guards (ticket 10). Appended too.
+    #[msg("randomness for this request has already been fulfilled")]
+    RandomnessAlreadyFulfilled,
+    #[msg("the registration window has not closed yet")]
+    RegistrationWindowOpen,
+    #[msg("the House cannot buy a position")]
+    HouseCannotPlay,
+    #[msg("the accepted mint is not owned by the SPL Token program")]
+    UnsupportedMint,
+    #[msg("the payout timeout has not elapsed")]
+    PayoutTimeoutNotElapsed,
+
+    // Bought tickets (hexo-referrals ticket 03). Appended too.
+    #[msg("the House cannot buy tickets")]
+    HouseCannotBuyTickets,
+    #[msg("this purchase would exceed today's cap of principal")]
+    DailyBuyCapExceeded,
+
+    // Granted tickets (hexo-referrals ticket 04). Appended too.
+    #[msg("the House cannot receive an operator grant")]
+    HouseCannotBeGranted,
+    #[msg("this grant would exceed the player's daily cap of principal")]
+    DailyPlayerGrantCapExceeded,
+    #[msg("this grant would exceed the pool's daily bonus cap")]
+    DailyPoolGrantCapExceeded,
+
+    // Shutdown (ops-and-envs ticket 02). Appended too.
+    #[msg("the pool is shut down")]
+    PoolShutDown,
+
+    // emergency_withdraw (ops-and-envs ticket 03). Appended too.
+    #[msg("the pool is not shut down")]
+    PoolNotShutDown,
+    #[msg("the House exits through sweep_house, not emergency_withdraw")]
+    HouseCannotEmergencyWithdraw,
+    #[msg("the principal vault cannot cover this payout")]
+    InsufficientVault,
+
+    // close_round (ops-and-envs ticket 05). Appended too.
+    #[msg("the round still has unsettled positions")]
+    RoundHasOpenPositions,
+
+    // beta-launch-fixes ticket 03. Appended too.
+    #[msg("an earlier epoch has not finished drawing yet")]
+    PreviousEpochStillDrawing,
+    #[msg("no epoch exists yet")]
+    NoEpochYet,
+
+    // Game pause and jackpot pause (game-jackpot-pause ticket 01). Appended too.
+    #[msg("the game is paused")]
+    GamePaused,
+    #[msg("the jackpot is paused")]
+    JackpotPaused,
 }

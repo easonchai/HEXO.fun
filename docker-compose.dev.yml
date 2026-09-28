@@ -3,6 +3,11 @@
 #
 #   docker compose -f docker-compose.dev.yml up -d
 #
+# Another env file (e.g. .env.devnew) needs both flags: --env-file for the
+# ${...} interpolation below, ENV_FILE for the backend container's env.
+#
+#   ENV_FILE=.env.devnew docker compose --env-file .env.devnew -f docker-compose.dev.yml up -d --build
+#
 # Same project name as docker-compose.yml so the existing postgres-data volume
 # is reused. Reads the same .env; the Traefik keys in it are ignored here.
 name: hexvault
@@ -38,7 +43,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    env_file: .env
+    env_file: ${ENV_FILE:-.env}
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PORT: 8080

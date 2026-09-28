@@ -37,6 +37,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import type { HexVaultEnv } from "../config/env";
+import { randomNonce, vrfSeed } from "../operator/vrf";
 import { PrismaService } from "../prisma/prisma.service";
 import { IndexerService } from "./indexer.service";
 
@@ -65,6 +66,7 @@ interface MethodBuilder {
 }
 type Instruction =
   | "createPool"
+  | "setFeaturePause"
   | "beginEpoch"
   | "deposit"
   | "createRound"
@@ -140,10 +142,11 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     connection = new Connection(rpcUrl, "confirmed");
 
     const env: Partial<HexVaultEnv> = {
-      AUTHORITY_KEYPAIR: bs58.encode(authority.secretKey),
+      OPERATOR_KEYPAIR: bs58.encode(authority.secretKey),
       POOL_ID: poolId.toString(),
-      // The address baked into the IDL snapshot is the one run-local.sh
-      // deploys, so the two cannot drift apart within a run.
+      // run-local.sh points `loadIdl()` (via HEXVAULT_IDL_PATH) at the
+      // freshly built target/idl/hex_vault.json, so this is the id it just
+      // deployed, not whatever the committed src/idl/ snapshot carries.
       PROGRAM_ID: loadIdl().address,
       RPC_URL: rpcUrl,
     };
@@ -181,6 +184,9 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await methods
       .createPool({
         poolId: new BN(poolId.toString()),
+        // One key plays both roles here: it pays, cranks and administers.
+        admin: authority.publicKey,
+        operator: authority.publicKey,
         vrfNetworkState: VRF_NETWORK_STATE,
         epochSeconds: new BN(3_600),
         epochAnchor: new BN(Math.floor(Date.now() / 1000)),
@@ -189,9 +195,22 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         vrfTimeout: new BN(5),
         minDeposit: new BN(1_000_000),
         houseCutBps: 600,
+        minJackpot: new BN(1),
+        // No window and a payout timeout far past this run: neither
+        // parameter is what this suite is about, and both would otherwise
+        // change its timing.
+        registrationWindow: new BN(0),
+        payoutTimeout: new BN(86_400),
+        // Base yield and grant-tickets are off (0), same reasoning as the
+        // operator localnet suite: neither is what this suite is about.
+        // `ticketsPerUsdc` only has to be positive to pass `create_pool`'s
+        // own validation.
+        baseRateBps: 0,
+        ticketsPerUsdc: 10,
+        bonusCapBps: 0,
       })
       .accountsPartial({
-        authority: authority.publicKey,
+        payer: authority.publicKey,
         pool,
         acceptedMint: mint,
         principalVault: chain.principalVaultAddress(),
@@ -203,11 +222,18 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         systemProgram: SystemProgram.programId,
       })
       .rpc();
+    // game-jackpot-pause ticket 02: create_pool leaves both switches on.
+    for (const feature of ["jackpot", "game"]) {
+      await methods
+        .setFeaturePause({ [feature]: {} }, false)
+        .accountsPartial({ signer: authority.publicKey, pool })
+        .rpc();
+    }
 
     await methods
       .beginEpoch()
       .accountsPartial({
-        authority: authority.publicKey,
+        operator: authority.publicKey,
         pool,
         currentEpoch: chain.epochAddress(0n),
         newEpoch: chain.epochAddress(1n),
@@ -245,7 +271,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await methods
       .createRound(new BN(startsAt), new BN(roundEndsAt))
       .accountsPartial({
-        authority: authority.publicKey,
+        operator: authority.publicKey,
         pool,
         currentEpoch: chain.epochAddress(1n),
         round,
@@ -253,7 +279,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
       })
       .rpc();
 
-    await methods
+    const buySignature = await methods
       .buyPosition(new BN(TILE_ZERO.toString()), new BN(STAKE.toString()))
       .accountsPartial({
         owner: depositor.publicKey,
@@ -266,11 +292,25 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
       .signers([depositor])
       .rpc();
 
+    // The setup above is the history the indexer's boot backfill has to
+    // replay, and `getSignaturesForAddress("finalized")` cannot list a
+    // transaction that has not finalized yet. Booting before they do leaves
+    // the backfill with an empty page while the live finalized subscription
+    // moves the cursor to a later slot, and the next sweep then lists only
+    // what came after it. A validator finalizes in about 32 slots.
+    await waitFor(
+      "the setup transactions to finalize",
+      async () =>
+        (await connection.getSignatureStatus(buySignature)).value
+          ?.confirmationStatus === "finalized",
+      90_000,
+    );
+
     prisma = new PrismaService();
     await prisma.$connect();
     await wipe(prisma);
 
-    indexer = new IndexerService(prisma, chain);
+    indexer = new IndexerService(prisma, chain, config);
     // The real boot path: the boot sweep, the confirmed-log sync trigger and
     // the finalized log subscription.
     indexer.onModuleInit();
@@ -320,14 +360,16 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
   it("drops the Position row once settle_position closes the account", async () => {
     await waitUntil(roundEndsAt);
 
-    const info = await connection.getAccountInfo(round);
-    if (!info) throw new Error("the round account vanished");
-    const decoded = chain.program.coder.accounts.decode<{ vrfSeed: number[] }>("round", info.data);
-    const seed = Uint8Array.from(decoded.vrfSeed);
+    // The seed is unknowable before this call (beta-launch-fixes ticket 02):
+    // it depends on a nonce this test generates fresh, mixed in by the
+    // program, so it cannot be read back off the Round account beforehand
+    // the way it could before the nonce landed.
+    const nonce = randomNonce();
+    const seed = vrfSeed("round", chain.poolAddress(), 1n, nonce);
     const randomness = randomnessAddress(seed);
 
     await methods
-      .requestRoundRandomness()
+      .requestRoundRandomness(Array.from(nonce))
       .accountsPartial({
         payer: authority.publicKey,
         pool: chain.poolAddress(),
@@ -355,7 +397,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await methods
       .settleRound()
       .accountsPartial({
-        authority: authority.publicKey,
+        caller: authority.publicKey,
         pool: chain.poolAddress(),
         round,
         randomness,
@@ -365,7 +407,12 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
 
     await waitFor(
       "the settled round to reach Postgres",
-      async () => (await prisma.round.findUnique({ where: { id: 1n } }))?.winningTile === 0,
+      async () =>
+        (
+          await prisma.round.findUnique({
+            where: { poolAddress_id: { poolAddress: chain.poolAddress().toBase58(), id: 1n } },
+          })
+        )?.winningTile === 0,
       8_000,
     );
 
@@ -405,13 +452,16 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
       amount: DEPOSIT.toString(),
     });
 
-    const cursor = await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } });
+    const cursor = await prisma.cursor.findUniqueOrThrow({
+      where: { poolAddress: chain.poolAddress().toBase58() },
+    });
     expect(cursor.lastSignature).toBeTruthy();
     expect(cursor.lastSlot).not.toBeNull();
   }, 120_000);
 });
 
 async function wipe(prisma: PrismaService): Promise<void> {
+  // Pool goes last, after every table that references it (ADR 0016).
   await prisma.$transaction([
     prisma.event.deleteMany(),
     prisma.cursor.deleteMany(),
@@ -419,6 +469,9 @@ async function wipe(prisma: PrismaService): Promise<void> {
     prisma.player.deleteMany(),
     prisma.round.deleteMany(),
     prisma.epoch.deleteMany(),
+    prisma.referralGrantShare.deleteMany(),
+    prisma.referralGrant.deleteMany(),
+    prisma.operatorState.deleteMany(),
     prisma.pool.deleteMany(),
   ]);
 }
