@@ -326,6 +326,48 @@ describe("sendMany", () => {
     });
   });
 
+  it("a sponsored send from a wallet with 0 SOL, which has no account yet, still goes to Privy", async () => {
+    const signer = Keypair.generate();
+    const sent: Transaction[] = [];
+    // The runtime's answer when the fee payer has never held lamports: no
+    // instruction runs, so there are no logs to read.
+    const connection = fakeConnection({ simulate: async () => ({ value: { err: "AccountNotFound" } }) });
+    const program = fakeProgram(connection, fakeWallet(signer, { tx: null }));
+
+    const result = await sendMany(
+      program,
+      {
+        publicKey: signer.publicKey,
+        sendTransaction: async (tx) => {
+          sent.push(tx);
+          return "sponsored-signature";
+        },
+      },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({ kind: "landed", signature: "sponsored-signature" });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("an unsponsored send from a wallet with 0 SOL fails before anything signs", async () => {
+    const signer = Keypair.generate();
+    const captured: { tx: Transaction | null } = { tx: null };
+    const connection = fakeConnection({ simulate: async () => ({ value: { err: "AccountNotFound" } }) });
+    const program = fakeProgram(connection, fakeWallet(signer, captured));
+
+    const result = await sendMany(
+      program,
+      { publicKey: signer.publicKey },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({ kind: "failed", code: null, message: '"AccountNotFound"' });
+    expect(captured.tx).toBeNull();
+  });
+
   it("an unsponsored send short of rent fails before anything signs", async () => {
     const signer = Keypair.generate();
     const captured: { tx: Transaction | null } = { tx: null };

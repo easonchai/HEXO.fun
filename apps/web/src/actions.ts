@@ -129,14 +129,19 @@ function customErrorCode(err: unknown): number | null {
 }
 
 /**
- * True when a simulation failed only because the signer could not pay rent
- * for an account the transaction opens (the Player on a first deposit into a
- * pool, a fresh token account). The system program logs this line before its
- * custom error 1. Privy's sponsored send tops the wallet up by exactly that
- * rent in the transaction it broadcasts, which our own simulation cannot see,
- * so for a sponsored send this failure is not real.
+ * True when a simulation failed only for lack of SOL, which Privy's sponsored
+ * send supplies in the transaction it broadcasts: it pays the fee and tops the
+ * wallet up by the rent for any account the transaction opens. Our own
+ * simulation runs with the wallet as fee payer and cannot see either, so for a
+ * sponsored send these failures are not real. Two shapes:
+ * - `"AccountNotFound"`: a wallet with exactly 0 SOL has no account, so the
+ *   fee payer does not exist and no instruction runs.
+ * - The system program's "insufficient lamports" log before its custom error
+ *   1: the wallet exists but cannot pay rent for a new account (the Player on
+ *   a first deposit into a pool, a fresh token account).
  */
-function isShortOfRent(logs: readonly string[] | null | undefined): boolean {
+function isShortOfSol(err: unknown, logs: readonly string[] | null | undefined): boolean {
+  if (err === "AccountNotFound") return true;
   return logs?.some((line) => line.startsWith("Transfer: insufficient lamports")) ?? false;
 }
 
@@ -158,8 +163,8 @@ type ComputeSizing =
  * (ticket 15's "a failed simulation surfaces its program error before the
  * wallet is asked to sign"), so that case is reported back instead of
  * silently falling back and sending anyway. The one exception is a sponsored
- * send short only of rent (`isShortOfRent`): Privy covers that, so it gets
- * the fallback limit and goes to Privy instead of failing here.
+ * send short only of SOL (`isShortOfSol`): Privy covers that, so it gets the
+ * fallback limit and goes to Privy instead of failing here.
  */
 async function computeUnitLimit(
   connection: Connection,
@@ -184,7 +189,7 @@ async function computeUnitLimit(
       ),
     };
   }
-  if (simulated.err && !(options.sponsored && isShortOfRent(simulated.logs))) {
+  if (simulated.err && !(options.sponsored && isShortOfSol(simulated.err, simulated.logs))) {
     return { kind: "programError", err: simulated.err };
   }
   if (simulated.err || simulated.unitsConsumed === undefined) {
