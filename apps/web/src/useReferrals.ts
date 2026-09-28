@@ -5,6 +5,7 @@
  */
 import { useCallback, useState } from "react";
 
+import { track } from "./analytics.js";
 import { apiBaseUrl, fetchReferrals, type ReferralsDto } from "./api.js";
 import { shareLink } from "./referrals.js";
 import { useApiPoll } from "./useApiPoll.js";
@@ -31,6 +32,7 @@ export function useReferrals(owner: string | undefined): ReferralsState {
 
   const copyLink = useCallback((code: string) => {
     const link = shareLink(window.location.origin, code);
+    track("referral_link_copied");
     void (async () => {
       try {
         await navigator.clipboard.writeText(link);
