@@ -37,3 +37,4 @@ docs/plan/
 operator.json
 
 .vercel
+operator-*.json
