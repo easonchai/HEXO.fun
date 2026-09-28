@@ -165,6 +165,10 @@
         --lime-30: rgba(182, 255, 59, 0.3);
         --red: #ff4136;
         --glow: rgba(182, 255, 59, 0.75);
+        --ink-75: rgba(255, 255, 255, 0.75);
+        --ink-30: rgba(255, 255, 255, 0.3);
+        /* Figma's flattened "on the list" pill fill. */
+        --moss: #4a5d48;
         --mono: "Roboto Mono", monospace;
         /* Tabular figures; the kit has one mono, so this is an intent alias. */
         --data: var(--mono);
@@ -455,15 +459,19 @@
       .btn {
         position: relative;
         overflow: hidden;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         font-family: var(--display);
-        font-size: 11px;
+        font-size: 14px;
         font-weight: 700;
-        letter-spacing: 0.12em;
+        letter-spacing: 0.064em;
         text-transform: uppercase;
-        width: 196px;
-        flex: 0 0 196px;
-        padding: 15px 0;
-        border-radius: var(--r);
+        width: 186px;
+        flex: 0 0 186px;
+        height: 44px;
+        padding: 0;
+        border-radius: 8px;
         border: 1px solid var(--lime);
         background: var(--lime);
         color: var(--navy-800);
@@ -537,27 +545,58 @@
         padding-bottom: 76px;
       }
 
-      .hero h1 {
-        margin: 24px 0 0;
+      /* Type set to the Figma hero: eyebrow 12/600, "Join waitlist" 64,
+         hook 33.5/45, tagline 20/31.5. Spacing 24 / 14 / 14 / 48 / 8. */
+      .hero .eyebrow {
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.167em;
+        color: var(--ink-75);
       }
 
-      .hero h1 .hl {
+      .cta-title {
+        margin: 24px 0 0;
+        font-family: var(--display);
+        font-weight: 700;
+        text-transform: uppercase;
+        font-size: clamp(28px, 8.5vw, 64px);
+        line-height: 0.96;
+        letter-spacing: 0.0175em;
+        color: #fff;
+      }
+
+      .hero h1 {
+        margin: 14px 0 0;
+        font-size: clamp(24px, 2.3vw, 33.5px);
+        line-height: 1.34;
+        letter-spacing: -0.035em;
+        color: #fff;
+      }
+
+      .hero .hl {
         color: var(--lime);
       }
 
+      .tagline {
+        margin-top: 14px;
+        font-size: 20px;
+        line-height: 1.575;
+        color: var(--ink-75);
+      }
+
       .hero-copy {
-        margin-top: 50px;
+        margin-top: 48px;
         display: flex;
         flex-direction: column;
-        gap: 26px;
-        max-width: 592px;
+        gap: 8px;
+        max-width: 623px;
       }
 
       .proof {
         display: grid;
         grid-template-columns: repeat(8, 1fr);
         gap: 16px;
-        margin-top: 12px;
+        margin-top: 30px;
         border-top: 1px solid var(--line);
       }
 
@@ -603,19 +642,20 @@
       .form {
         display: flex;
         gap: 16px;
-        max-width: 592px;
+        max-width: 623px;
       }
 
       .form input {
         flex: 1;
         min-width: 0;
-        background: var(--navy-850);
-        border: 1px solid var(--line-2);
-        border-radius: var(--r);
-        padding: 14px 16px;
+        height: 44px;
+        background: transparent;
+        border: 1px solid var(--ink-30);
+        border-radius: 8px;
+        padding: 0 16px;
         color: var(--ink);
         font-family: var(--mono);
-        font-size: 14px;
+        font-size: 13px;
         outline: none;
         transition:
           border-color var(--std) var(--ease),
@@ -623,7 +663,32 @@
       }
 
       .form input::placeholder {
-        color: var(--ink-3);
+        color: var(--ink-30);
+      }
+
+      /* "Save your money. Play your luck." + SHARE ON X, 14px, under the form.
+         The span is the error slot; the link hides once joined. */
+      .form-note {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 14px;
+        line-height: 1.32;
+        color: var(--ink-75);
+      }
+
+      .note-share {
+        color: var(--lime);
+        text-transform: uppercase;
+        transition: opacity var(--quick) var(--ease);
+      }
+
+      .note-share:hover {
+        opacity: 0.8;
+      }
+
+      .joined .note-share {
+        display: none;
       }
 
       .form input:focus {
@@ -652,13 +717,7 @@
 
       .form-done {
         display: none;
-        max-width: 592px;
-        border: 1px solid var(--lime-30);
-        border-radius: var(--r);
-        padding: 14px 18px;
-        font-size: 14px;
-        color: var(--lime);
-        background: var(--lime-08);
+        max-width: 623px;
       }
 
       .form-done.is-done {
@@ -666,102 +725,33 @@
         animation: popIn 380ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
       }
 
-      /* --- the one follow-up question --- */
-      /* The email is already saved by the time this appears, so skipping or
-         closing the tab here costs the signup nothing. */
+      /* Joined: the form row becomes the "on the list" pill + Share on X. */
+      .done-row {
+        display: flex;
+        gap: 16px;
+      }
 
       .done-line {
+        flex: 1;
+        min-width: 0;
         margin: 0;
-      }
-
-      .ask {
-        display: none;
-        margin-top: 16px;
-        padding-top: 16px;
-        border-top: 1px solid var(--lime-30);
-      }
-
-      .form-done.is-asking .ask {
-        display: block;
-        animation: popIn 320ms var(--ease) both;
-      }
-
-      .ask-q {
-        display: block;
-        color: var(--ink-2);
-        line-height: 1.5;
-      }
-
-      .ask-in {
-        display: block;
-        width: 100%;
-        margin-top: 12px;
-        background: var(--navy-850);
-        border: 1px solid var(--line-2);
-        border-radius: var(--r);
-        padding: 12px 14px;
-        color: var(--ink);
-        font-family: var(--mono);
-        font-size: 14px;
-        line-height: 1.6;
-        resize: vertical;
-        outline: none;
-        transition:
-          border-color var(--std) var(--ease),
-          box-shadow var(--std) var(--ease);
-      }
-
-      .ask-in::placeholder {
-        color: var(--ink-3);
-      }
-
-      .ask-in:focus {
-        border-color: var(--lime);
-        box-shadow: 0 0 0 3px var(--lime-08);
-      }
-
-      .ask-row {
+        height: 44px;
         display: flex;
         align-items: center;
-        flex-wrap: wrap;
-        gap: 16px;
-        margin-top: 12px;
-      }
-
-      .btn-sm {
-        flex: none;
-        padding: 10px 22px;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid var(--lime);
+        border-radius: 8px;
+        background: var(--moss);
+        color: var(--lime);
         font-size: 12px;
+        letter-spacing: 0.075em;
+        white-space: nowrap;
       }
 
-      .ask-skip {
-        background: none;
-        border: 0;
-        padding: 0;
-        color: var(--ink-3);
-        font-family: var(--mono);
-        font-size: 12px;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        cursor: pointer;
-        transition: color var(--quick) var(--ease);
-      }
-
-      .ask-skip:hover {
-        color: var(--ink-2);
-      }
-
-      .ask-thanks {
-        display: none;
-        margin: 16px 0 0;
-        padding-top: 16px;
-        border-top: 1px solid var(--lime-30);
-        color: var(--ink-2);
-      }
-
-      .form-done.is-thanked .ask-thanks {
-        display: block;
-        animation: popIn 320ms var(--ease) both;
+      .btn-share {
+        width: 208px;
+        flex: 0 0 208px;
       }
 
       @keyframes popIn {
@@ -1492,16 +1482,21 @@
         .nav-links {
           display: none;
         }
-        .form {
+        .form,
+        .done-row {
           flex-direction: column;
+        }
+        /* flex: 1 sets a 0 basis, which is the height in a column. */
+        .form input,
+        .done-line {
+          flex: none;
         }
         .btn {
           width: 100%;
           flex: none;
         }
-        /* Send sits beside "No thanks", so it keeps its intrinsic width. */
-        .btn-sm {
-          width: auto;
+        .cta-title {
+          margin-top: 18px;
         }
         .sec,
         .close-in {
@@ -1520,9 +1515,9 @@
         .hero-copy {
           margin-top: 22px;
         }
-        .hero .lead {
-          font-size: 15px;
-          line-height: 1.58;
+        .tagline {
+          font-size: 16px;
+          line-height: 1.5;
         }
         .proof b {
           font-size: 32px;
@@ -1645,18 +1640,17 @@
 
       <div class="wrap hero-in">
         <p class="eyebrow rv">Prize-linked savings on Solana</p>
-        <h1 class="rv" style="--d: 70ms">
+        <p class="cta-title rv" style="--d: 70ms">
+          Join <span class="hl">waitlist</span>
+        </p>
+        <h1 class="rv" style="--d: 110ms">
           Earn <span class="hl">5%</span>.<br />Play for jackpot.
         </h1>
+        <p class="tagline rv" style="--d: 150ms">
+          Deposit USDC, never lose it, win a daily prize.
+        </p>
 
         <div class="hero-copy">
-          <p class="lead rv" style="--d: 150ms">
-            Deposit USDC and earn a 5% base yield. Everything the pool earns
-            above that goes into the daily jackpot. Every dollar equals a
-            ticket for the jackpot, and use them to play games to earn more.
-            Your deposits are never touched.
-          </p>
-
           <form class="form rv" style="--d: 220ms" data-waitlist novalidate>
             <input
               type="email"
@@ -1666,39 +1660,50 @@
               required
             />
             <button class="btn" type="submit">
-              <span>Join the waitlist</span>
+              <span>Join now</span>
             </button>
           </form>
           <div class="form-done" role="status">
-            <p class="done-line">
-              You're on the list. We'll email you when the pool opens.
-            </p>
-            <div class="ask">
-              <label class="ask-q"
-                >One quick thing. What would make you trust us with your
-                money?</label
+            <div class="done-row">
+              <p class="done-line">
+                You're on the list
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M3 8.5l3.2 3.2L13 5"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </p>
+              <a
+                class="btn btn-share"
+                href="https://x.com/intent/post"
+                target="_blank"
+                rel="noopener"
+                data-share
+                ><span>Share on X</span></a
               >
-              <textarea
-                class="ask-in"
-                rows="3"
-                maxlength="2000"
-                placeholder="Anything at all. One line is plenty."
-                aria-label="What would make you trust us with your money?"
-              ></textarea>
-              <div class="ask-row">
-                <button type="button" class="btn btn-sm" data-send>
-                  <span>Send</span>
-                </button>
-                <button type="button" class="ask-skip" data-skip>
-                  No thanks
-                </button>
-              </div>
             </div>
-            <p class="ask-thanks">Thank you. That genuinely helps.</p>
           </div>
 
-          <p class="micro form-note rv" style="--d: 280ms">
-            No-loss · Daily jackpot · Your deposit is never touched
+          <p class="form-note rv" style="--d: 280ms">
+            <span data-note>Save your money. Play your luck.</span>
+            <a
+              class="note-share"
+              href="https://x.com/intent/post"
+              target="_blank"
+              rel="noopener"
+              data-share
+              >Share on X</a
+            >
           </p>
 
           <div class="proof">
@@ -1981,38 +1986,49 @@
               required
             />
             <button class="btn" type="submit">
-              <span>Join the waitlist</span>
+              <span>Join now</span>
             </button>
           </form>
           <div class="form-done" role="status">
-            <p class="done-line">
-              You're on the list. We'll email you when the pool opens.
-            </p>
-            <div class="ask">
-              <label class="ask-q"
-                >One quick thing. What would make you trust us with your
-                money?</label
+            <div class="done-row">
+              <p class="done-line">
+                You're on the list
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M3 8.5l3.2 3.2L13 5"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </p>
+              <a
+                class="btn btn-share"
+                href="https://x.com/intent/post"
+                target="_blank"
+                rel="noopener"
+                data-share
+                ><span>Share on X</span></a
               >
-              <textarea
-                class="ask-in"
-                rows="3"
-                maxlength="2000"
-                placeholder="Anything at all. One line is plenty."
-                aria-label="What would make you trust us with your money?"
-              ></textarea>
-              <div class="ask-row">
-                <button type="button" class="btn btn-sm" data-send>
-                  <span>Send</span>
-                </button>
-                <button type="button" class="ask-skip" data-skip>
-                  No thanks
-                </button>
-              </div>
             </div>
-            <p class="ask-thanks">Thank you. That genuinely helps.</p>
           </div>
-          <p class="micro form-note" style="margin-top: 16px">
-            Save your money. Play your luck.
+          <p class="form-note" style="margin-top: 8px">
+            <span data-note>Save your money. Play your luck.</span>
+            <a
+              class="note-share"
+              href="https://x.com/intent/post"
+              target="_blank"
+              rel="noopener"
+              data-share
+              >Share on X</a
+            >
           </p>
         </div>
       </div>
@@ -2584,10 +2600,7 @@
       })();
 
       // ----------------------------- waitlist ------------------------------
-      // Two steps against one route. Step one commits the email and hands back
-      // its id; step two attaches the answer to that id. Nothing about step two
-      // can lose the signup, which is why the question is asked after the save
-      // rather than beside it.
+      // One route: commit the email and hand back its id.
 
       const UTM = (() => {
         const q = new URLSearchParams(location.search);
@@ -2618,8 +2631,7 @@
       }
 
       // One joined state for the whole page, kept for the tab's lifetime so a
-      // refresh doesn't offer the form again. { id, asked } — asked stays
-      // true until the trust question is answered or skipped.
+      // refresh doesn't offer the form again. { id }
       const JOINED_KEY = "hexo.waitlist";
       const readJoined = () => {
         try {
@@ -2642,12 +2654,9 @@
       document.querySelectorAll("form[data-waitlist]").forEach((form) => {
         const scope = form.parentElement;
         const where = form.closest("#top") ? "hero" : "closing";
-        const note = scope.querySelector(".form-note");
+        const note = scope.querySelector("[data-note]");
         const noteDefault = note.textContent;
         const done = scope.querySelector(".form-done");
-        const ask = done.querySelector(".ask-in");
-        const send = done.querySelector("[data-send]");
-        const skip = done.querySelector("[data-skip]");
         const submit = form.querySelector("button[type=submit]");
 
         form.querySelector("input").addEventListener(
@@ -2657,10 +2666,9 @@
         );
 
         renderers.push((s) => {
+          scope.classList.toggle("joined", !!s);
           form.classList.toggle("is-done", !!s);
           done.classList.toggle("is-done", !!s);
-          done.classList.toggle("is-asking", !!s && s.asked);
-          done.classList.toggle("is-thanked", !!s && s.thanked);
         });
 
         const fail = (msg) => {
@@ -2699,36 +2707,27 @@
           }
           posthog.capture("waitlist_submitted", { where, has_utm: !!UTM });
           posthog.identify(signupId, { email });
-          writeJoined({ id: signupId, asked: true });
+          writeJoined({ id: signupId });
           renderJoined();
           note.textContent = noteDefault;
-          setTimeout(() => ask.focus(), 420);
         });
 
-        send.addEventListener("click", async () => {
-          const answer = ask.value.trim();
-          const s = readJoined();
-          if (!answer || !s) return;
-          send.disabled = true;
-          try {
-            await post({ id: s.id, answer });
-          } catch {
-            send.disabled = false;
-            return;
-          }
-          posthog.capture("waitlist_answered", {
-            where,
-            length: answer.length,
-          });
-          writeJoined({ ...s, asked: false, thanked: true });
-          renderJoined();
-        });
+      });
 
-        skip.addEventListener("click", () => {
-          posthog.capture("waitlist_answer_skipped", { where });
-          writeJoined({ ...readJoined(), asked: false });
-          renderJoined();
-        });
+      // ----------------------------- share on x ----------------------------
+      const SHARE_URL =
+        "https://x.com/intent/post?text=" +
+        encodeURIComponent(
+          "Join me on the @Hexofun waitlist. https://hexo-landing.vercel.app",
+        );
+      document.querySelectorAll("[data-share]").forEach((a) => {
+        a.href = SHARE_URL;
+        a.addEventListener("click", () =>
+          window.posthog?.capture("waitlist_shared", {
+            where: a.closest("#top") ? "hero" : "closing",
+            joined: !!readJoined(),
+          }),
+        );
       });
 
       // ----------------------------- nav cta -------------------------------
