@@ -78,6 +78,9 @@ export interface DashboardScreenProps {
   /** Ticket 05: `/state`'s `launchAt`, present only while `currentEpoch` is
    *  null (the deposit-only launch week). */
   launchAt: string | null;
+  /** game-jackpot-pause: the draw is held, so the clock says so instead of
+   *  counting to a draw that will not run on schedule. */
+  jackpotPaused: boolean;
   /** Null until the owner's Player is indexed, or no wallet is connected. */
   player: PlayerDto | null;
   /** Ticket 16: `status.ts`'s `stale` — the Read model or the operator looks
@@ -166,6 +169,7 @@ export function Dashboard(props: DashboardScreenProps) {
     now,
     currentEpoch,
     launchAt,
+    jackpotPaused,
     player,
     stale,
     onDeposit,
@@ -316,6 +320,10 @@ export function Dashboard(props: DashboardScreenProps) {
           {launching ? (
             <div className="dash-drawing" data-testid="dash-launch-countdown">
               {launchLabel}
+            </div>
+          ) : jackpotPaused ? (
+            <div className="dash-drawing" data-testid="dash-draw-paused">
+              DRAW PAUSED
             </div>
           ) : drawing || (remaining !== null && remaining <= 0n) ? (
             <div className="dash-drawing" data-testid="dash-drawing">

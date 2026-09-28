@@ -24,6 +24,8 @@ const HAND_WRITTEN: Record<number, string> = {
   [NOTHING_PENDING_CODE]: "Already paid out. Refreshing your balance.", // NothingPending
   6042: "Today's draw hasn't closed registration yet. Try again in a moment.", // RegistrationWindowOpen
   6051: "This pool is closed. Withdrawals still work; nothing else does.", // PoolShutDown
+  6058: "The game is paused right now. Try again once it restarts.", // GamePaused
+  6059: "The daily draw is paused, so Tickets can't be bought right now.", // JackpotPaused
 };
 
 const IDL_MESSAGE_BY_CODE = new Map(

@@ -41,13 +41,15 @@ export interface WeeklyDrawScreenProps {
   /** Chain clock seconds, for the draw countdown. */
   now: bigint | null;
   currentEpoch: CurrentEpochDto | null;
+  /** game-jackpot-pause: the draw is held; the header says so. */
+  jackpotPaused: boolean;
   /** Null until the owner's Player is indexed, or no wallet is connected. */
   player: PlayerDto | null;
   onDone: () => void;
 }
 
 export function WeeklyDraw(props: WeeklyDrawScreenProps) {
-  const { program, owner, sendTransaction, pool, now, currentEpoch, player, onDone } = props;
+  const { program, owner, sendTransaction, pool, now, currentEpoch, jackpotPaused, player, onDone } = props;
   const ownerBase58 = owner?.toBase58();
 
   const loadEpochs = useCallback(
@@ -106,7 +108,9 @@ export function WeeklyDraw(props: WeeklyDrawScreenProps) {
         wide
         title="DAILY DRAW"
         aside={
-          <span className="dual-line-inline">draw in {countdown}</span>
+          <span className="dual-line-inline" data-testid="draw-header-clock">
+            {jackpotPaused ? "draw paused" : `draw in ${countdown}`}
+          </span>
         }
       >
         <p className="screen-copy">

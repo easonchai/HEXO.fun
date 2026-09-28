@@ -25,6 +25,7 @@ import {
   displayTile,
   expectedReward,
   isRevealed,
+  idleBoardLabel,
   phaseFor,
   type FeedRow,
   type RememberedBoard,
@@ -166,6 +167,10 @@ export function App() {
   // `pool.paused` — shutdown forces `paused` too, but the reason shown for
   // each is different (see `shutdown.ts`).
   const shutdown = state?.status.shutdown ?? false;
+  // game-jackpot-pause: display only, so read straight off `/state` rather
+  // than the signing-side `pool`, which a refused Pool leaves null.
+  const gamePaused = state?.pool.gamePaused ?? false;
+  const jackpotPaused = state?.pool.jackpotPaused ?? false;
   const now = useChainClock(state ? BigInt(state.chainTime) : null, round?.roundId ?? null);
   // The wallet balance is the one chain read left in the browser, so it
   // reloads when something actually moved, not on every poll: `snapshot` is
@@ -265,7 +270,9 @@ export function App() {
   const deployHint = shutdown
     ? SHUTDOWN_REASON
     : !openRound
-      ? "no open round (the operator opens rounds)"
+      ? gamePaused
+        ? "the game is paused"
+        : "no open round (the operator opens rounds)"
       : locked
         ? `position already placed in round #${openRound.roundId}`
         : phaseFor(openRound, now ?? 0n, pool?.closeBuffer ?? 0n) !== "mine"
@@ -559,6 +566,7 @@ export function App() {
             now={now}
             currentEpoch={state?.currentEpoch ?? null}
             launchAt={state?.launchAt ?? null}
+            jackpotPaused={jackpotPaused}
             onDeposit={() => setTab("DASHBOARD")}
           />
         ) : null}
@@ -570,6 +578,7 @@ export function App() {
             now={now}
             currentEpoch={state?.currentEpoch ?? null}
             launchAt={state?.launchAt ?? null}
+            jackpotPaused={jackpotPaused}
             player={player}
             stale={status.stale}
             onDeposit={() => {
@@ -598,6 +607,11 @@ export function App() {
               canPick={canPick}
               operatorStale={status.stale}
               houseCutBps={pool?.houseCutBps ?? 0}
+              idleLabel={
+                state
+                  ? idleBoardLabel(state.openRound !== null, state.currentEpoch !== null, gamePaused)
+                  : null
+              }
               onToggleTile={(n) => {
                 sfx("click");
                 engine.setSelected(
@@ -714,6 +728,7 @@ export function App() {
             pool={pool}
             now={now}
             currentEpoch={state?.currentEpoch ?? null}
+            jackpotPaused={jackpotPaused}
             player={player}
             onDone={statePoll.kick}
           />

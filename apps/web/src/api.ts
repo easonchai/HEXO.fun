@@ -104,6 +104,12 @@ export interface PoolDto {
   /** Tickets credited per USDC spent in `buy_tickets`. */
   ticketsPerUsdc: number;
   paused: boolean;
+  /** game-jackpot-pause: no new rounds or positions while true. A new pool
+   *  starts with it on. */
+  gamePaused: boolean;
+  /** game-jackpot-pause: no new epoch, ticket purchase or draw close while
+   *  true. A new pool starts with it on. */
+  jackpotPaused: boolean;
   currentEpochId: string;
   currentEpochEndsAt: string;
   previousEpochEndsAt: string;

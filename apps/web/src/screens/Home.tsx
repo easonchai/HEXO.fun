@@ -22,6 +22,9 @@ export interface HomeProps {
   /** Ticket 05: `/state`'s `launchAt`, present only while `currentEpoch` is
    *  null (the deposit-only launch week). */
   launchAt: string | null;
+  /** game-jackpot-pause: the draw is held, so the clock says so instead of
+   *  counting to a draw that will not run on schedule. */
+  jackpotPaused: boolean;
   onDeposit: () => void;
 }
 
@@ -109,7 +112,7 @@ export const Star = () => (
   </svg>
 );
 
-export function Home({ now, currentEpoch, launchAt, onDeposit }: HomeProps) {
+export function Home({ now, currentEpoch, launchAt, jackpotPaused, onDeposit }: HomeProps) {
   const remaining =
     currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : null;
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
@@ -164,6 +167,10 @@ export function Home({ now, currentEpoch, launchAt, onDeposit }: HomeProps) {
         {launching ? (
           <div className="home-drawing" data-testid="home-launch-countdown">
             {launchLabel}
+          </div>
+        ) : jackpotPaused ? (
+          <div className="home-drawing" data-testid="home-draw-paused">
+            DRAW PAUSED
           </div>
         ) : drawing || (remaining !== null && remaining <= 0n) ? (
           <div className="home-drawing" data-testid="home-drawing">
