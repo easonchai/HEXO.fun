@@ -13,7 +13,7 @@ keypair explicitly.
 | Compose file | `docker-compose.dev.yml` (laptop) / `docker-compose.yml` (VPS) | `docker-compose.staging.yml` (`include:`s `docker-compose.yml`) | `docker-compose.yml` |
 | Env file | `.env` | `.env.staging` | `.env.mainnet` |
 | Backend host | laptop: `127.0.0.1:8080`; VPS: `api-hexo.elvtd.io` | `API_HOST` in `.env.staging`: _fill in_ | `API_HOST` in `.env.mainnet`: _fill in_ |
-| Vercel scope | Existing `hexofun-beta.vercel.app` project (predates this split): _fill in whether it moves to the `dev`-branch Preview below_ | Preview, scoped to the `dev` branch (`apps/web/.env.staging.example`) | Production, scoped to `main`: _fill in the project/domain_ |
+| Vercel scope | Existing `hexofun-beta.vercel.app` project (predates this split): _fill in whether it moves to the `dev`-branch Preview below_ | Preview, scoped to the `dev` branch (`apps/web/.env.staging.example`) | Production, scoped to `main`: `app.hexofun.lol` (landing at `hexofun.lol`) |
 | Live pool IDs | Several ad hoc pools exist today (`.env`, `.env.dev`, `.env.vps`, `.env.vps1`); ticket 15 retires `.env.vps` and `.env.vps1` once staging is up. _Fill in the pool this environment settles on._ | Not bootstrapped yet (ticket 15 is pending); `.env.staging.example`'s `POOL_ID=1` is a placeholder | Not deployed yet; `.env.mainnet.example`'s `POOL_ID=1` is a placeholder |
 
 Devnet RPC keys, mainnet RPC keys, and every real secret live only in the gitignored `.env*`

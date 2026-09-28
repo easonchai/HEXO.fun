@@ -15,7 +15,7 @@ import { useAccessGate } from "./useAccessGate.js";
 import { useGameSigner } from "./wallets.js";
 
 /** The landing page's waitlist form; it records signups and PostHog events. */
-const WAITLIST_URL = "https://hexo-landing.vercel.app/";
+const WAITLIST_URL = "https://hexofun.lol/";
 
 export function AccessGate({ children }: { children: ReactNode }) {
   const signer = useGameSigner();

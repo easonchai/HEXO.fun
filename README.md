@@ -23,7 +23,7 @@ program say **entries**. Same thing. [`CONTEXT.md`](CONTEXT.md) is the arbiter.
 
 > Devnet prototype. Test assets only. No audit, no legal review, do not deposit real assets.
 
-- App: <https://hexofun-beta.vercel.app>
+- App: <https://app.hexofun.lol>
 - API: <https://api-hexo.elvtd.io> (`/status` shows whether the operator is cranking)
 - Program: `LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6` on devnet
 
@@ -98,13 +98,13 @@ in the navbar; the rest are routable and linked from inside the app.
 
 | Tab | Link | What it is |
 | --- | --- | --- |
-| HOME | [`/`](https://hexofun-beta.vercel.app/) | The landing frame. Today's prize as a whole-dollar hero, a countdown to the draw, one button into the vault. |
-| EARN | [`/#earn`](https://hexofun-beta.vercel.app/#earn) | The dashboard. Your principal, this epoch's prize and draw clock, your odds, past winners, your own history. Where EARN lands. |
-| VAULT | [`/#deposit`](https://hexofun-beta.vercel.app/#deposit) | The deposit widget, one hop in from the dashboard's Deposit / Withdraw buttons. A withdrawal is requested here and pays out after the day's draw. |
-| PLAY | [`/#play`](https://hexofun-beta.vercel.app/#play) | The 36-tile hex board plus the control panel. Stake Entries on tiles (ODD / EVEN / 1-36 cover the board in one click), the round closes, ORAO's VRF picks the tile, and whoever covered it splits the pot after the House takes a configurable cut (6% by default). Auto-rounds repeats the same bet. |
-| DAILY DRAW | [`/#draw`](https://hexofun-beta.vercel.app/#draw) | The epoch draw: prize, your Weight and odds, past winners. Sends `register` as the permissionless fallback if the operator has not cranked it. |
-| LEADERBOARD | [`/#ranks`](https://hexofun-beta.vercel.app/#ranks) | Top ten players by Weight in the current epoch, straight from `GET /leaderboard`. Read-only. |
-| ABOUT | [`/#about`](https://hexofun-beta.vercel.app/#about) | What this is and what can go wrong, stated plainly. |
+| HOME | [`/`](https://app.hexofun.lol/) | The landing frame. Today's prize as a whole-dollar hero, a countdown to the draw, one button into the vault. |
+| EARN | [`/#earn`](https://app.hexofun.lol/#earn) | The dashboard. Your principal, this epoch's prize and draw clock, your odds, past winners, your own history. Where EARN lands. |
+| VAULT | [`/#deposit`](https://app.hexofun.lol/#deposit) | The deposit widget, one hop in from the dashboard's Deposit / Withdraw buttons. A withdrawal is requested here and pays out after the day's draw. |
+| PLAY | [`/#play`](https://app.hexofun.lol/#play) | The 36-tile hex board plus the control panel. Stake Entries on tiles (ODD / EVEN / 1-36 cover the board in one click), the round closes, ORAO's VRF picks the tile, and whoever covered it splits the pot after the House takes a configurable cut (6% by default). Auto-rounds repeats the same bet. |
+| DAILY DRAW | [`/#draw`](https://app.hexofun.lol/#draw) | The epoch draw: prize, your Weight and odds, past winners. Sends `register` as the permissionless fallback if the operator has not cranked it. |
+| LEADERBOARD | [`/#ranks`](https://app.hexofun.lol/#ranks) | Top ten players by Weight in the current epoch, straight from `GET /leaderboard`. Read-only. |
+| ABOUT | [`/#about`](https://app.hexofun.lol/#about) | What this is and what can go wrong, stated plainly. |
 
 ### EARN
 
