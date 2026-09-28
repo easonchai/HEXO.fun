@@ -182,7 +182,7 @@ The multisig or wallet that changes pool parameters, unpauses, rotates the Opera
 _Avoid_: Authority (the removed program role), owner, admin wallet, Operator
 
 **Operator key**:
-The hot keypair on the VPS that the Operator service signs with, and `Pool.operator` in the program. It opens epochs and rounds, requests randomness, settles and draws, and it owns the House Player. Paying the winner needs no signer, so it only pays that transaction's fee. It cannot change parameters, unpause, or move principal. The Admin rotates it in one transaction.
+The hot keypair on the VPS that the Operator service signs with, and `Pool.operator` in the program. It exclusively opens epochs and rounds and crank registration closed; settling, voiding, drawing and rolling over an epoch are permissionless (production-hardening ticket 01), so the Operator key still cranks them but a stalled or stolen one cannot withhold a fulfilled result or leave a timed-out request stuck. It owns the House Player. Paying the winner needs no signer, so it only pays that transaction's fee. It cannot change parameters, unpause, or move principal. The Admin rotates it in one transaction.
 _Avoid_: Authority keypair, pool authority, admin key, hot wallet
 
 **Operator**:
@@ -200,6 +200,10 @@ _Avoid_: Cache, backend
 **Indexer**:
 The backend component that mirrors program accounts and finalized events into Postgres. It is the Read model: the browser's only path to learning anything about the protocol.
 _Avoid_: Cache, backend (too broad)
+
+**Pause**:
+A reversible pool state (`Pool.paused`) that stops all Ticket movement, `buy_position` and both `grant_tickets` paths, while leaving an open Round free to finish: `request_withdraw`, `process_withdraw`, `settle_round`, `void_round`, `settle_position`, `close_round`, the epoch cranks and `fund_*` all stay open. Either the Admin or the Operator key can set it; only the Admin can unset it, so a stolen hot key can cost a day of rounds but cannot reopen a pool the team has halted.
+_Avoid_: Shutdown (a separate, irreversible state), freeze, halt
 
 **Shutdown**:
 An admin-only, irreversible pool state (`Pool.shutdown`) that stops every inflow, the game and the draw, and lets withdrawals skip the epoch lock. Set once, by `shutdown`. Modelled on Marginfi/Kamino's ReduceOnly.
