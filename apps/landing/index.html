@@ -430,9 +430,15 @@
           color var(--std) var(--ease);
       }
 
-      .nav-cta:hover {
+      .nav-cta:hover,
+      .nav-cta:disabled {
         border-color: var(--lime);
         color: var(--lime);
+      }
+
+      .nav-cta:disabled {
+        cursor: default;
+        background: var(--lime-08);
       }
 
       /* ------------------------------ buttons --------------------------- */
@@ -2604,6 +2610,28 @@
         return data;
       }
 
+      // One joined state for the whole page, kept for the tab's lifetime so a
+      // refresh doesn't offer the form again. { id, asked } — asked stays
+      // true until the trust question is answered or skipped.
+      const JOINED_KEY = "hexo.waitlist";
+      const readJoined = () => {
+        try {
+          return JSON.parse(sessionStorage.getItem(JOINED_KEY)) || null;
+        } catch {
+          return null;
+        }
+      };
+      const writeJoined = (state) => {
+        try {
+          sessionStorage.setItem(JOINED_KEY, JSON.stringify(state));
+        } catch {}
+      };
+      const renderers = [];
+      const renderJoined = () => {
+        const s = readJoined();
+        renderers.forEach((r) => r(s));
+      };
+
       document.querySelectorAll("form[data-waitlist]").forEach((form) => {
         const scope = form.parentElement;
         const where = form.closest("#top") ? "hero" : "closing";
@@ -2614,7 +2642,13 @@
         const send = done.querySelector("[data-send]");
         const skip = done.querySelector("[data-skip]");
         const submit = form.querySelector("button[type=submit]");
-        let signupId = null;
+
+        renderers.push((s) => {
+          form.classList.toggle("is-done", !!s);
+          done.classList.toggle("is-done", !!s);
+          done.classList.toggle("is-asking", !!s && s.asked);
+          done.classList.toggle("is-thanked", !!s && s.thanked);
+        });
 
         const fail = (msg) => {
           note.textContent = msg;
@@ -2634,6 +2668,7 @@
           }
           note.classList.remove("form-err");
           submit.disabled = true;
+          let signupId;
           try {
             const r = await post({
               email,
@@ -2651,18 +2686,19 @@
           }
           posthog.capture("waitlist_submitted", { where, has_utm: !!UTM });
           posthog.identify(signupId, { email });
-          form.classList.add("is-done");
-          done.classList.add("is-done", "is-asking");
+          writeJoined({ id: signupId, asked: true });
+          renderJoined();
           note.textContent = noteDefault;
           setTimeout(() => ask.focus(), 420);
         });
 
         send.addEventListener("click", async () => {
           const answer = ask.value.trim();
-          if (!answer || !signupId) return;
+          const s = readJoined();
+          if (!answer || !s) return;
           send.disabled = true;
           try {
-            await post({ id: signupId, answer });
+            await post({ id: s.id, answer });
           } catch {
             send.disabled = false;
             return;
@@ -2671,18 +2707,24 @@
             where,
             length: answer.length,
           });
-          done.classList.remove("is-asking");
-          done.classList.add("is-thanked");
+          writeJoined({ ...s, asked: false, thanked: true });
+          renderJoined();
         });
 
         skip.addEventListener("click", () => {
           posthog.capture("waitlist_answer_skipped", { where });
-          done.classList.remove("is-asking");
+          writeJoined({ ...readJoined(), asked: false });
+          renderJoined();
         });
       });
 
       // ----------------------------- nav cta -------------------------------
       document.querySelectorAll("[data-scroll]").forEach((btn) => {
+        const label = btn.textContent;
+        renderers.push((s) => {
+          btn.disabled = !!s;
+          btn.textContent = s ? "You're on the list" : label;
+        });
         btn.addEventListener("click", () => {
           document
             .querySelector(btn.dataset.scroll)
@@ -2693,6 +2735,8 @@
           );
         });
       });
+
+      renderJoined();
     </script>
   </body>
 </html>
