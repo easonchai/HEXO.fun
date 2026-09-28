@@ -407,7 +407,12 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
 
     await waitFor(
       "the settled round to reach Postgres",
-      async () => (await prisma.round.findUnique({ where: { id: 1n } }))?.winningTile === 0,
+      async () =>
+        (
+          await prisma.round.findUnique({
+            where: { poolAddress_id: { poolAddress: chain.poolAddress().toBase58(), id: 1n } },
+          })
+        )?.winningTile === 0,
       8_000,
     );
 
@@ -447,13 +452,16 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
       amount: DEPOSIT.toString(),
     });
 
-    const cursor = await prisma.cursor.findUniqueOrThrow({ where: { id: 1 } });
+    const cursor = await prisma.cursor.findUniqueOrThrow({
+      where: { poolAddress: chain.poolAddress().toBase58() },
+    });
     expect(cursor.lastSignature).toBeTruthy();
     expect(cursor.lastSlot).not.toBeNull();
   }, 120_000);
 });
 
 async function wipe(prisma: PrismaService): Promise<void> {
+  // Pool goes last, after every table that references it (ADR 0016).
   await prisma.$transaction([
     prisma.event.deleteMany(),
     prisma.cursor.deleteMany(),
@@ -461,6 +469,9 @@ async function wipe(prisma: PrismaService): Promise<void> {
     prisma.player.deleteMany(),
     prisma.round.deleteMany(),
     prisma.epoch.deleteMany(),
+    prisma.referralGrantShare.deleteMany(),
+    prisma.referralGrant.deleteMany(),
+    prisma.operatorState.deleteMany(),
     prisma.pool.deleteMany(),
   ]);
 }

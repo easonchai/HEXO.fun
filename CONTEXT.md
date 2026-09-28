@@ -166,7 +166,7 @@ A single-use code that lets a wallet past the beta gate. It may have an owner. G
 _Avoid_: Access token, whitelist, referral code (a different thing)
 
 **Referral code**:
-A depositor's own code, one per wallet, unlimited uses, shared as a link. Applying it before a wallet's first deposit makes its owner that wallet's Referrer. Outlives the beta; does not pass the beta gate.
+A wallet's own code, one per wallet, minted at first deposit or once it is past the beta gate, unlimited uses, shared as a link. Applying it before a wallet's first deposit makes its owner that wallet's Referrer. Outlives the beta; does not pass the beta gate.
 _Avoid_: Invite code (a different thing), promo code
 
 **Referrer**:
@@ -218,6 +218,10 @@ _Avoid_: Freeze, stop the board
 **Jackpot pause**:
 A reversible pool switch (`Pool.jackpot_paused`) that stops the epoch cycle at its next step: no new Epoch begins, no Tickets are bought or granted, and a Registering Epoch does not close for the draw. Registration stays open, and an Epoch already Drawing or Drawn still draws and pays. Rounds live inside an Epoch, so once the current one ends the game stops too. Same key rules and starting state as the Game pause.
 _Avoid_: Draw freeze, skip the draw
+
+**Feature gate**:
+A per-deployment switch the team sets when the app is deployed that covers a feature (the game, the jackpot) with a Coming soon card of the same size, so the layout does not move. It says "not launched here yet" and knows nothing about the pool: a gated feature stays covered even when its Pause is off, and an ungated feature shows the Pause copy when its Pause is on. Never set on chain.
+_Avoid_: Pause (a pool switch), feature flag, hide
 
 **Emergency withdraw**:
 A permissionless crank, valid only once a pool is shut down, that pays one Player's whole Principal and pending withdrawal to their own wallet in one instruction (`emergency_withdraw`). Anyone may run it for any Player; the House is excluded, since its principal is protocol money and leaves through a Sweep instead.

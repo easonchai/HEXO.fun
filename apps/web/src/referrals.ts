@@ -15,8 +15,9 @@ import type { ReferralBandDto, ReferralItemDto, ReferralsDto } from "./api.js";
 import { shortDate } from "./screens/Dashboard.js";
 
 /** Hero card's code-field state (spec.md "Web page structure", user stories
- *  6-7): no wallet connected, connected but never deposited (no Referral
- *  code minted yet), or connected with a code to show and share. */
+ *  6-7): no wallet connected, connected but the code has not loaded yet
+ *  (GET /referrals/:wallet mints one for any wallet past the gate, deposited
+ *  or not), or connected with a code to show and share. */
 export type ReferralHeroState =
   | { kind: "disconnected" }
   | { kind: "no-code" }

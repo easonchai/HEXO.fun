@@ -42,7 +42,7 @@ describe("referralHeroState", () => {
     });
   });
 
-  it("is no-code once connected with no Referral code yet (never deposited)", () => {
+  it("is no-code once connected with no Referral code yet (not past the gate)", () => {
     expect(referralHeroState("11111111111111111111111111111111", dto(null))).toEqual({
       kind: "no-code",
     });

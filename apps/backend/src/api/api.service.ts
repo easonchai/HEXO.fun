@@ -278,11 +278,18 @@ export class ApiService {
    *  while the Pool has no Epoch yet. Null when `LAUNCH_AT` is unset. */
   private readonly launchAt: string | null;
 
+  /** The Active pool's address as base58. The database may also hold
+   *  retired pools' rows, so every read of a pool-scoped table filters on
+   *  this (ADR 0016). Public so AlertsController scopes its Event read the
+   *  same way. */
+  readonly poolAddress: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly chain: ChainService,
     config: ConfigService<HexVaultEnv, true>,
   ) {
+    this.poolAddress = chain.poolAddress().toBase58();
     this.operatorSolWarn = config.get("OPERATOR_SOL_WARN", { infer: true });
     const launchAt = config.get("LAUNCH_AT", { infer: true });
     this.launchAt = typeof launchAt === "string" && launchAt.length > 0 ? launchAt : null;
@@ -294,10 +301,13 @@ export class ApiService {
 
   async getPool() {
     const pool = await this.requirePool();
+    const poolAddress = this.poolAddress;
     const [currentEpoch, openRound] = await Promise.all([
-      this.prisma.epoch.findUnique({ where: { id: pool.currentEpochId } }),
+      this.prisma.epoch.findUnique({
+        where: { poolAddress_id: { poolAddress, id: pool.currentEpochId } },
+      }),
       this.prisma.round.findFirst({
-        where: { status: { in: [ROUND_OPEN, ROUND_REQUESTED] } },
+        where: { poolAddress, status: { in: [ROUND_OPEN, ROUND_REQUESTED] } },
         orderBy: { id: "desc" },
       }),
     ]);
@@ -309,13 +319,17 @@ export class ApiService {
   }
 
   getEpochs(limit: number): Promise<Epoch[]> {
-    return this.prisma.epoch.findMany({ orderBy: { id: "desc" }, take: limit });
+    return this.prisma.epoch.findMany({
+      where: { poolAddress: this.poolAddress },
+      orderBy: { id: "desc" },
+      take: limit,
+    });
   }
 
   async getCurrentEpoch() {
     const pool = await this.requirePool();
     const epoch = await this.prisma.epoch.findUnique({
-      where: { id: pool.currentEpochId },
+      where: { poolAddress_id: { poolAddress: this.poolAddress, id: pool.currentEpochId } },
     });
     if (epoch === null) {
       throw new NotFoundException(
@@ -379,11 +393,17 @@ export class ApiService {
   }
 
   getRounds(limit: number): Promise<Round[]> {
-    return this.prisma.round.findMany({ orderBy: { id: "desc" }, take: limit });
+    return this.prisma.round.findMany({
+      where: { poolAddress: this.poolAddress },
+      orderBy: { id: "desc" },
+      take: limit,
+    });
   }
 
   async getRound(id: bigint): Promise<Round> {
-    const round = await this.prisma.round.findUnique({ where: { id } });
+    const round = await this.prisma.round.findUnique({
+      where: { poolAddress_id: { poolAddress: this.poolAddress, id } },
+    });
     if (round === null) {
       throw new NotFoundException(`No round ${id}. Check the round id and retry.`);
     }
@@ -413,7 +433,9 @@ export class ApiService {
    * `yieldLastEpoch` (what `register` credited this owner in
    * `player.yieldEpoch`, the most recent epoch a credit landed) and
    * `yieldToDate` (every credit ever), summed from the `YieldCredited`
-   * event log the same way `getPositionCounts` sums `PositionBought`.
+   * event log the same way `getPositionCounts` sums `PositionBought`. Active
+   * pool only: epoch ids restart per pool, so a retired pool's rows would
+   * collide with `yieldEpoch` (ADR 0016).
    */
   private async playerYieldStats(
     owner: string,
@@ -428,7 +450,8 @@ export class ApiService {
           WHERE (data->>'epochId')::bigint = ${yieldEpoch}
         ), 0)::text AS "yieldLastEpoch"
       FROM "Event"
-      WHERE name = 'YieldCredited' AND data->>'owner' = ${owner}
+      WHERE "poolAddress" = ${this.poolAddress}
+        AND name = 'YieldCredited' AND data->>'owner' = ${owner}
     `;
     const row = rows[0];
     return {
@@ -460,23 +483,28 @@ export class ApiService {
     const { pool, epoch, previousEpoch, openRound, operator, cursor, players, round, position } =
       await this.prisma.$transaction(
         async (tx) => {
-          const pool = await tx.pool.findFirst();
+          const poolAddress = this.poolAddress;
+          const pool = await tx.pool.findUnique({ where: { address: poolAddress } });
           if (pool === null) {
             throw new NotFoundException(
               "The pool is not indexed yet. Try again in a few seconds.",
             );
           }
           const [epoch, previousEpoch, openRound, operator, cursor] = await Promise.all([
-            tx.epoch.findUnique({ where: { id: pool.currentEpochId } }),
+            tx.epoch.findUnique({
+              where: { poolAddress_id: { poolAddress, id: pool.currentEpochId } },
+            }),
             pool.currentEpochId <= 0n
               ? Promise.resolve(null)
-              : tx.epoch.findUnique({ where: { id: pool.currentEpochId - 1n } }),
+              : tx.epoch.findUnique({
+                  where: { poolAddress_id: { poolAddress, id: pool.currentEpochId - 1n } },
+                }),
             tx.round.findFirst({
-              where: { status: { in: [ROUND_OPEN, ROUND_REQUESTED] } },
+              where: { poolAddress, status: { in: [ROUND_OPEN, ROUND_REQUESTED] } },
               orderBy: { id: "desc" },
             }),
-            tx.operatorState.findUnique({ where: { id: 1 } }),
-            tx.cursor.findUnique({ where: { id: 1 } }),
+            tx.operatorState.findUnique({ where: { poolAddress } }),
+            tx.cursor.findUnique({ where: { poolAddress } }),
           ]);
           const needsPlayers =
             owner !== undefined ||
@@ -485,13 +513,17 @@ export class ApiService {
                 previousEpoch.status === EPOCH_DRAWING));
           const trackedRoundId = roundId ?? openRound?.id;
           const [players, round, position] = await Promise.all([
-            needsPlayers ? tx.player.findMany() : Promise.resolve([]),
+            needsPlayers ? tx.player.findMany({ where: { poolAddress } }) : Promise.resolve([]),
             trackedRoundId === undefined
               ? Promise.resolve(null)
-              : tx.round.findUnique({ where: { id: trackedRoundId } }),
+              : tx.round.findUnique({
+                  where: { poolAddress_id: { poolAddress, id: trackedRoundId } },
+                }),
             owner === undefined || trackedRoundId === undefined
               ? Promise.resolve(null)
-              : tx.position.findFirst({ where: { owner, roundId: trackedRoundId } }),
+              : tx.position.findFirst({
+                  where: { poolAddress, owner, roundId: trackedRoundId },
+                }),
           ]);
           return { pool, epoch, previousEpoch, openRound, operator, cursor, players, round, position };
         },
@@ -617,7 +649,8 @@ export class ApiService {
     return this.prisma.$queryRaw<FeedRow[]>`
       SELECT slot, signature, "index", name, data, "blockTime"
       FROM "Event"
-      WHERE (name IN (${Prisma.join(FEED_NAMES)})
+      WHERE "poolAddress" = ${this.poolAddress}
+        AND (name IN (${Prisma.join(FEED_NAMES)})
          OR (name = 'PositionSettled' AND data->>'reward' ~ '^[1-9][0-9]*$'))
       ${ownerFilter}
       ORDER BY slot DESC, "index" DESC
@@ -637,13 +670,15 @@ export class ApiService {
    *
    * DISTINCT on `roundId`: a player can buy more than once in the same round
    * (adding tiles to the same Position account), each a separate
-   * `PositionBought` event, so counting rows would overcount rounds.
+   * `PositionBought` event, so counting rows would overcount rounds. Round
+   * ids restart per pool, so this counts the Active pool only (ADR 0016).
    */
   async getPositionCounts(owners: string[]): Promise<{ counts: Record<string, number> }> {
     const rows = await this.prisma.$queryRaw<{ owner: string; rounds: number }[]>`
       SELECT data->>'owner' AS owner, COUNT(DISTINCT data->>'roundId')::int AS rounds
       FROM "Event"
-      WHERE name = 'PositionBought' AND data->>'owner' IN (${Prisma.join(owners)})
+      WHERE "poolAddress" = ${this.poolAddress}
+        AND name = 'PositionBought' AND data->>'owner' IN (${Prisma.join(owners)})
       GROUP BY data->>'owner'
     `;
     const byOwner = new Map(rows.map((row) => [row.owner, row.rounds]));
@@ -652,10 +687,14 @@ export class ApiService {
   }
 
   async getStatus() {
+    const poolAddress = this.poolAddress;
+    // A freshly cut-over pool has no OperatorState or Cursor row until its
+    // first tick and sync; statusFrom reads those nulls as "never ran"
+    // rather than showing the retired pool's (ADR 0016).
     const [operator, cursor, pool, rpc, balances] = await Promise.all([
-      this.prisma.operatorState.findUnique({ where: { id: 1 } }),
-      this.prisma.cursor.findUnique({ where: { id: 1 } }),
-      this.prisma.pool.findFirst(),
+      this.prisma.operatorState.findUnique({ where: { poolAddress } }),
+      this.prisma.cursor.findUnique({ where: { poolAddress } }),
+      this.prisma.pool.findUnique({ where: { address: poolAddress } }),
       this.rpcHealth(),
       this.chainBalances(),
     ]);
@@ -663,7 +702,11 @@ export class ApiService {
     // near-close alert conditions. One extra row read, gated on a pool
     // actually being indexed, same tolerance as the rest of this method.
     const epoch =
-      pool === null ? null : await this.prisma.epoch.findUnique({ where: { id: pool.currentEpochId } });
+      pool === null
+        ? null
+        : await this.prisma.epoch.findUnique({
+            where: { poolAddress_id: { poolAddress, id: pool.currentEpochId } },
+          });
     return {
       ...statusFrom(operator, cursor, rpc, pool, balances, this.operatorSolWarn),
       ...(await this.yieldStatus(pool)),
@@ -721,13 +764,14 @@ export class ApiService {
     const rows = await this.prisma.$queryRaw<{ shortfall: string }[]>`
       SELECT COALESCE(SUM((data->>'shortfall')::numeric), 0)::text AS shortfall
       FROM "Event"
-      WHERE name = 'YieldCredited' AND (data->>'epochId')::bigint = ${lastEpoch}
+      WHERE "poolAddress" = ${this.poolAddress}
+        AND name = 'YieldCredited' AND (data->>'epochId')::bigint = ${lastEpoch}
     `;
     return BigInt(rows[0]?.shortfall ?? "0");
   }
 
   private async requirePool(): Promise<Pool> {
-    const pool = await this.prisma.pool.findFirst();
+    const pool = await this.prisma.pool.findUnique({ where: { address: this.poolAddress } });
     if (pool === null) {
       throw new NotFoundException(
         "The pool is not indexed yet. Try again in a few seconds.",
@@ -742,13 +786,14 @@ export class ApiService {
    */
   private async drawingProgress(pool: Pool) {
     if (pool.currentEpochId <= 0n) return null;
+    const poolAddress = this.poolAddress;
     const previous = await this.prisma.epoch.findUnique({
-      where: { id: pool.currentEpochId - 1n },
+      where: { poolAddress_id: { poolAddress, id: pool.currentEpochId - 1n } },
     });
     const needsPlayers =
       previous !== null &&
       (previous.status === EPOCH_REGISTERING || previous.status === EPOCH_DRAWING);
-    const players = needsPlayers ? await this.prisma.player.findMany() : [];
+    const players = needsPlayers ? await this.prisma.player.findMany({ where: { poolAddress } }) : [];
     return drawingProgressFrom(previous, players);
   }
 
@@ -757,9 +802,10 @@ export class ApiService {
    * Fine for one demo pool; cache the total per epoch tick if it grows.
    */
   private async liveWeights(): Promise<{ weights: LiveWeight[]; total: bigint }> {
+    const poolAddress = this.poolAddress;
     const pool = await this.requirePool();
     const epoch = await this.prisma.epoch.findUnique({
-      where: { id: pool.currentEpochId },
+      where: { poolAddress_id: { poolAddress, id: pool.currentEpochId } },
     });
     if (epoch === null) {
       throw new NotFoundException(
@@ -767,7 +813,7 @@ export class ApiService {
       );
     }
     const at = await this.chainNow();
-    const players = await this.prisma.player.findMany();
+    const players = await this.prisma.player.findMany({ where: { poolAddress } });
     return weightsFrom(players, epoch, at);
   }
 

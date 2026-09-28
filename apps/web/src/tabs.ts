@@ -49,3 +49,18 @@ const TAB_HASHES: Record<Tab, string> = Object.fromEntries(
 export function hashForTab(tab: Tab): string {
   return `#${TAB_HASHES[tab]}`;
 }
+
+/**
+ * PLAY's lock state: `aria-disabled` (not `disabled`, so it stays hoverable
+ * for the `data-tip` tooltip) plus the tooltip copy, or `null` when the tab
+ * is clickable. The game gate wins over the entries lock (ticket 01,
+ * feature-gates): "Coming soon" shows even with tickets in hand.
+ */
+export function playLock(
+  gameGated: boolean,
+  entries: bigint,
+): { tip: string } | null {
+  if (gameGated) return { tip: "Coming soon" };
+  if (entries === 0n) return { tip: "Deposit first to play" };
+  return null;
+}

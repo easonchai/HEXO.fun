@@ -18,7 +18,7 @@ import { WeeklyDraw } from "./screens/WeeklyDraw.js";
 import { awaitSendResult, buyPosition, settlePosition } from "./actions.js";
 import { track } from "./analytics.js";
 import { apiBaseUrl, fetchFeed, type RoundDto } from "./api.js";
-import { PROGRAM_ID, POOL_ID, poolAddress, type HexVaultProgram } from "./chain.js";
+import { GAME_GATED, PROGRAM_ID, POOL_ID, poolAddress, type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
   covers,
@@ -51,7 +51,7 @@ import { snapshot, useStatePoll } from "./useStatePoll.js";
 import { useRoundEngine } from "./useRoundEngine.js";
 import { useGameSigner } from "./wallets.js";
 import { summarizeStatus } from "./status.js";
-import { TABS, hashForTab, tabFromHash, type Tab } from "./tabs.js";
+import { TABS, hashForTab, playLock, tabFromHash, type Tab } from "./tabs.js";
 
 /** `GET /state`'s tracked Round (any status) → the engine's `RoundLike`. */
 function roundLikeFrom(dto: RoundDto): RoundLike {
@@ -197,7 +197,7 @@ export function App() {
   );
   // Ticket 15: rent for a first deposit or Position's account creation.
   const solBalance = useSolBalance(connection, publicKey ?? undefined, balanceNonce);
-  const rentWarning = solRentWarning(solBalance);
+  const rentWarning = solRentWarning(solBalance, { sponsored: sendTransaction !== undefined });
   const status = useMemo(
     () => summarizeStatus(state?.status ?? null, Date.now()),
     [state?.status],
@@ -479,9 +479,12 @@ export function App() {
         </button>
         <nav className="nav" aria-label="Sections">
           {TABS.map((candidate) => {
-            // PLAY needs Tickets; aria-disabled (not `disabled`) keeps the
-            // button hoverable so the data-tip tooltip (styles.css) shows.
-            const locked = candidate.id === "MINE" && entries === 0n;
+            // PLAY needs Tickets, or is gated off entirely; aria-disabled
+            // (not `disabled`) keeps the button hoverable so the data-tip
+            // tooltip (styles.css) shows. The gate wins over the entries
+            // lock (ticket 01, feature-gates).
+            const lock =
+              candidate.id === "MINE" ? playLock(GAME_GATED, entries) : null;
             return (
               <button
                 key={candidate.id}
@@ -491,9 +494,9 @@ export function App() {
                   candidate.id === "REFERRALS" || candidate.id === "ABOUT" ? " nav-item-menu" : ""
                 }`}
                 data-testid={`tab-${candidate.id.toLowerCase()}`}
-                aria-disabled={locked}
-                data-tip={locked ? "Deposit first to play" : undefined}
-                onClick={locked ? undefined : () => setTab(candidate.id)}
+                aria-disabled={lock !== null}
+                data-tip={lock?.tip}
+                onClick={lock !== null ? undefined : () => setTab(candidate.id)}
               >
                 <span className="nav-item-long">{candidate.long}</span>
                 <span className="nav-item-short">{candidate.short}</span>

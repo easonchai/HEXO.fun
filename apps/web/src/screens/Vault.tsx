@@ -185,7 +185,7 @@ export function Vault(props: VaultScreenProps) {
    */
   const cap = mode === "deposit" ? walletBalance : principal;
   const balanceUnavailable = mode === "deposit" && walletBalance === null;
-  const rentWarning = solRentWarning(solBalance);
+  const rentWarning = solRentWarning(solBalance, { sponsored: sendTransaction !== undefined });
 
   const ownerBase58 = owner?.toBase58();
   const loadPlayerExtras = useCallback(

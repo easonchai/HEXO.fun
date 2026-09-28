@@ -31,7 +31,7 @@ function realInstruction(payer: PublicKey): TransactionInstruction {
 }
 
 interface FakeConnectionOptions {
-  simulate?: () => Promise<{ value: { err: unknown; unitsConsumed?: number } }>;
+  simulate?: () => Promise<{ value: { err: unknown; unitsConsumed?: number; logs?: string[] } }>;
   confirm?: () => Promise<{ value: { err: unknown } }>;
   sendRawTransaction?: () => Promise<string>;
   signatureStatuses?: () => Promise<{ value: (SignatureStatus | null)[] }>;
@@ -285,6 +285,134 @@ describe("sendMany", () => {
 
     expect(result).toEqual<SendResult>({ kind: "failed", code: 6003, message: JSON.stringify(err) });
     expect(signed).toBe(false);
+  });
+
+  // A first deposit from a Privy embedded wallet with no SOL: our simulation
+  // runs with the wallet as payer and fails opening the Player account, but
+  // Privy's sponsored send tops the wallet up by that rent on chain.
+  const SHORT_OF_RENT = {
+    err: { InstructionError: [2, { Custom: 1 }] },
+    unitsConsumed: 20_000,
+    logs: [
+      "Program 11111111111111111111111111111111 invoke [2]",
+      "Transfer: insufficient lamports 1102360, need 2250440",
+      "Program 11111111111111111111111111111111 failed: custom program error: 0x1",
+    ],
+  };
+
+  it("a sponsored send short only of rent still goes to Privy, on the fallback compute limit", async () => {
+    const signer = Keypair.generate();
+    const sent: Transaction[] = [];
+    const connection = fakeConnection({ simulate: async () => ({ value: SHORT_OF_RENT }) });
+    const program = fakeProgram(connection, fakeWallet(signer, { tx: null }));
+
+    const result = await sendMany(
+      program,
+      {
+        publicKey: signer.publicKey,
+        sendTransaction: async (tx) => {
+          sent.push(tx);
+          return "sponsored-signature";
+        },
+      },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({ kind: "landed", signature: "sponsored-signature" });
+    expect(sent).toHaveLength(1);
+    expect(ComputeBudgetInstruction.decodeSetComputeUnitLimit(sent[0]!.instructions[1]!)).toEqual({
+      units: 200_000,
+    });
+  });
+
+  it("a sponsored send from a wallet with 0 SOL, which has no account yet, still goes to Privy", async () => {
+    const signer = Keypair.generate();
+    const sent: Transaction[] = [];
+    // The runtime's answer when the fee payer has never held lamports: no
+    // instruction runs, so there are no logs to read.
+    const connection = fakeConnection({ simulate: async () => ({ value: { err: "AccountNotFound" } }) });
+    const program = fakeProgram(connection, fakeWallet(signer, { tx: null }));
+
+    const result = await sendMany(
+      program,
+      {
+        publicKey: signer.publicKey,
+        sendTransaction: async (tx) => {
+          sent.push(tx);
+          return "sponsored-signature";
+        },
+      },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({ kind: "landed", signature: "sponsored-signature" });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("an unsponsored send from a wallet with 0 SOL fails before anything signs", async () => {
+    const signer = Keypair.generate();
+    const captured: { tx: Transaction | null } = { tx: null };
+    const connection = fakeConnection({ simulate: async () => ({ value: { err: "AccountNotFound" } }) });
+    const program = fakeProgram(connection, fakeWallet(signer, captured));
+
+    const result = await sendMany(
+      program,
+      { publicKey: signer.publicKey },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({ kind: "failed", code: null, message: '"AccountNotFound"' });
+    expect(captured.tx).toBeNull();
+  });
+
+  it("an unsponsored send short of rent fails before anything signs", async () => {
+    const signer = Keypair.generate();
+    const captured: { tx: Transaction | null } = { tx: null };
+    const connection = fakeConnection({ simulate: async () => ({ value: SHORT_OF_RENT }) });
+    const program = fakeProgram(connection, fakeWallet(signer, captured));
+
+    const result = await sendMany(
+      program,
+      { publicKey: signer.publicKey },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({
+      kind: "failed",
+      code: 1,
+      message: JSON.stringify(SHORT_OF_RENT.err),
+    });
+    expect(captured.tx).toBeNull();
+  });
+
+  it("a sponsored send with a real program error still fails before Privy sees it", async () => {
+    const signer = Keypair.generate();
+    let sent = false;
+    const err = { InstructionError: [2, { Custom: 6003 }] };
+    const connection = fakeConnection({
+      simulate: async () => ({ value: { err, unitsConsumed: 20_000, logs: ["Program log: AnchorError"] } }),
+    });
+    const program = fakeProgram(connection, fakeWallet(signer, { tx: null }));
+
+    const result = await sendMany(
+      program,
+      {
+        publicKey: signer.publicKey,
+        sendTransaction: async () => {
+          sent = true;
+          return "sponsored-signature";
+        },
+      },
+      [realInstruction(signer.publicKey)],
+      FEE_MICROLAMPORTS,
+    );
+
+    expect(result).toEqual<SendResult>({ kind: "failed", code: 6003, message: JSON.stringify(err) });
+    expect(sent).toBe(false);
   });
 });
 

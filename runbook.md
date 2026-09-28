@@ -222,15 +222,19 @@
        Both are admin-only, so on mainnet each one is a Squads paste. pause-game and
        pause-jackpot undo them and either key can run them.
 
-    2. Wipe the dev database and rebuild the stack. Epoch, Round and Player rows carry no pool
-       column, so the previous pool's rows collide with the new pool's ids on the same numbers.
+    2. Recreate the dev stack. Keep the database volume: every pool-scoped row carries its pool's
+       address (ADR 0016), so the retired pool's rows stay beside the new one's as history, and
+       Invite codes, Referral codes, Referrals and faucet claims carry over. The indexer starts
+       the new pool's cursor empty and walks its history from the first signature.
 
-         docker compose -f docker-compose.dev.yml down -v
-         docker compose -f docker-compose.dev.yml up -d --build
+         docker compose -f docker-compose.dev.yml up -d --build --force-recreate
 
        The container runs prisma migrate deploy before node starts, which is what adds the new
        columns. Confirm with curl localhost:8080/pool for the new poolId and curl
        localhost:8080/status for rpcOk true and a lastAction a few seconds old.
+
+       `down -v` still works on a laptop when you want an empty database, and it deletes every
+       invite and referral with it. Never run it on the VPS or mainnet.
 
     3. Repoint the dev frontend: VITE_POOL_ID=7 in apps/web/.env, plus VITE_PROGRAM_ID if the
        program id moved. Vite reloads on its own. A stale id reads an account that no longer
@@ -258,14 +262,15 @@
 
     6. On the box, set POOL_ID=8 in its .env, then pull and recreate. Compose hardcodes
        env_file: .env, so the file is named .env there whatever it is called in this repo.
-       Wipe the volume for the same reason step 3 does: Epoch, Round and Player are keyed by
-       chain id alone, so the previous pool's rows collide with the new pool's ids. FaucetClaim
-       goes with it, so anyone who already claimed may claim again.
+       Keep the volume, for the same reason as step 2: the database holds every pool it has
+       mirrored, and the invites and referrals in it exist nowhere else.
 
          sed -i 's/^POOL_ID=.*/POOL_ID=8/' .env
          git pull
-         docker compose down -v
-         docker compose up -d --build
+         docker compose up -d --build --force-recreate
+
+       Depositors in the retired pool get their Principal back through Shutdown and Emergency
+       withdraw on that pool; nothing in this procedure moves it.
 
     7. Vercel: set VITE_POOL_ID to 8 on the project pointed at api-hexo.elvtd.io and redeploy.
        A Vercel env var only reaches the bundle on the next build, so a redeploy is required.
@@ -373,17 +378,22 @@
 
   Launch week
 
-  The program already accepts deposits with no Epoch: a deposit before Epoch 1 freezes no weight and Epoch 1's accrual starts from
-  `current_epoch_start` regardless. Set `LAUNCH_AT` (an ISO timestamp, apps/backend/.env) to open a pool for deposits before the
-  first Draw: the Operator's tick step 3 (`begin_epoch`) waits for it, and nothing else in the tick changes. `GET /state` and
-  `GET /status` return a null current Epoch plus the configured `launchAt` the whole time, instead of 404ing; the web shows "first
-  draw in <countdown>" on Home, Vault and Dashboard, deposits and withdrawal requests stay open, and buying Tickets stays hidden
-  (Tickets bought before Epoch 1 begins would reset and are refused on chain: `buy_tickets` requires `current_epoch_id > 0`).
+  A new pool starts with the game and the jackpot both paused; start each on chain with the admin CLI's `pause-game`,
+  `start-game`, `pause-jackpot` and `start-jackpot` (see "Standing up a fresh pool" above for the exact commands and who
+  can sign them). `GET /state`'s `pool.gamePaused` and `pool.jackpotPaused` say which switch is on; check there rather
+  than assuming a command landed.
 
-  Bring a launch week up the same way as any other bootstrap: run `bootstrap` (creates the Pool with `currentEpochId` 0), set
-  `LAUNCH_AT` to whenever the first Draw should start, bring the backend up, and invite depositors. Once the chain clock passes
-  `LAUNCH_AT`, the next tick begins Epoch 1 normally and the countdown clears itself.
+  Vercel adds a second, independent cover: `VITE_GATE_GAME` and `VITE_GATE_JACKPOT` on the project's env vars. Set to
+  `off`, a gate covers its feature with a same-sized "COMING SOON" card and the chain switch is not consulted. Unset, or
+  set to anything else, the feature falls through to the chain switch's own copy: "GAME PAUSED", "STARTS SOON", "DRAW
+  PAUSED". Both are Vite build-time variables, so a change only reaches the site on the next build.
 
-  Base yield is credited per ended Epoch, so a launch week earns none — if the beta promises yield for that week, fund it as a
-  manual grant. Leave `LAUNCH_AT` unset (or past) for a pool that should begin its first Epoch immediately, which is today's
-  behaviour.
+  Launching a gated feature: start it on chain, confirm `/state` shows the switch off, then remove the gate on Vercel and
+  redeploy. Chain first, so the card never comes off a feature that is still paused underneath; the other order swaps
+  "Coming soon" for "Game paused" instead of a live board.
+
+  `LAUNCH_AT` (apps/backend/.env) still holds the Operator's first `begin_epoch` back until that time, but the Game pause
+  and Jackpot pause above cover a deposit-only week now; leave it unset.
+
+  Base yield is credited per ended Epoch, so a week with no Epoch earns none. If the beta promises yield for that week,
+  fund it as a manual grant.

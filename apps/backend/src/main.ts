@@ -29,17 +29,18 @@ async function bootstrap(): Promise<void> {
   const config = app.get<ConfigService<HexVaultEnv, true>>(ConfigService);
 
   // ticket 10: refuses to start against the wrong network, Pool or mint,
-  // and refuses a database mirroring some other pool's rows.
+  // and refuses a database mirroring another program's pools (retired pools
+  // on this program are fine, ADR 0016).
   const chain = app.get(ChainService);
   const prisma = app.get(PrismaService);
   await runBootGuards({
     connection: chain.connection,
     program: chain.program,
+    programId: chain.programId,
     poolAddress: chain.poolAddress(),
     acceptedMint: config.get("ACCEPTED_MINT", { infer: true }),
     cluster: config.get("CLUSTER", { infer: true }),
-    mirroredPoolAddresses: async () =>
-      (await prisma.pool.findMany({ select: { address: true } })).map((row) => row.address),
+    mirroredPoolRows: () => prisma.pool.findMany({ select: { address: true, poolId: true } }),
   });
 
   // Comma-separated list, e.g. "https://app.vercel.app,http://localhost:5173".

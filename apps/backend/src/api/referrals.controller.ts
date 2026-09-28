@@ -13,10 +13,12 @@ import { ConfigService } from "@nestjs/config";
 import { PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
+import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { isUniqueConstraintViolation } from "./access.controller";
 import { applyReferralMessage, normalizeInviteCode, verifyApplyReferralSignature } from "./invite-code";
+import { ensureReferralCode } from "./referral-code";
 import { buildReferralsResponse, type ReferralInput } from "./referral-summary";
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
@@ -89,10 +91,17 @@ function parseApplyReferralBody(body: unknown): ApplyReferralBody {
  */
 @Controller("referrals")
 export class ReferralsController {
+  /** The Active pool's address. Today's bonus is read off its Pool row and
+   *  its grants only: epoch ids restart per pool (ADR 0016). */
+  private readonly poolAddress: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<HexVaultEnv, true>,
-  ) {}
+    chain: ChainService,
+  ) {
+    this.poolAddress = chain.poolAddress().toBase58();
+  }
 
   @Get(":wallet")
   async getReferrals(
@@ -104,15 +113,12 @@ export class ReferralsController {
     const qualifySeconds = this.config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
 
     const [referralCode, referralRows, pool] = await Promise.all([
-      this.prisma.referralCode.findUnique({
-        where: { owner: wallet },
-        select: { code: true },
-      }),
+      this.referralCodeFor(wallet),
       this.prisma.referral.findMany({
         where: { referrer: wallet },
         select: { referee: true, aboveSince: true, boundAt: true },
       }),
-      this.prisma.pool.findFirst(),
+      this.prisma.pool.findUnique({ where: { address: this.poolAddress } }),
     ]);
 
     const [grantToday, shares] = await Promise.all([
@@ -127,7 +133,7 @@ export class ReferralsController {
     }));
 
     return buildReferralsResponse(
-      referralCode?.code ?? null,
+      referralCode,
       referrals,
       nowSeconds(),
       qualifySeconds,
@@ -135,6 +141,22 @@ export class ReferralsController {
       cursorRaw ?? null,
       parseReferralsLimit(limitRaw),
     );
+  }
+
+  /**
+   * The wallet's Referral code, minting one for a wallet past the beta gate
+   * that has not deposited yet so it can refer before it deposits (its own
+   * bonus stays capped by its own Principal, which the Referral's Bonus card
+   * already shows). A depositor's code comes from the indexer. Gated on an
+   * InviteRedemption so this unthrottled GET can't mint rows for arbitrary
+   * addresses.
+   */
+  private async referralCodeFor(wallet: string): Promise<string | null> {
+    const owned = await this.prisma.referralCode.findUnique({ where: { owner: wallet } });
+    if (owned !== null) return owned.code;
+    const redeemed = await this.prisma.inviteRedemption.findUnique({ where: { wallet } });
+    if (redeemed === null) return null;
+    return ensureReferralCode(this.prisma, wallet);
   }
 
   /**
@@ -168,7 +190,9 @@ export class ReferralsController {
         if (existingReferral !== null) {
           return { applied: false, reason: "This wallet already has a Referrer." };
         }
-        const player = await tx.player.findUnique({ where: { owner: address } });
+        // Cross-pool on purpose: "first deposit" means first deposit ever,
+        // so a depositor from a retired pool stays refused (ADR 0016).
+        const player = await tx.player.findFirst({ where: { owner: address } });
         if (player !== null) {
           return { applied: false, reason: "This wallet has already deposited." };
         }
@@ -197,7 +221,9 @@ export class ReferralsController {
   private bonusGrant(epochId: bigint | undefined, referrer: string) {
     if (epochId === undefined) return Promise.resolve(null);
     return this.prisma.referralGrant.findUnique({
-      where: { epochId_referrer: { epochId, referrer } },
+      where: {
+        poolAddress_epochId_referrer: { poolAddress: this.poolAddress, epochId, referrer },
+      },
       select: { amount: true, uncapped: true },
     });
   }
@@ -212,7 +238,7 @@ export class ReferralsController {
   ): Promise<Map<string, bigint>> {
     if (epochId === undefined) return new Map();
     const rows = await this.prisma.referralGrantShare.findMany({
-      where: { epochId, referrer },
+      where: { poolAddress: this.poolAddress, epochId, referrer },
       select: { referee: true, amount: true },
     });
     return new Map(rows.map((row) => [row.referee, row.amount]));

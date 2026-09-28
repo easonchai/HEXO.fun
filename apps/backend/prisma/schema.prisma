@@ -63,10 +63,28 @@ model Pool {
   /// close (game-jackpot-pause).
   jackpotPaused       Boolean @default(false)
   updatedSlot         BigInt
+
+  // Back-relations for the pool-scoped tables (ADR 0016). A Pool row is
+  // never deleted, so every child relation is onDelete: Restrict.
+  epochs              Epoch[]
+  rounds              Round[]
+  players             Player[]
+  positions           Position[]
+  events              Event[]
+  cursor              Cursor?
+  operatorState       OperatorState?
+  referralGrants      ReferralGrant[]
+  referralGrantShares ReferralGrantShare[]
 }
 
+// Pool-scoped tables carry poolAddress, the Pool PDA, as part of their key so
+// the database keeps every pool it has mirrored and a Pool cutover needs no
+// wipe (ADR 0016). The backend reads and writes the Active pool's rows only.
+
 model Epoch {
-  id                BigInt   @id
+  poolAddress       String
+  pool              Pool     @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  id                BigInt
   startsAt          BigInt
   endsAt            BigInt
   status            Int
@@ -75,10 +93,15 @@ model Epoch {
   jackpotAmount     BigInt
   target            Decimal  @db.Decimal(40, 0)
   winner            String?
+
+  // Epoch ids restart at 1 on every pool (ADR 0016).
+  @@id([poolAddress, id])
 }
 
 model Round {
-  id          BigInt  @id
+  poolAddress String
+  pool        Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  id          BigInt
   epochId     BigInt
   startsAt    BigInt
   endsAt      BigInt
@@ -93,10 +116,15 @@ model Round {
   /// set it; the row keeps its last mirrored state instead of being
   /// deleted or blanked (ops-and-envs ticket 08).
   closed      Boolean @default(false)
+
+  // Round ids restart at 1 on every pool (ADR 0016).
+  @@id([poolAddress, id])
 }
 
 model Player {
-  owner        String  @id
+  poolAddress  String
+  pool         Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  owner        String
   principal    BigInt
   entries      BigInt
   weightAcc    Decimal @db.Decimal(40, 0)
@@ -128,33 +156,52 @@ model Player {
   /// Tickets an operator grant_tickets call has credited this Player so far
   /// in bonusEpoch.
   bonusGranted       BigInt
+
+  // On chain a Player is one wallet's account in one pool (ADR 0016). The
+  // owner index serves the two cross-pool "has this wallet ever deposited"
+  // checks: the beta gate and the referral apply.
+  @@id([poolAddress, owner])
+  @@index([owner])
 }
 
 model Position {
+  // The PDA is unique across pools, so it stays the key; poolAddress scopes
+  // reads to the Active pool (ADR 0016).
   address      String  @id
+  poolAddress  String
+  pool         Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
   owner        String
   roundId      BigInt
   tiles        BigInt
   stakePerTile BigInt
+
+  @@index([poolAddress, roundId])
 }
 
-// Finalized program events, decoded from `Program data:` logs.
+// Finalized program events, decoded from `Program data:` logs. The key is
+// already unique across pools; poolAddress scopes reads (ADR 0016).
 model Event {
-  slot      BigInt
-  signature String
-  index     Int
-  name      String
-  data      Json
-  blockTime BigInt?
+  slot        BigInt
+  signature   String
+  index       Int
+  poolAddress String
+  pool        Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  name        String
+  data        Json
+  blockTime   BigInt?
 
   @@id([slot, signature, index])
+  @@index([poolAddress, slot])
 }
 
-// Single row (id = 1): the indexer's signature-catch-up cursor. `updatedAt`
-// is unix seconds of the last successful sync, so GET /status can report a
-// cursor age without guessing from the newest event's block time.
+// One row per pool: the indexer's signature-catch-up cursor. A new pool has
+// no row, so the indexer walks its history from the first signature (ADR
+// 0016). `updatedAt` is unix seconds of the last successful sync, so GET
+// /status can report a cursor age without guessing from the newest event's
+// block time.
 model Cursor {
-  id            Int     @id
+  poolAddress   String  @id
+  pool          Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
   lastSignature String?
   lastSlot      BigInt?
   updatedAt     BigInt?
@@ -223,8 +270,12 @@ model Referral {
 // unique index is the natural key, and createMany({ skipDuplicates: true })
 // uses it to make writing a referrer's row for an epoch idempotent across
 // restarts. txSig fills in once the batch it was sent in confirms; a null
-// txSig on a row this epoch is a grant still owed.
+// txSig on a row this epoch is a grant still owed. Keyed by pool as well:
+// epoch ids restart on every pool, and skipDuplicates would otherwise drop the
+// new pool's grants silently (ADR 0016).
 model ReferralGrant {
+  poolAddress    String
+  pool           Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
   epochId        BigInt
   referrer       String
   amount         BigInt
@@ -236,7 +287,7 @@ model ReferralGrant {
   rateBps        Int
   txSig          String?
 
-  @@unique([epochId, referrer])
+  @@unique([poolAddress, epochId, referrer])
 }
 
 // One referee's share of one referrer's ReferralGrant, epoch-scoped
@@ -250,19 +301,23 @@ model ReferralGrant {
 // `splitShares`), so shares always sum exactly to the grant's `amount`. The
 // indexer's re-clamp loop rescales these the same way, off each row's own
 // existing amount as its weight, whenever a grant's `amount` shrinks after
-// Principal moves.
+// Principal moves. Keyed by pool like ReferralGrant (ADR 0016).
 model ReferralGrantShare {
-  epochId  BigInt
-  referrer String
-  referee  String
-  amount   BigInt
+  poolAddress String
+  pool        Pool   @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
+  epochId     BigInt
+  referrer    String
+  referee     String
+  amount      BigInt
 
-  @@unique([epochId, referrer, referee])
+  @@unique([poolAddress, epochId, referrer, referee])
 }
 
-// Single row (id = 1): what the operator last did, for GET /status.
+// One row per pool: what the operator last did for it, for GET /status. A
+// new pool has no row until its first tick (ADR 0016).
 model OperatorState {
-  id               Int     @id
+  poolAddress      String  @id
+  pool             Pool    @relation(fields: [poolAddress], references: [address], onDelete: Restrict)
   lastTickAt       BigInt?
   /** Wall-clock unix seconds of the scheduler's next planned wake, so the
    *  web status summary can read a long deadline-driven sleep as live

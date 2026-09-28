@@ -14,7 +14,7 @@ import { ConfigService } from "@nestjs/config";
 import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
-import type { Player } from "@prisma/client";
+import type { Player, Pool } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
@@ -47,11 +47,52 @@ function sign(keypair: Keypair, message: string): string {
 
 async function truncate(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE "InviteCode", "InviteRedemption", "Player", "Referral", "ReferralCode"',
+    'TRUNCATE "InviteCode", "InviteRedemption", "Pool", "Player", "Referral", "ReferralCode" CASCADE',
   );
 }
 
+/** Two pools, as after a Pool cutover (ADR 0016). AccessController has no
+ *  notion of which one is Active: its "has this wallet deposited" checks look
+ *  across every pool, so each Player below lives only in the retired one. */
+const ACTIVE_POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
+const RETIRED_POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
+
+const emptyPool = (address: string): Pool => ({
+  address,
+  poolId: 1n,
+  admin: Keypair.generate().publicKey.toBase58(),
+  operator: Keypair.generate().publicKey.toBase58(),
+  pendingAdmin: null,
+  mint: Keypair.generate().publicKey.toBase58(),
+  epochSeconds: 86_400n,
+  epochAnchor: 0n,
+  roundSeconds: 60n,
+  closeBuffer: 15n,
+  minDeposit: 0n,
+  paused: false,
+  currentEpochId: 1n,
+  currentEpochEndsAt: 0n,
+  previousEpochEndsAt: 0n,
+  totalPrincipal: 0n,
+  pendingWithdrawals: 0n,
+  minJackpot: 0n,
+  carryPot: 0n,
+  houseCutBps: 0,
+  baseRateBps: 488,
+  yieldBudget: 0n,
+  ticketsPerUsdc: 1,
+  bonusCapBps: 500,
+  bonusEpoch: 0n,
+  bonusGranted: 0n,
+  version: 1,
+  shutdown: false,
+  gamePaused: false,
+  jackpotPaused: false,
+  updatedSlot: 0n,
+});
+
 const emptyPlayer = (owner: string): Player => ({
+  poolAddress: RETIRED_POOL_ADDRESS,
   owner,
   principal: 0n,
   entries: 0n,
@@ -95,6 +136,9 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     prisma = app.get(PrismaService);
     await truncate(prisma);
+    await prisma.pool.createMany({
+      data: [emptyPool(ACTIVE_POOL_ADDRESS), emptyPool(RETIRED_POOL_ADDRESS)],
+    });
     await prisma.player.create({ data: emptyPlayer(DEPOSITOR) });
 
     await app.init();
@@ -122,7 +166,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       expect(body).toEqual({ allowed: false, reason: "no invite code redeemed" });
     });
 
-    it("allows an existing depositor with no invite redeemed", async () => {
+    it("allows an existing depositor with no invite redeemed, whose only Player is in the retired pool", async () => {
       const { body } = await http.get(`/access/${DEPOSITOR}`).expect(200);
       expect(body).toEqual({ allowed: true, reason: "existing depositor" });
     });
@@ -383,7 +427,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       expect(referral).toBeNull();
     });
 
-    it("does not bind a referral for a wallet that already has a Player", async () => {
+    it("does not bind a referral for a wallet that already has a Player, even in the retired pool only", async () => {
       const owner = Keypair.generate();
       const existingDepositor = Keypair.generate();
       await prisma.player.create({ data: emptyPlayer(existingDepositor.publicKey.toBase58()) });
@@ -413,7 +457,14 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
         });
         expect(referral).toBeNull();
       } finally {
-        await prisma.player.delete({ where: { owner: existingDepositor.publicKey.toBase58() } });
+        await prisma.player.delete({
+          where: {
+            poolAddress_owner: {
+              poolAddress: RETIRED_POOL_ADDRESS,
+              owner: existingDepositor.publicKey.toBase58(),
+            },
+          },
+        });
       }
     });
   });

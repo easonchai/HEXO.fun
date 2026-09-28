@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { clusterFrom, faucetEnabled, genesisMatchesCluster } from "./cluster.js";
+import {
+  clusterFrom,
+  faucetEnabled,
+  gameGated,
+  genesisMatchesCluster,
+  jackpotGated,
+} from "./cluster.js";
 
 describe("VITE_CLUSTER", () => {
   it("defaults to devnet when unset or blank", () => {
@@ -27,6 +33,36 @@ describe("VITE_CLUSTER", () => {
       false,
     );
     expect(faucetEnabled(clusterFrom({}))).toBe(true);
+  });
+});
+
+describe("gameGated", () => {
+  it("gates only on the exact string \"off\"", () => {
+    expect(gameGated("off")).toBe(true);
+  });
+
+  it("shows when unset", () => {
+    expect(gameGated(undefined)).toBe(false);
+  });
+
+  it("shows on a stray value", () => {
+    expect(gameGated("on")).toBe(false);
+    expect(gameGated("OFF")).toBe(false);
+  });
+});
+
+describe("jackpotGated", () => {
+  it("gates only on the exact string \"off\"", () => {
+    expect(jackpotGated("off")).toBe(true);
+  });
+
+  it("shows when unset", () => {
+    expect(jackpotGated(undefined)).toBe(false);
+  });
+
+  it("shows on a stray value", () => {
+    expect(jackpotGated("on")).toBe(false);
+    expect(jackpotGated("OFF")).toBe(false);
   });
 });
 

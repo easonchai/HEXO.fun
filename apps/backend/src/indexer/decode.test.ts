@@ -554,7 +554,8 @@ describe("playerRow", () => {
       bonusEpoch: new BN(0),
       bonusGranted: new BN(0),
     };
-    expect(playerRow(player)).toMatchObject({
+    expect(playerRow(player, POOL)).toMatchObject({
+      poolAddress: POOL,
       pendingWithdraw: 750_000n,
       pendingEpoch: 4n,
     });
@@ -589,7 +590,7 @@ describe("playerRow", () => {
       bonusEpoch: new BN(4),
       bonusGranted: new BN(50_000),
     };
-    expect(playerRow(player)).toMatchObject({
+    expect(playerRow(player, POOL)).toMatchObject({
       principalAcc: "18446744073709551617",
       frozenPrincipalAcc: "500",
       yieldEpoch: 3n,
@@ -614,7 +615,7 @@ describe("roundRow", () => {
       houseCut: new BN(540),
       winningTile: 35,
     };
-    expect(roundRow(round)).toMatchObject({ pot: 9_000n, houseCut: 540n });
+    expect(roundRow(round, POOL)).toMatchObject({ poolAddress: POOL, pot: 9_000n, houseCut: 540n });
   });
 });
 

@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Interval } from "@nestjs/schedule";
+import { Prisma } from "@prisma/client";
 import { getAccount, TokenAccountNotFoundError } from "@solana/spl-token";
 import { PublicKey, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 
@@ -502,6 +503,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ owner: string; amount: bigint }[]> {
     const players = await this.prisma.player.findMany({
       where: {
+        poolAddress: this.chain.poolAddress().toBase58(),
         pendingWithdraw: { gt: 0 },
         pendingEpoch: { lt: currentEpochId },
       },
@@ -521,6 +523,7 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
   ): Promise<string | null> {
     const player = await this.prisma.player.findFirst({
       where: {
+        poolAddress: this.chain.poolAddress().toBase58(),
         regEpoch: epochId,
         regStart: { lte: target.toString() },
         regEnd: { gt: target.toString() },
@@ -564,12 +567,16 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
     return hit ? hit.account.owner.toBase58() : null;
   }
 
-  /** Ticket 07: the Indexer cursor's own staleness, straight off its row. */
+  /** Ticket 07: the Indexer cursor's own staleness, straight off its row.
+   *  The Active pool's row only (ADR 0016): a retired pool's cursor can be
+   *  fresh while this pool's mirror has not synced once. */
   private async indexerCursorInfo(): Promise<{
     ageSeconds: number | null;
     updatedAt: bigint | null;
   }> {
-    const cursor = await this.prisma.cursor.findUnique({ where: { id: 1 } });
+    const cursor = await this.prisma.cursor.findUnique({
+      where: { poolAddress: this.chain.poolAddress().toBase58() },
+    });
     if (cursor?.updatedAt == null) return { ageSeconds: null, updatedAt: null };
     const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
     return {
@@ -636,10 +643,27 @@ export class OperatorService implements OnModuleInit, OnModuleDestroy {
       ...(outcome.epochNoProgress === undefined ? {} : { epochNoProgress: outcome.epochNoProgress }),
       ...(outcome.drawnUnpaid === undefined ? {} : { drawnUnpaid: outcome.drawnUnpaid }),
     };
-    await this.prisma.operatorState.upsert({
-      where: { id: 1 },
-      create: { id: 1, ...fields },
-      update: fields,
-    });
+    const poolAddress = this.chain.poolAddress().toBase58();
+    try {
+      await this.prisma.operatorState.upsert({
+        where: { poolAddress },
+        create: { poolAddress, ...fields },
+        update: fields,
+      });
+    } catch (cause) {
+      // OperatorState references the Pool row (ADR 0016), and the indexer,
+      // not the operator, writes that row. On a fresh database the first
+      // tick can land before the indexer's first sync, and a pool that is
+      // not bootstrapped has no row at all. Nothing is lost by skipping: the
+      // next tick writes the whole state again. P2003 is the only foreign
+      // key this upsert has, so anything else still throws.
+      if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2003") {
+        this.logger.warn(
+          `tick state not recorded: the indexer has not mirrored pool ${poolAddress} yet`,
+        );
+        return;
+      }
+      throw cause;
+    }
   }
 }

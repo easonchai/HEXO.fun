@@ -339,7 +339,11 @@ export class AlertsController {
   }> {
     const cutoff = BigInt(Math.floor(Date.now() / 1000) - VOID_OR_ROLLOVER_RECENT_S);
     const rows = await this.prisma.event.findMany({
-      where: { name: { in: ["RoundVoided", "EpochRolledOver"] }, blockTime: { gte: cutoff } },
+      where: {
+        poolAddress: this.api.poolAddress,
+        name: { in: ["RoundVoided", "EpochRolledOver"] },
+        blockTime: { gte: cutoff },
+      },
       select: { name: true },
       distinct: ["name"],
     });

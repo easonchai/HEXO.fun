@@ -5,13 +5,17 @@ import { describe, expect, it } from "vitest";
 import {
   assertAcceptedMintMatchesPool,
   assertClusterMatchesGenesis,
-  assertNoForeignPoolRows,
+  assertPoolRowsBelongToProgram,
   CLUSTER_GENESIS_HASHES,
   runBootGuards,
   type BootGuardDeps,
 } from "./boot-guard";
+import { poolAddress } from "./chain/pda";
 
-const POOL_ADDRESS = Keypair.generate().publicKey;
+const PROGRAM_ID = new PublicKey("LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6");
+const POOL_ADDRESS = poolAddress(PROGRAM_ID, 2n);
+const ACTIVE = { address: POOL_ADDRESS.toBase58(), poolId: 2n };
+const RETIRED = { address: poolAddress(PROGRAM_ID, 1n).toBase58(), poolId: 1n };
 const MINT = Keypair.generate().publicKey;
 
 function deps(overrides: Partial<BootGuardDeps> = {}): BootGuardDeps {
@@ -29,10 +33,11 @@ function deps(overrides: Partial<BootGuardDeps> = {}): BootGuardDeps {
         },
       },
     },
+    programId: PROGRAM_ID,
     poolAddress: POOL_ADDRESS,
     acceptedMint: MINT.toBase58(),
     cluster: "devnet",
-    mirroredPoolAddresses: async () => [POOL_ADDRESS.toBase58()],
+    mirroredPoolRows: async () => [ACTIVE],
     ...overrides,
   };
 }
@@ -62,22 +67,21 @@ describe("assertAcceptedMintMatchesPool", () => {
   });
 });
 
-describe("assertNoForeignPoolRows", () => {
-  it("passes when every mirrored row is the configured Pool", () => {
-    expect(() =>
-      assertNoForeignPoolRows(POOL_ADDRESS.toBase58(), [POOL_ADDRESS.toBase58()]),
-    ).not.toThrow();
+describe("assertPoolRowsBelongToProgram", () => {
+  it("passes with a retired pool beside the Active one on the same program", () => {
+    expect(() => assertPoolRowsBelongToProgram(PROGRAM_ID, [RETIRED, ACTIVE])).not.toThrow();
   });
 
   it("passes with no mirrored rows yet (a fresh database)", () => {
-    expect(() => assertNoForeignPoolRows(POOL_ADDRESS.toBase58(), [])).not.toThrow();
+    expect(() => assertPoolRowsBelongToProgram(PROGRAM_ID, [])).not.toThrow();
   });
 
-  it("throws when a mirrored row is for a different pool", () => {
-    const foreign = Keypair.generate().publicKey.toBase58();
-    expect(() =>
-      assertNoForeignPoolRows(POOL_ADDRESS.toBase58(), [POOL_ADDRESS.toBase58(), foreign]),
-    ).toThrow(new RegExp(foreign));
+  it("throws, naming the row, when an address is not its poolId's PDA under PROGRAM_ID", () => {
+    const otherProgram = Keypair.generate().publicKey;
+    const foreign = { address: poolAddress(otherProgram, 1n).toBase58(), poolId: 1n };
+    expect(() => assertPoolRowsBelongToProgram(PROGRAM_ID, [ACTIVE, foreign])).toThrow(
+      new RegExp(`${foreign.address}.*wrong DATABASE_URL or PROGRAM_ID`),
+    );
   });
 });
 
@@ -121,11 +125,15 @@ describe("runBootGuards", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("throws when Postgres mirrors a Pool row for a different pool", async () => {
+  it("throws when Postgres mirrors a Pool row from another program", async () => {
     await expect(
       runBootGuards(
-        deps({ mirroredPoolAddresses: async () => [Keypair.generate().publicKey.toBase58()] }),
+        deps({
+          mirroredPoolRows: async () => [
+            { address: Keypair.generate().publicKey.toBase58(), poolId: 2n },
+          ],
+        }),
       ),
-    ).rejects.toThrow(/wrong DATABASE_URL/);
+    ).rejects.toThrow(/wrong DATABASE_URL or PROGRAM_ID/);
   });
 });

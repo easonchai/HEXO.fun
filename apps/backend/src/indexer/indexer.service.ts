@@ -10,7 +10,7 @@ import type { Epoch, Player, Prisma, Round } from "@prisma/client";
 import { PublicKey, type ConfirmedSignatureInfo } from "@solana/web3.js";
 import bs58 from "bs58";
 
-import { generateInviteCode } from "../api/invite-code";
+import { ensureReferralCode } from "../api/referral-code";
 import {
   applyReferralEvent,
   isQualified,
@@ -117,25 +117,6 @@ function referralPrincipalEvents(
 }
 
 /**
- * A fresh code for a wallet's first-deposit ReferralCode (ADR 0014,
- * docs/plan/referral-page ticket 01), reusing InviteCode's own alphabet and
- * length. Unlike InviteCode's insert, which lets its own primary key catch a
- * collision, ReferralCode and InviteCode are separate tables: a generated
- * code landing in the other one would not fail an insert, so this checks
- * both by hand before returning one.
- */
-async function generateReferralCode(tx: Prisma.TransactionClient): Promise<string> {
-  for (;;) {
-    const code = generateInviteCode();
-    const [invite, referral] = await Promise.all([
-      tx.inviteCode.findUnique({ where: { code } }),
-      tx.referralCode.findUnique({ where: { code } }),
-    ]);
-    if (invite === null && referral === null) return code;
-  }
-}
-
-/**
  * The account sync is event driven: a confirmed program log triggers one
  * `getProgramAccountsV2` walk. This sweep is the safety net for a dropped
  * websocket, and it is where the finalized event catch-up runs.
@@ -150,7 +131,6 @@ const FULL_WALK_INTERVAL_MS = 60 * 60 * 1000;
 /** ticket 08: how long `v2Unsupported` sticks before `fetchAll` gives
  *  `getProgramAccountsV2` another try. */
 const V2_UNSUPPORTED_RESET_MS = 60 * 60 * 1000;
-const CURSOR_ID = 1;
 // One page of `getSignaturesForAddress`. `catchUpEvents` pages backwards
 // with `before` past as many of these as the backlog since the cursor takes,
 // so a long outage no longer loses anything older than one page.
@@ -271,6 +251,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   /** Ticket 08's qualify hold period, read once at construction like every
    *  other env-derived constant this service uses. */
   private readonly referralQualifySeconds: number;
+  /** The Active pool's address (the `POOL_ID` PDA). Every pool-scoped row
+   *  this service reads or writes is filtered or keyed by it, so a retired
+   *  pool's rows in the same database are never read as current (ADR 0016). */
+  private readonly activePool: string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -279,6 +263,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   ) {
     this.parser = new EventParser(this.chain.programId, this.chain.program.coder);
     this.referralQualifySeconds = config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
+    this.activePool = this.chain.poolAddress().toBase58();
   }
 
   onModuleInit(): void {
@@ -301,27 +286,29 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
   // ---------------------------------------------------------------- reads
 
   getPlayers(): Promise<Player[]> {
-    return this.prisma.player.findMany();
+    return this.prisma.player.findMany({ where: { poolAddress: this.activePool } });
   }
 
   /** The round the operator may still act on, newest first. */
   getOpenRound(): Promise<Round | null> {
     return this.prisma.round.findFirst({
-      where: { status: { in: LIVE_ROUND_STATUSES } },
+      where: { poolAddress: this.activePool, status: { in: LIVE_ROUND_STATUSES } },
       orderBy: { id: "desc" },
     });
   }
 
   getEpoch(id: bigint): Promise<Epoch | null> {
-    return this.prisma.epoch.findUnique({ where: { id } });
+    return this.prisma.epoch.findUnique({
+      where: { poolAddress_id: { poolAddress: this.activePool, id } },
+    });
   }
 
   /** Owners the operator still owes a `register` for this ended epoch. */
   async playersToRegister(epochId: bigint): Promise<string[]> {
-    const epoch = await this.prisma.epoch.findUnique({ where: { id: epochId } });
+    const epoch = await this.getEpoch(epochId);
     if (!epoch) return [];
     const players = await this.prisma.player.findMany({
-      where: { regEpoch: { not: epochId } },
+      where: { poolAddress: this.activePool, regEpoch: { not: epochId } },
     });
     return players
       .filter((player) => registrationWeight(player, epoch) > 0n)
@@ -335,12 +322,15 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    */
   async unsettledPositions(): Promise<{ address: string; owner: string; roundId: bigint }[]> {
     const terminalRounds = await this.prisma.round.findMany({
-      where: { status: { notIn: LIVE_ROUND_STATUSES } },
+      where: { poolAddress: this.activePool, status: { notIn: LIVE_ROUND_STATUSES } },
       select: { id: true },
     });
     if (terminalRounds.length === 0) return [];
     return this.prisma.position.findMany({
-      where: { roundId: { in: terminalRounds.map((round) => round.id) } },
+      where: {
+        poolAddress: this.activePool,
+        roundId: { in: terminalRounds.map((round) => round.id) },
+      },
       select: { address: true, owner: true, roundId: true },
     });
   }
@@ -354,13 +344,13 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    */
   async roundsToClose(): Promise<bigint[]> {
     const rounds = await this.prisma.round.findMany({
-      where: { status: { notIn: LIVE_ROUND_STATUSES }, closed: false },
+      where: { poolAddress: this.activePool, status: { notIn: LIVE_ROUND_STATUSES }, closed: false },
       select: { id: true },
       orderBy: { id: "asc" },
     });
     if (rounds.length === 0) return [];
     const busyRounds = await this.prisma.position.findMany({
-      where: { roundId: { in: rounds.map((round) => round.id) } },
+      where: { poolAddress: this.activePool, roundId: { in: rounds.map((round) => round.id) } },
       select: { roundId: true },
       distinct: ["roundId"],
     });
@@ -378,9 +368,14 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * re-clamped against the freshest Player data first (see the loop below).
    */
   async referralGrantsDue(epochId: bigint): Promise<{ referrer: string; amount: bigint }[]> {
-    const pool = await this.prisma.pool.findFirst();
+    const poolAddress = this.activePool;
+    const pool = await this.prisma.pool.findUnique({ where: { address: poolAddress } });
     if (!pool) return [];
 
+    // Referral is wallet-level and outlives any one pool; everything the
+    // bonus is computed against below (Player, ReferralGrant) is the Active
+    // pool's only, so a referee with no Player here counts for nothing
+    // after a cutover (ADR 0016).
     const referrals = await this.prisma.referral.findMany({
       select: { referee: true, referrer: true, principal: true, aboveSince: true },
     });
@@ -396,7 +391,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     }
 
     const referrerPlayers = await this.prisma.player.findMany({
-      where: { owner: { in: [...byReferrer.keys()] } },
+      where: { poolAddress, owner: { in: [...byReferrer.keys()] } },
       select: { owner: true, principal: true, bonusEpoch: true, bonusGranted: true },
     });
     const playerByOwner = new Map(referrerPlayers.map((player) => [player.owner, player]));
@@ -440,7 +435,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     // on-chain call then refused outright once summed with what earlier
     // grants this epoch had already spent.
     const recordedThisEpoch = await this.prisma.referralGrant.findMany({
-      where: { epochId },
+      where: { poolAddress, epochId },
       select: { referrer: true, amount: true },
     });
     const alreadyGrantedThisEpoch = recordedThisEpoch.reduce(
@@ -468,13 +463,17 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         // comment on `uncapped` below) does not get its shares re-derived
         // from qualified referees that may have changed since.
         const already = await tx.referralGrant.findMany({
-          where: { epochId, referrer: { in: bonuses.map((bonus) => bonus.referrer) } },
+          where: { poolAddress, epochId, referrer: { in: bonuses.map((bonus) => bonus.referrer) } },
           select: { referrer: true },
         });
         const alreadyWritten = new Set(already.map((row) => row.referrer));
 
+        // skipDuplicates keys on (poolAddress, epochId, referrer): epoch ids
+        // restart on every pool, so without poolAddress a retired pool's
+        // epoch-1 row would silently swallow this one (ADR 0016).
         await tx.referralGrant.createMany({
           data: bonuses.map((bonus) => ({
+            poolAddress,
             epochId,
             referrer: bonus.referrer,
             amount: bonus.amount,
@@ -495,6 +494,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           .flatMap((bonus) =>
             splitShares(bonus.amount, qualifiedRefereesByReferrer.get(bonus.referrer) ?? []).map(
               (share) => ({
+                poolAddress,
                 epochId,
                 referrer: bonus.referrer,
                 referee: share.referee,
@@ -511,7 +511,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     // ticket 11: a deterministic order, so a batch built from this list is
     // the same set on a retry regardless of Postgres's own row order.
     const pending = await this.prisma.referralGrant.findMany({
-      where: { epochId, txSig: null },
+      where: { poolAddress, epochId, txSig: null },
       select: { referrer: true, amount: true },
       orderBy: { referrer: "asc" },
     });
@@ -542,7 +542,9 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       await this.prisma.$transaction(async (tx) => {
         for (const grant of changed) {
           await tx.referralGrant.update({
-            where: { epochId_referrer: { epochId, referrer: grant.referrer } },
+            where: {
+              poolAddress_epochId_referrer: { poolAddress, epochId, referrer: grant.referrer },
+            },
             data: { amount: grant.amount },
           });
           // referral-page ticket 05: rescale this referrer's shares off
@@ -552,7 +554,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           // without re-deriving them from referee Principal data that may
           // have moved again since they were written.
           const shares = await tx.referralGrantShare.findMany({
-            where: { epochId, referrer: grant.referrer },
+            where: { poolAddress, epochId, referrer: grant.referrer },
             select: { referee: true, amount: true },
           });
           if (shares.length === 0) continue;
@@ -563,7 +565,8 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           for (const share of rescaled) {
             await tx.referralGrantShare.update({
               where: {
-                epochId_referrer_referee: {
+                poolAddress_epochId_referrer_referee: {
+                  poolAddress,
                   epochId,
                   referrer: grant.referrer,
                   referee: share.referee,
@@ -584,7 +587,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     txSig: string,
   ): Promise<void> {
     await this.prisma.referralGrant.updateMany({
-      where: { epochId, referrer: { in: [...referrers] } },
+      where: { poolAddress: this.activePool, epochId, referrer: { in: [...referrers] } },
       data: { txSig },
     });
   }
@@ -595,11 +598,15 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      // Sync first: its full walk upserts the Active pool's Pool row, which
+      // every Event, Epoch, Round, Player, Position and Cursor row written
+      // after it references by foreign key (ADR 0016). On a brand-new pool
+      // that walk is what creates the row at all.
       await this.requestSync();
       await this.catchUpEvents();
       await this.prisma.cursor.upsert({
-        where: { id: CURSOR_ID },
-        create: { id: CURSOR_ID, updatedAt: nowSeconds() },
+        where: { poolAddress: this.activePool },
+        create: { poolAddress: this.activePool, updatedAt: nowSeconds() },
         update: { updatedAt: nowSeconds() },
       });
       this.noteRecovery();
@@ -654,11 +661,13 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * call.
    */
   private async refreshFromLogs(logs: string[], slot: bigint): Promise<void> {
+    // The Pool goes in first: `wanted` is applied in insertion order, so its
+    // row lands before the rows below that reference it (ADR 0016).
     const wanted = new Map<string, WantedAccount>();
-    wanted.set(this.chain.poolAddress().toBase58(), { kind: "pool" });
+    wanted.set(this.activePool, { kind: "pool" });
 
     const [pool, openRound] = await Promise.all([
-      this.prisma.pool.findFirst(),
+      this.prisma.pool.findUnique({ where: { address: this.activePool } }),
       this.getOpenRound(),
     ]);
     const currentEpochId = pool?.currentEpochId ?? 0n;
@@ -720,10 +729,11 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     const pubkey = new PublicKey(address);
     if (data === undefined) {
       if (wanted.kind !== "position") return;
-      await this.prisma.position.deleteMany({ where: { address } });
+      await this.prisma.position.deleteMany({ where: { poolAddress: this.activePool, address } });
       this.freshWrites.set(address, slot);
       return;
     }
+    const poolAddress = this.activePool;
     switch (wanted.kind) {
       case "pool": {
         const row = poolRow(pubkey, coder.decode<DecodedPool>(ACCOUNT.pool, data), slot);
@@ -731,18 +741,30 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         break;
       }
       case "epoch": {
-        const row = epochRow(coder.decode<DecodedEpoch>(ACCOUNT.epoch, data));
-        await this.prisma.epoch.upsert({ where: { id: row.id }, create: row, update: row });
+        const row = epochRow(coder.decode<DecodedEpoch>(ACCOUNT.epoch, data), poolAddress);
+        await this.prisma.epoch.upsert({
+          where: { poolAddress_id: { poolAddress, id: row.id } },
+          create: row,
+          update: row,
+        });
         break;
       }
       case "round": {
-        const row = roundRow(coder.decode<DecodedRound>(ACCOUNT.round, data));
-        await this.prisma.round.upsert({ where: { id: row.id }, create: row, update: row });
+        const row = roundRow(coder.decode<DecodedRound>(ACCOUNT.round, data), poolAddress);
+        await this.prisma.round.upsert({
+          where: { poolAddress_id: { poolAddress, id: row.id } },
+          create: row,
+          update: row,
+        });
         break;
       }
       case "player": {
-        const row = playerRow(coder.decode<DecodedPlayer>(ACCOUNT.player, data));
-        await this.prisma.player.upsert({ where: { owner: row.owner }, create: row, update: row });
+        const row = playerRow(coder.decode<DecodedPlayer>(ACCOUNT.player, data), poolAddress);
+        await this.prisma.player.upsert({
+          where: { poolAddress_owner: { poolAddress, owner: row.owner } },
+          create: row,
+          update: row,
+        });
         break;
       }
       case "position": {
@@ -750,6 +772,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
           pubkey,
           coder.decode<DecodedPosition>(ACCOUNT.position, data),
           wanted.roundId,
+          poolAddress,
         );
         await this.prisma.position.upsert({
           where: { address: row.address },
@@ -793,9 +816,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * by Anchor discriminator locally, then one Prisma transaction per type.
    *
    * Every account is checked against the PDA it must live at for the
-   * configured pool. Epoch, Round and Player carry no pool field, and the
-   * Postgres tables are keyed by epoch id, round id and owner, so a second
-   * pool's accounts would collide with this one's.
+   * configured pool. Epoch, Round and Player carry no pool field on chain,
+   * and the walk returns every pool the program owns, so this is what keeps
+   * a sibling pool's accounts from being written under the Active pool's
+   * address (ADR 0016).
    *
    * A closed Position never appears here to begin with on an incremental
    * walk (an absent account looks identical to an unchanged one), so a
@@ -808,6 +832,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    */
   async syncAccounts(): Promise<void> {
     const pool = this.chain.poolAddress();
+    const poolAddress = this.activePool;
     const fullWalk =
       this.lastSyncedSlot === undefined ||
       this.v2Unsupported ||
@@ -845,8 +870,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
             !this.behindLogPath(pubkey, slot),
         )
         .map(({ account }) => {
-          const row = epochRow(account);
-          return this.prisma.epoch.upsert({ where: { id: row.id }, create: row, update: row });
+          const row = epochRow(account, poolAddress);
+          return this.prisma.epoch.upsert({
+            where: { poolAddress_id: { poolAddress, id: row.id } },
+            create: row,
+            update: row,
+          });
         }),
     );
 
@@ -859,8 +888,12 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       rounds
         .filter(({ pubkey }) => !this.behindLogPath(pubkey, slot))
         .map(({ account }) => {
-          const row = roundRow(account);
-          return this.prisma.round.upsert({ where: { id: row.id }, create: row, update: row });
+          const row = roundRow(account, poolAddress);
+          return this.prisma.round.upsert({
+            where: { poolAddress_id: { poolAddress, id: row.id } },
+            create: row,
+            update: row,
+          });
         }),
     );
     // A full walk sees when a Round account is gone (`close_round` reclaimed
@@ -872,8 +905,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     // below is the backstop for a missed `PositionSettled` (ticket 06).
     if (fullWalk) {
       const liveRoundIds = rounds.map(({ account }) => BigInt(account.roundId.toString()));
+      // Scoped to the Active pool: a retired pool's rounds are absent from
+      // this walk too, but they are not this walk's to mark (ADR 0016).
       const stillOpen = await this.prisma.round.findMany({
-        where: { id: { notIn: liveRoundIds }, closed: false },
+        where: { poolAddress, id: { notIn: liveRoundIds }, closed: false },
         select: { id: true },
       });
       // The same `behindLogPath` guard as the upsert above, keyed by the
@@ -885,7 +920,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         .map((round) => round.id)
         .filter((id) => !this.behindLogPath(this.chain.roundAddress(id, pool), slot));
       if (toClose.length > 0) {
-        await this.prisma.round.updateMany({ where: { id: { in: toClose } }, data: { closed: true } });
+        await this.prisma.round.updateMany({
+          where: { poolAddress, id: { in: toClose } },
+          data: { closed: true },
+        });
       }
     }
 
@@ -898,9 +936,9 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
             !this.behindLogPath(pubkey, slot),
         )
         .map(({ account }) => {
-          const row = playerRow(account);
+          const row = playerRow(account, poolAddress);
           return this.prisma.player.upsert({
-            where: { owner: row.owner },
+            where: { poolAddress_owner: { poolAddress, owner: row.owner } },
             create: row,
             update: row,
           });
@@ -924,8 +962,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         select: { referee: true, principal: true, aboveSince: true },
       });
       if (referrals.length > 0) {
+        // Active pool only: a referee with no Player here yet keeps the
+        // Principal their last event left (spec's "Referral job" decision).
         const referralPlayers = await this.prisma.player.findMany({
-          where: { owner: { in: referrals.map((referral) => referral.referee) } },
+          where: { poolAddress, owner: { in: referrals.map((referral) => referral.referee) } },
           select: { owner: true, principal: true },
         });
         const principalByOwner = new Map(
@@ -966,7 +1006,7 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         const roundId = roundIds.get(account.round.toBase58());
         if (roundId === undefined) return [];
         if (!pubkey.equals(this.chain.positionAddress(account.round, account.owner))) return [];
-        return [positionRow(pubkey, account, roundId)];
+        return [positionRow(pubkey, account, roundId, poolAddress)];
       },
     );
     const live = positions.map((row) => row.address);
@@ -987,8 +1027,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       // addresses are spared the same way its rows are.
       ...(fullWalk
         ? [
+            // Scoped like the Round close above: absence from this pool's
+            // walk says nothing about a retired pool's Positions.
             this.prisma.position.deleteMany({
-              where: { address: { notIn: [...live, ...this.freshWrites.keys()] } },
+              where: { poolAddress, address: { notIn: [...live, ...this.freshWrites.keys()] } },
             }),
           ]
         : []),
@@ -1212,7 +1254,9 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     events: DecodedEvent[],
     options: { advanceCursor: boolean } = { advanceCursor: true },
   ): Promise<number> {
+    const poolAddress = this.activePool;
     const rows = events.map((event, index) => ({
+      poolAddress,
       slot: batch.slot,
       signature: batch.signature,
       index,
@@ -1253,28 +1297,22 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.event.createMany({ data: rows, skipDuplicates: true });
       for (const { owner, roundId } of closed) {
-        await tx.position.deleteMany({ where: { owner, roundId } });
+        await tx.position.deleteMany({ where: { poolAddress, owner, roundId } });
       }
       for (const { id } of closedRounds) {
         // updateMany, not update: a row this transaction has not seen yet
         // (an out-of-order replay) is a no-op here, and the next sync or
         // sweep still upserts the Round itself.
-        await tx.round.updateMany({ where: { id }, data: { closed: true } });
+        await tx.round.updateMany({ where: { poolAddress, id }, data: { closed: true } });
       }
       for (const owner of depositors) {
         // ADR 0014: a wallet's first deposit gets it a ReferralCode, not a
         // depositor-owned InviteCode; InviteCode.ownerWallet is now
-        // Admin-only.
-        const owned = await tx.referralCode.findUnique({ where: { owner } });
-        if (owned === null) {
-          await tx.referralCode.create({
-            data: {
-              code: await generateReferralCode(tx),
-              owner,
-              createdAt: nowSeconds(),
-            },
-          });
-        }
+        // Admin-only. "First" means first ever, across pools: the check is
+        // on ReferralCode itself, which is wallet-level, so a depositor from
+        // a retired pool keeps the code they have and never trips the
+        // unique owner index on their first deposit into a new one (ADR 0016).
+        await ensureReferralCode(tx, owner);
       }
       if (referralEvents.length > 0 && created.count > 0) {
         // `created.count === 0` means every row in this batch already
@@ -1307,15 +1345,15 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
         }
       }
       if (options.advanceCursor) {
-        const cursor = await tx.cursor.findUnique({ where: { id: CURSOR_ID } });
+        const cursor = await tx.cursor.findUnique({ where: { poolAddress } });
         // Only the catch-up poll walks backwards, and it must not drag the
         // resume point back with it.
         const reached = cursor?.lastSlot ?? null;
         if (reached === null || reached <= batch.slot) {
           const at = { lastSignature: batch.signature, lastSlot: batch.slot, updatedAt: nowSeconds() };
           await tx.cursor.upsert({
-            where: { id: CURSOR_ID },
-            create: { id: CURSOR_ID, ...at },
+            where: { poolAddress },
+            create: { poolAddress, ...at },
             update: at,
           });
         }
@@ -1340,7 +1378,9 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
    * which only happens once.
    */
   private async catchUpEvents(): Promise<void> {
-    const cursor = await this.prisma.cursor.findUnique({ where: { id: CURSOR_ID } });
+    // A new pool has no Cursor row, so this walks its whole history rather
+    // than hunting for a retired pool's last signature (ADR 0016).
+    const cursor = await this.prisma.cursor.findUnique({ where: { poolAddress: this.activePool } });
     const backlog: ConfirmedSignatureInfo[] = [];
     let before: string | undefined;
     for (;;) {
@@ -1432,6 +1472,11 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
       (logs, context) => {
         if (logs.err) return;
         void this.enqueue(async () => {
+          // Before the first sweep lands there may be no Pool row for the
+          // Event's foreign key (a fresh pool, ADR 0016). Dropping the event
+          // loses nothing: this path never moves the cursor, so catch-up
+          // replays it once the sweep has written the Pool.
+          if (this.lastSyncedSlot === undefined) return;
           const events = decodeEventLogs(this.parser, logs.logs);
           if (events.length === 0) return;
           await this.persist(

@@ -124,7 +124,6 @@ export function Referrals({ owner, onConnect, onDeposit }: ReferralsScreenProps)
             if (hero.kind === "has-code") referrals.copyLink(hero.code);
           }}
           onConnect={onConnect}
-          onDeposit={onDeposit}
         />
 
         <div className="referrals-row">
@@ -152,13 +151,11 @@ function ReferralHero({
   copied,
   onCopy,
   onConnect,
-  onDeposit,
 }: {
   state: ReferralHeroState;
   copied: boolean;
   onCopy: () => void;
   onConnect: () => void;
-  onDeposit: () => void;
 }) {
   return (
     <section className="referral-hero" aria-label="Invite your team">
@@ -214,17 +211,7 @@ function ReferralHero({
               </button>
             </>
           ) : state.kind === "no-code" ? (
-            <>
-              <span className="referral-code-placeholder">Deposit once to get your code</span>
-              <button
-                type="button"
-                className="referral-pill-btn"
-                data-testid="referrals-deposit"
-                onClick={onDeposit}
-              >
-                DEPOSIT
-              </button>
-            </>
+            <span className="referral-code-placeholder">Getting your code…</span>
           ) : (
             <>
               <span className="referral-code-value" data-testid="referral-code">

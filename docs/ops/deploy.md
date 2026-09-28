@@ -242,6 +242,23 @@ one yet. The path, when it happens:
 4. **Timelock**: a delay between Squads approval and execution, on top of Squads itself, is a
    later addition; not implemented here.
 
+## Vercel
+
+Two feature gates live only on the Vercel project, never on chain or in a committed env file:
+`VITE_GATE_GAME` and `VITE_GATE_JACKPOT` (see `CONTEXT.md`, "Feature gate"). Set to `off`, a gate covers
+its feature with a "COMING SOON" card of the same size; unset, or any other value, the feature shows.
+Both are Vite build-time variables, so a change only reaches the site on the next build.
+
+Mainnet starts with both set to `off`:
+
+```
+VITE_GATE_GAME=off
+VITE_GATE_JACKPOT=off
+```
+
+Remove each one only after its chain switch is confirmed live in `GET /state`, then redeploy; see
+`runbook.md`, "Launch week", for the order.
+
 ## Launch checklist
 
 Before a real mainnet deploy:
