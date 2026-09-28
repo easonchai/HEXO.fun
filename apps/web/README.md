@@ -14,10 +14,10 @@ pnpm --filter @hexvault/web dev        # Vite dev server
 ```
 
 Copy `.env.example` to `.env.local` and adjust. The five variables are
-`VITE_RPC_URL`, `VITE_API_URL`, `VITE_PROGRAM_ID`, `VITE_POOL_ID` and
+`VITE_PUBLIC_RPC_URL`, `VITE_API_URL`, `VITE_PROGRAM_ID`, `VITE_POOL_ID` and
 `VITE_PRIVY_APP_ID`; every one has a working default for a local validator.
 `VITE_BURNER_WALLET=1` adds the dev burner wallet, and only when
-`VITE_RPC_URL` points at localhost.
+`VITE_PUBLIC_RPC_URL` points at localhost.
 
 ## Scripts
 
