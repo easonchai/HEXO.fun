@@ -17,7 +17,7 @@ import { Vault, type VaultMode } from "./screens/Vault.js";
 import { WeeklyDraw } from "./screens/WeeklyDraw.js";
 import { awaitSendResult, buyPosition, settlePosition } from "./actions.js";
 import { apiBaseUrl, fetchFeed, type RoundDto } from "./api.js";
-import { ACCEPTED_MINT, PROGRAM_ID, POOL_ID, poolAddress, type HexVaultProgram } from "./chain.js";
+import { PROGRAM_ID, POOL_ID, poolAddress, type HexVaultProgram } from "./chain.js";
 import { idl } from "./idl.js";
 import {
   covers,
@@ -146,7 +146,7 @@ export function App() {
   const ownerKey = publicKey?.toBase58();
   const statePoll = useStatePoll(apiBaseUrl(), ownerKey);
   const state = statePoll.data;
-  // Ticket 14: refuses to sign against any Pool or mint other than this
+  // Ticket 14: refuses to sign against any Pool other than this
   // build's own configuration. `/state` is unauthenticated input; a
   // compromised or misconfigured backend could otherwise route a signature
   // at an attacker's Pool. A mismatch (or a bad RPC genesis hash below)
@@ -154,7 +154,7 @@ export function App() {
   // as "nothing to sign against yet".
   const expectedPoolAddress = useMemo(() => poolAddress(POOL_ID), []);
   const poolResult = state
-    ? poolFromDto(state.pool, state.priorityFeeMicroLamports, expectedPoolAddress, ACCEPTED_MINT)
+    ? poolFromDto(state.pool, state.priorityFeeMicroLamports, expectedPoolAddress)
     : null;
   const genesisMismatch = useGenesisCheck(connection);
   const pool = poolResult?.ok && !genesisMismatch ? poolResult.pool : null;

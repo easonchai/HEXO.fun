@@ -8,7 +8,6 @@ const FULL_ENV = {
   VITE_PRIVY_APP_ID: "app-id",
   VITE_PROGRAM_ID: "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6",
   VITE_POOL_ID: "1",
-  VITE_ACCEPTED_MINT: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
   VITE_PUBLIC_RPC_URL: "https://rpc.example.com",
 };
 
@@ -24,7 +23,7 @@ describe("validateProdEnv", () => {
 
   it("names every missing value at once, not just the first", () => {
     expect(() => validateProdEnv({})).toThrow(
-      /VITE_CLUSTER.*VITE_API_URL.*VITE_PRIVY_APP_ID.*VITE_PROGRAM_ID.*VITE_POOL_ID.*VITE_ACCEPTED_MINT.*VITE_PUBLIC_RPC_URL/s,
+      /VITE_CLUSTER.*VITE_API_URL.*VITE_PRIVY_APP_ID.*VITE_PROGRAM_ID.*VITE_POOL_ID.*VITE_PUBLIC_RPC_URL/s,
     );
   });
 

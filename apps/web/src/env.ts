@@ -9,8 +9,7 @@
 
 /** Every value a production build needs a real one for; each also has its
  *  own build-time or load-time check (VITE_CLUSTER via `clusterFrom`,
- *  VITE_PROGRAM_ID via `programIdFrom`, VITE_ACCEPTED_MINT via
- *  `acceptedMintFrom`) — this is the one place that checks all of them are
+ *  VITE_PROGRAM_ID via `programIdFrom`) — this is the one place that checks all of them are
  *  present together. */
 const REQUIRED_IN_PRODUCTION = [
   "VITE_CLUSTER",
@@ -18,7 +17,6 @@ const REQUIRED_IN_PRODUCTION = [
   "VITE_PRIVY_APP_ID",
   "VITE_PROGRAM_ID",
   "VITE_POOL_ID",
-  "VITE_ACCEPTED_MINT",
   "VITE_PUBLIC_RPC_URL",
 ] as const;
 

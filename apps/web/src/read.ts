@@ -73,23 +73,23 @@ export function safePriorityFee(raw: number): number {
 
 /**
  * Ticket 14: the app signs only against the Pool address its own
- * `VITE_POOL_ID` derives, and only against its own configured mint. `/state`
- * is unauthenticated input; a compromised or misconfigured backend could
- * otherwise hand a signature a different Pool or a worthless mint to spend
- * against. `expectedMint` is null only in dev, where nothing pins it.
+ * `VITE_POOL_ID` derives. `/state` is unauthenticated input; a compromised
+ * or misconfigured backend could otherwise hand a signature a different Pool
+ * to spend against. The mint is taken from `/state` as is: the backend's own
+ * boot guard checks it against the on-chain Pool (beta-launch-fixes 10), and
+ * the Pool address pin above is what stops a swapped pool.
  */
 export type PoolResult =
   | { ok: true; pool: PoolLike }
   | { ok: false; reason: string };
 
 /** Pure mapping from the API's decimal-string shape to the PublicKey/bigint
- *  one signing code needs; refuses a Pool or mint that does not match what
- *  this build is configured for. */
+ *  one signing code needs; refuses a Pool that does not match what this
+ *  build is configured for. */
 export function poolFromDto(
   dto: PoolDto & { closeBuffer: string; minDeposit: string },
   priorityFeeMicroLamports: number,
   expectedAddress: PublicKey,
-  expectedMint: PublicKey | null,
 ): PoolResult {
   const address = new PublicKey(dto.address);
   if (!address.equals(expectedAddress)) {
@@ -99,12 +99,6 @@ export function poolFromDto(
     };
   }
   const mint = new PublicKey(dto.mint);
-  if (expectedMint && !mint.equals(expectedMint)) {
-    return {
-      ok: false,
-      reason: `Accepted mint does not match this app's configuration (expected ${expectedMint.toBase58()}).`,
-    };
-  }
   return {
     ok: true,
     pool: {
