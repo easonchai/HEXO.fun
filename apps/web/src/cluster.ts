@@ -33,6 +33,17 @@ export const faucetEnabled = (cluster: Cluster): boolean =>
   cluster === "devnet";
 
 /**
+ * Ticket 01 (feature-gates): the game gate. `off` covers the PLAY tab and
+ * board with a same-sized "Coming soon" card; unset or any other value
+ * means shown. Exact and case-sensitive, so a typo fails open (shown)
+ * rather than silently hiding a live feature.
+ */
+export const gameGated = (raw: string | undefined): boolean => raw === "off";
+
+/** The jackpot gate; same rule as `gameGated`, its own variable. */
+export const jackpotGated = (raw: string | undefined): boolean => raw === "off";
+
+/**
  * Ticket 14: each cluster's own genesis block hash, checked against the
  * configured RPC at load so a `VITE_PUBLIC_RPC_URL` pointed at the wrong
  * cluster is caught before anything signs against it. Fixed values (Solana

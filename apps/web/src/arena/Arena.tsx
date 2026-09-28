@@ -7,6 +7,8 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { computeGeo } from "./geo.js";
 import { Textile } from "./Textile.js";
+import { GAME_GATED } from "../chain.js";
+import { ComingSoon } from "../ComingSoon.js";
 import { timerText } from "../engine.js";
 import { formatAtomic2 } from "../lib/money.js";
 import type { EngineOutput } from "../useRoundEngine.js";
@@ -404,6 +406,10 @@ export function Arena({
 
         <RoundPotPill value={pot} houseCutBps={houseCutBps} />
       </div>
+
+      {/* Game gate (ticket 02, feature-gates): covers the board instead of
+          consulting idleLabel; the label sits underneath, blurred out. */}
+      {GAME_GATED ? <ComingSoon /> : null}
 
       {/* Round win takeover */}
       {takeover ? (

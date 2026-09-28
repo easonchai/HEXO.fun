@@ -18,6 +18,7 @@ import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { isUniqueConstraintViolation } from "./access.controller";
 import { applyReferralMessage, normalizeInviteCode, verifyApplyReferralSignature } from "./invite-code";
+import { ensureReferralCode } from "./referral-code";
 import { buildReferralsResponse, type ReferralInput } from "./referral-summary";
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
@@ -112,10 +113,7 @@ export class ReferralsController {
     const qualifySeconds = this.config.get("REFERRAL_QUALIFY_SECONDS", { infer: true });
 
     const [referralCode, referralRows, pool] = await Promise.all([
-      this.prisma.referralCode.findUnique({
-        where: { owner: wallet },
-        select: { code: true },
-      }),
+      this.referralCodeFor(wallet),
       this.prisma.referral.findMany({
         where: { referrer: wallet },
         select: { referee: true, aboveSince: true, boundAt: true },
@@ -135,7 +133,7 @@ export class ReferralsController {
     }));
 
     return buildReferralsResponse(
-      referralCode?.code ?? null,
+      referralCode,
       referrals,
       nowSeconds(),
       qualifySeconds,
@@ -143,6 +141,22 @@ export class ReferralsController {
       cursorRaw ?? null,
       parseReferralsLimit(limitRaw),
     );
+  }
+
+  /**
+   * The wallet's Referral code, minting one for a wallet past the beta gate
+   * that has not deposited yet so it can refer before it deposits (its own
+   * bonus stays capped by its own Principal, which the Referral's Bonus card
+   * already shows). A depositor's code comes from the indexer. Gated on an
+   * InviteRedemption so this unthrottled GET can't mint rows for arbitrary
+   * addresses.
+   */
+  private async referralCodeFor(wallet: string): Promise<string | null> {
+    const owned = await this.prisma.referralCode.findUnique({ where: { owner: wallet } });
+    if (owned !== null) return owned.code;
+    const redeemed = await this.prisma.inviteRedemption.findUnique({ where: { wallet } });
+    if (redeemed === null) return null;
+    return ensureReferralCode(this.prisma, wallet);
   }
 
   /**

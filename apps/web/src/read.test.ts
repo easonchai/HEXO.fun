@@ -59,19 +59,25 @@ describe("isMissingTokenAccount", () => {
   });
 });
 
+const UNSPONSORED = { sponsored: false };
+
 describe("solRentWarning", () => {
+  it("says nothing for a Privy-sponsored wallet, whose send covers rent", () => {
+    expect(solRentWarning(0n, { sponsored: true })).toBeNull();
+  });
+
   it("warns naming the amount when SOL is below the rent floor", () => {
-    const warning = solRentWarning(0n);
+    const warning = solRentWarning(0n, UNSPONSORED);
     expect(warning).toContain("SOL");
     expect(warning).toMatch(/0\.003/);
   });
 
   it("says nothing once the wallet covers the floor", () => {
-    expect(solRentWarning(MIN_SOL_LAMPORTS)).toBeNull();
-    expect(solRentWarning(MIN_SOL_LAMPORTS + 1n)).toBeNull();
+    expect(solRentWarning(MIN_SOL_LAMPORTS, UNSPONSORED)).toBeNull();
+    expect(solRentWarning(MIN_SOL_LAMPORTS + 1n, UNSPONSORED)).toBeNull();
   });
 
   it("says nothing while the balance is still unknown", () => {
-    expect(solRentWarning(null)).toBeNull();
+    expect(solRentWarning(null, UNSPONSORED)).toBeNull();
   });
 });

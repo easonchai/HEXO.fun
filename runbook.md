@@ -378,17 +378,22 @@
 
   Launch week
 
-  The program already accepts deposits with no Epoch: a deposit before Epoch 1 freezes no weight and Epoch 1's accrual starts from
-  `current_epoch_start` regardless. Set `LAUNCH_AT` (an ISO timestamp, apps/backend/.env) to open a pool for deposits before the
-  first Draw: the Operator's tick step 3 (`begin_epoch`) waits for it, and nothing else in the tick changes. `GET /state` and
-  `GET /status` return a null current Epoch plus the configured `launchAt` the whole time, instead of 404ing; the web shows "first
-  draw in <countdown>" on Home, Vault and Dashboard, deposits and withdrawal requests stay open, and buying Tickets stays hidden
-  (Tickets bought before Epoch 1 begins would reset and are refused on chain: `buy_tickets` requires `current_epoch_id > 0`).
+  A new pool starts with the game and the jackpot both paused; start each on chain with the admin CLI's `pause-game`,
+  `start-game`, `pause-jackpot` and `start-jackpot` (see "Standing up a fresh pool" above for the exact commands and who
+  can sign them). `GET /state`'s `pool.gamePaused` and `pool.jackpotPaused` say which switch is on; check there rather
+  than assuming a command landed.
 
-  Bring a launch week up the same way as any other bootstrap: run `bootstrap` (creates the Pool with `currentEpochId` 0), set
-  `LAUNCH_AT` to whenever the first Draw should start, bring the backend up, and invite depositors. Once the chain clock passes
-  `LAUNCH_AT`, the next tick begins Epoch 1 normally and the countdown clears itself.
+  Vercel adds a second, independent cover: `VITE_GATE_GAME` and `VITE_GATE_JACKPOT` on the project's env vars. Set to
+  `off`, a gate covers its feature with a same-sized "COMING SOON" card and the chain switch is not consulted. Unset, or
+  set to anything else, the feature falls through to the chain switch's own copy: "GAME PAUSED", "STARTS SOON", "DRAW
+  PAUSED". Both are Vite build-time variables, so a change only reaches the site on the next build.
 
-  Base yield is credited per ended Epoch, so a launch week earns none — if the beta promises yield for that week, fund it as a
-  manual grant. Leave `LAUNCH_AT` unset (or past) for a pool that should begin its first Epoch immediately, which is today's
-  behaviour.
+  Launching a gated feature: start it on chain, confirm `/state` shows the switch off, then remove the gate on Vercel and
+  redeploy. Chain first, so the card never comes off a feature that is still paused underneath; the other order swaps
+  "Coming soon" for "Game paused" instead of a live board.
+
+  `LAUNCH_AT` (apps/backend/.env) still holds the Operator's first `begin_epoch` back until that time, but the Game pause
+  and Jackpot pause above cover a deposit-only week now; leave it unset.
+
+  Base yield is credited per ended Epoch, so a week with no Epoch earns none. If the beta promises yield for that week,
+  fund it as a manual grant.

@@ -34,3 +34,22 @@ export function launchCountdownLabel(countdown: LaunchCountdown): string {
   if (countdown.remainingSeconds === null) return "First draw in —";
   return `First draw in ${dhmsParts(countdown.remainingSeconds).join(":")}`;
 }
+
+export type PrizeCardState = "launch" | "paused" | "live";
+
+/**
+ * Ticket 02 (feature-gates): shared precedence for the Home and Dashboard
+ * prize cards. The jackpot gate wins outright, even with a live epoch and
+ * `jackpotPaused` false, and lands on the same "launch" branch the
+ * deposit-only launch week already renders. Gate unset falls back to
+ * today's rule: no epoch yet means launching, otherwise the chain's own
+ * `jackpotPaused` switch decides.
+ */
+export function prizeCardState(
+  gated: boolean,
+  hasEpoch: boolean,
+  jackpotPaused: boolean,
+): PrizeCardState {
+  if (gated || !hasEpoch) return "launch";
+  return jackpotPaused ? "paused" : "live";
+}

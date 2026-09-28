@@ -3,7 +3,8 @@
 ADR 0012 had one code do two jobs: a depositor's owned Invite code let a friend past the beta
 gate and, once redeemed, fixed that depositor as the friend's Referrer. That tied referrals to the
 gate, and the gate goes away after the beta while referrals stay. So they are now two codes. A
-Referral code is one per depositor, created at first deposit, has unlimited uses, is shared as a
+Referral code is one per wallet, created at first deposit or, for a wallet past the gate that
+has not deposited, on its first visit to the Referrals page, has unlimited uses, is shared as a
 `?ref=` link, and does not pass the gate. An Invite code is single use and only passes the gate.
 Each wallet that redeems one receives two of its own, as long as fewer than 50 unredeemed Invite
 codes exist, Admin-issued ones included.

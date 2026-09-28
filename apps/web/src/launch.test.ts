@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { launchCountdown, launchCountdownLabel } from "./launch.js";
+import { launchCountdown, launchCountdownLabel, prizeCardState } from "./launch.js";
 
 describe("launchCountdown", () => {
   it("is unscheduled with no launch time configured", () => {
@@ -53,5 +53,25 @@ describe("launchCountdownLabel", () => {
     const launchAt = new Date(1_700_003_661_000).toISOString(); // +1h 1s
     const label = launchCountdownLabel(launchCountdown(launchAt, 1_700_000_000n));
     expect(label).toBe("First draw in 00:01:01:01");
+  });
+});
+
+describe("prizeCardState", () => {
+  it("is live with no gate, an epoch and no pause", () => {
+    expect(prizeCardState(false, true, false)).toBe("live");
+  });
+
+  it("falls to paused when the chain switch is on", () => {
+    expect(prizeCardState(false, true, true)).toBe("paused");
+  });
+
+  it("falls to launch with no epoch yet, gate or not", () => {
+    expect(prizeCardState(false, false, false)).toBe("launch");
+    expect(prizeCardState(false, false, true)).toBe("launch");
+  });
+
+  it("the gate wins over a live epoch, even over paused", () => {
+    expect(prizeCardState(true, true, false)).toBe("launch");
+    expect(prizeCardState(true, true, true)).toBe("launch");
   });
 });
