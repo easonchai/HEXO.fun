@@ -1,66 +1,17 @@
 -- ADR 0016 (docs/plan/pool-cutover ticket 01): every pool-scoped table gains
 -- poolAddress as part of its key, so a Pool cutover keeps the database.
---
--- Hand-edited from `prisma migrate diff`. Existing rows belong to the one
--- Pool the boot guard has allowed until now, so they are backfilled from it.
--- An empty database (first boot) backfills nothing.
+-- Assumes empty pool-scoped tables (fresh database). A database with rows
+-- fails on NOT NULL; run `prisma migrate reset` on it.
 
--- The backfill below is only correct with at most one Pool row. The old boot
--- guard enforced that; refuse loudly if something slipped past it.
-DO $$
-BEGIN
-  IF (SELECT count(*) FROM "Pool") > 1 THEN
-    RAISE EXCEPTION 'pool_address_scoping: Pool holds % rows, expected at most 1; cannot tell which pool existing rows belong to', (SELECT count(*) FROM "Pool");
-  END IF;
-END $$;
-
--- Add nullable, backfill, then NOT NULL.
-ALTER TABLE "Epoch" ADD COLUMN "poolAddress" TEXT;
-ALTER TABLE "Round" ADD COLUMN "poolAddress" TEXT;
-ALTER TABLE "Player" ADD COLUMN "poolAddress" TEXT;
-ALTER TABLE "Position" ADD COLUMN "poolAddress" TEXT;
-ALTER TABLE "Event" ADD COLUMN "poolAddress" TEXT;
-ALTER TABLE "Cursor" ADD COLUMN "poolAddress" TEXT;
-ALTER TABLE "OperatorState" ADD COLUMN "poolAddress" TEXT;
-ALTER TABLE "ReferralGrant" ADD COLUMN "poolAddress" TEXT;
-ALTER TABLE "ReferralGrantShare" ADD COLUMN "poolAddress" TEXT;
-
-UPDATE "Epoch" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-UPDATE "Round" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-UPDATE "Player" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-UPDATE "Position" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-UPDATE "Event" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-UPDATE "Cursor" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-UPDATE "OperatorState" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-UPDATE "ReferralGrant" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-UPDATE "ReferralGrantShare" SET "poolAddress" = (SELECT "address" FROM "Pool" LIMIT 1);
-
--- Rows with no Pool to belong to (an empty Pool table beside non-empty
--- scoped tables) would fail NOT NULL with a bare constraint error. Say why.
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM "Epoch" WHERE "poolAddress" IS NULL)
-     OR EXISTS (SELECT 1 FROM "Round" WHERE "poolAddress" IS NULL)
-     OR EXISTS (SELECT 1 FROM "Player" WHERE "poolAddress" IS NULL)
-     OR EXISTS (SELECT 1 FROM "Position" WHERE "poolAddress" IS NULL)
-     OR EXISTS (SELECT 1 FROM "Event" WHERE "poolAddress" IS NULL)
-     OR EXISTS (SELECT 1 FROM "Cursor" WHERE "poolAddress" IS NULL)
-     OR EXISTS (SELECT 1 FROM "OperatorState" WHERE "poolAddress" IS NULL)
-     OR EXISTS (SELECT 1 FROM "ReferralGrant" WHERE "poolAddress" IS NULL)
-     OR EXISTS (SELECT 1 FROM "ReferralGrantShare" WHERE "poolAddress" IS NULL) THEN
-    RAISE EXCEPTION 'pool_address_scoping: pool-scoped rows exist but the Pool table is empty; cannot backfill poolAddress';
-  END IF;
-END $$;
-
-ALTER TABLE "Epoch" ALTER COLUMN "poolAddress" SET NOT NULL;
-ALTER TABLE "Round" ALTER COLUMN "poolAddress" SET NOT NULL;
-ALTER TABLE "Player" ALTER COLUMN "poolAddress" SET NOT NULL;
-ALTER TABLE "Position" ALTER COLUMN "poolAddress" SET NOT NULL;
-ALTER TABLE "Event" ALTER COLUMN "poolAddress" SET NOT NULL;
-ALTER TABLE "Cursor" ALTER COLUMN "poolAddress" SET NOT NULL;
-ALTER TABLE "OperatorState" ALTER COLUMN "poolAddress" SET NOT NULL;
-ALTER TABLE "ReferralGrant" ALTER COLUMN "poolAddress" SET NOT NULL;
-ALTER TABLE "ReferralGrantShare" ALTER COLUMN "poolAddress" SET NOT NULL;
+ALTER TABLE "Epoch" ADD COLUMN "poolAddress" TEXT NOT NULL;
+ALTER TABLE "Round" ADD COLUMN "poolAddress" TEXT NOT NULL;
+ALTER TABLE "Player" ADD COLUMN "poolAddress" TEXT NOT NULL;
+ALTER TABLE "Position" ADD COLUMN "poolAddress" TEXT NOT NULL;
+ALTER TABLE "Event" ADD COLUMN "poolAddress" TEXT NOT NULL;
+ALTER TABLE "Cursor" ADD COLUMN "poolAddress" TEXT NOT NULL;
+ALTER TABLE "OperatorState" ADD COLUMN "poolAddress" TEXT NOT NULL;
+ALTER TABLE "ReferralGrant" ADD COLUMN "poolAddress" TEXT NOT NULL;
+ALTER TABLE "ReferralGrantShare" ADD COLUMN "poolAddress" TEXT NOT NULL;
 
 -- Primary keys.
 ALTER TABLE "Epoch" DROP CONSTRAINT "Epoch_pkey",
