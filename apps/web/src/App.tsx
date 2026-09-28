@@ -185,7 +185,7 @@ export function App() {
   );
   // Ticket 15: rent for a first deposit or Position's account creation.
   const solBalance = useSolBalance(connection, publicKey ?? undefined, balanceNonce);
-  const rentWarning = solRentWarning(solBalance);
+  const rentWarning = solRentWarning(solBalance, { sponsored: sendTransaction !== undefined });
   const status = useMemo(
     () => summarizeStatus(state?.status ?? null, Date.now()),
     [state?.status],

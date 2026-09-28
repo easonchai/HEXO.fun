@@ -128,6 +128,18 @@ function customErrorCode(err: unknown): number | null {
   return typeof code === "number" ? code : null;
 }
 
+/**
+ * True when a simulation failed only because the signer could not pay rent
+ * for an account the transaction opens (the Player on a first deposit into a
+ * pool, a fresh token account). The system program logs this line before its
+ * custom error 1. Privy's sponsored send tops the wallet up by exactly that
+ * rent in the transaction it broadcasts, which our own simulation cannot see,
+ * so for a sponsored send this failure is not real.
+ */
+function isShortOfRent(logs: readonly string[] | null | undefined): boolean {
+  return logs?.some((line) => line.startsWith("Transfer: insufficient lamports")) ?? false;
+}
+
 /** `computeUnitLimit`'s result: either a sized (or fallback) compute-unit
  *  limit, or ticket 15's "the simulation itself reported the instructions
  *  would fail" — a program error caught before the wallet ever sees a
@@ -145,14 +157,17 @@ type ComputeSizing =
  * reports `value.err` means these exact instructions would fail on chain
  * (ticket 15's "a failed simulation surfaces its program error before the
  * wallet is asked to sign"), so that case is reported back instead of
- * silently falling back and sending anyway.
+ * silently falling back and sending anyway. The one exception is a sponsored
+ * send short only of rent (`isShortOfRent`): Privy covers that, so it gets
+ * the fallback limit and goes to Privy instead of failing here.
  */
 async function computeUnitLimit(
   connection: Connection,
   instructions: TransactionInstruction[],
   payer: PublicKey,
+  options: { sponsored: boolean },
 ): Promise<ComputeSizing> {
-  let simulated: { err: unknown; unitsConsumed?: number };
+  let simulated: { err: unknown; unitsConsumed?: number; logs?: string[] | null };
   try {
     const probe = new Transaction().add(
       ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT }),
@@ -169,8 +184,10 @@ async function computeUnitLimit(
       ),
     };
   }
-  if (simulated.err) return { kind: "programError", err: simulated.err };
-  if (simulated.unitsConsumed === undefined) {
+  if (simulated.err && !(options.sponsored && isShortOfRent(simulated.logs))) {
+    return { kind: "programError", err: simulated.err };
+  }
+  if (simulated.err || simulated.unitsConsumed === undefined) {
     return {
       kind: "units",
       units: Math.min(
@@ -201,7 +218,9 @@ export async function sendMany(
   const provider = providerOf(program);
   const connection = provider.connection;
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(CONFIRMED);
-  const sizing = await computeUnitLimit(connection, instructions, owner.publicKey);
+  const sizing = await computeUnitLimit(connection, instructions, owner.publicKey, {
+    sponsored: owner.sendTransaction !== undefined,
+  });
   if (sizing.kind === "programError") {
     // Ticket 15: caught before anything is signed or sent.
     return {

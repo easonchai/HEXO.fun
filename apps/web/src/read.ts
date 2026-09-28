@@ -176,9 +176,14 @@ export function useWalletBalance(
 export const MIN_SOL_LAMPORTS = 3_000_000n; // ~0.003 SOL
 
 /** Player copy naming the amount, or null when `lamports` covers it (or is
- *  still unknown, in which case there is nothing to warn about yet). */
-export function solRentWarning(lamports: bigint | null): string | null {
-  if (lamports === null || lamports >= MIN_SOL_LAMPORTS) return null;
+ *  still unknown, in which case there is nothing to warn about yet). Null for
+ *  a sponsored wallet too: Privy's sponsored send pays the fee and tops the
+ *  wallet up by the rent the transaction needs. */
+export function solRentWarning(
+  lamports: bigint | null,
+  options: { sponsored: boolean },
+): string | null {
+  if (options.sponsored || lamports === null || lamports >= MIN_SOL_LAMPORTS) return null;
   const solNeeded = (Number(MIN_SOL_LAMPORTS - lamports) / 1e9).toFixed(3);
   return `You need about ${solNeeded} more SOL in your wallet to cover network fees before this will go through.`;
 }
