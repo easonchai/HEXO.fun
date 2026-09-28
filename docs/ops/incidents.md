@@ -147,9 +147,10 @@ Starts with `EPOCH_NO_PROGRESS`.
    too-early call fails with `VrfTimeoutNotElapsed` and changes nothing:
    `admin rollover-epoch --epoch N` for a Registering, Drawing or Drawn epoch past its timeout,
    `admin void-round --round N` for an Open or Requested round past `vrf_timeout`. Ids are in
-   `GET /epochs/current` and `GET /status`. The operator today only voids a Requested round and
-   only rolls over a Drawing or Drawn epoch, so an Open round past its timeout or a Registering
-   epoch behind a stale indexer needs this step.
+   `GET /epochs/current` and `GET /status`. The operator voids a round itself, Open or Requested,
+   and rolls over a Drawing or Drawn epoch, but never a Registering one: it holds
+   `close_registration` on purpose while the indexer is stale, so that epoch needs a human to
+   decide between fixing the indexer and giving up the draw.
 
 ## Drawn epoch sitting unpaid
 

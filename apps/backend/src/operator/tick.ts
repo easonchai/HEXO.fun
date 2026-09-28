@@ -387,6 +387,9 @@ function nextWakeAt(ctx: TickContext, acted: boolean): bigint {
   if (acted) candidates.push(now);
   if (openRound?.status === ROUND_STATUS.OPEN) {
     candidates.push(openRound.endsAt - pool.closeBuffer);
+    // The void deadline for a round whose request never landed; the
+    // request retries every safety tick until then.
+    candidates.push(openRound.endsAt + pool.vrfTimeout);
   }
   if (openRound?.status === ROUND_STATUS.REQUESTED) {
     candidates.push(openRound.requestedAt + pool.vrfTimeout);
@@ -516,12 +519,19 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // fulfilled settles; Requested past `vrf_timeout` voids. Runs first so a
   // Round can never straddle the boundary step 3 might open next.
   if (openRound) {
-    if (
-      openRound.status === ROUND_STATUS.OPEN &&
-      now >= openRound.endsAt - pool.closeBuffer
-    ) {
-      await ctx.send(await ctx.ix.requestRoundRandomness(pool, openRound));
-      return finish({ action: "request_round_randomness" });
+    if (openRound.status === ROUND_STATUS.OPEN) {
+      // Still Open `vrf_timeout` past its end means every request so far
+      // failed to land (ORAO refusing, a dropped transaction): stop retrying
+      // and take the program's own exit (beta-launch-fixes ticket 02), or
+      // the round holds every Position and no new round opens.
+      if (now > openRound.endsAt + pool.vrfTimeout) {
+        await ctx.send(await ctx.ix.voidRound(pool, openRound));
+        return finish({ action: "void_round" });
+      }
+      if (now >= openRound.endsAt - pool.closeBuffer) {
+        await ctx.send(await ctx.ix.requestRoundRandomness(pool, openRound));
+        return finish({ action: "request_round_randomness" });
+      }
     }
     if (openRound.status === ROUND_STATUS.REQUESTED) {
       if (await ctx.fulfilled(openRound.vrfSeed)) {

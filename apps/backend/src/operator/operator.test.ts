@@ -290,6 +290,19 @@ describe("runTick", () => {
     expect(result.labels).toEqual(["void_round"]);
   });
 
+  it("1. voids an Open round still unrequested `vrfTimeout` past its end, instead of requesting again", async () => {
+    const result = await tickLabels({
+      openRound: round({ status: ROUND_STATUS.OPEN, endsAt: NOW - 121n }),
+    });
+    expect(result.labels).toEqual(["void_round"]);
+    // One second earlier the request path still wins; the program would
+    // refuse the void anyway.
+    const early = await tickLabels({
+      openRound: round({ status: ROUND_STATUS.OPEN, endsAt: NOW - 120n }),
+    });
+    expect(early.labels).toEqual(["request_round_randomness"]);
+  });
+
   it("1. requests round randomness before begin_epoch when the epoch has also ended", async () => {
     const result = await tickLabels({
       currentEpoch: epoch({ endsAt: NOW }),
