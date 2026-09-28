@@ -234,3 +234,11 @@ _Avoid_: Deployed principal (the narrower figure), TVL gap
 **Environment**:
 One deployment of the whole stack: its own program keypair, its own pools, its own Postgres database and its own env file. Dev, staging and mainnet share nothing but the box and Traefik. See `docs/ops/environments.md`.
 _Avoid_: Env (fine in code and flags), cluster (a Solana term, narrower than this)
+
+**Active pool**:
+The one Pool the backend and web are configured against. Every other Pool the database knows about is a retired pool: its rows stay, nothing reads them as current.
+_Avoid_: Current pool, live pool, the pool (when more than one exists)
+
+**Pool cutover**:
+Pointing the backend and web at a new Active pool. Nothing in the database is deleted; invites, referral codes and referrals carry over, and the retired pool's rows stay as history. Depositors in the retired pool get their Principal back through Emergency withdraw.
+_Avoid_: Pool switch, reset, wipe
