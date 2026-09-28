@@ -617,6 +617,11 @@ pub fn rollover_epoch(ctx: Context<RolloverEpoch>) -> Result<()> {
         // Rollover below: nothing was ever reserved for this epoch
         // (`jackpot_amount` is still 0), so the Prize stays in the hexpot.
         epoch_status::REGISTERING => {
+            // The jackpot pause holds `close_registration` back on purpose,
+            // and the spec promises registration stays open meanwhile; a
+            // stranger must not be able to end the draw in its place
+            // (production-hardening 14, finding 3).
+            require!(!pool.jackpot_paused, HexVaultError::JackpotPaused);
             let opened = epoch.registration_opened_at.max(epoch.ends_at);
             let closes_at = opened
                 .checked_add(pool.registration_window)

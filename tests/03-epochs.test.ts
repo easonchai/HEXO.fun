@@ -2302,6 +2302,35 @@ describe("epochs", () => {
   );
 
   it(
+    "jackpot pause refuses rollover_epoch on a Registering epoch, even for a stranger past the VRF timeout",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 5, vrfTimeout: 1 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await beginEpoch(pool, 0n);
+      await deposit(pool, owner, 3_000_000n);
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch 1 -> Registering
+
+      await setJackpotPaused(pool, true);
+      await sleep(3_000); // past registration_window (0) + vrf_timeout (1)
+
+      const stranger = await pool.fundedWallet(1_000_000n);
+      await expect(
+        rolloverEpoch(pool, 1n, new Uint8Array(32), stranger.keypair),
+      ).rejects.toThrow(/JackpotPaused/);
+      await expect(rolloverEpoch(pool, 1n, new Uint8Array(32))).rejects.toThrow(
+        /JackpotPaused/,
+      );
+
+      // Registration is still open, and the draw resumes once unpaused.
+      await register(pool, 1n, owner.keypair.publicKey);
+      await setJackpotPaused(pool, false);
+      await closeRegistration(pool, 1n);
+      expect((await fetchEpoch(pool, 1n)).status).toBe(epoch_status.DRAWING);
+    },
+    TIMEOUT,
+  );
+
+  it(
     "an epoch already Drawing when the jackpot is paused still draws and pays its winner",
     async () => {
       const pool = await setupPool({ epochSeconds: 6 });
