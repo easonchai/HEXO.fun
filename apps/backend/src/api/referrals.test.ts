@@ -30,6 +30,7 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { applyReferralMessage } from "./invite-code";
+import { REFERRAL_QUALIFY_PRINCIPAL } from "./referral";
 import { ReferralsController } from "./referrals.controller";
 import { SerializationInterceptor } from "./serialization.interceptor";
 
@@ -500,13 +501,18 @@ describe.skipIf(!DB_AVAILABLE)("POST /referrals/apply", () => {
     expect(referral?.code).toBe("OWNR2345");
   });
 
-  it("quietly declines a wallet that has already deposited", async () => {
+  // Binding after a first deposit is allowed; the row's qualification state
+  // is seeded from the Active pool's Player so the 7-day clock starts now
+  // when Principal is already at the threshold.
+  it("binds a wallet that has already deposited, seeding principal and aboveSince", async () => {
     const owner = Keypair.generate();
     const wallet = Keypair.generate();
     await prisma.referralCode.create({
       data: { code: "DEPO2345", owner: owner.publicKey.toBase58(), createdAt: 0n },
     });
-    await prisma.player.create({ data: emptyPlayer(wallet.publicKey.toBase58()) });
+    await prisma.player.create({
+      data: { ...emptyPlayer(wallet.publicKey.toBase58()), principal: REFERRAL_QUALIFY_PRINCIPAL },
+    });
 
     const { body } = await http
       .post("/referrals/apply")
@@ -519,24 +525,29 @@ describe.skipIf(!DB_AVAILABLE)("POST /referrals/apply", () => {
         ),
       })
       .expect(200);
-    expect(body.applied).toBe(false);
+    expect(body).toEqual({ applied: true, reason: "referral applied" });
 
     const referral = await prisma.referral.findUnique({
       where: { referee: wallet.publicKey.toBase58() },
     });
-    expect(referral).toBeNull();
+    expect(referral?.referrer).toBe(owner.publicKey.toBase58());
+    expect(referral?.principal).toBe(REFERRAL_QUALIFY_PRINCIPAL);
+    expect(referral?.aboveSince).toBe(referral?.boundAt);
   });
 
-  // ADR 0016: "first deposit" means first deposit ever, so a Pool cutover
-  // does not reopen binding for someone who deposited in the old pool.
-  it("quietly declines a wallet whose only Player is in the retired pool", async () => {
+  // A Player only in a retired pool (ADR 0016) is not the Active pool's
+  // Principal, so the row seeds as never deposited.
+  it("binds a wallet whose only Player is in the retired pool, seeded at zero", async () => {
     const owner = Keypair.generate();
     const wallet = Keypair.generate();
     await prisma.referralCode.create({
       data: { code: "RETD2345", owner: owner.publicKey.toBase58(), createdAt: 0n },
     });
     await prisma.player.create({
-      data: emptyPlayer(wallet.publicKey.toBase58(), RETIRED_POOL_ADDRESS),
+      data: {
+        ...emptyPlayer(wallet.publicKey.toBase58(), RETIRED_POOL_ADDRESS),
+        principal: REFERRAL_QUALIFY_PRINCIPAL,
+      },
     });
 
     const { body } = await http
@@ -547,12 +558,13 @@ describe.skipIf(!DB_AVAILABLE)("POST /referrals/apply", () => {
         signature: sign(wallet, applyReferralMessage(wallet.publicKey.toBase58(), "RETD2345")),
       })
       .expect(200);
-    expect(body).toEqual({ applied: false, reason: "This wallet has already deposited." });
+    expect(body).toEqual({ applied: true, reason: "referral applied" });
 
     const referral = await prisma.referral.findUnique({
       where: { referee: wallet.publicKey.toBase58() },
     });
-    expect(referral).toBeNull();
+    expect(referral?.principal).toBe(0n);
+    expect(referral?.aboveSince).toBeNull();
   });
 
   it("quietly declines a wallet that already has a Referrer, without overwriting it", async () => {

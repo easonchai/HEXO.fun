@@ -166,11 +166,11 @@ A single-use code that lets a wallet past the beta gate. It may have an owner. G
 _Avoid_: Access token, whitelist, referral code (a different thing)
 
 **Referral code**:
-A wallet's own code, one per wallet, minted at first deposit or once it is past the beta gate, unlimited uses, shared as a link. Applying it before a wallet's first deposit makes its owner that wallet's Referrer. Outlives the beta; does not pass the beta gate.
+A wallet's own code, one per wallet, minted at first deposit or once it is past the beta gate, unlimited uses, shared as a link. Applying it makes its owner that wallet's Referrer, before or after the wallet's first deposit. Outlives the beta; does not pass the beta gate.
 _Avoid_: Invite code (a different thing), promo code
 
 **Referrer**:
-The owner of the Referral code a wallet applied before its first deposit, or failing that, the owner of the Invite code it redeemed. Fixed for good once written.
+The owner of the Referral code a wallet applied, or failing that, the owner of the Invite code it redeemed. Bound at any time, deposited or not. Fixed for good once written.
 _Avoid_: Sponsor, upline, inviter
 
 **Qualified referral**:

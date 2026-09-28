@@ -17,9 +17,11 @@ import { Prisma } from "@prisma/client";
 import { PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
+import { ChainService } from "../chain/chain.service";
 import type { HexVaultEnv } from "../config/env";
 
 import { PrismaService } from "../prisma/prisma.service";
+import { bindReferral } from "./referral-code";
 import {
   accessMessage,
   generateInviteCode,
@@ -155,10 +157,16 @@ export class AccessController {
   private readonly circulationCap: number;
   private readonly redeemGrantCount: number;
 
+  /** The Active pool's address, for seeding a new Referral's qualification
+   *  state from the redeemer's Player (`bindReferral`). */
+  private readonly poolAddress: string;
+
   constructor(
     private readonly prisma: PrismaService,
     config: ConfigService<HexVaultEnv, true>,
+    chain: ChainService,
   ) {
+    this.poolAddress = chain.poolAddress().toBase58();
     this.inviteAdminKey = config.get("INVITE_ADMIN_KEY", { infer: true });
     this.circulationCap = config.get("INVITE_CIRCULATION_CAP", { infer: true });
     this.redeemGrantCount = config.get("INVITE_REDEEM_GRANT_COUNT", { infer: true });
@@ -235,8 +243,8 @@ export class AccessController {
    * `InviteRedemption` primary key: a losing race there surfaces as a
    * Postgres unique-violation (P2002), caught below.
    *
-   * When the redeemer has no Player yet (binding only before a first
-   * deposit), this also writes the `Referral` (ticket 07). Referrer
+   * When the redeemer has no Referral yet, deposited or not, this also
+   * writes the `Referral` (ticket 07). Referrer
    * precedence (ADR 0014, ticket 02): a valid `referralCode` wins — it
    * exists and is not owned by the redeemer itself — otherwise the invite
    * code's owner is used, provided that owner is not the redeemer either (no
@@ -286,10 +294,6 @@ export class AccessController {
           data: { wallet: address, code, redeemedAt: nowSeconds() },
         });
 
-        // Cross-pool, like POST /referrals/apply's check: a wallet that
-        // deposited in a retired pool has had its first deposit, so it
-        // never gains a Referrer after a Pool cutover (ADR 0016).
-        const player = await tx.player.findFirst({ where: { owner: address } });
         // A wallet that applied a Referral code via POST /referrals/apply
         // before ever redeeming an invite already has a Referral row here
         // (beta-launch-fixes ticket 13): keep that earlier Referrer rather
@@ -297,7 +301,7 @@ export class AccessController {
         // table's unique `referee` and fail this whole transaction, blocking
         // the invite redemption over a binding that already succeeded.
         const existingReferral = await tx.referral.findUnique({ where: { referee: address } });
-        if (player === null && existingReferral === null) {
+        if (existingReferral === null) {
           let bound: { referrer: string; code: string } | null = null;
           if (referralCode !== null) {
             const owner = await tx.referralCode.findUnique({ where: { code: referralCode } });
@@ -309,9 +313,7 @@ export class AccessController {
             bound = { referrer: invite.ownerWallet, code };
           }
           if (bound !== null) {
-            await tx.referral.create({
-              data: { referee: address, referrer: bound.referrer, code: bound.code, boundAt: nowSeconds() },
-            });
+            await bindReferral(tx, this.poolAddress, address, bound.referrer, bound.code);
           }
         }
 

@@ -1,8 +1,8 @@
 // Against a real Postgres (docs/plan/hexo-referrals ticket 06), same shape as
 // api.test.ts and indexer.test.ts: a dedicated database so a rerun, or
 // another agent's suite, cannot collide with these rows. AccessController is
-// exercised directly, not through the whole ApiModule: it needs no
-// ChainService, so there is nothing to fake.
+// exercised directly, not through the whole ApiModule: its only ChainService
+// call is `poolAddress()`, so a one-method fake stands in.
 const TEST_DATABASE_URL =
   "postgresql://hexvault:hexvault@127.0.0.1:5433/hexvault_access";
 process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -16,16 +16,18 @@ import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
 import type { Player, Pool } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { ChainService } from "../chain/chain.service";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PrismaService } from "../prisma/prisma.service";
 import { isDatabaseReachableSync } from "../test-utils/db-probe";
 import { AccessController } from "./access.controller";
 import { accessMessage, INVITE_CIRCULATION_CAP } from "./invite-code";
+import { REFERRAL_QUALIFY_PRINCIPAL } from "./referral";
 
 const DB_AVAILABLE = isDatabaseReachableSync(TEST_DATABASE_URL);
 
@@ -51,11 +53,17 @@ async function truncate(prisma: PrismaService): Promise<void> {
   );
 }
 
-/** Two pools, as after a Pool cutover (ADR 0016). AccessController has no
- *  notion of which one is Active: its "has this wallet deposited" checks look
- *  across every pool, so each Player below lives only in the retired one. */
+/** Two pools, as after a Pool cutover (ADR 0016). `GET /access/:wallet`'s
+ *  "has this wallet deposited" check looks across every pool, so each Player
+ *  below lives only in the retired one unless a test says otherwise. */
 const ACTIVE_POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
 const RETIRED_POOL_ADDRESS = Keypair.generate().publicKey.toBase58();
+
+/** Makes ACTIVE_POOL_ADDRESS the Active pool. */
+const fakeChain = {
+  provide: ChainService,
+  useValue: { poolAddress: () => new PublicKey(ACTIVE_POOL_ADDRESS) },
+};
 
 const emptyPool = (address: string): Pool => ({
   address,
@@ -91,8 +99,8 @@ const emptyPool = (address: string): Pool => ({
   updatedSlot: 0n,
 });
 
-const emptyPlayer = (owner: string): Player => ({
-  poolAddress: RETIRED_POOL_ADDRESS,
+const emptyPlayer = (owner: string, poolAddress: string = RETIRED_POOL_ADDRESS): Player => ({
+  poolAddress,
   owner,
   principal: 0n,
   entries: 0n,
@@ -127,6 +135,7 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       controllers: [AccessController],
       providers: [
         { provide: ConfigService, useValue: new ConfigService({ INVITE_ADMIN_KEY: ADMIN_KEY }) },
+        fakeChain,
       ],
     })
       .overrideProvider(PrismaService)
@@ -458,10 +467,15 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
       expect(referral).toBeNull();
     });
 
-    it("does not bind a referral for a wallet that already has a Player, even in the retired pool only", async () => {
+    it("binds a wallet that already has a Player, seeding the clock from the Active pool's Principal", async () => {
       const owner = Keypair.generate();
       const existingDepositor = Keypair.generate();
-      await prisma.player.create({ data: emptyPlayer(existingDepositor.publicKey.toBase58()) });
+      await prisma.player.create({
+        data: {
+          ...emptyPlayer(existingDepositor.publicKey.toBase58(), ACTIVE_POOL_ADDRESS),
+          principal: REFERRAL_QUALIFY_PRINCIPAL,
+        },
+      });
       await prisma.inviteCode.create({
         data: {
           code: "PLYR2345",
@@ -486,12 +500,14 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
         const referral = await prisma.referral.findUnique({
           where: { referee: existingDepositor.publicKey.toBase58() },
         });
-        expect(referral).toBeNull();
+        expect(referral?.referrer).toBe(owner.publicKey.toBase58());
+        expect(referral?.principal).toBe(REFERRAL_QUALIFY_PRINCIPAL);
+        expect(referral?.aboveSince).toBe(referral?.boundAt);
       } finally {
         await prisma.player.delete({
           where: {
             poolAddress_owner: {
-              poolAddress: RETIRED_POOL_ADDRESS,
+              poolAddress: ACTIVE_POOL_ADDRESS,
               owner: existingDepositor.publicKey.toBase58(),
             },
           },

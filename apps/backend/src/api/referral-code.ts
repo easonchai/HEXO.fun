@@ -4,6 +4,7 @@
 import type { Prisma } from "@prisma/client";
 
 import { generateInviteCode } from "./invite-code";
+import { applyReferralEvent } from "./referral";
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
 
@@ -39,4 +40,35 @@ export async function ensureReferralCode(tx: Prisma.TransactionClient, owner: st
     skipDuplicates: true,
   });
   return (await tx.referralCode.findUniqueOrThrow({ where: { owner } })).code;
+}
+
+/**
+ * Writes `referee`'s Referral row (ADR 0014). Binding is allowed at any time,
+ * before or after a first deposit, so the row's qualification state is seeded
+ * from the Active pool's Player right away: a referee already holding 50 USDC
+ * starts its 7-day clock now instead of on its next chain event, and a later
+ * WithdrawRequested delta applies against the real Principal. No Player, or a
+ * Player only in a retired pool (ADR 0016), seeds as 0. Throws Prisma's
+ * P2002 when a Referral already exists; callers turn that into a refusal.
+ */
+export async function bindReferral(
+  tx: Prisma.TransactionClient,
+  poolAddress: string,
+  referee: string,
+  referrer: string,
+  code: string,
+): Promise<void> {
+  const player = await tx.player.findUnique({
+    where: { poolAddress_owner: { poolAddress, owner: referee } },
+    select: { principal: true },
+  });
+  const now = nowSeconds();
+  const seeded = applyReferralEvent(
+    { principal: 0n, aboveSince: null },
+    { kind: "Deposited", principal: player?.principal ?? 0n },
+    now,
+  );
+  await tx.referral.create({
+    data: { referee, referrer, code, boundAt: now, ...seeded },
+  });
 }

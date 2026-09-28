@@ -18,7 +18,7 @@ import type { HexVaultEnv } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
 import { isUniqueConstraintViolation } from "./access.controller";
 import { applyReferralMessage, normalizeInviteCode, verifyApplyReferralSignature } from "./invite-code";
-import { ensureReferralCode } from "./referral-code";
+import { bindReferral, ensureReferralCode } from "./referral-code";
 import { buildReferralsResponse, type ReferralInput } from "./referral-summary";
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
@@ -161,15 +161,16 @@ export class ReferralsController {
 
   /**
    * `POST /referrals/apply` (ADR 0014, ticket 02): covers a wallet already
-   * past the beta gate that opens a `?ref=CODE` link before its first
-   * deposit. One ed25519 signature over
+   * past the beta gate that opens a `?ref=CODE` link, deposited or not.
+   * One ed25519 signature over
    * `applyReferralMessage(wallet, code)` (invite-code.ts), distinct from the
    * redeem message so one can't be replayed as the other. Throttled in
    * api.module.ts alongside access, same abuse shape as redeem.
    *
-   * Binding only writes a Referral when the wallet has no Referral yet, has
-   * no Player yet (never deposited), the code exists, and its owner is not
-   * the wallet itself. Any of those failing answers 200 with `applied:
+   * Binding only writes a Referral when the wallet has no Referral yet, the
+   * code exists, and its owner is not the wallet itself. Having deposited
+   * is no bar: the 7-day qualification and the per-referral bonus cap are
+   * the guard. Any of those failing answers 200 with `applied:
    * false` and a reason, never an error, so the web can ignore it quietly.
    * Only a bad signature is a 4xx.
    */
@@ -190,12 +191,6 @@ export class ReferralsController {
         if (existingReferral !== null) {
           return { applied: false, reason: "This wallet already has a Referrer." };
         }
-        // Cross-pool on purpose: "first deposit" means first deposit ever,
-        // so a depositor from a retired pool stays refused (ADR 0016).
-        const player = await tx.player.findFirst({ where: { owner: address } });
-        if (player !== null) {
-          return { applied: false, reason: "This wallet has already deposited." };
-        }
         const referralCode = await tx.referralCode.findUnique({ where: { code } });
         if (referralCode === null) {
           return { applied: false, reason: "That referral code does not exist." };
@@ -203,9 +198,7 @@ export class ReferralsController {
         if (referralCode.owner === address) {
           return { applied: false, reason: "You cannot apply your own referral code." };
         }
-        await tx.referral.create({
-          data: { referee: address, referrer: referralCode.owner, code, boundAt: nowSeconds() },
-        });
+        await bindReferral(tx, this.poolAddress, address, referralCode.owner, code);
         return { applied: true, reason: "referral applied" };
       });
     } catch (cause) {

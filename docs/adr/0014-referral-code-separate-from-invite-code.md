@@ -9,13 +9,18 @@ has not deposited, on its first visit to the Referrals page, has unlimited uses,
 Each wallet that redeems one receives two of its own, as long as fewer than 50 unredeemed Invite
 codes exist, Admin-issued ones included.
 
-The Referrer is whoever owns the Referral code the wallet applied before its first deposit. If it
-applied none, the owner of the Invite code it redeemed is used instead, so a beta invite still
-earns a referral. Either way it is written once and never changed.
+The Referrer is whoever owns the Referral code the wallet applied. If it applied none, the owner
+of the Invite code it redeemed is used instead, so a beta invite still earns a referral. Either
+way it is written once and never changed. Applying is allowed at any time, before or after the
+wallet's first deposit: the rule used to be "before first deposit only", but the HEXO proposal
+never asked for it and it left every early depositor unable to name a Referrer. The 7-day
+qualification and the per-referral bonus cap are the guard against two existing savers referring
+each other. A Referral written after a deposit starts with the wallet's current Principal in the
+Active pool, so its 7-day clock starts at binding when it already holds the threshold.
 
 Applying a Referral code needs a message signature from the wallet, even though nothing moves on
 chain. Wallet addresses are public and the binding is permanent, so without proof of ownership
-anyone could claim every wallet that has not deposited yet as their own referral. In the gate
+anyone could claim every wallet without a Referrer as their own referral. In the gate
 flow the Referral code goes inside the redeem signature the user already makes, so it adds no
 extra prompt.
 
