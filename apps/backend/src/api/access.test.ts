@@ -234,6 +234,37 @@ describe.skipIf(!DB_AVAILABLE)("access routes", () => {
     });
   });
 
+  describe("GET /access/invites", () => {
+    it("401s without the key", async () => {
+      await http.get("/access/invites").expect(401);
+    });
+
+    it("lists every code with its redemptions", async () => {
+      await prisma.inviteCode.createMany({
+        data: [
+          { code: "AAAA2222", maxUses: 1, uses: 0, createdAt: 1n, ownerWallet: null },
+          { code: "BBBB3333", maxUses: 2, uses: 1, createdAt: 2n, ownerWallet: null },
+        ],
+      });
+      await prisma.inviteRedemption.create({
+        data: { wallet: DEPOSITOR, code: "BBBB3333", redeemedAt: 5n },
+      });
+      const { body } = await http.get("/access/invites").set("x-admin-key", ADMIN_KEY).expect(200);
+      expect(body.invites).toEqual([
+        {
+          code: "BBBB3333",
+          owner: null,
+          maxUses: 2,
+          uses: 1,
+          createdAt: "1970-01-01T00:00:02.000Z",
+          redeemed: false,
+          redemptions: [{ wallet: DEPOSITOR, redeemedAt: "1970-01-01T00:00:05.000Z" }],
+        },
+        { code: "AAAA2222", owner: null, maxUses: 1, uses: 0, createdAt: "1970-01-01T00:00:01.000Z", redeemed: false, redemptions: [] },
+      ]);
+    });
+  });
+
   describe("POST /access/redeem", () => {
     it("400s a signature that does not match the wallet and code", async () => {
       const wallet = Keypair.generate();

@@ -31,6 +31,9 @@ import {
 
 const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
 
+/** Unix seconds (how the DB stores every timestamp) to ISO 8601 for JSON. */
+const toIso = (seconds: bigint): string => new Date(Number(seconds) * 1000).toISOString();
+
 const parseWallet = (raw: string): PublicKey => {
   try {
     return new PublicKey(raw);
@@ -149,12 +152,55 @@ const INVITE_QUOTA_LOCK_KEY = 472_819_003;
 @Controller("access")
 export class AccessController {
   private readonly inviteAdminKey: string | undefined;
+  private readonly circulationCap: number;
+  private readonly redeemGrantCount: number;
 
   constructor(
     private readonly prisma: PrismaService,
     config: ConfigService<HexVaultEnv, true>,
   ) {
     this.inviteAdminKey = config.get("INVITE_ADMIN_KEY", { infer: true });
+    this.circulationCap = config.get("INVITE_CIRCULATION_CAP", { infer: true });
+    this.redeemGrantCount = config.get("INVITE_REDEEM_GRANT_COUNT", { infer: true });
+  }
+
+  /** 404 with `INVITE_ADMIN_KEY` unset, as if the admin routes did not
+   *  exist; 401 on a missing or wrong `x-admin-key`. */
+  private requireAdminKey(key: string | undefined): void {
+    if (this.inviteAdminKey === undefined) {
+      throw new NotFoundException();
+    }
+    if (typeof key !== "string" || !sameKey(key, this.inviteAdminKey)) {
+      throw new UnauthorizedException("Missing or wrong `x-admin-key`.");
+    }
+  }
+
+  /** Every Invite code with its redemptions, admin-keyed like `POST
+   *  /access/invites`. Declared before `GET :wallet` so "invites" is not
+   *  parsed as a wallet. No relation between the two tables (schema.prisma),
+   *  so the join is done here. */
+  @Get("invites")
+  async listInvites(@Headers("x-admin-key") key: string | undefined) {
+    this.requireAdminKey(key);
+    const [codes, redemptions] = await Promise.all([
+      this.prisma.inviteCode.findMany({ orderBy: { createdAt: "desc" } }),
+      this.prisma.inviteRedemption.findMany(),
+    ]);
+    const byCode = new Map<string, { wallet: string; redeemedAt: string }[]>();
+    for (const r of redemptions) {
+      byCode.set(r.code, [...(byCode.get(r.code) ?? []), { wallet: r.wallet, redeemedAt: toIso(r.redeemedAt) }]);
+    }
+    return {
+      invites: codes.map((c) => ({
+        code: c.code,
+        owner: c.ownerWallet,
+        maxUses: c.maxUses,
+        uses: c.uses,
+        createdAt: toIso(c.createdAt),
+        redeemed: c.uses >= c.maxUses,
+        redemptions: byCode.get(c.code) ?? [],
+      })),
+    };
   }
 
   @Get(":wallet")
@@ -277,7 +323,7 @@ export class AccessController {
           _sum: { maxUses: true, uses: true },
         });
         const circulation = (inCirculation._sum.maxUses ?? 0) - (inCirculation._sum.uses ?? 0);
-        const grantCount = inviteGrantCount(circulation);
+        const grantCount = inviteGrantCount(circulation, this.circulationCap, this.redeemGrantCount);
         if (grantCount > 0) {
           const grantedAt = nowSeconds();
           await tx.inviteCode.createMany({
@@ -309,12 +355,7 @@ export class AccessController {
    */
   @Post("invites")
   async createInvites(@Headers("x-admin-key") key: string | undefined, @Body() body: unknown) {
-    if (this.inviteAdminKey === undefined) {
-      throw new NotFoundException();
-    }
-    if (typeof key !== "string" || !sameKey(key, this.inviteAdminKey)) {
-      throw new UnauthorizedException("Missing or wrong `x-admin-key`.");
-    }
+    this.requireAdminKey(key);
     const { maxUses, owner, count } = parseCreateInvitesBody(body);
     const createdAt = nowSeconds();
     const rows = Array.from({ length: count }, () => ({
