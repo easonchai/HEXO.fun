@@ -41,15 +41,18 @@ export type PrizeCardState = "launch" | "paused" | "live";
  * Ticket 02 (feature-gates): shared precedence for the Home and Dashboard
  * prize cards. The jackpot gate wins outright, even with a live epoch and
  * `jackpotPaused` false, and lands on the same "launch" branch the
- * deposit-only launch week already renders. Gate unset falls back to
- * today's rule: no epoch yet means launching, otherwise the chain's own
- * `jackpotPaused` switch decides.
+ * deposit-only launch week already renders. Gate unset: no epoch yet is
+ * "launch" only while `LAUNCH_AT` is scheduled, so "Coming soon" is reserved
+ * for the gate; unscheduled, the screens show the clock at zero instead.
+ * With an epoch, the chain's own `jackpotPaused` switch decides.
  */
 export function prizeCardState(
   gated: boolean,
   hasEpoch: boolean,
   jackpotPaused: boolean,
+  scheduled: boolean,
 ): PrizeCardState {
-  if (gated || !hasEpoch) return "launch";
+  if (gated || (!hasEpoch && scheduled)) return "launch";
+  if (!hasEpoch) return "live";
   return jackpotPaused ? "paused" : "live";
 }

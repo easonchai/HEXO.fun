@@ -58,20 +58,25 @@ describe("launchCountdownLabel", () => {
 
 describe("prizeCardState", () => {
   it("is live with no gate, an epoch and no pause", () => {
-    expect(prizeCardState(false, true, false)).toBe("live");
+    expect(prizeCardState(false, true, false, false)).toBe("live");
   });
 
   it("falls to paused when the chain switch is on", () => {
-    expect(prizeCardState(false, true, true)).toBe("paused");
+    expect(prizeCardState(false, true, true, false)).toBe("paused");
   });
 
-  it("falls to launch with no epoch yet, gate or not", () => {
-    expect(prizeCardState(false, false, false)).toBe("launch");
-    expect(prizeCardState(false, false, true)).toBe("launch");
+  it("falls to launch with no epoch yet while LAUNCH_AT is scheduled", () => {
+    expect(prizeCardState(false, false, false, true)).toBe("launch");
+    expect(prizeCardState(false, false, true, true)).toBe("launch");
+  });
+
+  it("stays live (clock at zero) with no epoch and nothing scheduled", () => {
+    expect(prizeCardState(false, false, false, false)).toBe("live");
+    expect(prizeCardState(false, false, true, false)).toBe("live");
   });
 
   it("the gate wins over a live epoch, even over paused", () => {
-    expect(prizeCardState(true, true, false)).toBe("launch");
-    expect(prizeCardState(true, true, true)).toBe("launch");
+    expect(prizeCardState(true, true, false, false)).toBe("launch");
+    expect(prizeCardState(true, true, true, true)).toBe("launch");
   });
 });

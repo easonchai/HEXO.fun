@@ -117,12 +117,20 @@ export function Home({ now, currentEpoch, launchAt, jackpotPaused, onDeposit }: 
   const remaining =
     currentEpoch && now !== null ? BigInt(currentEpoch.endsAt) - now : null;
   const drawing = currentEpoch?.drawing !== null && currentEpoch?.drawing !== undefined;
-  const parts = remaining === null ? null : dhmsParts(remaining);
+  // No epoch and no LAUNCH_AT: the clock sits at zero. "--" is only for an
+  // unknown chain clock; "Coming soon" is the jackpot gate's.
+  const parts =
+    remaining !== null ? dhmsParts(remaining) : currentEpoch === null ? dhmsParts(0n) : null;
   // Ticket 05: no Epoch yet (deposit-only launch week) counts down to
   // LAUNCH_AT instead of an Epoch's endsAt. Ticket 02 (feature-gates): the
   // jackpot gate takes the same "launch" branch, live epoch or not, and
   // ignores LAUNCH_AT so it always reads "Coming soon".
-  const cardState = prizeCardState(JACKPOT_GATED, currentEpoch !== null, jackpotPaused);
+  const cardState = prizeCardState(
+    JACKPOT_GATED,
+    currentEpoch !== null,
+    jackpotPaused,
+    launchAt !== null,
+  );
   const launchLabel =
     cardState === "launch"
       ? launchCountdownLabel(launchCountdown(JACKPOT_GATED ? null : launchAt, now))
