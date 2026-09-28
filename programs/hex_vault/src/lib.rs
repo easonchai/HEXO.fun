@@ -94,6 +94,16 @@ pub mod hex_vault {
         custody::set_pause(ctx, paused)
     }
 
+    /// Sets the game or the jackpot switch on its own (game-jackpot-pause
+    /// ticket 01), same role rule as `set_pause`.
+    pub fn set_feature_pause(
+        ctx: Context<SetFeaturePause>,
+        feature: PauseFeature,
+        paused: bool,
+    ) -> Result<()> {
+        custody::set_feature_pause(ctx, feature, paused)
+    }
+
     /// Admin-only and irreversible (ops-and-envs ticket 02, spec
     /// "Shutdown"). Stops every inflow, the game and the draw, and lets
     /// withdrawals skip the epoch lock.

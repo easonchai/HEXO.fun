@@ -113,6 +113,14 @@ async function setPause(pool: PoolCtx, paused: boolean) {
     .rpc();
 }
 
+async function setJackpotPaused(pool: PoolCtx, paused: boolean) {
+  return program.methods
+    .setFeaturePause({ jackpot: {} }, paused)
+    .accountsPartial({ signer: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
+    .rpc();
+}
+
 /** `currentEpochId` is `pool.currentEpochId` *before* this call. */
 async function beginEpoch(pool: PoolCtx, currentEpochId: bigint) {
   const twoBehindId = currentEpochId > 0n ? currentEpochId - 1n : 0n;
@@ -2255,6 +2263,80 @@ describe("epochs", () => {
       const after = await fetchPlayer(pool, owner.keypair.publicKey);
       expect(after.entries.toString()).toBe(after.principal.toString());
       expect(after.principal.toString()).toBe("2000000");
+    },
+    TIMEOUT,
+  );
+
+  // --- Jackpot pause (game-jackpot-pause ticket 01). `begin_epoch`,
+  // `buy_tickets`, `grant_tickets` and `close_registration` are refused;
+  // `register`, `draw`, `payout` and `rollover_epoch` are not.
+
+  it(
+    "jackpot pause refuses begin_epoch, buy_tickets, grant_tickets and close_registration, but register still works",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 5 });
+      const owner = await pool.fundedWallet(10_000_000n);
+      await beginEpoch(pool, 0n); // epoch 1 open
+      await deposit(pool, owner, 3_000_000n);
+
+      await retryUntilOk(() => beginEpoch(pool, 1n)); // epoch1 -> Registering, epoch 2 open
+
+      await setJackpotPaused(pool, true);
+
+      await expect(buyTickets(pool, owner, 1_000_000n)).rejects.toThrow(/JackpotPaused/);
+      await expect(
+        grantTickets(pool, pool.operator, owner.keypair.publicKey, 1n),
+      ).rejects.toThrow(/JackpotPaused/);
+      await expect(beginEpoch(pool, 2n)).rejects.toThrow(/JackpotPaused/);
+      await expect(closeRegistration(pool, 1n)).rejects.toThrow(/JackpotPaused/);
+
+      // Registration itself is never gated by the jackpot switch, so a
+      // player's weight is still recorded while the jackpot is held.
+      const sig = await register(pool, 1n, owner.keypair.publicKey);
+      expect(await findEvent(sig, "registered")).toBeDefined();
+
+      await setJackpotPaused(pool, false);
+      await closeRegistration(pool, 1n); // clears once unpaused
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "an epoch already Drawing when the jackpot is paused still draws and pays its winner",
+    async () => {
+      const pool = await setupPool({ epochSeconds: 6 });
+      await beginEpoch(pool, 0n);
+
+      const a = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, a, 4_000_000n);
+
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+      await register(pool, 1n, a.keypair.publicKey);
+
+      const funder = await pool.fundedWallet(10_000_000n);
+      await fundJackpot(pool, funder, 2_000_000n);
+      await closeRegistration(pool, 1n); // -> Drawing, while still unpaused
+
+      const epochAfterClose = await fetchEpoch(pool, 1n);
+      expect(epochAfterClose.status).toBe(epoch_status.DRAWING);
+
+      await setJackpotPaused(pool, true);
+
+      const randomness = await fulfillRandomness(Uint8Array.from(epochAfterClose.vrfSeed));
+      await draw(pool, 1n, randomness); // not gated by jackpot_paused
+
+      const drawn = await fetchEpoch(pool, 1n);
+      expect(drawn.status).toBe(epoch_status.DRAWN);
+
+      const playerBefore = await fetchPlayer(pool, a.keypair.publicKey);
+      await payout(pool, 1n, a.keypair.publicKey); // not gated either
+      const playerAfter = await fetchPlayer(pool, a.keypair.publicKey);
+      expect(
+        BigInt(playerAfter.principal.toString()) - BigInt(playerBefore.principal.toString()),
+      ).toBe(2_000_000n);
+
+      const paid = await fetchEpoch(pool, 1n);
+      expect(paid.status).toBe(epoch_status.PAID);
     },
     TIMEOUT,
   );

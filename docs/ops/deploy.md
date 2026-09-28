@@ -171,8 +171,10 @@ Three ways an admin-gated instruction gets signed, picked by env vars the admin 
   (`apps/backend/src/admin/squads.ts`, `adminMode`); everything else it prints goes to stderr, so
   `admin withdraw-principal --amount 25000 | pbcopy` hands Squads a clean paste. In Squads:
   Transaction Builder, Add instruction, Import base58 encoded tx, paste, simulate, then collect
-  approvals and execute. The transaction carries a blockhash that expires in about a minute;
-  re-run the command for a fresh one if the paste took too long. `pause`, `fund-jackpot`,
+  approvals and execute. `start-game` and `start-jackpot` are admin-gated too and go through
+  the same path. The transaction carries a blockhash that expires in about a minute;
+  re-run the command for a fresh one if the paste took too long. `pause`, `pause-game`,
+  `pause-jackpot`, `fund-jackpot`,
   `fund-yield`, `principal-out` and `emergency-crank` never go through Squads: the first three
   are permissionless or dual-signer by design, and `principal-out` is read-only, so none of them
   has to wait on multisig approval, which matters most for `pause` in an incident.

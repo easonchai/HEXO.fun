@@ -3,6 +3,8 @@
 
 use anchor_lang::prelude::*;
 
+use crate::custody::PauseFeature;
+
 #[event]
 pub struct PoolCreated {
     pub pool: Pubkey,
@@ -54,6 +56,17 @@ pub struct ParamsSet {
 pub struct Paused {
     pub pool: Pubkey,
     pub paused: bool,
+}
+
+/// `set_feature_pause` changed the game or the jackpot switch
+/// (game-jackpot-pause ticket 01). `set_pause` keeps its own `Paused` event,
+/// unchanged.
+#[event]
+pub struct FeaturePaused {
+    pub pool: Pubkey,
+    pub feature: PauseFeature,
+    pub paused: bool,
+    pub at: i64,
 }
 
 #[event]

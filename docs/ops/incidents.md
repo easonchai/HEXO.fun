@@ -28,9 +28,11 @@ Starts with `OPERATOR_STALE`, sometimes alongside `INDEXER_STALE`.
 5. Restart the backend for the affected environment if the process looks hung, not just waiting:
    `docker compose -f docker-compose.dev.yml restart backend` (swap the compose file for the
    environment, see [`docs/ops/environments.md`](environments.md)).
-6. Pause (see "Suspected exploit" below) if rounds stay visibly stuck after a restart. Pause today
-   stops `create_round`, `deposit` and `buy_tickets` only; an already-open round still plays out to
-   settlement.
+6. Pause the game (`admin pause-game`, either key) if rounds stay visibly stuck after a restart.
+   It stops `create_round` and `buy_position` and leaves deposits and the daily draw alone; an
+   already-open round still plays out to settlement. The pool-wide `pause` (see "Suspected
+   exploit" below) stops `create_round`, `deposit` and `buy_tickets`. `pause-jackpot` holds the
+   next epoch and the draw.
 7. Players see the countdown end at `close_buffer` and the stage read DRAWING until settle lands
    ([`runbook.md`](../../runbook.md)). A real stall shows as DRAWING, or "no open round", staying
    that way well past the usual few seconds.

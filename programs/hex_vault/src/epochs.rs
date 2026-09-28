@@ -166,6 +166,7 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
     let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.shutdown, HexVaultError::PoolShutDown);
+    require!(!pool.jackpot_paused, HexVaultError::JackpotPaused);
 
     // The epoch two behind the one this call is about to create is the one
     // whose winner's registered interval must survive until Payout
@@ -393,6 +394,7 @@ pub fn close_registration(ctx: Context<CloseRegistration>, nonce: [u8; 32]) -> R
     let epoch = &mut ctx.accounts.epoch;
 
     require!(!pool.shutdown, HexVaultError::PoolShutDown);
+    require!(!pool.jackpot_paused, HexVaultError::JackpotPaused);
     require!(
         epoch.status == epoch_status::REGISTERING,
         HexVaultError::EpochNotRegistering
@@ -1051,7 +1053,9 @@ mod tests {
             bonus_granted: 0,
             version: 1,
             shutdown: false,
-            _reserved: [0; 127],
+            game_paused: false,
+            jackpot_paused: false,
+            _reserved: [0; 125],
         }
     }
 

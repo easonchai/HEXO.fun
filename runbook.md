@@ -211,6 +211,17 @@
        KEY=value block and progress goes to stderr, so `bootstrap > pool.env` gives a clean file.
        Paste ACCEPTED_MINT back into .env if the block names a mint you did not already have.
 
+       A new pool starts with the game and the jackpot both paused: deposits work, but the
+       operator begins no epoch and opens no round. Pass --start to bootstrap for a dev pool
+       that runs at once. Otherwise start each one on purpose, jackpot first so epoch 1 exists
+       before the game looks for it:
+
+         pnpm --filter @hexvault/backend admin start-jackpot
+         pnpm --filter @hexvault/backend admin start-game
+
+       Both are admin-only, so on mainnet each one is a Squads paste. pause-game and
+       pause-jackpot undo them and either key can run them.
+
     2. Wipe the dev database and rebuild the stack. Epoch, Round and Player rows carry no pool
        column, so the previous pool's rows collide with the new pool's ids on the same numbers.
 

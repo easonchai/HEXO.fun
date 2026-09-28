@@ -145,6 +145,11 @@ const CASES: Case[] = [
     data: { pool: POOL, paused: true },
   },
   {
+    name: "FeaturePaused",
+    fields: [key(POOL), u8(1), bool(true), i64(1_700_000_000n)],
+    data: { pool: POOL, feature: { jackpot: {} }, paused: true, at: "1700000000" },
+  },
+  {
     name: "Deposited",
     fields: [key(OWNER), u64(1_000_000n), u64(3_000_000n), u64(3_000_000n)],
     data: { owner: OWNER, amount: "1000000", principal: "3000000", entries: "3000000" },

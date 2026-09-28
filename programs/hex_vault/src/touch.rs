@@ -162,7 +162,9 @@ mod tests {
             bonus_granted: 0,
             version: 1,
             shutdown: false,
-            _reserved: [0; 127],
+            game_paused: false,
+            jackpot_paused: false,
+            _reserved: [0; 125],
         }
     }
 

@@ -2180,6 +2180,65 @@
       "args": []
     },
     {
+      "name": "set_feature_pause",
+      "docs": [
+        "Sets the game or the jackpot switch on its own (game-jackpot-pause",
+        "ticket 01), same role rule as `set_pause`."
+      ],
+      "discriminator": [
+        29,
+        249,
+        82,
+        247,
+        108,
+        216,
+        30,
+        168
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool.pool_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "feature",
+          "type": {
+            "defined": {
+              "name": "PauseFeature"
+            }
+          }
+        },
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "set_operator",
       "discriminator": [
         238,
@@ -2963,6 +3022,19 @@
       ]
     },
     {
+      "name": "FeaturePaused",
+      "discriminator": [
+        231,
+        161,
+        209,
+        49,
+        122,
+        135,
+        2,
+        148
+      ]
+    },
+    {
       "name": "HouseSwept",
       "discriminator": [
         250,
@@ -3539,6 +3611,16 @@
       "code": 6057,
       "name": "NoEpochYet",
       "msg": "no epoch exists yet"
+    },
+    {
+      "code": 6058,
+      "name": "GamePaused",
+      "msg": "the game is paused"
+    },
+    {
+      "code": 6059,
+      "name": "JackpotPaused",
+      "msg": "the jackpot is paused"
     }
   ],
   "types": [
@@ -3890,6 +3972,39 @@
       }
     },
     {
+      "name": "FeaturePaused",
+      "docs": [
+        "`set_feature_pause` changed the game or the jackpot switch",
+        "(game-jackpot-pause ticket 01). `set_pause` keeps its own `Paused` event,",
+        "unchanged."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "feature",
+            "type": {
+              "defined": {
+                "name": "PauseFeature"
+              }
+            }
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "HouseSwept",
       "docs": [
         "Admin-only: `sweep_house` moved the whole jackpot and any unspent yield",
@@ -4039,6 +4154,24 @@
           {
             "name": "bonus_cap_bps",
             "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PauseFeature",
+      "docs": [
+        "Which switch `set_feature_pause` changes (game-jackpot-pause ticket 01).",
+        "`set_pause`'s own `paused` field is untouched by either variant."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Game"
+          },
+          {
+            "name": "Jackpot"
           }
         ]
       }
@@ -4562,6 +4695,28 @@
             "type": "bool"
           },
           {
+            "name": "game_paused",
+            "docs": [
+              "Stops `create_round` and `buy_position` (game-jackpot-pause ticket",
+              "01). `create_pool` sets this `true`; the zero value stays the safe",
+              "default for a pool that predates this field. Carved from",
+              "`_reserved` alongside `jackpot_paused`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "jackpot_paused",
+            "docs": [
+              "Stops the epoch cycle's next step: `begin_epoch`, `buy_tickets`,",
+              "`grant_tickets` and `close_registration` (game-jackpot-pause ticket",
+              "01). An epoch already Drawing or Drawn still finishes. `create_pool`",
+              "sets this `true`; the zero value stays the safe default for a pool",
+              "that predates this field. Carved from `_reserved` alongside",
+              "`game_paused`."
+            ],
+            "type": "bool"
+          },
+          {
             "name": "_reserved",
             "docs": [
               "Take new fields from here. Their zero value must be the safe default,",
@@ -4570,7 +4725,7 @@
             "type": {
               "array": [
                 "u8",
-                127
+                125
               ]
             }
           }

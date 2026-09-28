@@ -178,7 +178,7 @@ _Avoid_: Active referral (outside screen copy), crew member
 ### Operations
 
 **Admin**:
-The multisig or wallet that changes pool parameters, unpauses, rotates the Operator key, and moves principal out of the vault to a yield venue and back. It is `Pool.admin` in the program, a Squads multisig on mainnet, and it never signs a round. The role moves in two steps, `propose_admin` then `accept_admin`, so a typo cannot hand the pool to an address nobody holds.
+The multisig or wallet that changes pool parameters, unpauses (including starting the game and the jackpot on a new pool), rotates the Operator key, and moves principal out of the vault to a yield venue and back. It is `Pool.admin` in the program, a Squads multisig on mainnet, and it never signs a round. The role moves in two steps, `propose_admin` then `accept_admin`, so a typo cannot hand the pool to an address nobody holds.
 _Avoid_: Authority (the removed program role), owner, admin wallet, Operator
 
 **Operator key**:
@@ -208,6 +208,14 @@ _Avoid_: Shutdown (a separate, irreversible state), freeze, halt
 **Shutdown**:
 An admin-only, irreversible pool state (`Pool.shutdown`) that stops every inflow, the game and the draw, and lets withdrawals skip the epoch lock. Set once, by `shutdown`. Modelled on Marginfi/Kamino's ReduceOnly.
 _Avoid_: Pause (a separate, reversible state), wind-down, freeze
+
+**Game pause**:
+A reversible pool switch (`Pool.game_paused`) that stops new Rounds opening and new Positions being bought. A Round already open still settles or voids, so no stake is stuck. Either key can turn it on; only the Admin can turn it off, and never after Shutdown. A new pool starts with it on, so turning it off is how the game starts. Set by `set_feature_pause`.
+_Avoid_: Freeze, stop the board
+
+**Jackpot pause**:
+A reversible pool switch (`Pool.jackpot_paused`) that stops the epoch cycle at its next step: no new Epoch begins, no Tickets are bought or granted, and a Registering Epoch does not close for the draw. Registration stays open, and an Epoch already Drawing or Drawn still draws and pays. Rounds live inside an Epoch, so once the current one ends the game stops too. Same key rules and starting state as the Game pause.
+_Avoid_: Draw freeze, skip the draw
 
 **Emergency withdraw**:
 A permissionless crank, valid only once a pool is shut down, that pays one Player's whole Principal and pending withdrawal to their own wallet in one instruction (`emergency_withdraw`). Anyone may run it for any Player; the House is excluded, since its principal is protocol money and leaves through a Sweep instead.

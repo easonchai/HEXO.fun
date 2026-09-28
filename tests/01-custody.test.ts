@@ -163,6 +163,24 @@ async function setPause(pool: PoolCtx, paused: boolean) {
     .rpc();
 }
 
+type Feature = "Game" | "Jackpot";
+
+async function setFeaturePause(pool: PoolCtx, signer: Keypair, feature: Feature, paused: boolean) {
+  return program.methods
+    .setFeaturePause(feature === "Game" ? { game: {} } : { jackpot: {} }, paused)
+    .accountsPartial({ signer: signer.publicKey, pool: pool.pool })
+    .signers([signer])
+    .rpc();
+}
+
+async function shutdown(pool: PoolCtx) {
+  return program.methods
+    .shutdown()
+    .accountsPartial({ admin: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
+    .rpc();
+}
+
 describe("custody", () => {
   it(
     "deposit mints equal principal and entries",
@@ -869,6 +887,76 @@ describe("roles", () => {
   );
 
   it(
+    "set_feature_pause follows set_pause's role rule, for each feature on its own",
+    async () => {
+      const pool = await setupPool();
+      const stranger = await fundedKey();
+      const fieldFor = (feature: Feature) =>
+        feature === "Game" ? ("gamePaused" as const) : ("jackpotPaused" as const);
+
+      for (const feature of ["Game", "Jackpot"] as const) {
+        const sig = await setFeaturePause(pool, pool.operator, feature, true);
+        expect((await program.account.pool.fetch(pool.pool))[fieldFor(feature)]).toBe(true);
+
+        const event = await findEvent<{ pool: PublicKey; paused: boolean; at: BN }>(
+          sig,
+          "featurePaused",
+        );
+        expect(event?.pool.toBase58()).toBe(pool.pool.toBase58());
+        expect(event?.paused).toBe(true);
+
+        await expect(setFeaturePause(pool, pool.operator, feature, false)).rejects.toThrow(
+          /Unauthorized/,
+        );
+        await expect(setFeaturePause(pool, stranger, feature, true)).rejects.toThrow(
+          /Unauthorized/,
+        );
+        expect((await program.account.pool.fetch(pool.pool))[fieldFor(feature)]).toBe(true);
+
+        await setFeaturePause(pool, pool.admin, feature, false);
+        expect((await program.account.pool.fetch(pool.pool))[fieldFor(feature)]).toBe(false);
+      }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "turning one switch off never turns the other off by accident",
+    async () => {
+      const pool = await setupPool();
+      await setFeaturePause(pool, pool.admin, "Game", true);
+      await setFeaturePause(pool, pool.admin, "Jackpot", true);
+
+      await setFeaturePause(pool, pool.admin, "Game", false);
+      expect((await program.account.pool.fetch(pool.pool)).jackpotPaused).toBe(true);
+      expect((await program.account.pool.fetch(pool.pool)).gamePaused).toBe(false);
+
+      await setFeaturePause(pool, pool.admin, "Jackpot", false);
+      expect((await program.account.pool.fetch(pool.pool)).jackpotPaused).toBe(false);
+      expect((await program.account.pool.fetch(pool.pool)).gamePaused).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "set_feature_pause(false) is refused once shut down, for both features, but pause(true) still no-ops",
+    async () => {
+      const pool = await setupPool();
+      await shutdown(pool);
+
+      await expect(setFeaturePause(pool, pool.admin, "Game", false)).rejects.toThrow(
+        /PoolShutDown/,
+      );
+      await expect(setFeaturePause(pool, pool.admin, "Jackpot", false)).rejects.toThrow(
+        /PoolShutDown/,
+      );
+      await setFeaturePause(pool, pool.admin, "Game", true);
+      await setFeaturePause(pool, pool.admin, "Jackpot", true);
+    },
+    TIMEOUT,
+  );
+
+  it(
     "set_operator rotates the crank key and locks the old one out",
     async () => {
       const pool = await rolePool();
@@ -1152,6 +1240,34 @@ describe("create_pool guards", () => {
       // drawn in, which is what the timeout exists to stop.
       await expect(attempt(0, 0)).rejects.toThrow(/InvalidParameter/);
       await attempt(599);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a fresh pool reads game_paused and jackpot_paused as true, before anyone starts either",
+    async () => {
+      const payer = await fundedKey();
+      const connection = program.provider.connection;
+      const mint = await createMint(connection, payer, payer.publicKey, null, 6);
+      const token = (): Promise<PublicKey> =>
+        createAccount(connection, payer, mint, payer.publicKey, Keypair.generate());
+      const treasury = await token();
+      const buybackReserve = await token();
+      const poolId = nextPoolId();
+      const pool = poolPda(poolId);
+
+      await program.methods
+        .createPool(params({ poolId: new BN(poolId.toString()), operator: payer.publicKey }))
+        .accountsPartial(
+          createPoolAccounts(payer, pool, mint, treasury, buybackReserve, TOKEN_PROGRAM_ID),
+        )
+        .signers([payer])
+        .rpc();
+
+      const account = await program.account.pool.fetch(pool);
+      expect(account.gamePaused).toBe(true);
+      expect(account.jackpotPaused).toBe(true);
     },
     TIMEOUT,
   );

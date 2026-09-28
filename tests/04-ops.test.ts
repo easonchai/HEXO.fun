@@ -453,6 +453,8 @@ describe("shutdown", () => {
       const account = await program.account.pool.fetch(pool.pool);
       expect(account.shutdown).toBe(true);
       expect(account.paused).toBe(true);
+      expect(account.gamePaused).toBe(true);
+      expect(account.jackpotPaused).toBe(true);
 
       const event = await findEvent<{ pool: PublicKey; at: BN }>(sig, "poolShutdown");
       expect(event?.pool.toBase58()).toBe(pool.pool.toBase58());

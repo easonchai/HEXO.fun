@@ -486,6 +486,22 @@ export async function setupPool(overrides: PoolParamsOverrides = {}): Promise<Po
     .signers([operator])
     .rpc();
 
+  // A new pool starts with both the game and the jackpot paused (spec
+  // "game-jackpot-pause"): the admin has to explicitly start each one. Every
+  // suite's fixture starts both right here, right after create_pool, so the
+  // rest of the tests see the pool the way they did before either switch
+  // existed -- running from the moment `setupPool` returns.
+  await program.methods
+    .setFeaturePause({ game: {} }, false)
+    .accountsPartial({ signer: admin.publicKey, pool })
+    .signers([admin])
+    .rpc();
+  await program.methods
+    .setFeaturePause({ jackpot: {} }, false)
+    .accountsPartial({ signer: admin.publicKey, pool })
+    .signers([admin])
+    .rpc();
+
   async function fundedWallet(amount: bigint) {
     const keypair = Keypair.generate();
     await airdrop(keypair.publicKey, 5);

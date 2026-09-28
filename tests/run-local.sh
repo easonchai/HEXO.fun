@@ -97,4 +97,5 @@ echo "deployed $program_id at $rpc"
 # touching that committed file.
 export HEXVAULT_IDL_PATH="$(pwd)/target/idl/hex_vault.json"
 
-pnpm exec vitest run "${@:-tests}"
+# Agent worktrees under .claude/ carry their own copies of tests/; skip them.
+pnpm exec vitest run --exclude '**/.claude/**' "${@:-tests}"

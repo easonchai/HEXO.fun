@@ -85,6 +85,14 @@ async function setPause(pool: PoolCtx, paused: boolean) {
     .rpc();
 }
 
+async function setGamePaused(pool: PoolCtx, paused: boolean) {
+  return program.methods
+    .setFeaturePause({ game: {} }, paused)
+    .accountsPartial({ signer: pool.admin.publicKey, pool: pool.pool })
+    .signers([pool.admin])
+    .rpc();
+}
+
 /**
  * The validator's own Clock sysvar time. `solana-test-validator` derives
  * `unix_timestamp` from slot count, not wall time, and slots can run well
@@ -933,16 +941,107 @@ describe("rounds", () => {
   );
 
   it(
-    "create_round rejects a paused pool and a second open round",
+    "create_round rejects a paused pool, a game-paused pool, and a second open round",
     async () => {
       const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
 
       await setPause(pool, true);
-      await expect(createRound(pool, 6)).rejects.toThrow();
+      await expect(createRound(pool, 6)).rejects.toThrow(/PoolPaused/);
       await setPause(pool, false);
+
+      await setGamePaused(pool, true);
+      await expect(createRound(pool, 6)).rejects.toThrow(/GamePaused/);
+      await setGamePaused(pool, false);
 
       await createRound(pool, 6); // now open
       await expect(createRound(pool, 6)).rejects.toThrow(); // still open
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "buy_position rejects a game-paused pool",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const { round } = await createRound(pool, 6);
+      await setGamePaused(pool, true);
+      await expect(
+        buyPosition(pool, alice, round, 1n << 0n, 1_000_000n),
+      ).rejects.toThrow(/GamePaused/);
+
+      await setGamePaused(pool, false);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n); // clears once unpaused
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a round opened before the game is paused still settles, its position still settles, and it still closes",
+    async () => {
+      const pool = await setupPool({ roundSeconds: 6, closeBuffer: 2 });
+      const alice = await pool.fundedWallet(10_000_000n);
+      const bob = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+      await deposit(pool, bob, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 6);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
+
+      await setGamePaused(pool, true);
+      // create_round and buy_position are refused, but nothing that finishes
+      // this already-open round is gated (spec: game pause never blocks
+      // request_round_randomness, settle_round, settle_position or
+      // close_round). Bob, not Alice, tries to buy: Alice's Position already
+      // exists, so her second buy fails its `init` before the pause check.
+      await expect(createRound(pool, 6)).rejects.toThrow(/GamePaused/);
+      await expect(
+        buyPosition(pool, bob, round, 1n << 1n, 1n),
+      ).rejects.toThrow(/GamePaused/);
+
+      const settled = await playToSettlement(pool, round, endsAt, 0);
+      expect(settled.status).toBe(2); // Settled
+
+      await settlePosition(pool, round, alice.keypair.publicKey);
+      const aliceAfter = await program.account.player.fetch(
+        playerPda(pool.pool, alice.keypair.publicKey),
+      );
+      // 5M - 1M staked + the 1M pot back net of the 60k House cut.
+      expect(aliceAfter.entries.toString()).toBe("4940000");
+
+      const positionPdaAddr = positionPda(round, alice.keypair.publicKey);
+      await expectClosed(positionPdaAddr);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "voiding an already-open round after the vrf timeout still works while the game is paused",
+    async () => {
+      const pool = await setupPool({
+        roundSeconds: 4,
+        closeBuffer: 1,
+        vrfTimeout: 2,
+      });
+      const alice = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, alice, 5_000_000n);
+
+      const { round, endsAt } = await createRound(pool, 4);
+      await buyPosition(pool, alice, round, 1n << 0n, 1_000_000n);
+      await setGamePaused(pool, true);
+
+      await waitUntil(endsAt);
+      const roundBefore = await program.account.round.fetch(round);
+      const seed = await requestRandomness(pool, round, BigInt(roundBefore.roundId.toString()));
+      const requested = await program.account.round.fetch(round);
+
+      await waitUntil(Number(requested.requestedAt.toString()) + 2);
+      await voidRound(pool, round, seed);
+
+      const voided = await program.account.round.fetch(round);
+      expect(voided.status).toBe(4); // Voided
     },
     TIMEOUT,
   );

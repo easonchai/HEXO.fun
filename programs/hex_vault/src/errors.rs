@@ -144,4 +144,10 @@ pub enum HexVaultError {
     PreviousEpochStillDrawing,
     #[msg("no epoch exists yet")]
     NoEpochYet,
+
+    // Game pause and jackpot pause (game-jackpot-pause ticket 01). Appended too.
+    #[msg("the game is paused")]
+    GamePaused,
+    #[msg("the jackpot is paused")]
+    JackpotPaused,
 }

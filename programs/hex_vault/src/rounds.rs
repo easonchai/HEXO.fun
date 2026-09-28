@@ -27,6 +27,7 @@ pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> 
 
     require!(!pool.shutdown, HexVaultError::PoolShutDown);
     require!(!pool.paused, HexVaultError::PoolPaused);
+    require!(!pool.game_paused, HexVaultError::GamePaused);
     require!(pool.open_round_id == 0, HexVaultError::RoundAlreadyOpen);
     require!(
         ends_at.checked_sub(starts_at) == Some(pool.round_seconds),
@@ -107,6 +108,7 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
     // already-open round can still finish (settle_round, settle_position,
     // close_round all stay open while paused).
     require!(!pool.paused, HexVaultError::PoolPaused);
+    require!(!pool.game_paused, HexVaultError::GamePaused);
     // The House is the counterparty, not a participant: it takes forfeited
     // pots and the cut, so letting the operator stake those Entries back on
     // tiles would be playing against the depositors with their own money.
