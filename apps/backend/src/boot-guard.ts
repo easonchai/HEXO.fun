@@ -8,6 +8,7 @@
 // Postgres.
 import type { PublicKey } from "@solana/web3.js";
 
+import { poolAddress } from "./chain/pda";
 import type { Cluster } from "./config/env";
 
 /** Mainnet-beta's and devnet's genesis hashes never change; a mismatch means
@@ -35,19 +36,33 @@ export function assertAcceptedMintMatchesPool(configuredMint: string, poolMint: 
   }
 }
 
-/** "Mirrored" means the indexer's own Postgres copy of the Pool table, not
- *  the on-chain account: a row here for any address other than the
- *  configured Pool means this database was populated against a different
- *  program id or pool id than the one this process is about to crank. */
-export function assertNoForeignPoolRows(
-  configuredPoolAddress: string,
-  mirroredAddresses: readonly string[],
+/** One row of the indexer's Postgres Pool table, as the guard needs it. */
+export interface MirroredPoolRow {
+  readonly address: string;
+  readonly poolId: bigint;
+}
+
+/**
+ * "Mirrored" means the indexer's own Postgres copy of the Pool table, not
+ * the on-chain account. The database keeps every pool it has ever mirrored
+ * (ADR 0016), so a Pool cutover leaves the retired pool's row behind, and a
+ * row for a pool other than the configured one is no longer a mistake. What
+ * still is: a row whose address is not the PDA of its own `poolId` under the
+ * configured program. That database was built against another program, which
+ * is what a wrong DATABASE_URL or PROGRAM_ID looks like.
+ */
+export function assertPoolRowsBelongToProgram(
+  programId: PublicKey,
+  mirroredRows: readonly MirroredPoolRow[],
 ): void {
-  const foreign = mirroredAddresses.filter((address) => address !== configuredPoolAddress);
+  const foreign = mirroredRows.filter(
+    (row) => poolAddress(programId, row.poolId).toBase58() !== row.address,
+  );
   if (foreign.length > 0) {
     throw new Error(
-      `Postgres has Pool row(s) for a different pool than the configured ${configuredPoolAddress}: ` +
-        `${foreign.join(", ")}; wrong DATABASE_URL for this deployment`,
+      `Postgres has Pool row(s) that are not PDAs of PROGRAM_ID ${programId.toBase58()}: ` +
+        `${foreign.map((row) => `${row.address} (poolId ${row.poolId})`).join(", ")}; ` +
+        `wrong DATABASE_URL or PROGRAM_ID for this deployment`,
     );
   }
 }
@@ -71,11 +86,12 @@ export interface BootGuardConnection {
 export interface BootGuardDeps {
   readonly connection: BootGuardConnection;
   readonly program: PoolMintDecoder;
+  readonly programId: PublicKey;
   readonly poolAddress: PublicKey;
   readonly acceptedMint: string;
   readonly cluster: Cluster;
-  /** Every address currently in Postgres's Pool table. */
-  readonly mirroredPoolAddresses: () => Promise<string[]>;
+  /** Every row currently in Postgres's Pool table, Active and retired. */
+  readonly mirroredPoolRows: () => Promise<MirroredPoolRow[]>;
 }
 
 /**
@@ -83,7 +99,7 @@ export interface BootGuardDeps {
  * check: CLUSTER against the RPC's genesis hash, ACCEPTED_MINT against the
  * on-chain Pool's mint (skipped when the Pool does not exist yet — bootstrap
  * has not run), and every mirrored Postgres Pool row against the configured
- * Pool address. Throws on the first failing guard; main.ts lets that fail
+ * program. Throws on the first failing guard; main.ts lets that fail
  * `bootstrap()` rather than starting the server.
  */
 export async function runBootGuards(deps: BootGuardDeps): Promise<void> {
@@ -96,6 +112,5 @@ export async function runBootGuards(deps: BootGuardDeps): Promise<void> {
     assertAcceptedMintMatchesPool(deps.acceptedMint, raw.acceptedMint.toBase58());
   }
 
-  const mirrored = await deps.mirroredPoolAddresses();
-  assertNoForeignPoolRows(deps.poolAddress.toBase58(), mirrored);
+  assertPoolRowsBelongToProgram(deps.programId, await deps.mirroredPoolRows());
 }
