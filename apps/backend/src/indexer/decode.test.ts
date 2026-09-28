@@ -388,6 +388,8 @@ describe("poolRow", () => {
       bonusGranted: new BN(40_000),
       version: 1,
       shutdown: false,
+      gamePaused: false,
+      jackpotPaused: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       epochSeconds: 86_400n,
@@ -432,6 +434,8 @@ describe("poolRow", () => {
       bonusGranted: new BN(40_000),
       version: 1,
       shutdown: false,
+      gamePaused: false,
+      jackpotPaused: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       baseRateBps: 488,
@@ -474,6 +478,8 @@ describe("poolRow", () => {
       bonusGranted: new BN(0),
       version: 1,
       shutdown: false,
+      gamePaused: false,
+      jackpotPaused: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n)).toMatchObject({
       admin: OWNER,
@@ -513,6 +519,8 @@ describe("poolRow", () => {
       bonusGranted: new BN(0),
       version: 1,
       shutdown: false,
+      gamePaused: false,
+      jackpotPaused: false,
     };
     expect(poolRow(new PublicKey(POOL), pool, 9n).pendingAdmin).toBeNull();
   });

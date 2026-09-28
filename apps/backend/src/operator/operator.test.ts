@@ -105,6 +105,8 @@ const pool = (over: Partial<PoolState> = {}): PoolState => ({
   openRoundId: 3n,
   totalPrincipal: 1_000_000_000n,
   shutdown: false,
+  gamePaused: false,
+  jackpotPaused: false,
   ...over,
 });
 
@@ -586,6 +588,29 @@ describe("runTick", () => {
     expect(result.action).toBe("begin_epoch");
   });
 
+  // game-jackpot-pause ticket 02: begin_epoch is refused under jackpot
+  // pause, and a new pool starts that way.
+  it("3. does not begin the first epoch while the jackpot is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ currentEpochId: 0n, nextRoundId: 1n, openRoundId: 0n, jackpotPaused: true }),
+      currentEpoch: null,
+      previousEpoch: null,
+      openRound: null,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
+  });
+
+  it("3. does not begin the next epoch while the jackpot is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n, jackpotPaused: true }),
+      currentEpoch: epoch({ endsAt: NOW }),
+      openRound: null,
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
+  });
+
   it("3. LAUNCH_AT does not hold back a later epoch once one already exists", async () => {
     const result = await tickLabels({
       pool: pool({ openRoundId: 0n }),
@@ -661,6 +686,17 @@ describe("runTick", () => {
       pool: pool({ shutdown: true }),
       referralGrantsDue: () => {
         throw new Error("must not be asked while shut down");
+      },
+    });
+    expect(result.action).toBeNull();
+  });
+
+  // game-jackpot-pause ticket 02: grant_tickets is refused under jackpot pause.
+  it("3b. does not grant tickets while the jackpot is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ jackpotPaused: true }),
+      referralGrantsDue: () => {
+        throw new Error("must not be asked while the jackpot is paused");
       },
     });
     expect(result.action).toBeNull();
@@ -856,6 +892,28 @@ describe("runTick", () => {
       },
     });
     expect(result.action).toBeNull();
+  });
+
+  // game-jackpot-pause ticket 02: close_registration is refused under
+  // jackpot pause, register is not.
+  it("4. does not close registration while the jackpot is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ jackpotPaused: true }),
+      previousEpoch: registering(),
+      lastRegisterCheck: { epochId: 1n, empty: true },
+    });
+    expect(result.transactions).toBe(0);
+    expect(result.action).toBeNull();
+  });
+
+  it("4. still registers players while the jackpot is paused", async () => {
+    const owner = Keypair.generate().publicKey.toBase58();
+    const result = await tickLabels({
+      pool: pool({ jackpotPaused: true }),
+      previousEpoch: registering(),
+      playersToRegister: async () => [owner],
+    });
+    expect(result.labels).toEqual(["register"]);
   });
 
   // --- 5. Draw or rollover.
@@ -1354,6 +1412,16 @@ describe("runTick", () => {
     expect(result.transactions).toBe(0);
     // Nothing closer than the running epoch's own (far-off) end: falls back
     // to the safety interval.
+    expect(result.nextWakeAt).toBe(NOW + SAFETY_INTERVAL_SECONDS);
+  });
+
+  // game-jackpot-pause ticket 02: create_round is refused under game pause.
+  it("7. does not open a round while the game is paused", async () => {
+    const result = await tickLabels({
+      pool: pool({ openRoundId: 0n, gamePaused: true }),
+      openRound: null,
+    });
+    expect(result.transactions).toBe(0);
     expect(result.nextWakeAt).toBe(NOW + SAFETY_INTERVAL_SECONDS);
   });
 

@@ -496,6 +496,56 @@ describe("admin run", () => {
     ).rejects.toThrow(/transaction .* failed/);
   });
 
+  // game-jackpot-pause ticket 02.
+  it("pause-game signs locally with the loaded key", async () => {
+    const { chain, sent } = await harness();
+    const mode: AdminMode = { signer: chain.keypair.publicKey, multisig: false };
+
+    const { stderr } = await capture(() => run({ kind: "pause-game" }, chain, mode));
+
+    expect(sent).toHaveLength(1);
+    expect(stderr).toContain("game paused");
+  });
+
+  it("start-jackpot refuses an operator signer before sending", async () => {
+    const { chain, sent, rawSent } = await harness();
+    const mode: AdminMode = { signer: poolFields.operator, multisig: false };
+
+    await expect(
+      capture(() => run({ kind: "start-jackpot" }, chain, mode)),
+    ).rejects.toThrow(/admin only: .* is the operator/);
+    expect(sent).toEqual([]);
+    expect(rawSent).toEqual([]);
+  });
+
+  it("start-game in multisig mode prints one base58 transaction signed by the admin", async () => {
+    const multisigVault = Keypair.generate().publicKey;
+    const { chain, sent } = await harness({ pool: { admin: multisigVault } });
+    const mode: AdminMode = { signer: multisigVault, multisig: true };
+
+    const { stdout } = await capture(() => run({ kind: "start-game" }, chain, mode));
+
+    expect(sent).toEqual([]);
+    expect(stdout).toHaveLength(1);
+    const tx = Transaction.from(bs58.decode(stdout[0] as string));
+    expect(tx.feePayer?.equals(multisigVault)).toBe(true);
+  });
+
+  it("start-jackpot with a Ledger admin sends through the Ledger", async () => {
+    const ledgerKeypair = Keypair.generate();
+    const { chain, sent, rawSent } = await harness({
+      pool: { admin: ledgerKeypair.publicKey },
+    });
+    const mode: AdminMode = { signer: ledgerKeypair.publicKey, multisig: false };
+
+    await capture(() =>
+      run({ kind: "start-jackpot" }, chain, mode, fakeLedger(ledgerKeypair)),
+    );
+
+    expect(sent).toEqual([]);
+    expect(rawSent).toHaveLength(1);
+  });
+
   it("principal-out reads the pool and vault and sends nothing", async () => {
     const { chain, sent } = await harness({
       pool: {

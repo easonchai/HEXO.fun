@@ -245,6 +245,14 @@ describe.skipIf(!RPC_URL)("operator on localnet", () => {
           systemProgram: SystemProgram.programId,
         })
         .rpc();
+      // game-jackpot-pause ticket 02: create_pool leaves both switches on.
+      // Start them the way `bootstrap --start` does, jackpot first, so the
+      // operator runs this pool as it did before either switch existed.
+      for (const feature of ["jackpot", "game"]) {
+        await method("setFeaturePause", { [feature]: {} }, false)
+          .accountsPartial({ signer: authority.publicKey, pool })
+          .rpc();
+      }
 
       // Params apply to the next epoch created, so this lands before the
       // operator opens the first one.

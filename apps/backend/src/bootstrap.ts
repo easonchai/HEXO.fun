@@ -58,6 +58,8 @@ interface PoolAccount {
   acceptedMint: PublicKey;
   treasury: PublicKey;
   buybackReserve: PublicKey;
+  gamePaused: boolean;
+  jackpotPaused: boolean;
 }
 
 const log = (message: string): void => {
@@ -290,6 +292,42 @@ async function createPool(
   }
 }
 
+/**
+ * game-jackpot-pause ticket 02: `--start`. Jackpot first, then game, the
+ * order the spec asks for. Reads the pool first and sends only for a switch
+ * still on, so a re-run starts nothing twice.
+ */
+async function startPool(
+  program: Program<Idl>,
+  admin: Keypair,
+  pool: PublicKey,
+): Promise<void> {
+  const setFeaturePause = program.methods.setFeaturePause;
+  if (!setFeaturePause) {
+    throw new Error(
+      "the IDL has no set_feature_pause instruction; run `pnpm --filter @hexvault/backend sync-idl`",
+    );
+  }
+  const info = await program.provider.connection.getAccountInfo(pool);
+  if (!info) throw new Error(`pool ${pool.toBase58()} not found after create_pool`);
+  const state = program.coder.accounts.decode<PoolAccount>("pool", info.data);
+  const switches = [
+    { feature: "jackpot", paused: state.jackpotPaused },
+    { feature: "game", paused: state.gamePaused },
+  ];
+  for (const { feature, paused } of switches) {
+    if (!paused) {
+      log(`${feature} already started`);
+      continue;
+    }
+    await setFeaturePause({ [feature]: {} }, false)
+      .accountsPartial({ signer: admin.publicKey, pool })
+      .signers([admin])
+      .rpc();
+    log(`started the ${feature}`);
+  }
+}
+
 async function main(): Promise<void> {
   // Same file and precedence as Nest's ConfigModule: process.env wins.
   if (existsSync(".env")) process.loadEnvFile();
@@ -335,6 +373,13 @@ async function main(): Promise<void> {
     buybackReserve: params.buybackReserve,
     acceptedMint: envMint,
   });
+  // game-jackpot-pause ticket 02: starting is admin only on chain, so a
+  // --start this key cannot sign fails before anything is created.
+  if (params.start && !roles.admin.equals(authority.publicKey)) {
+    throw new Error(
+      `--start needs the admin key, but the admin is ${roles.admin.toBase58()}; start the pool with the admin CLI's start-jackpot and start-game instead`,
+    );
+  }
   if (!explicitAdmin) {
     log(
       `warning: no --admin/ADMIN_ADDRESS given; defaulting Admin to the operator hot key ${authority.publicKey.toBase58()}`,
@@ -467,6 +512,13 @@ async function main(): Promise<void> {
         params,
       ),
     );
+  }
+  if (params.start) {
+    await step("starting the jackpot and the game", () =>
+      startPool(program, authority, pool),
+    );
+  } else if (!existing) {
+    log("the game and the jackpot start paused; run the admin CLI's start-jackpot and start-game, or pass --start");
   }
 
   // The inline line above scrolls away behind create_pool's output, and a

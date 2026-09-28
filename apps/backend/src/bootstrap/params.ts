@@ -44,6 +44,10 @@ export interface PoolParams {
    * `grant_tickets` call may credit pool-wide per epoch. Env override
    * BONUS_CAP_BPS. */
   readonly bonusCapBps: number;
+  /** game-jackpot-pause ticket 02: a new pool starts with the game and the
+   *  jackpot paused. `--start` turns both off right after create_pool, for
+   *  localnet and dev. Needs the signer to be the admin. */
+  readonly start?: boolean;
 }
 
 /**
@@ -104,7 +108,7 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
 };
 
 export const USAGE =
-  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--admin PUBKEY] [--operator PUBKEY] [--treasury PUBKEY] [--buyback-reserve PUBKEY]";
+  "usage: bootstrap [--epoch-seconds N] [--round-seconds N] [--epoch-anchor ISO8601] [--house-cut-bps N] [--min-jackpot USDC] [--registration-window N] [--payout-timeout N] [--admin PUBKEY] [--operator PUBKEY] [--treasury PUBKEY] [--buyback-reserve PUBKEY] [--start]";
 
 /** mainnet-beta's genesis hash. Every other cluster (devnet, testnet,
  * localnet) keeps today's hot-key convenience defaults. */
@@ -226,6 +230,7 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
     operator?: string;
     treasury?: string;
     "buyback-reserve"?: string;
+    start?: boolean;
   };
   try {
     ({ values } = parseArgs({
@@ -242,6 +247,7 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
         operator: { type: "string" },
         treasury: { type: "string" },
         "buyback-reserve": { type: "string" },
+        start: { type: "boolean" },
       },
       allowPositionals: false,
     }));
@@ -296,6 +302,7 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
       : {
           buybackReserve: pubkey("buyback-reserve", values["buyback-reserve"]),
         }),
+    ...(values.start === true ? { start: true } : {}),
   };
 
   // create_pool requires close_buffer < round_seconds, so a too-fast demo

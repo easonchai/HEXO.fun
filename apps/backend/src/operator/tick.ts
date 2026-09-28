@@ -591,6 +591,9 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // LAUNCH_AT, if configured, so deposits can open days before the first
   // Draw without an Epoch existing to reset a bought Ticket. Every later
   // begin_epoch (currentEpoch already exists) is unaffected.
+  // game-jackpot-pause ticket 02: `begin_epoch` is refused while the jackpot
+  // is paused, and a new pool starts that way, so no epoch begins until the
+  // admin starts the jackpot.
   const launchReady = ctx.launchAt === null || now >= ctx.launchAt;
   const epochEnded =
     (pool.currentEpochId === 0n && launchReady) ||
@@ -599,7 +602,13 @@ async function decide(ctx: TickContext): Promise<Decision> {
     previousEpoch === null ||
     previousEpoch.status === EPOCH_STATUS.PAID ||
     previousEpoch.status === EPOCH_STATUS.ROLLED_OVER;
-  if (!pool.shutdown && epochEnded && pool.openRoundId === 0n && previousDone) {
+  if (
+    !pool.shutdown &&
+    !pool.jackpotPaused &&
+    epochEnded &&
+    pool.openRoundId === 0n &&
+    previousDone
+  ) {
     await ctx.send(await ctx.ix.beginEpoch(pool));
     return finish({ action: "begin_epoch" });
   }
@@ -612,8 +621,10 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // across restarts), then hands back whatever is still unsent; batched the
   // same way step 4 batches registrations. `grant_tickets` is refused in
   // shutdown (ops-and-envs ticket 02), so this stops with the rest of the
-  // epoch loop.
-  if (!pool.shutdown && currentEpoch) {
+  // epoch loop. It is refused while the jackpot is paused too
+  // (game-jackpot-pause ticket 02); the grants stay due and go out once the
+  // jackpot restarts.
+  if (!pool.shutdown && !pool.jackpotPaused && currentEpoch) {
     const grants = await ctx.referralGrantsDue(currentEpoch.epochId);
     if (grants.length > 0) {
       const batch = grants.slice(0, BATCH_SIZE);
@@ -676,7 +687,17 @@ async function decide(ctx: TickContext): Promise<Decision> {
         registerCheck: { epochId: previousEpoch.epochId, empty: false },
       });
     }
+  }
 
+  // 4b. Close registration. Refused while the jackpot is paused
+  // (game-jackpot-pause ticket 02), but `register` above is not, so weight
+  // keeps being recorded. The tick falls through instead of returning here,
+  // so withdrawals and rounds are not held for as long as the pause lasts.
+  if (
+    !pool.shutdown &&
+    !pool.jackpotPaused &&
+    previousEpoch?.status === EPOCH_STATUS.REGISTERING
+  ) {
     const emptyLastTick =
       ctx.lastRegisterCheck?.epochId === previousEpoch.epochId &&
       ctx.lastRegisterCheck.empty;
@@ -851,6 +872,8 @@ async function decide(ctx: TickContext): Promise<Decision> {
   // 7. Open the next round, if a whole one still fits in this epoch, and the
   // previous Round's reveal has had time to play: no viewer should see a new
   // countdown while the last Round's laser is still landing.
+  // game-jackpot-pause ticket 02: `create_round` is refused under the game
+  // pause as well as the global `paused`, so both hold the round loop.
   const lastRound = ctx.lastRound;
   const revealDone =
     lastRound === null ||
@@ -859,6 +882,7 @@ async function decide(ctx: TickContext): Promise<Decision> {
   if (
     pool.openRoundId === 0n &&
     !pool.paused &&
+    !pool.gamePaused &&
     currentEpoch &&
     now + pool.roundSeconds <= currentEpoch.endsAt &&
     revealDone

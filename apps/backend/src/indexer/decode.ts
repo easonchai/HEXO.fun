@@ -173,6 +173,11 @@ export interface DecodedPool {
   /** Admin-only and irreversible: stops every inflow, the game and the
    *  draw, and lets withdrawals skip the epoch lock. */
   shutdown: boolean;
+  /** Game pause (game-jackpot-pause ticket 02): no new Round or Position. */
+  gamePaused: boolean;
+  /** Jackpot pause (game-jackpot-pause ticket 02): no new epoch, ticket
+   *  purchase, grant or registration close. */
+  jackpotPaused: boolean;
 }
 
 export interface DecodedEpoch {
@@ -274,6 +279,8 @@ export function poolRow(
     bonusGranted: big(pool.bonusGranted),
     version: pool.version,
     shutdown: pool.shutdown,
+    gamePaused: pool.gamePaused,
+    jackpotPaused: pool.jackpotPaused,
     updatedSlot: slot,
   };
 }

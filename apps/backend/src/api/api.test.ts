@@ -908,6 +908,9 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       // The browser needs both and no longer reads the Pool account itself.
       expect(body.pool.closeBuffer).toBe(POOL_CLOSE_BUFFER.toString());
       expect(body.pool.minDeposit).toBe(POOL_MIN_DEPOSIT.toString());
+      // game-jackpot-pause ticket 02: the web reads both switches off here.
+      expect(body.pool.gamePaused).toBe(false);
+      expect(body.pool.jackpotPaused).toBe(false);
       expect(body.currentEpoch).toMatchObject({ id: "7", status: 0 });
       // Open epoch: same live-vault-balance rule as GET /epochs/current.
       expect(body.currentEpoch.jackpotAmount).toBe(VAULT_BALANCE.toString());
@@ -1004,9 +1007,15 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
     // Epoch id exists to mirror); `/state` returns a null Epoch and the
     // configured launch time instead of 404ing.
     it("returns a null current epoch and the launch time before Epoch 1, instead of 404", async () => {
-      await prisma.pool.update({ where: { address: POOL_ADDRESS }, data: { currentEpochId: 0n } });
+      // game-jackpot-pause ticket 02: a new pool sits here, both switches on,
+      // for as long as the deposit-only week lasts.
+      await prisma.pool.update({
+        where: { address: POOL_ADDRESS },
+        data: { currentEpochId: 0n, gamePaused: true, jackpotPaused: true },
+      });
       try {
         const { body } = await http.get(`/state?owner=${ALICE}`).expect(200);
+        expect(body.pool).toMatchObject({ gamePaused: true, jackpotPaused: true });
         expect(body.currentEpoch).toBeNull();
         expect(body.launchAt).toBe(process.env.LAUNCH_AT);
         // Deposits still show the depositor's real Principal even with no Epoch.
@@ -1015,7 +1024,7 @@ describe.skipIf(!DB_AVAILABLE)("API routes", () => {
       } finally {
         await prisma.pool.update({
           where: { address: POOL_ADDRESS },
-          data: { currentEpochId: CURRENT_EPOCH },
+          data: { currentEpochId: CURRENT_EPOCH, gamePaused: false, jackpotPaused: false },
         });
       }
     });

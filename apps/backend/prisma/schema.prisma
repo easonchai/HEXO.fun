@@ -57,6 +57,11 @@ model Pool {
   /// Admin-only and irreversible: stops every inflow, the game and the
   /// draw, and lets withdrawals skip the epoch lock.
   shutdown            Boolean
+  /// Game pause: no new Round or Position (game-jackpot-pause).
+  gamePaused          Boolean @default(false)
+  /// Jackpot pause: no new epoch, ticket purchase, grant or registration
+  /// close (game-jackpot-pause).
+  jackpotPaused       Boolean @default(false)
   updatedSlot         BigInt
 }
 

@@ -66,6 +66,7 @@ interface MethodBuilder {
 }
 type Instruction =
   | "createPool"
+  | "setFeaturePause"
   | "beginEpoch"
   | "deposit"
   | "createRound"
@@ -221,6 +222,13 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
         systemProgram: SystemProgram.programId,
       })
       .rpc();
+    // game-jackpot-pause ticket 02: create_pool leaves both switches on.
+    for (const feature of ["jackpot", "game"]) {
+      await methods
+        .setFeaturePause({ [feature]: {} }, false)
+        .accountsPartial({ signer: authority.publicKey, pool })
+        .rpc();
+    }
 
     await methods
       .beginEpoch()

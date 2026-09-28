@@ -93,6 +93,12 @@ describe("parsePoolParams", () => {
     );
   });
 
+  // game-jackpot-pause ticket 02: paused unless asked.
+  it("leaves the pool paused by default and takes --start", () => {
+    expect(parsePoolParams([]).start).toBeUndefined();
+    expect(parsePoolParams(["--start"]).start).toBe(true);
+  });
+
   it("rejects unknown flags", () => {
     expect(() => parsePoolParams(["--pool-id", "2"])).toThrow(/usage/);
   });

@@ -107,6 +107,8 @@ const emptyPool = (overrides: Partial<Pool> = {}): Pool => ({
   bonusGranted: 0n,
   version: 1,
   shutdown: false,
+  gamePaused: false,
+  jackpotPaused: false,
   updatedSlot: 0n,
   ...overrides,
 });
