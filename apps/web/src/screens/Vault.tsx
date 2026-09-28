@@ -118,8 +118,6 @@ export interface VaultScreenProps {
   pendingWithdraw: bigint;
   /** The epoch that pending amount was requested in, so the day it pays after. */
   pendingEpoch: bigint;
-  /** Ticket 16: `status.ts`'s `stale` — shows a "data delayed" chip. */
-  stale: boolean;
   /**
    * Which tab the widget opens on. The dashboard's two buttons are the only
    * way in, and they arrive with an intent already; App unmounts the screen on
@@ -147,7 +145,6 @@ export function Vault(props: VaultScreenProps) {
     currentEpoch,
     pendingWithdraw,
     pendingEpoch,
-    stale,
     initialMode,
     onConnect,
     onDone,
@@ -340,11 +337,6 @@ export function Vault(props: VaultScreenProps) {
 
   return (
     <div className="vault" data-testid="vault-screen">
-      {stale ? (
-        <span className="chip stale-chip" data-testid="data-delayed-chip">
-          Data delayed
-        </span>
-      ) : null}
       {/* Pre-dithered checkmark coin (scripts/dither-video.mjs). Without autoplay the poster stays. */}
       <video
         className="home-bg"

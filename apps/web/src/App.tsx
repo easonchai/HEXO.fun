@@ -580,7 +580,6 @@ export function App() {
             launchAt={state?.launchAt ?? null}
             jackpotPaused={jackpotPaused}
             player={player}
-            stale={status.stale}
             onDeposit={() => {
               setVaultMode("deposit");
               setTab("VAULT");
@@ -704,7 +703,6 @@ export function App() {
             currentEpoch={state?.currentEpoch ?? null}
             pendingWithdraw={pendingWithdraw}
             pendingEpoch={pendingEpoch}
-            stale={status.stale}
             initialMode={vaultMode}
             onConnect={() => signer.connect()}
             onDone={statePoll.kick}
