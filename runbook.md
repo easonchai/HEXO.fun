@@ -222,15 +222,19 @@
        Both are admin-only, so on mainnet each one is a Squads paste. pause-game and
        pause-jackpot undo them and either key can run them.
 
-    2. Wipe the dev database and rebuild the stack. Epoch, Round and Player rows carry no pool
-       column, so the previous pool's rows collide with the new pool's ids on the same numbers.
+    2. Recreate the dev stack. Keep the database volume: every pool-scoped row carries its pool's
+       address (ADR 0016), so the retired pool's rows stay beside the new one's as history, and
+       Invite codes, Referral codes, Referrals and faucet claims carry over. The indexer starts
+       the new pool's cursor empty and walks its history from the first signature.
 
-         docker compose -f docker-compose.dev.yml down -v
-         docker compose -f docker-compose.dev.yml up -d --build
+         docker compose -f docker-compose.dev.yml up -d --build --force-recreate
 
        The container runs prisma migrate deploy before node starts, which is what adds the new
        columns. Confirm with curl localhost:8080/pool for the new poolId and curl
        localhost:8080/status for rpcOk true and a lastAction a few seconds old.
+
+       `down -v` still works on a laptop when you want an empty database, and it deletes every
+       invite and referral with it. Never run it on the VPS or mainnet.
 
     3. Repoint the dev frontend: VITE_POOL_ID=7 in apps/web/.env, plus VITE_PROGRAM_ID if the
        program id moved. Vite reloads on its own. A stale id reads an account that no longer
@@ -258,14 +262,15 @@
 
     6. On the box, set POOL_ID=8 in its .env, then pull and recreate. Compose hardcodes
        env_file: .env, so the file is named .env there whatever it is called in this repo.
-       Wipe the volume for the same reason step 3 does: Epoch, Round and Player are keyed by
-       chain id alone, so the previous pool's rows collide with the new pool's ids. FaucetClaim
-       goes with it, so anyone who already claimed may claim again.
+       Keep the volume, for the same reason as step 2: the database holds every pool it has
+       mirrored, and the invites and referrals in it exist nowhere else.
 
          sed -i 's/^POOL_ID=.*/POOL_ID=8/' .env
          git pull
-         docker compose down -v
-         docker compose up -d --build
+         docker compose up -d --build --force-recreate
+
+       Depositors in the retired pool get their Principal back through Shutdown and Emergency
+       withdraw on that pool; nothing in this procedure moves it.
 
     7. Vercel: set VITE_POOL_ID to 8 on the project pointed at api-hexo.elvtd.io and redeploy.
        A Vercel env var only reaches the bundle on the next build, so a redeploy is required.

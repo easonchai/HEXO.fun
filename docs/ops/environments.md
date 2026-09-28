@@ -29,7 +29,11 @@ Adding a pool means:
 2. `pnpm --filter @hexvault/backend bootstrap` against that ID (creates `Pool`, its vaults, and
    the House `Player`; reuses an existing mint if you pass one).
 3. Point a backend stack's env file at the new `POOL_ID` (and, if it is a fresh mint, the new
-   `ACCEPTED_MINT`), then recreate that stack.
+   `ACCEPTED_MINT`), then recreate that stack. Keep the database volume: every pool-scoped row
+   carries its pool's address, so the retired pool's rows stay as history and Invite codes,
+   Referral codes and Referrals carry over ([ADR 0016](../adr/0016-database-outlives-the-pool.md)).
+   `docker compose down -v` is a local-only way to get an empty database; it deletes every
+   invite and referral.
 4. Point the matching frontend build's `VITE_POOL_ID` at it and redeploy.
 
 Every other pool on that program is untouched: bootstrap only writes new accounts. Since
@@ -52,3 +56,8 @@ made append-only:
 An additive field taken from `_reserved`, a new instruction, a new event or error variant, or an
 admin parameter change never needs a new program ID; that is the point of ADR 0013's upgrade
 policy. See [`docs/ops/deploy.md`](deploy.md#upgrade-policy-adr-0013).
+
+A new program ID does not carry the database over yet. The boot guard refuses any Pool row
+whose address does not derive from its `poolId` under the configured `PROGRAM_ID`, which is how
+it catches a wrong `DATABASE_URL`, and a pool from the old program looks exactly like that. A
+fresh pool on the same program ID is the path ADR 0016 covers.
