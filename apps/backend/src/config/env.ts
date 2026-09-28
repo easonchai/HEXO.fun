@@ -3,6 +3,7 @@
 // time, so a fresh checkout tells you everything it needs in one error.
 import { Logger } from "@nestjs/common";
 
+import { INVITE_CIRCULATION_CAP, INVITE_REDEEM_GRANT_COUNT } from "../api/invite-code";
 import { DEFAULT_REFERRAL_QUALIFY_SECONDS } from "../api/referral";
 
 const REQUIRED_KEYS = [
@@ -97,6 +98,11 @@ export interface HexVaultEnv {
   /** Ticket 07: how young the Indexer cursor must be, in seconds, for
    *  `close_registration` to trust it. */
   REGISTRATION_INDEXER_FRESH_S: number;
+  /** Most remaining Invite code uses allowed in circulation before a redeem
+   *  stops granting the redeemer codes of its own (invite-code.ts). */
+  INVITE_CIRCULATION_CAP: number;
+  /** Invite codes a successful redeem grants its redeemer, under the cap. */
+  INVITE_REDEEM_GRANT_COUNT: number;
   CORS_ORIGIN: string;
   PORT: string;
   /** Sparring player secret, base58. Absent switches the Sparring player off. */
@@ -250,6 +256,19 @@ function registrationIndexerFreshSeconds(raw: unknown): number {
   return value;
 }
 
+/** Unset or empty takes `fallback`; anything else must be a non-negative
+ *  whole number, or the boot fails naming `key`. */
+function wholeNumber(key: string, raw: unknown, fallback: number): number {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${key} must be a non-negative whole number, got "${String(raw)}"`);
+  }
+  return value;
+}
+
 /** @nestjs/config `validate` hook: runs once at boot, on the raw process.env. */
 export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
   if (!env.ACCEPTED_MINT && env.HEXUSDC_MINT) {
@@ -283,6 +302,16 @@ export function validateEnv(env: Record<string, unknown>): HexVaultEnv {
     ALERT_TICK_STALE_S: alertTickStaleSeconds(env.ALERT_TICK_STALE_S),
     ALERT_INDEXER_STALE_S: alertIndexerStaleSeconds(env.ALERT_INDEXER_STALE_S),
     REGISTRATION_INDEXER_FRESH_S: registrationIndexerFreshSeconds(env.REGISTRATION_INDEXER_FRESH_S),
+    INVITE_CIRCULATION_CAP: wholeNumber(
+      "INVITE_CIRCULATION_CAP",
+      env.INVITE_CIRCULATION_CAP,
+      INVITE_CIRCULATION_CAP,
+    ),
+    INVITE_REDEEM_GRANT_COUNT: wholeNumber(
+      "INVITE_REDEEM_GRANT_COUNT",
+      env.INVITE_REDEEM_GRANT_COUNT,
+      INVITE_REDEEM_GRANT_COUNT,
+    ),
     CORS_ORIGIN: String(env.CORS_ORIGIN),
     PORT: String(env.PORT ?? "8080"),
     // Spread rather than assigned: under `exactOptionalPropertyTypes` an

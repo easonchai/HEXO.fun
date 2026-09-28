@@ -71,6 +71,12 @@ describe("inviteGrantCount", () => {
   it("never grants more than INVITE_REDEEM_GRANT_COUNT", () => {
     expect(inviteGrantCount(-100)).toBe(INVITE_REDEEM_GRANT_COUNT);
   });
+
+  it("follows a configured cap and grant count", () => {
+    expect(inviteGrantCount(60, 200, 3)).toBe(3);
+    expect(inviteGrantCount(199, 200, 3)).toBe(1);
+    expect(inviteGrantCount(0, 200, 0)).toBe(0);
+  });
 });
 
 describe("normalizeInviteCode", () => {

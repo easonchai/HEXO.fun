@@ -4,6 +4,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 
+import { INVITE_CIRCULATION_CAP, INVITE_REDEEM_GRANT_COUNT } from "../api/invite-code";
 import { DEFAULT_REFERRAL_QUALIFY_SECONDS } from "../api/referral";
 import {
   DEFAULT_ALERT_INDEXER_STALE_S,
@@ -204,5 +205,28 @@ describe("validateEnv", () => {
     expect(() =>
       validateEnv({ ...base, ACCEPTED_MINT: MINT, LAUNCH_AT: "not-a-date" }),
     ).toThrow(/LAUNCH_AT/);
+  });
+
+  it("defaults the invite quota and takes overrides", () => {
+    const defaults = validateEnv({ ...base, ACCEPTED_MINT: MINT });
+    expect(defaults.INVITE_CIRCULATION_CAP).toBe(INVITE_CIRCULATION_CAP);
+    expect(defaults.INVITE_REDEEM_GRANT_COUNT).toBe(INVITE_REDEEM_GRANT_COUNT);
+    const set = validateEnv({
+      ...base,
+      ACCEPTED_MINT: MINT,
+      INVITE_CIRCULATION_CAP: "200",
+      INVITE_REDEEM_GRANT_COUNT: "0",
+    });
+    expect(set.INVITE_CIRCULATION_CAP).toBe(200);
+    expect(set.INVITE_REDEEM_GRANT_COUNT).toBe(0);
+  });
+
+  it("fails the boot on a malformed invite quota", () => {
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, INVITE_CIRCULATION_CAP: "lots" }),
+    ).toThrow(/INVITE_CIRCULATION_CAP/);
+    expect(() =>
+      validateEnv({ ...base, ACCEPTED_MINT: MINT, INVITE_REDEEM_GRANT_COUNT: "-1" }),
+    ).toThrow(/INVITE_REDEEM_GRANT_COUNT/);
   });
 });

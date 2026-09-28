@@ -16,22 +16,28 @@ export const INVITE_CODE_MAX_USES = 1;
 
 /** No more than this many remaining uses, summed across every Invite code
  *  (admin-issued included), may be in circulation at once (ADR 0014,
- *  referral-page ticket 07). */
+ *  referral-page ticket 07). The default; env `INVITE_CIRCULATION_CAP`
+ *  overrides it. */
 export const INVITE_CIRCULATION_CAP = 50;
 
 /** A successful redeem grants the redeemer up to this many new codes of its
- *  own, capped by INVITE_CIRCULATION_CAP. */
+ *  own, capped by the circulation cap. The default; env
+ *  `INVITE_REDEEM_GRANT_COUNT` overrides it. */
 export const INVITE_REDEEM_GRANT_COUNT = 2;
 
 /**
  * How many new Invite codes a successful redeem grants its redeemer, given
  * how many remaining uses (maxUses − uses, summed over every Invite code)
- * are already in circulation. `min(INVITE_REDEEM_GRANT_COUNT,
- * INVITE_CIRCULATION_CAP − circulation)`, floored at 0: at or over the cap
- * the redeemer gets fewer or none, and nobody tops them up later.
+ * are already in circulation. `min(grantCount, cap − circulation)`, floored
+ * at 0: at or over the cap the redeemer gets fewer or none, and nobody tops
+ * them up later.
  */
-export function inviteGrantCount(circulation: number): number {
-  return Math.max(0, Math.min(INVITE_REDEEM_GRANT_COUNT, INVITE_CIRCULATION_CAP - circulation));
+export function inviteGrantCount(
+  circulation: number,
+  cap: number = INVITE_CIRCULATION_CAP,
+  grantCount: number = INVITE_REDEEM_GRANT_COUNT,
+): number {
+  return Math.max(0, Math.min(grantCount, cap - circulation));
 }
 
 /** A fresh 8-character code. Collisions against `INVITE_CODE_ALPHABET`'s
