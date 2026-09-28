@@ -19,7 +19,9 @@ import {
   createContext,
   useContext,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
@@ -30,7 +32,8 @@ import {
   type PublicKey as PubkeyType,
 } from "@solana/web3.js";
 
-import { RPC_URL, SIGNING_CHAIN } from "./chain.js";
+import { identifyWallet, resetIdentity, track } from "./analytics.js";
+import { CLUSTER, RPC_URL, SIGNING_CHAIN } from "./chain.js";
 
 export type WalletMode = "privy" | "standard";
 
@@ -233,6 +236,7 @@ function PrivySignerSource({
   children: ReactNode;
 }) {
   const signer = usePrivySigner();
+  useWalletIdentity(signer);
   return (
     <GameSignerContext.Provider value={{ ...signer, mode }}>
       {children}
@@ -248,11 +252,35 @@ function StandardSignerSource({
   children: ReactNode;
 }) {
   const signer = useStandardSigner();
+  useWalletIdentity(signer);
   return (
     <GameSignerContext.Provider value={{ ...signer, mode }}>
       {children}
     </GameSignerContext.Provider>
   );
+}
+
+/**
+ * PostHog identity (posthog-analytics ticket 02): identify on connect, reset
+ * on disconnect. The ref holds the last identified pubkey, so only a real
+ * transition fires; a first mount with no wallet and StrictMode's effect
+ * re-run both see no change and stay silent.
+ */
+function useWalletIdentity({ mode, connected, publicKey }: GameSigner): void {
+  const pubkey = connected ? publicKey?.toBase58() : undefined;
+  const previous = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (pubkey === previous.current) return;
+    if (previous.current) {
+      track("wallet_disconnected");
+      resetIdentity();
+    }
+    if (pubkey) {
+      identifyWallet(pubkey, { cluster: CLUSTER, mode });
+      track("wallet_connected", { mode });
+    }
+    previous.current = pubkey;
+  }, [pubkey, mode]);
 }
 
 function usePrivySigner(): GameSigner {

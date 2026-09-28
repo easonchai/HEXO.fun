@@ -5,6 +5,7 @@
  * depositor's console. Best-effort and silent: a failed report must never
  * itself surface an error to the player.
  */
+import { track } from "./analytics.js";
 import { apiBaseUrl } from "./api.js";
 
 export interface ErrorReport {
@@ -27,6 +28,7 @@ export function currentPage(): string | undefined {
 
 export function reportError(report: ErrorReport): void {
   try {
+    track("client_error", { code: report.code, page: report.page });
     void fetch(`${apiBaseUrl()}/error-reports`, {
       method: "POST",
       headers: { "content-type": "application/json" },

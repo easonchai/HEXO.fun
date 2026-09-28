@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { track } from "./analytics.js";
 import { apiBaseUrl, requestFaucet } from "./api.js";
 import { CLUSTER } from "./chain.js";
 import { faucetEnabled } from "./cluster.js";
@@ -68,6 +69,7 @@ export function WalletMenu({
     setFaucet({ kind: "busy" });
     const result = await requestFaucet(apiBaseUrl(), address);
     if (result.ok) {
+      track("faucet_claimed");
       setFaucet({ kind: "sent" });
       onFunded();
     } else if ("retryAfterSeconds" in result) {

@@ -11,6 +11,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AccessGate } from "./AccessGate.js";
+import { initAnalytics } from "./analytics.js";
 import { App } from "./App.js";
 import { RPC_URL } from "./chain.js";
 import { BurnerWalletAdapter, burnerEnabled } from "./dev-burner.js";
@@ -41,6 +42,9 @@ const mode = walletModeFor(ENV, import.meta.env.PROD);
 // Dev-only burner wallet: opt-in via env, local RPC only (see dev-burner.ts).
 // It augments (never replaces) the standard wallets in the fallback path.
 const wallets = burnerEnabled(ENV) ? [new BurnerWalletAdapter()] : [];
+
+// No-op without VITE_POSTHOG_KEY (posthog-analytics ticket 02).
+initAnalytics();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

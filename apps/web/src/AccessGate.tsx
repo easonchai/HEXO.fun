@@ -5,8 +5,9 @@
  * SUBMIT connects first if needed. See useAccessGate.ts for the logic and
  * access.ts for the pure pieces of it.
  */
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
+import { track } from "./analytics.js";
 import { apiBaseUrl } from "./api.js";
 import { LogoCog, LogoWordmark } from "./arena/Arena.js";
 import { Star } from "./screens/Home.js";
@@ -32,6 +33,9 @@ export function AccessGate({ children }: { children: ReactNode }) {
   // "loading": the wallet layer is still restoring last session, so painting
   // the card now would flash it at everyone who is already past the gate.
   const showCard = gate.status !== "hidden" && gate.status !== "loading";
+  useEffect(() => {
+    if (showCard) track("access_gate_shown", { state: gate.status });
+  }, [showCard, gate.status]);
 
   return (
     <>

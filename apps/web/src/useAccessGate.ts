@@ -15,6 +15,7 @@ import {
   normalizeInviteCode,
   type GateStatus,
 } from "./access.js";
+import { setPersonProperties, track } from "./analytics.js";
 import { applyReferralMessage, refCodeFromSearch } from "./referrals.js";
 
 export interface AccessGateState {
@@ -179,15 +180,20 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
         const signature = anchorUtils.bytes.bs58.encode(bytes);
         const result = await redeemAccess(baseUrl, wallet, trimmed, signature, ref);
         if (result.ok) {
+          track("invite_redeemed", { has_referral_code: ref !== undefined });
+          setPersonProperties({ invite_code: trimmed, referral_code: ref });
           setAccess(result.data);
           if (ref) {
             clearStoredRefCode();
             setRefCode("");
           }
         } else {
+          track("invite_failed", { reason: result.status ? `http_${result.status}` : "network_error" });
           setError(classifyRedeemError(result.status, result.reason));
         }
       } catch (err) {
+        // Most often the wallet declining the signature request.
+        track("invite_failed", { reason: "sign_failed" });
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
@@ -226,6 +232,10 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
         const signature = anchorUtils.bytes.bs58.encode(bytes);
         const result = await applyReferral(baseUrl, owner, refCode, signature);
         if (result.ok) {
+          if (result.data.applied) {
+            track("referral_applied");
+            setPersonProperties({ referral_code: refCode });
+          }
           clearStoredRefCode();
           setRefCode("");
         }
