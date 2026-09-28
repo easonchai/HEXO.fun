@@ -25,6 +25,7 @@ import type { EpochState, PoolState, RoundState } from "./chain-state";
 import {
   ORAO_VRF_PROGRAM_ID,
   ORAO_VRF_TREASURY,
+  randomNonce,
   randomnessAddress,
   vrfSeed,
 } from "./vrf";
@@ -88,12 +89,17 @@ export class OperatorInstructions {
   async beginEpoch(pool: PoolState): Promise<TransactionInstruction[]> {
     // `current_epoch` does not exist before the first epoch; the program skips
     // it in that case, but the address still has to be supplied.
+    // `epochTwoBehind` (beta-launch-fixes ticket 03) is likewise only read
+    // once `current_epoch_id >= 2`; the address still has to be supplied, and
+    // clamping at 0 keeps it in range for the two calls before that.
+    const twoBehindId = pool.currentEpochId > 0n ? pool.currentEpochId - 1n : 0n;
     return [
       await this.method("beginEpoch")
         .accountsPartial({
           operator: this.operator,
           pool: pool.address,
           currentEpoch: this.epoch(pool, pool.currentEpochId),
+          epochTwoBehind: this.epoch(pool, twoBehindId),
           newEpoch: this.epoch(pool, pool.currentEpochId + 1n),
           systemProgram: SystemProgram.programId,
         })
@@ -184,20 +190,24 @@ export class OperatorInstructions {
     return batches.flat();
   }
 
-  /** Step 4's tail: the epoch draws on whatever the jackpot vault holds. */
+  /**
+   * Step 4's tail: the epoch draws on whatever the jackpot vault holds. A
+   * fresh nonce is generated per call and mixed into the seed
+   * (beta-launch-fixes ticket 02), so the randomness address is derived here
+   * rather than read back off the Epoch, and is unknowable before this call.
+   */
   async closeRegistration(
     pool: PoolState,
     epochId: bigint,
   ): Promise<TransactionInstruction[]> {
-    const close = await this.method("closeRegistration")
+    const nonce = randomNonce();
+    const close = await this.method("closeRegistration", Array.from(nonce))
       .accountsPartial({
         operator: this.operator,
         pool: pool.address,
         epoch: this.epoch(pool, epochId),
         jackpotVault: jackpotVaultAddress(this.programId, pool.address),
-        // The seed is computed inside the same instruction, so it has to be
-        // derived here rather than read back off the Epoch.
-        randomness: this.randomnessFor(vrfSeed("epoch", pool.address, epochId)),
+        randomness: this.randomnessFor(vrfSeed("epoch", pool.address, epochId, nonce)),
         vrfNetworkState: pool.vrfNetworkState,
         vrfTreasury: ORAO_VRF_TREASURY,
         vrfProgram: ORAO_VRF_PROGRAM_ID,
@@ -208,11 +218,13 @@ export class OperatorInstructions {
     return [close];
   }
 
+  /** Permissionless (production-hardening ticket 01): the operator still
+   *  cranks it, but the first account is `caller`, not `operator`. */
   async draw(pool: PoolState, epoch: EpochState): Promise<TransactionInstruction[]> {
     return [
       await this.method("draw")
         .accountsPartial({
-          operator: this.operator,
+          caller: this.operator,
           pool: pool.address,
           epoch: this.epoch(pool, epoch.epochId),
           randomness: this.randomnessFor(epoch.vrfSeed),
@@ -221,13 +233,17 @@ export class OperatorInstructions {
     ];
   }
 
-  /** Takes the Epoch rather than its id: the program checks the randomness
-   *  account against the epoch's own seed before it will roll over. */
+  /**
+   * Takes the Epoch rather than its id: the program checks the randomness
+   * account against the epoch's own seed before it will roll over.
+   * Permissionless (production-hardening ticket 01): first account is
+   * `caller`, not `operator`.
+   */
   async rolloverEpoch(pool: PoolState, epoch: EpochState): Promise<TransactionInstruction[]> {
     return [
       await this.method("rolloverEpoch")
         .accountsPartial({
-          operator: this.operator,
+          caller: this.operator,
           pool: pool.address,
           epoch: this.epoch(pool, epoch.epochId),
           randomness: this.randomnessFor(epoch.vrfSeed),
@@ -265,17 +281,25 @@ export class OperatorInstructions {
     ];
   }
 
+  /**
+   * A fresh nonce is generated per call and mixed into the seed
+   * (beta-launch-fixes ticket 02), so the randomness address is derived here
+   * from `round.roundId` rather than read back off `round.vrfSeed` (still
+   * `[0; 32]` before the first successful request), and is unknowable before
+   * this call.
+   */
   async requestRoundRandomness(
     pool: PoolState,
     round: RoundState,
   ): Promise<TransactionInstruction[]> {
+    const nonce = randomNonce();
     return [
-      await this.method("requestRoundRandomness")
+      await this.method("requestRoundRandomness", Array.from(nonce))
         .accountsPartial({
           payer: this.operator,
           pool: pool.address,
           round: this.round(pool, round.roundId),
-          randomness: this.randomnessFor(round.vrfSeed),
+          randomness: this.randomnessFor(vrfSeed("round", pool.address, round.roundId, nonce)),
           vrfNetworkState: pool.vrfNetworkState,
           vrfTreasury: ORAO_VRF_TREASURY,
           vrfProgram: ORAO_VRF_PROGRAM_ID,
@@ -285,11 +309,13 @@ export class OperatorInstructions {
     ];
   }
 
+  /** Permissionless (production-hardening ticket 01): first account is
+   *  `caller`, not `operator`; `house` still pins to `pool.house`. */
   async settleRound(pool: PoolState, round: RoundState): Promise<TransactionInstruction[]> {
     return [
       await this.method("settleRound")
         .accountsPartial({
-          operator: this.operator,
+          caller: this.operator,
           pool: pool.address,
           round: this.round(pool, round.roundId),
           randomness: this.randomnessFor(round.vrfSeed),
@@ -299,13 +325,17 @@ export class OperatorInstructions {
     ];
   }
 
-  /** Takes the Round rather than its id: the program checks the randomness
-   *  account against the round's own seed before it will void. */
+  /**
+   * Takes the Round rather than its id: the program checks the randomness
+   * account against the round's own seed before it will void. Permissionless
+   * (production-hardening ticket 01): first account is `caller`, not
+   * `operator`.
+   */
   async voidRound(pool: PoolState, round: RoundState): Promise<TransactionInstruction[]> {
     return [
       await this.method("voidRound")
         .accountsPartial({
-          operator: this.operator,
+          caller: this.operator,
           pool: pool.address,
           round: this.round(pool, round.roundId),
           randomness: this.randomnessFor(round.vrfSeed),

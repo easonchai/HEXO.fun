@@ -25,6 +25,8 @@ import {
   roundPda,
   setupPool,
   sleepUntilOnChain,
+  testNonce,
+  vrfSeed,
   type PoolCtx,
 } from "./helpers/hx.js";
 
@@ -102,12 +104,14 @@ async function shutdown(pool: PoolCtx, admin: Keypair = pool.admin) {
 
 /** `currentEpochId` is `pool.currentEpochId` *before* this call. */
 async function beginEpoch(pool: PoolCtx, currentEpochId: bigint) {
+  const twoBehindId = currentEpochId > 0n ? currentEpochId - 1n : 0n;
   return program.methods
     .beginEpoch()
     .accountsPartial({
       operator: pool.operator.publicKey,
       pool: pool.pool,
       currentEpoch: epochPda(pool.pool, currentEpochId),
+      epochTwoBehind: epochPda(pool.pool, twoBehindId),
       newEpoch: epochPda(pool.pool, currentEpochId + 1n),
       systemProgram: SystemProgram.programId,
     })
@@ -184,15 +188,25 @@ async function grantTickets(pool: PoolCtx, signer: Keypair, owner: PublicKey, am
     .rpc();
 }
 
-async function closeRegistration(pool: PoolCtx, epochId: bigint) {
+/**
+ * `nonce` is mixed into the seed (beta-launch-fixes ticket 02); the program
+ * now checks the randomness account against it itself (production-hardening
+ * ticket 02), so a throwaway address no longer works.
+ */
+async function closeRegistration(
+  pool: PoolCtx,
+  epochId: bigint,
+  nonce: Uint8Array = testNonce(),
+) {
+  const seed = vrfSeed("epoch", pool.pool, epochId, nonce);
   return program.methods
-    .closeRegistration()
+    .closeRegistration(Array.from(nonce))
     .accountsPartial({
       operator: pool.operator.publicKey,
       pool: pool.pool,
       epoch: epochPda(pool.pool, epochId),
       jackpotVault: pool.jackpotVault,
-      randomness: Keypair.generate().publicKey,
+      randomness: randomnessPda(seed),
       vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
       vrfTreasury: DEVNET_VRF_TREASURY,
       vrfProgram: ORAO_VRF_PROGRAM_ID,
@@ -202,16 +216,23 @@ async function closeRegistration(pool: PoolCtx, epochId: bigint) {
     .rpc();
 }
 
-async function draw(pool: PoolCtx, epochId: bigint, randomness: PublicKey) {
+/** Permissionless (production-hardening ticket 01): first account is
+ *  `caller`, not `operator`. */
+async function draw(
+  pool: PoolCtx,
+  epochId: bigint,
+  randomness: PublicKey,
+  caller: Keypair = pool.operator,
+) {
   return program.methods
     .draw()
     .accountsPartial({
-      operator: pool.operator.publicKey,
+      caller: caller.publicKey,
       pool: pool.pool,
       epoch: epochPda(pool.pool, epochId),
       randomness,
     })
-    .signers([pool.operator])
+    .signers([caller])
     .rpc();
 }
 
@@ -273,14 +294,22 @@ async function buyPosition(
     .rpc();
 }
 
-async function requestRoundRandomness(pool: PoolCtx, roundId: bigint, seed: Uint8Array | number[]) {
-  return program.methods
-    .requestRoundRandomness()
+/** `nonce` is mixed into the seed (beta-launch-fixes ticket 02); returns the
+ *  seed actually used, since the Round's `vrfSeed` is `[0; 32]` until this
+ *  succeeds. */
+async function requestRoundRandomness(
+  pool: PoolCtx,
+  roundId: bigint,
+  nonce: Uint8Array = testNonce(),
+): Promise<Uint8Array> {
+  const seed = vrfSeed("round", pool.pool, roundId, nonce);
+  await program.methods
+    .requestRoundRandomness(Array.from(nonce))
     .accountsPartial({
       payer: pool.operator.publicKey,
       pool: pool.pool,
       round: roundPda(pool.pool, roundId),
-      randomness: randomnessPda(Uint8Array.from(seed)),
+      randomness: randomnessPda(seed),
       vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
       vrfTreasury: DEVNET_VRF_TREASURY,
       vrfProgram: ORAO_VRF_PROGRAM_ID,
@@ -288,19 +317,27 @@ async function requestRoundRandomness(pool: PoolCtx, roundId: bigint, seed: Uint
     })
     .signers([pool.operator])
     .rpc();
+  return seed;
 }
 
-async function settleRound(pool: PoolCtx, roundId: bigint, randomness: PublicKey) {
+/** Permissionless (production-hardening ticket 01): first account is
+ *  `caller`, not `operator`; `house` still pins to `pool.house`. */
+async function settleRound(
+  pool: PoolCtx,
+  roundId: bigint,
+  randomness: PublicKey,
+  caller: Keypair = pool.operator,
+) {
   return program.methods
     .settleRound()
     .accountsPartial({
-      operator: pool.operator.publicKey,
+      caller: caller.publicKey,
       pool: pool.pool,
       round: roundPda(pool.pool, roundId),
       randomness,
       house: pool.house,
     })
-    .signers([pool.operator])
+    .signers([caller])
     .rpc();
 }
 
@@ -486,6 +523,46 @@ describe("shutdown", () => {
   );
 
   it(
+    "draw succeeds after Shutdown: shut down while Drawing, fulfil, draw, pay out",
+    async () => {
+      // beta-launch-fixes ticket 03: shutdown must never strand a Prize that
+      // was already mid-draw. Unlike the "already Drawn before shutdown"
+      // test above, here `shutdown` lands while the epoch is still Drawing
+      // (randomness requested, not yet fulfilled), so `draw` itself has to
+      // run after shutdown for the Prize to ever reach its winner.
+      const pool = await setupPool({ epochSeconds: 6 });
+      await beginEpoch(pool, 0n);
+
+      const a = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, a, 4_000_000n);
+
+      const funder = await pool.fundedWallet(10_000_000n);
+      await fundJackpot(pool, funder, 2_000_000n);
+
+      await retryUntilOk(() => beginEpoch(pool, 1n));
+      await register(pool, 1n, a.keypair.publicKey);
+      await closeRegistration(pool, 1n); // status: Drawing
+
+      const drawing = await fetchEpoch(pool, 1n);
+      expect(drawing.status).toBe(2); // Drawing
+
+      await shutdown(pool); // shuts down mid-draw
+
+      const randomness = await fulfillRandomness(Uint8Array.from(drawing.vrfSeed));
+      await draw(pool, 1n, randomness); // must succeed despite shutdown
+      expect((await fetchEpoch(pool, 1n)).status).toBe(3); // Drawn
+
+      const before = await fetchPlayer(pool, a.keypair.publicKey);
+      await payout(pool, 1n, a.keypair.publicKey);
+      const after = await fetchPlayer(pool, a.keypair.publicKey);
+      expect(BigInt(after.principal.toString()) - BigInt(before.principal.toString())).toBe(
+        2_000_000n,
+      );
+    },
+    TIMEOUT,
+  );
+
+  it(
     "every shutdown-refused instruction fails once the pool is shut down",
     async () => {
       const pool = await setupPool();
@@ -514,7 +591,10 @@ describe("shutdown", () => {
       await expect(buyPosition(pool, owner, roundId, 1n, 1n)).rejects.toThrow(/PoolShutDown/);
       await expect(beginEpoch(pool, 1n)).rejects.toThrow(/PoolShutDown/);
       await expect(closeRegistration(pool, 1n)).rejects.toThrow(/PoolShutDown/);
-      await expect(draw(pool, 1n, pool.pool)).rejects.toThrow(/PoolShutDown/);
+      // `draw` deliberately does NOT check shutdown any more
+      // (beta-launch-fixes ticket 03): an Epoch still Drawing when shutdown
+      // lands must still be drawn so its Prize reaches its winner. See the
+      // dedicated "draw succeeds after Shutdown" test below.
       await expect(fundYield(pool, owner, 1_000_000n)).rejects.toThrow(/PoolShutDown/);
     },
     TIMEOUT,
@@ -714,9 +794,43 @@ describe("sweep_house", () => {
       const sig = await sweepHouse(pool);
 
       expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore); // nothing to sweep
-      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe("0");
+      // beta-launch-fixes ticket 03: sweep_house deducts only what it swept
+      // (0 here, the real surplus) rather than zeroing the whole budget, so
+      // the 500k that never actually left the vault is still accounted for.
+      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe(
+        "500000",
+      );
       const event = await findEvent<{ jackpot: BN; yieldBudget: BN }>(sig, "houseSwept");
       expect(event?.yieldBudget.toString()).toBe("0");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "sweep_house deducts only the yield it actually swept, leaving the rest of the budget accounted for",
+    async () => {
+      // beta-launch-fixes ticket 03: a partial sweep (surplus < yield_budget,
+      // some principal deployed at sweep time) must not zero the whole
+      // budget -- only what actually left the vault comes off it.
+      const pool = await setupPool();
+      const owner = await pool.fundedWallet(10_000_000n);
+      await deposit(pool, owner, 4_000_000n);
+
+      const funder = await pool.fundedWallet(10_000_000n);
+      await fundYield(pool, funder, 1_000_000n); // vault: 4M principal + 1M yield budget
+      // Deploy 700k of the surplus, leaving only 300k of it in the vault.
+      await adminWithdraw(pool, await adminAta(pool), 700_000n);
+      await shutdown(pool);
+
+      const treasuryBefore = await vaultBalance(pool.treasury);
+      const sig = await sweepHouse(pool);
+
+      expect(await vaultBalance(pool.treasury)).toBe(treasuryBefore + 300_000n);
+      expect((await program.account.pool.fetch(pool.pool)).yieldBudget.toString()).toBe(
+        "700000", // 1M budget - 300k actually swept, not zeroed
+      );
+      const event = await findEvent<{ yieldBudget: BN }>(sig, "houseSwept");
+      expect(event?.yieldBudget.toString()).toBe("300000");
     },
     TIMEOUT,
   );
@@ -786,9 +900,7 @@ describe("close_round", () => {
       await buyPosition(pool, owner, roundId, 1n << 0n, 1_000_000n); // tile 0
 
       await sleepUntilOnChain(endsAt - 1); // past the close buffer
-      const round = await fetchRound(pool, roundId);
-      const seed = Uint8Array.from(round.vrfSeed);
-      await requestRoundRandomness(pool, roundId, seed);
+      const seed = await requestRoundRandomness(pool, roundId);
 
       await expect(closeRound(pool, roundId)).rejects.toThrow(/RoundNotSettled/);
 
@@ -830,9 +942,7 @@ describe("close_round", () => {
       const startsAt = await onChainNowSeconds();
       await createRound(pool, 0n, forfeitedId, startsAt, startsAt + 4);
       await sleepUntilOnChain(startsAt + 3);
-      const forfeited = await fetchRound(pool, forfeitedId);
-      const forfeitedSeed = Uint8Array.from(forfeited.vrfSeed);
-      await requestRoundRandomness(pool, forfeitedId, forfeitedSeed);
+      const forfeitedSeed = await requestRoundRandomness(pool, forfeitedId);
       const forfeitedRandomness = await fulfillRandomness(forfeitedSeed, randomnessFor(0));
       await settleRound(pool, forfeitedId, forfeitedRandomness);
       expect((await fetchRound(pool, forfeitedId)).status).toBe(3); // Forfeited

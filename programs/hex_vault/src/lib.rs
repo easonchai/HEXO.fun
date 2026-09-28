@@ -38,6 +38,12 @@ use test_vrf::*;
 compile_error!("features `staging` and `mainnet` are mutually exclusive");
 #[cfg(all(feature = "devnew", any(feature = "staging", feature = "mainnet")))]
 compile_error!("feature `devnew` cannot combine with `staging` or `mainnet`");
+// beta-launch-fixes ticket 03 / production-hardening ticket 02: a `test-vrf`
+// build fabricates its own "fulfilled" randomness instead of ever calling
+// ORAO, so it must never be deployable to a real cluster even if someone
+// skips `scripts/deploy.sh`'s runtime check.
+#[cfg(all(feature = "test-vrf", any(feature = "staging", feature = "mainnet")))]
+compile_error!("feature `test-vrf` cannot combine with `staging` or `mainnet`");
 
 #[cfg(feature = "mainnet")]
 declare_id!("EwqRKGqnH7dGwL5ERMGQc2tsLKwT3duzKWPcCDphyPCH");
@@ -153,8 +159,11 @@ pub mod hex_vault {
         rounds::buy_position(ctx, tiles, stake_per_tile)
     }
 
-    pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<()> {
-        rounds::request_round_randomness(ctx)
+    pub fn request_round_randomness(
+        ctx: Context<RequestRoundRandomness>,
+        nonce: [u8; 32],
+    ) -> Result<()> {
+        rounds::request_round_randomness(ctx, nonce)
     }
 
     pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
@@ -193,8 +202,8 @@ pub mod hex_vault {
         epochs::fund_yield(ctx, amount)
     }
 
-    pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
-        epochs::close_registration(ctx)
+    pub fn close_registration(ctx: Context<CloseRegistration>, nonce: [u8; 32]) -> Result<()> {
+        epochs::close_registration(ctx, nonce)
     }
 
     pub fn draw(ctx: Context<Draw>) -> Result<()> {

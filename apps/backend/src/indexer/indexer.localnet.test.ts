@@ -37,6 +37,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ChainService } from "../chain/chain.service";
 import { loadIdl } from "../chain/idl";
 import type { HexVaultEnv } from "../config/env";
+import { randomNonce, vrfSeed } from "../operator/vrf";
 import { PrismaService } from "../prisma/prisma.service";
 import { IndexerService } from "./indexer.service";
 
@@ -351,14 +352,16 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
   it("drops the Position row once settle_position closes the account", async () => {
     await waitUntil(roundEndsAt);
 
-    const info = await connection.getAccountInfo(round);
-    if (!info) throw new Error("the round account vanished");
-    const decoded = chain.program.coder.accounts.decode<{ vrfSeed: number[] }>("round", info.data);
-    const seed = Uint8Array.from(decoded.vrfSeed);
+    // The seed is unknowable before this call (beta-launch-fixes ticket 02):
+    // it depends on a nonce this test generates fresh, mixed in by the
+    // program, so it cannot be read back off the Round account beforehand
+    // the way it could before the nonce landed.
+    const nonce = randomNonce();
+    const seed = vrfSeed("round", chain.poolAddress(), 1n, nonce);
     const randomness = randomnessAddress(seed);
 
     await methods
-      .requestRoundRandomness()
+      .requestRoundRandomness(Array.from(nonce))
       .accountsPartial({
         payer: authority.publicKey,
         pool: chain.poolAddress(),
@@ -386,7 +389,7 @@ describe.skipIf(process.env.HEXVAULT_INDEXER_LOCALNET !== "1")("indexer on local
     await methods
       .settleRound()
       .accountsPartial({
-        operator: authority.publicKey,
+        caller: authority.publicKey,
         pool: chain.poolAddress(),
         round,
         randomness,

@@ -19,8 +19,11 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
+  DEVNET_VRF_NETWORK_STATE,
+  DEVNET_VRF_TREASURY,
   epochPda,
   findEvent,
+  fulfillRandomness,
   jackpotVaultPda,
   nextPoolId,
   onChainNowSeconds,
@@ -28,10 +31,14 @@ import {
   poolPda,
   principalVaultPda,
   program,
+  randomnessFor,
+  randomnessPda,
   retryUntilOk,
   roundPda,
   setupPool,
   sleepUntilOnChain,
+  testNonce,
+  vrfSeed,
   type PoolCtx,
 } from "./helpers/hx.js";
 
@@ -130,12 +137,14 @@ async function returnPrincipal(pool: PoolCtx, from: PublicKey, amount: bigint) {
 
 /** `currentEpochId` is `pool.currentEpochId` *before* this call. */
 async function beginEpoch(pool: PoolCtx, currentEpochId: bigint) {
+  const twoBehindId = currentEpochId > 0n ? currentEpochId - 1n : 0n;
   return program.methods
     .beginEpoch()
     .accountsPartial({
       operator: pool.operator.publicKey,
       pool: pool.pool,
       currentEpoch: epochPda(pool.pool, currentEpochId),
+      epochTwoBehind: epochPda(pool.pool, twoBehindId),
       newEpoch: epochPda(pool.pool, currentEpochId + 1n),
       systemProgram: SystemProgram.programId,
     })
@@ -595,6 +604,7 @@ async function rolePool(): Promise<PoolCtx> {
       operator: pool.operator.publicKey,
       pool: pool.pool,
       currentEpoch: epochPda(pool.pool, 0n),
+      epochTwoBehind: epochPda(pool.pool, 0n),
       newEpoch: epochPda(pool.pool, 1n),
       systemProgram: SystemProgram.programId,
     })
@@ -616,11 +626,18 @@ async function rolePool(): Promise<PoolCtx> {
   return pool;
 }
 
-/** Every operator-gated instruction, built with `signer` in the operator slot. */
+/**
+ * Every operator-gated instruction, built with `signer` in the operator slot.
+ *
+ * `settle_round`, `void_round`, `draw` and `rollover_epoch` are deliberately
+ * absent (production-hardening ticket 01): they take any `caller`, so an
+ * operator that stops cranking cannot withhold a fulfilled result or leave a
+ * timed-out request stuck. Their permissionless behavior is covered by the
+ * "settle_round, void_round, draw and rollover_epoch accept any caller" test
+ * below and by tests/03-epochs.test.ts's `payout` coverage.
+ */
 function operatorGated(pool: PoolCtx, signer: PublicKey) {
-  const filler = pool.pool;
   const epoch = epochPda(pool.pool, 1n);
-  const round = roundPda(pool.pool, 1n);
   const m = program.methods;
   return {
     // Round 1 is already open, so this one is aimed at the next id.
@@ -631,41 +648,28 @@ function operatorGated(pool: PoolCtx, signer: PublicKey) {
       round: roundPda(pool.pool, 2n),
       systemProgram: SystemProgram.programId,
     }),
-    settleRound: m.settleRound().accountsPartial({
-      operator: signer,
-      pool: pool.pool,
-      round,
-      randomness: filler,
-      house: pool.house,
-    }),
-    voidRound: m
-      .voidRound()
-      .accountsPartial({ operator: signer, pool: pool.pool, round, randomness: filler }),
     beginEpoch: m.beginEpoch().accountsPartial({
       operator: signer,
       pool: pool.pool,
       currentEpoch: epoch,
+      epochTwoBehind: epochPda(pool.pool, 0n),
       newEpoch: epochPda(pool.pool, 2n),
       systemProgram: SystemProgram.programId,
     }),
-    closeRegistration: m.closeRegistration().accountsPartial({
+    closeRegistration: m.closeRegistration(Array.from(testNonce())).accountsPartial({
       operator: signer,
       pool: pool.pool,
       epoch,
       jackpotVault: pool.jackpotVault,
-      randomness: filler,
-      vrfNetworkState: filler,
-      vrfTreasury: filler,
+      randomness: pool.pool,
+      vrfNetworkState: pool.pool,
+      vrfTreasury: pool.pool,
       vrfProgram: ORAO_VRF_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     }),
-    draw: m.draw().accountsPartial({ operator: signer, pool: pool.pool, epoch, randomness: filler }),
     // `payout` is deliberately absent: it takes no signer at all, so the
     // operator cannot veto a winner by sitting out `payout_timeout`. A
     // stranger paying one successfully is in tests/03-epochs.test.ts.
-    rolloverEpoch: m
-      .rolloverEpoch()
-      .accountsPartial({ operator: signer, pool: pool.pool, epoch, randomness: filler }),
   };
 }
 
@@ -722,6 +726,101 @@ describe("roles", () => {
           await expect(builder.signers([wrong]).rpc(), name).rejects.toThrow(/ConstraintHasOne/);
         }
       }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "settle_round and void_round accept any caller, and refuse the wrong precondition regardless of who calls",
+    async () => {
+      // Production-hardening ticket 01: `caller` may be any signer. A
+      // stranger succeeds exactly when the operator would have, and is
+      // refused by the same preconditions (unfulfilled/fulfilled/timeout),
+      // never by who they are.
+      const pool = await setupPool({ roundSeconds: 4, closeBuffer: 1, vrfTimeout: 2 });
+      const stranger = await fundedKey();
+
+      const startsAt = await onChainNowSeconds();
+      const endsAt = startsAt + 4;
+      await program.methods
+        .createRound(new BN(startsAt), new BN(endsAt))
+        .accountsPartial({
+          operator: pool.operator.publicKey,
+          pool: pool.pool,
+          currentEpoch: pool.pool,
+          round: roundPda(pool.pool, 1n),
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([pool.operator])
+        .rpc();
+
+      await sleepUntilOnChain(endsAt);
+
+      const nonce = testNonce();
+      const seed = vrfSeed("round", pool.pool, 1n, nonce);
+      // Requests stay Operator-signed by design (spec.md's Implementation
+      // Decisions): the nonce that keeps the randomness address unguessable
+      // has to come from the Operator.
+      await program.methods
+        .requestRoundRandomness(Array.from(nonce))
+        .accountsPartial({
+          payer: pool.operator.publicKey,
+          pool: pool.pool,
+          round: roundPda(pool.pool, 1n),
+          randomness: randomnessPda(seed),
+          vrfNetworkState: DEVNET_VRF_NETWORK_STATE,
+          vrfTreasury: DEVNET_VRF_TREASURY,
+          vrfProgram: ORAO_VRF_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([pool.operator])
+        .rpc();
+
+      const settleRoundAsStranger = () =>
+        program.methods
+          .settleRound()
+          .accountsPartial({
+            caller: stranger.publicKey,
+            pool: pool.pool,
+            round: roundPda(pool.pool, 1n),
+            randomness: randomnessPda(seed),
+            house: pool.house,
+          })
+          .signers([stranger])
+          .rpc();
+
+      // Unfulfilled: under test-vrf the randomness account doesn't even
+      // exist until test_fulfill creates it (real ORAO would have created a
+      // Pending one at request time), so this reads as InvalidRandomnessAccount
+      // rather than RandomnessNotFulfilled -- refused by the precondition
+      // either way, never by who is calling.
+      await expect(settleRoundAsStranger()).rejects.toThrow(/InvalidRandomnessAccount/);
+
+      const voidRoundAsStranger = () =>
+        program.methods
+          .voidRound()
+          .accountsPartial({
+            caller: stranger.publicKey,
+            pool: pool.pool,
+            round: roundPda(pool.pool, 1n),
+            randomness: randomnessPda(seed),
+          })
+          .signers([stranger])
+          .rpc();
+
+      // Before the vrf_timeout has elapsed: refused by VrfTimeoutNotElapsed.
+      await expect(voidRoundAsStranger()).rejects.toThrow(/VrfTimeoutNotElapsed/);
+
+      await fulfillRandomness(seed, randomnessFor(0));
+
+      // Fulfilled: void is refused even past the timeout.
+      const requested = await program.account.round.fetch(roundPda(pool.pool, 1n));
+      await sleepUntilOnChain(Number(requested.requestedAt.toString()) + 2 + 1);
+      await expect(voidRoundAsStranger()).rejects.toThrow(/RandomnessAlreadyFulfilled/);
+
+      // A stranger succeeds once the precondition holds.
+      await settleRoundAsStranger();
+      expect((await program.account.round.fetch(roundPda(pool.pool, 1n))).status).toBe(3); // Forfeited (no positions)
     },
     TIMEOUT,
   );
@@ -1060,7 +1159,9 @@ describe("create_pool guards", () => {
   it(
     "set_params rejects a window the epoch cannot hold, whichever field moves",
     async () => {
-      const pool = await setupPool({ epochSeconds: 600, registrationWindow: 0 });
+      // payoutTimeout below every epochSeconds this test tries, since
+      // set_params requires payout_timeout < epoch_seconds.
+      const pool = await setupPool({ epochSeconds: 600, registrationWindow: 0, payoutTimeout: 59 });
       const set = (over: { epochSeconds?: number; registrationWindow?: number }) =>
         program.methods
           .setParams({

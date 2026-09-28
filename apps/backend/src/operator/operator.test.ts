@@ -1512,23 +1512,29 @@ describe("randomness", () => {
     );
   });
 
-  it("separates seeds by domain, pool and id", () => {
+  const NONCE_A = new Uint8Array(32).fill(1);
+  const NONCE_B = new Uint8Array(32).fill(2);
+
+  it("separates seeds by domain, pool, id and nonce", () => {
     const other = poolAddress(PROGRAM_ID, 2n);
-    const base = vrfSeed("epoch", POOL, 7n);
-    expect(Buffer.from(vrfSeed("epoch", POOL, 7n))).toEqual(Buffer.from(base));
-    expect(Buffer.from(vrfSeed("round", POOL, 7n))).not.toEqual(
+    const base = vrfSeed("epoch", POOL, 7n, NONCE_A);
+    expect(Buffer.from(vrfSeed("epoch", POOL, 7n, NONCE_A))).toEqual(Buffer.from(base));
+    expect(Buffer.from(vrfSeed("round", POOL, 7n, NONCE_A))).not.toEqual(
       Buffer.from(base),
     );
-    expect(Buffer.from(vrfSeed("epoch", other, 7n))).not.toEqual(
+    expect(Buffer.from(vrfSeed("epoch", other, 7n, NONCE_A))).not.toEqual(
       Buffer.from(base),
     );
-    expect(Buffer.from(vrfSeed("epoch", POOL, 8n))).not.toEqual(
+    expect(Buffer.from(vrfSeed("epoch", POOL, 8n, NONCE_A))).not.toEqual(
+      Buffer.from(base),
+    );
+    expect(Buffer.from(vrfSeed("epoch", POOL, 7n, NONCE_B))).not.toEqual(
       Buffer.from(base),
     );
   });
 
   it("uses this program's PDA under test-vrf and ORAO's otherwise", () => {
-    const seed = vrfSeed("round", POOL, 1n);
+    const seed = vrfSeed("round", POOL, 1n, NONCE_A);
     const test = randomnessAddress(PROGRAM_ID, seed, true);
     const orao = randomnessAddress(PROGRAM_ID, seed, false);
     expect(test.equals(orao)).toBe(false);

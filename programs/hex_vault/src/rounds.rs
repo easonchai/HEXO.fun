@@ -1,9 +1,14 @@
 //! Round lifecycle (spec §2.3 "Rounds").
 //!
-//! `create_round`, `settle_round` and `void_round` are operator-only via
-//! `has_one = operator` on the Pool account. `buy_position`,
-//! `request_round_randomness`, `settle_position` and `close_round` are
-//! permissionless.
+//! `create_round` is operator-only via `has_one = operator` on the Pool
+//! account. `buy_position`, `request_round_randomness`, `settle_position` and
+//! `close_round` are permissionless.
+//!
+//! `settle_round` and `void_round` are permissionless too
+//! (production-hardening ticket 01): the first account, `caller`, is any
+//! signer, so an operator that stops cranking cannot withhold a fulfilled
+//! result or leave a timed-out request stuck. `settle_round`'s House account
+//! stays pinned to the Player PDA of `pool.operator`, never the caller.
 
 use anchor_lang::prelude::*;
 
@@ -61,7 +66,6 @@ pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> 
     pool.carry_pot = 0;
     pool.open_round_id = round_id;
     let epoch_id = pool.current_epoch_id;
-    let vrf_seed = utils::vrf_seed(b"round", &pool.key(), round_id);
 
     let round = &mut ctx.accounts.round;
     round.round_id = round_id;
@@ -72,7 +76,11 @@ pub fn create_round(ctx: Context<CreateRound>, starts_at: i64, ends_at: i64) -> 
     round.tile_totals = [0; TILE_COUNT as usize];
     round.pot = pot;
     round.house_cut = 0;
-    round.vrf_seed = vrf_seed;
+    // Unknowable until `request_round_randomness` mixes in the Operator's
+    // nonce (beta-launch-fixes ticket 02): a seed precomputed here, from
+    // public inputs alone, could be griefed by pre-creating ORAO's request
+    // account for it before the Operator ever asks.
+    round.vrf_seed = [0u8; 32];
     round.requested_at = 0;
     round.winning_tile = 0;
     round.bump = ctx.bumps.round;
@@ -95,6 +103,10 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
     touch(player, pool, now)?;
 
     require!(!pool.shutdown, HexVaultError::PoolShutDown);
+    // Pause stops all Ticket movement (production-hardening ticket 02); an
+    // already-open round can still finish (settle_round, settle_position,
+    // close_round all stay open while paused).
+    require!(!pool.paused, HexVaultError::PoolPaused);
     // The House is the counterparty, not a participant: it takes forfeited
     // pots and the cut, so letting the operator stake those Entries back on
     // tiles would be playing against the depositors with their own money.
@@ -170,7 +182,11 @@ pub fn buy_position(ctx: Context<BuyPosition>, tiles: u64, stake_per_tile: u64) 
     Ok(())
 }
 
-pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<()> {
+/// `nonce` is a 32-byte value the Operator generates fresh for this request
+/// and mixes into the seed (beta-launch-fixes ticket 02), so the resulting
+/// randomness address is unknowable before this instruction runs and cannot
+/// be griefed by pre-creating ORAO's request account for it.
+pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>, nonce: [u8; 32]) -> Result<()> {
     let now = utils::now()?;
     let pool = &ctx.accounts.pool;
     let round = &mut ctx.accounts.round;
@@ -184,9 +200,10 @@ pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<
         .ok_or(HexVaultError::ArithmeticOverflow)?;
     require!(now >= close_at, HexVaultError::RoundNotEnded);
 
+    let seed = utils::vrf_seed(b"round", &pool.key(), round.round_id, &nonce);
     require_keys_eq!(
         ctx.accounts.randomness.key(),
-        vrf::randomness_address(&round.vrf_seed),
+        vrf::randomness_address(&seed),
         HexVaultError::InvalidRandomnessAccount
     );
 
@@ -197,9 +214,10 @@ pub fn request_round_randomness(ctx: Context<RequestRoundRandomness>) -> Result<
         &ctx.accounts.randomness.to_account_info(),
         &ctx.accounts.vrf_program.to_account_info(),
         &ctx.accounts.system_program.to_account_info(),
-        round.vrf_seed,
+        seed,
     )?;
 
+    round.vrf_seed = seed;
     round.status = round_status::REQUESTED;
     round.requested_at = now;
     Ok(())
@@ -352,26 +370,39 @@ pub fn void_round(ctx: Context<VoidRound>) -> Result<()> {
     let round = &mut ctx.accounts.round;
 
     require!(
-        round.status == round_status::REQUESTED,
+        matches!(round.status, round_status::REQUESTED | round_status::OPEN),
         HexVaultError::RoundNotRequested
     );
-    // A fulfilled request has to go through `settle_round`. Without this the
-    // operator could read the drawn tile, dislike it, and sit out the
-    // timeout to void the round instead.
-    require_keys_eq!(
-        ctx.accounts.randomness.key(),
-        vrf::randomness_address(&round.vrf_seed),
-        HexVaultError::InvalidRandomnessAccount
-    );
-    require!(
-        !vrf::is_fulfilled(&ctx.accounts.randomness.to_account_info(), &round.vrf_seed),
-        HexVaultError::RandomnessAlreadyFulfilled
-    );
-    let timeout_at = round
-        .requested_at
-        .checked_add(pool.vrf_timeout)
-        .ok_or(HexVaultError::ArithmeticOverflow)?;
-    require!(now > timeout_at, HexVaultError::VrfTimeoutNotElapsed);
+
+    if round.status == round_status::REQUESTED {
+        // A fulfilled request has to go through `settle_round`. Without this
+        // a caller could read the drawn tile, dislike it, and sit out the
+        // timeout to void the round instead.
+        require_keys_eq!(
+            ctx.accounts.randomness.key(),
+            vrf::randomness_address(&round.vrf_seed),
+            HexVaultError::InvalidRandomnessAccount
+        );
+        require!(
+            !vrf::is_fulfilled(&ctx.accounts.randomness.to_account_info(), &round.vrf_seed),
+            HexVaultError::RandomnessAlreadyFulfilled
+        );
+        let timeout_at = round
+            .requested_at
+            .checked_add(pool.vrf_timeout)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        require!(now > timeout_at, HexVaultError::VrfTimeoutNotElapsed);
+    } else {
+        // Still OPEN past its own end plus the VRF timeout: nobody ever
+        // requested randomness for it at all (beta-launch-fixes ticket 02),
+        // so there is no request to check a fulfilled/unfulfilled state
+        // against.
+        let timeout_at = round
+            .ends_at
+            .checked_add(pool.vrf_timeout)
+            .ok_or(HexVaultError::ArithmeticOverflow)?;
+        require!(now > timeout_at, HexVaultError::VrfTimeoutNotElapsed);
+    }
 
     // Same evaporation rule as `settle_round`: once the Round's Epoch has
     // rolled over, the Entries that funded this pot are already back with
@@ -531,15 +562,18 @@ pub struct RequestRoundRandomness<'info> {
 // Boxed: unboxed, this struct's `try_accounts` overflows the BPF stack frame
 // (Pool, Round's 36-tile array and Player combined), the same issue
 // `Payout` in `epochs.rs` already works around.
+/// Permissionless (production-hardening ticket 01): `caller` may be any
+/// signer, only paying the transaction's fee. Every precondition below
+/// (status, fulfilled randomness) is unchanged, and `house` still pins to
+/// `pool.operator`'s Player, never to `caller`.
 #[derive(Accounts)]
 pub struct SettleRound<'info> {
-    pub operator: Signer<'info>,
+    pub caller: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = operator,
     )]
     pub pool: Box<Account<'info, Pool>>,
 
@@ -602,15 +636,16 @@ pub struct SettlePosition<'info> {
     pub position: Account<'info, Position>,
 }
 
+/// Permissionless (production-hardening ticket 01): `caller` may be any
+/// signer, only paying the transaction's fee.
 #[derive(Accounts)]
 pub struct VoidRound<'info> {
-    pub operator: Signer<'info>,
+    pub caller: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = operator,
     )]
     pub pool: Account<'info, Pool>,
 

@@ -1,5 +1,5 @@
 {
-  "address": "8JVqp7anmrrE5ZvJPnz9jimbZDHotMT8aq877Xgg7Aih",
+  "address": "LFk9ba6QXuM9oYRRNGGPxMGzfo13X3DAr8ghSPz72C6",
   "metadata": {
     "name": "hex_vault",
     "version": "0.1.0",
@@ -213,6 +213,37 @@
               {
                 "kind": "account",
                 "path": "pool.current_epoch_id",
+                "account": "Pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_two_behind",
+          "docs": [
+            "deserialized) only when `pool.current_epoch_id >= 2`, i.e. when such",
+            "an epoch could exist at all. `saturating_sub` keeps the seed in range",
+            "on the two calls before that, where it is never read."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "pool.current_epoch_id.saturating_sub(1)",
                 "account": "Pool"
               }
             ]
@@ -579,9 +610,9 @@
         {
           "name": "randomness",
           "docs": [
-            "depends on the seed this instruction computes, so unlike `draw`",
-            "(which reads `epoch.vrf_seed` back) there is nothing to check it",
-            "against yet; `draw` is what actually verifies it."
+            "against `vrf::randomness_address(&seed)` in the handler once the seed",
+            "is computed from the instruction's own `nonce` argument",
+            "(production-hardening ticket 02)."
           ],
           "writable": true
         },
@@ -609,7 +640,17 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "nonce",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "close_round",
@@ -1056,11 +1097,8 @@
       ],
       "accounts": [
         {
-          "name": "operator",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "caller",
+          "signer": true
         },
         {
           "name": "pool",
@@ -1978,7 +2016,17 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "nonce",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "request_withdraw",
@@ -2068,11 +2116,8 @@
       ],
       "accounts": [
         {
-          "name": "operator",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "caller",
+          "signer": true
         },
         {
           "name": "pool",
@@ -2429,11 +2474,8 @@
       ],
       "accounts": [
         {
-          "name": "operator",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "caller",
+          "signer": true
         },
         {
           "name": "pool",
@@ -2697,11 +2739,8 @@
       ],
       "accounts": [
         {
-          "name": "operator",
-          "signer": true,
-          "relations": [
-            "pool"
-          ]
+          "name": "caller",
+          "signer": true
         },
         {
           "name": "pool",
@@ -3490,6 +3529,16 @@
       "code": 6055,
       "name": "RoundHasOpenPositions",
       "msg": "the round still has unsettled positions"
+    },
+    {
+      "code": 6056,
+      "name": "PreviousEpochStillDrawing",
+      "msg": "an earlier epoch has not finished drawing yet"
+    },
+    {
+      "code": 6057,
+      "name": "NoEpochYet",
+      "msg": "no epoch exists yet"
     }
   ],
   "types": [

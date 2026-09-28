@@ -138,4 +138,10 @@ pub enum HexVaultError {
     // close_round (ops-and-envs ticket 05). Appended too.
     #[msg("the round still has unsettled positions")]
     RoundHasOpenPositions,
+
+    // beta-launch-fixes ticket 03. Appended too.
+    #[msg("an earlier epoch has not finished drawing yet")]
+    PreviousEpochStillDrawing,
+    #[msg("no epoch exists yet")]
+    NoEpochYet,
 }

@@ -91,7 +91,11 @@ export const DEFAULT_POOL_PARAMS: PoolParams = {
   houseCutBps: 600, // 6%, the rate PRD-V2 §5.4 asks for
   minJackpot: 1_000_000n, // 1 hexUSDC at 6 decimals
   registrationWindow: 600, // 10 minutes for the crank to register everyone
-  payoutTimeout: 86_400, // a day before an unpayable winner rolls over
+  // A day less an hour before an unpayable winner rolls over. Strictly less
+  // than epochSeconds: set_params requires payout_timeout < epoch_seconds
+  // (beta-launch-fixes ticket 03), so bootstrap's own defaults have to hold
+  // that relation too, or the very first set_params call would refuse.
+  payoutTimeout: 82_800,
   // ~5% APY with daily compounding.
   baseRateBps: envInt("BASE_RATE_BPS", process.env.BASE_RATE_BPS, 488),
   ticketsPerUsdc: envInt("TICKETS_PER_USDC", process.env.TICKETS_PER_USDC, 10),
@@ -313,6 +317,14 @@ export function parsePoolParams(argv: readonly string[]): PoolParams {
   if (params.registrationWindow >= params.epochSeconds) {
     throw new Error(
       `--epoch-seconds must be greater than the ${params.registrationWindow}s registration window`,
+    );
+  }
+  // set_params requires payout_timeout < epoch_seconds (beta-launch-fixes
+  // ticket 03); create_pool doesn't enforce it, but a pool bootstrapped past
+  // this line would fail its very first set_params call.
+  if (params.payoutTimeout >= params.epochSeconds) {
+    throw new Error(
+      `--epoch-seconds must be greater than the ${params.payoutTimeout}s payout timeout`,
     );
   }
   return params;

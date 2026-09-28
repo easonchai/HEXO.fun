@@ -1,8 +1,13 @@
 //! Epoch lifecycle (spec §2.3 "Epochs").
 //!
-//! `begin_epoch`, `close_registration`, `draw` and `rollover_epoch` are
-//! operator-only via `has_one = operator` on the Pool account. `register`,
-//! `fund_jackpot` and `payout` are permissionless.
+//! `begin_epoch` and `close_registration` are operator-only via
+//! `has_one = operator` on the Pool account. `register`, `fund_jackpot` and
+//! `payout` are permissionless.
+//!
+//! `draw` and `rollover_epoch` are permissionless too (production-hardening
+//! ticket 01): the first account, `caller`, is any signer, so an operator
+//! that stops cranking cannot withhold a fulfilled result or leave a
+//! timed-out request stuck.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
@@ -161,6 +166,22 @@ pub fn begin_epoch(ctx: Context<BeginEpoch>) -> Result<()> {
     let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.shutdown, HexVaultError::PoolShutDown);
+
+    // The epoch two behind the one this call is about to create is the one
+    // whose winner's registered interval must survive until Payout
+    // (beta-launch-fixes ticket 03): if it is still Drawing or Drawn, its
+    // winner has not been paid yet, and the next `begin_epoch` (two calls
+    // from now) would otherwise be free to overwrite that Player's interval
+    // before Payout ever reads it. Only checked once such an epoch could
+    // exist (`current_epoch_id >= 2`; epoch ids start at 1).
+    if pool.current_epoch_id >= 2 {
+        let data = ctx.accounts.epoch_two_behind.try_borrow_data()?;
+        let two_behind = Epoch::try_deserialize(&mut &data[..])?;
+        require!(
+            !matches!(two_behind.status, epoch_status::DRAWING | epoch_status::DRAWN),
+            HexVaultError::PreviousEpochStillDrawing
+        );
+    }
 
     let starts_at = if pool.current_epoch_id == 0 {
         now
@@ -362,7 +383,11 @@ pub fn fund_yield(ctx: Context<FundYield>, amount: u64) -> Result<()> {
     Ok(())
 }
 
-pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
+/// `nonce` is a 32-byte value the Operator generates fresh for this request
+/// and mixes into the seed (beta-launch-fixes ticket 02), so the resulting
+/// randomness address is unknowable before this instruction runs and cannot
+/// be griefed by pre-creating ORAO's request account for it.
+pub fn close_registration(ctx: Context<CloseRegistration>, nonce: [u8; 32]) -> Result<()> {
     let now = utils::now()?;
     let pool = &mut ctx.accounts.pool;
     let epoch = &mut ctx.accounts.epoch;
@@ -402,7 +427,16 @@ pub fn close_registration(ctx: Context<CloseRegistration>) -> Result<()> {
         return Ok(());
     }
 
-    let seed = utils::vrf_seed(b"epoch", &pool.key(), epoch.epoch_id);
+    let seed = utils::vrf_seed(b"epoch", &pool.key(), epoch.epoch_id, &nonce);
+    // Checked here the same way `request_round_randomness` checks its own
+    // request (production-hardening ticket 02): unlike before, the seed is
+    // now known before the CPI (it only depends on this instruction's own
+    // nonce argument), so there is something to check it against.
+    require_keys_eq!(
+        ctx.accounts.randomness.key(),
+        vrf::randomness_address(&seed),
+        HexVaultError::InvalidRandomnessAccount
+    );
     epoch.vrf_seed = seed;
 
     vrf::request_randomness(
@@ -429,7 +463,10 @@ pub fn draw(ctx: Context<Draw>) -> Result<()> {
     let now = utils::now()?;
     let epoch = &mut ctx.accounts.epoch;
 
-    require!(!ctx.accounts.pool.shutdown, HexVaultError::PoolShutDown);
+    // No shutdown check by design (beta-launch-fixes ticket 03): an Epoch
+    // still Drawing when `shutdown` lands must still be drawn so its Prize
+    // reaches its winner instead of being stranded in the vault. `payout`
+    // already runs after shutdown for the same reason.
     require!(
         epoch.status == epoch_status::DRAWING,
         HexVaultError::EpochNotDrawing
@@ -571,8 +608,24 @@ pub fn rollover_epoch(ctx: Context<RolloverEpoch>) -> Result<()> {
     let epoch = &mut ctx.accounts.epoch;
 
     match epoch.status {
+        // Still Registering past its own close deadline plus the VRF
+        // timeout: `close_registration` never landed at all, so there is no
+        // request to check a fulfilled/unfulfilled state against
+        // (beta-launch-fixes ticket 02). Behaves as the existing no-draw
+        // Rollover below: nothing was ever reserved for this epoch
+        // (`jackpot_amount` is still 0), so the Prize stays in the hexpot.
+        epoch_status::REGISTERING => {
+            let opened = epoch.registration_opened_at.max(epoch.ends_at);
+            let closes_at = opened
+                .checked_add(pool.registration_window)
+                .ok_or(HexVaultError::ArithmeticOverflow)?;
+            let deadline = closes_at
+                .checked_add(pool.vrf_timeout)
+                .ok_or(HexVaultError::ArithmeticOverflow)?;
+            require!(now > deadline, HexVaultError::VrfTimeoutNotElapsed);
+        }
         epoch_status::DRAWING => {
-            // A fulfilled request has to go through `draw`, or the operator
+            // A fulfilled request has to go through `draw`, or a caller
             // could read the target, see who won, and wait out the timeout.
             require_keys_eq!(
                 ctx.accounts.randomness.key(),
@@ -641,6 +694,16 @@ pub struct BeginEpoch<'info> {
         bump,
     )]
     pub current_epoch: UncheckedAccount<'info>,
+
+    /// CHECK: the epoch two behind the one being created, read (not
+    /// deserialized) only when `pool.current_epoch_id >= 2`, i.e. when such
+    /// an epoch could exist at all. `saturating_sub` keeps the seed in range
+    /// on the two calls before that, where it is never read.
+    #[account(
+        seeds = [SEED_EPOCH, pool.key().as_ref(), &pool.current_epoch_id.saturating_sub(1).to_le_bytes()],
+        bump,
+    )]
+    pub epoch_two_behind: UncheckedAccount<'info>,
 
     #[account(
         init,
@@ -750,10 +813,10 @@ pub struct CloseRegistration<'info> {
     )]
     pub jackpot_vault: InterfaceAccount<'info, TokenAccount>,
 
-    /// CHECK: ORAO randomness account for this epoch's draw. Its address
-    /// depends on the seed this instruction computes, so unlike `draw`
-    /// (which reads `epoch.vrf_seed` back) there is nothing to check it
-    /// against yet; `draw` is what actually verifies it.
+    /// CHECK: ORAO randomness account for this epoch's draw, verified
+    /// against `vrf::randomness_address(&seed)` in the handler once the seed
+    /// is computed from the instruction's own `nonce` argument
+    /// (production-hardening ticket 02).
     #[account(mut)]
     pub randomness: UncheckedAccount<'info>,
 
@@ -775,11 +838,13 @@ pub struct CloseRegistration<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Permissionless (production-hardening ticket 01): `caller` may be any
+/// signer, only paying the transaction's fee.
 #[derive(Accounts)]
 pub struct Draw<'info> {
-    pub operator: Signer<'info>,
+    pub caller: Signer<'info>,
 
-    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump, has_one = operator)]
+    #[account(seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()], bump = pool.bump)]
     pub pool: Account<'info, Pool>,
 
     #[account(
@@ -851,15 +916,16 @@ pub struct Payout<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+/// Permissionless (production-hardening ticket 01): `caller` may be any
+/// signer, only paying the transaction's fee.
 #[derive(Accounts)]
 pub struct RolloverEpoch<'info> {
-    pub operator: Signer<'info>,
+    pub caller: Signer<'info>,
 
     #[account(
         mut,
         seeds = [SEED_POOL, &pool.pool_id.to_le_bytes()],
         bump = pool.bump,
-        has_one = operator,
     )]
     pub pool: Account<'info, Pool>,
 
