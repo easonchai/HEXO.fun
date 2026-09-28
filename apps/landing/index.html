@@ -2643,6 +2643,12 @@
         const skip = done.querySelector("[data-skip]");
         const submit = form.querySelector("button[type=submit]");
 
+        form.querySelector("input").addEventListener(
+          "input",
+          () => window.posthog?.capture("waitlist_started", { where }),
+          { once: true },
+        );
+
         renderers.push((s) => {
           form.classList.toggle("is-done", !!s);
           done.classList.toggle("is-done", !!s);
@@ -2726,6 +2732,7 @@
           btn.textContent = s ? "You're on the list" : label;
         });
         btn.addEventListener("click", () => {
+          window.posthog?.capture("waitlist_cta_clicked");
           document
             .querySelector(btn.dataset.scroll)
             .scrollIntoView({ behavior: "smooth" });
@@ -2734,6 +2741,23 @@
             420,
           );
         });
+      });
+
+      // --------------------------- section views ---------------------------
+      const sectionIo = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((e) => {
+            // The first callback fires for any overlap, so check the ratio.
+            if (e.intersectionRatio < 0.4) return;
+            window.posthog?.capture("section_viewed", { section: e.target.id });
+            sectionIo.unobserve(e.target);
+          });
+        },
+        { threshold: 0.4 },
+      );
+      ["how", "play", "draw", "rules", "faq"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) sectionIo.observe(el);
       });
 
       renderJoined();
