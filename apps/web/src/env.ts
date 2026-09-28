@@ -10,14 +10,14 @@
 /** Every value a production build needs a real one for; each also has its
  *  own build-time or load-time check (VITE_CLUSTER via `clusterFrom`,
  *  VITE_PROGRAM_ID via `programIdFrom`) — this is the one place that checks all of them are
- *  present together. */
+ *  present together. VITE_PUBLIC_RPC_URL is optional: `chain.ts` falls back
+ *  to the cluster's public endpoint. */
 const REQUIRED_IN_PRODUCTION = [
   "VITE_CLUSTER",
   "VITE_API_URL",
   "VITE_PRIVY_APP_ID",
   "VITE_PROGRAM_ID",
   "VITE_POOL_ID",
-  "VITE_PUBLIC_RPC_URL",
 ] as const;
 
 /** Throws naming every missing value, not just the first. */
