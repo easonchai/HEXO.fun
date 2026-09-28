@@ -40,9 +40,7 @@ describe("launchCountdown", () => {
 
 describe("launchCountdownLabel", () => {
   it("names the unscheduled case", () => {
-    expect(launchCountdownLabel(launchCountdown(null, 1_000n))).toBe(
-      "First draw: not yet scheduled",
-    );
+    expect(launchCountdownLabel(launchCountdown(null, 1_000n))).toBe("Coming soon");
   });
 
   it("shows a placeholder before the chain clock is known", () => {

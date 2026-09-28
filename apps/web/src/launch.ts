@@ -28,9 +28,9 @@ export function launchCountdown(
 }
 
 /** "First draw in DD:HH:MM:SS", "First draw in —" while `now` is unknown, or
- *  "First draw: not yet scheduled" with no `LAUNCH_AT` configured. */
+ *  "Coming soon" with no `LAUNCH_AT` configured. */
 export function launchCountdownLabel(countdown: LaunchCountdown): string {
-  if (!countdown.scheduled) return "First draw: not yet scheduled";
+  if (!countdown.scheduled) return "Coming soon";
   if (countdown.remainingSeconds === null) return "First draw in —";
   return `First draw in ${dhmsParts(countdown.remainingSeconds).join(":")}`;
 }

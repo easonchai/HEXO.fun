@@ -37,7 +37,6 @@ import { apiBaseUrl, fetchPlayer, type CurrentEpochDto } from "../api.js";
 import { LogoCog } from "../arena/Arena.js";
 import { apyFromBaseRateBps } from "../buyTickets.js";
 import { InfoTip } from "../InfoTip.js";
-import { launchCountdown, launchCountdownLabel } from "../launch.js";
 import { CLUSTER, type HexVaultProgram } from "../chain.js";
 import {
   addCapped,
@@ -115,11 +114,6 @@ export interface VaultScreenProps {
   /** ticket 11: irreversible. Withdraw goes one-step; everything else refuses. */
   shutdown: boolean;
   currentEpoch: CurrentEpochDto | null;
-  /** Ticket 05: `/state`'s `launchAt`, present only while `currentEpoch` is
-   *  null (the deposit-only launch week). */
-  launchAt: string | null;
-  /** Chain clock seconds, for the buy-tickets draw-value preview. */
-  now: bigint | null;
   /** Requested but unpaid Principal; 0 when nothing is pending. */
   pendingWithdraw: bigint;
   /** The epoch that pending amount was requested in, so the day it pays after. */
@@ -151,8 +145,6 @@ export function Vault(props: VaultScreenProps) {
     paused,
     shutdown,
     currentEpoch,
-    launchAt,
-    now,
     pendingWithdraw,
     pendingEpoch,
     stale,
@@ -173,13 +165,6 @@ export function Vault(props: VaultScreenProps) {
   >(null);
   /** Atomic amount of the deposit that just landed; null closes the modal. */
   const [confirmed, setConfirmed] = useState<bigint | null>(null);
-  /** Ticket 15: an app-side confirm step before an embedded wallet's send —
-   *  one click cannot move USDC. Null hides the step; unset entirely for a
-   *  wallet with no `sendTransaction` (nothing is sponsored, so the wallet's
-   *  own confirmation already covers this). */
-  const [pendingConfirm, setPendingConfirm] = useState<{ label: string; amountText: string } | null>(
-    null,
-  );
   /**
    * A `process_withdraw` has been sent and the read model has not caught up.
    * Keyed on the pending amount so the flag clears itself the moment the
@@ -353,21 +338,11 @@ export function Vault(props: VaultScreenProps) {
           ? "POOL PAUSED"
           : mode.toUpperCase();
 
-  // Ticket 05: no Epoch yet (deposit-only launch week) — deposits and
-  // withdrawal requests stay open; this just names when the first Draw is.
-  const launchLabel =
-    currentEpoch === null ? launchCountdownLabel(launchCountdown(launchAt, now)) : null;
-
   return (
     <div className="vault" data-testid="vault-screen">
       {stale ? (
         <span className="chip stale-chip" data-testid="data-delayed-chip">
           Data delayed
-        </span>
-      ) : null}
-      {launchLabel ? (
-        <span className="chip" data-testid="vault-launch-countdown">
-          {launchLabel}
         </span>
       ) : null}
       {/* Pre-dithered checkmark coin (scripts/dither-video.mjs). Without autoplay the poster stays. */}
@@ -517,23 +492,7 @@ export function Vault(props: VaultScreenProps) {
               className="vault-cta"
               disabled={connected && !canSubmit}
               data-testid={`${mode}-submit`}
-              onClick={
-                connected
-                  ? () => {
-                      // Ticket 15: an embedded wallet (Privy's sponsored
-                      // path, `sendTransaction` set) confirms in-app first;
-                      // an external wallet already confirms in its own UI.
-                      if (sendTransaction) {
-                        setPendingConfirm({
-                          label: mode === "deposit" ? "Deposit" : "Withdraw",
-                          amountText: fmt2(amount ?? 0n),
-                        });
-                      } else {
-                        submit();
-                      }
-                    }
-                  : onConnect
-              }
+              onClick={connected ? submit : onConnect}
             >
               {ctaText}
             </button>
@@ -634,67 +593,6 @@ export function Vault(props: VaultScreenProps) {
           onPlay={onPlay}
         />
       ) : null}
-
-      {pendingConfirm ? (
-        <ConfirmSend
-          label={pendingConfirm.label}
-          amountText={pendingConfirm.amountText}
-          symbol={SYMBOL}
-          onCancel={() => setPendingConfirm(null)}
-          onConfirm={() => {
-            setPendingConfirm(null);
-            submit();
-          }}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-interface ConfirmSendProps {
-  label: string;
-  amountText: string;
-  symbol: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-}
-
-/** Ticket 15: names the action and amount before an embedded wallet's send
- *  actually moves USDC. */
-function ConfirmSend({ label, amountText, symbol, onCancel, onConfirm }: ConfirmSendProps) {
-  return (
-    <div className="deposit-modal-backdrop" onClick={onCancel} data-testid="confirm-send-modal">
-      <section
-        className="deposit-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirm-send-title"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="deposit-modal-head">
-          <span className="deposit-modal-brand">
-            <LogoCog size={18} />
-            CONFIRM
-          </span>
-          <button type="button" className="deposit-modal-close" aria-label="Cancel" onClick={onCancel}>
-            ×
-          </button>
-        </header>
-        <p className="deposit-modal-kicker" id="confirm-send-title">
-          {label.toUpperCase()}
-        </p>
-        <p className="deposit-modal-amount" data-testid="confirm-send-amount">
-          {amountText} {symbol}
-        </p>
-        <button
-          type="button"
-          className="vault-cta deposit-modal-play"
-          data-testid="confirm-send-confirm"
-          onClick={onConfirm}
-        >
-          Confirm {label}
-        </button>
-      </section>
     </div>
   );
 }

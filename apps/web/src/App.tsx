@@ -702,8 +702,6 @@ export function App() {
             paused={pool?.paused ?? false}
             shutdown={shutdown}
             currentEpoch={state?.currentEpoch ?? null}
-            launchAt={state?.launchAt ?? null}
-            now={now}
             pendingWithdraw={pendingWithdraw}
             pendingEpoch={pendingEpoch}
             stale={status.stale}
