@@ -751,6 +751,100 @@
         }
       }
 
+      html:has(.share-modal[open]) {
+        overflow: hidden;
+      }
+
+      .share-modal {
+        width: min(480px, calc(100vw - 32px));
+        margin: auto;
+        padding: 84px 36px 40px;
+        border: 1px solid rgba(182, 255, 59, 0.18);
+        border-radius: 16px;
+        background: #0e1b2b;
+        color: #fff;
+        text-align: center;
+        box-shadow: 0 4px 10px #4a5d48;
+      }
+
+      .share-modal[open] {
+        animation: popIn 380ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+      }
+
+      .share-modal::backdrop {
+        background: rgba(0, 0, 0, 0.75);
+        backdrop-filter: blur(3px);
+      }
+
+      .share-close {
+        position: absolute;
+        top: 18px;
+        right: 15px;
+        width: 32px;
+        height: 32px;
+        font-family: system-ui, sans-serif;
+        font-size: 20px;
+        line-height: 1;
+        letter-spacing: -0.45px;
+        color: rgba(255, 255, 255, 0.3);
+        background: none;
+        border: 0;
+        cursor: pointer;
+        transition: color var(--std) var(--ease);
+      }
+
+      .share-coin {
+        display: block;
+        width: 188px;
+        height: 188px;
+        margin: 0 auto;
+      }
+
+      .share-modal h2 {
+        margin-top: 26px;
+        font-size: 26px;
+        line-height: 1.5;
+        letter-spacing: 0.06em;
+        text-transform: none;
+        color: var(--lime);
+      }
+
+      .share-modal p {
+        max-width: 332px;
+        margin: 6px auto 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #fff;
+      }
+
+      .share-modal .btn-share {
+        width: 100%;
+        margin-top: 32px;
+        gap: 8px;
+        text-transform: none;
+        color: #07101c;
+      }
+
+      .share-later {
+        margin-top: 3px;
+        padding: 4px 8px;
+        font-family: var(--mono);
+        font-size: 14px;
+        line-height: 21px;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        color: rgba(255, 255, 255, 0.55);
+        background: none;
+        border: 0;
+        cursor: pointer;
+        transition: color var(--std) var(--ease);
+      }
+
+      .share-close:hover,
+      .share-later:hover {
+        color: #fff;
+      }
+
       .form-err {
         color: #ff8a6a;
       }
@@ -1477,6 +1571,16 @@
         .done-line {
           flex: none;
         }
+        .share-modal {
+          padding: 64px 20px 28px;
+        }
+        .share-coin {
+          width: 140px;
+          height: 140px;
+        }
+        .share-modal h2 {
+          font-size: 20px;
+        }
         .btn {
           width: 100%;
           flex: none;
@@ -1537,7 +1641,8 @@
         }
         .ruler .now,
         .stage-svg .core,
-        .btn::before {
+        .btn::before,
+        .share-modal[open] {
           animation: none;
           transition: none;
         }
@@ -2076,6 +2181,46 @@
       </div>
     </footer>
 
+    <!-- method="dialog": each button closes the modal with its value as the
+         returnValue, no click handlers needed. -->
+    <dialog class="share-modal" aria-labelledby="share-modal-title">
+      <form method="dialog">
+        <button class="share-close" value="close" aria-label="Close">
+          ×
+        </button>
+        <img
+          class="share-coin"
+          src="/check-coin.webp"
+          width="188"
+          height="188"
+          alt=""
+        />
+        <h2 id="share-modal-title">You're on the list</h2>
+        <p>Share on X to increase your chances of moving up the waitlist.</p>
+        <a
+          class="btn btn-share"
+          href="https://x.com/intent/post"
+          target="_blank"
+          rel="noopener"
+          data-share
+          autofocus
+          ><span>Share on</span
+          ><svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            role="img"
+            aria-label="X"
+          >
+            <path
+              d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"
+            /></svg
+        ></a>
+        <button class="share-later" value="later">Maybe Later</button>
+      </form>
+    </dialog>
+
     <script>
       const REDUCED = window.matchMedia(
         "(prefers-reduced-motion: reduce)",
@@ -2589,6 +2734,22 @@
         return Object.keys(out).length ? out : null;
       })();
 
+      // Referral code outlives the visit: a link clicked today still credits
+      // a signup next week. Last link clicked wins. Kept after signup, since
+      // the server never overwrites a signup's first referred_by.
+      const REF_KEY = "hexo.ref";
+      const REF = (() => {
+        try {
+          if (UTM?.ref) localStorage.setItem(REF_KEY, UTM.ref);
+          return localStorage.getItem(REF_KEY);
+        } catch {
+          return UTM?.ref ?? null;
+        }
+      })();
+      // Super property: every later event carries it, so PostHog can break
+      // visits down by code, joined or not.
+      if (REF) posthog.register({ ref: REF });
+
       async function post(body) {
         const r = await fetch("/api/waitlist", {
           method: "POST",
@@ -2663,7 +2824,7 @@
           try {
             signup = await post({
               email,
-              ref: UTM?.ref ?? null,
+              ref: REF,
               referrer: document.referrer || null,
               utm: UTM,
             });
@@ -2678,12 +2839,13 @@
           posthog.capture("waitlist_submitted", {
             where,
             has_utm: !!UTM,
-            referred: !!UTM?.ref,
+            referred: !!REF,
           });
           posthog.identify(signup.id, { email });
           writeJoined({ id: signup.id, code: signup.code });
           renderJoined();
           note.textContent = noteDefault;
+          openShareModal();
         });
 
       });
@@ -2698,17 +2860,47 @@
             "Use my link to increase your chances of getting early access\n\n" +
             `https://hexofun.lol/?ref=${code}`,
         );
+      const shareModal = document.querySelector(".share-modal");
       document.querySelectorAll("[data-share]").forEach((a) => {
         renderers.push((s) => {
           if (s?.code) a.href = shareUrl(s.code);
         });
-        a.addEventListener("click", () =>
+        a.addEventListener("click", () => {
           window.posthog?.capture("waitlist_shared", {
-            where: a.closest("#top") ? "hero" : "closing",
+            where: a.closest("dialog")
+              ? "modal"
+              : a.closest("#top")
+                ? "hero"
+                : "closing",
             joined: !!readJoined(),
-          }),
-        );
+          });
+          if (a.closest("dialog")) shareModal.close("shared");
+        });
       });
+
+      // ----------------------------- share modal ---------------------------
+      // Opens once, right after a fresh submit. A return visit already lands
+      // on the joined state, so it never re-prompts.
+      function openShareModal() {
+        if (!shareModal?.showModal) return;
+        shareModal.showModal();
+        window.posthog?.capture("share_modal_opened");
+      }
+      // A backdrop click targets the dialog itself but lands outside its box.
+      shareModal?.addEventListener("click", (e) => {
+        const r = shareModal.getBoundingClientRect();
+        const outside =
+          e.clientX < r.left ||
+          e.clientX > r.right ||
+          e.clientY < r.top ||
+          e.clientY > r.bottom;
+        if (e.target === shareModal && outside) shareModal.close("backdrop");
+      });
+      shareModal?.addEventListener("close", () =>
+        window.posthog?.capture("share_modal_closed", {
+          via: shareModal.returnValue || "dismiss",
+        }),
+      );
 
       // ----------------------------- nav cta -------------------------------
       document.querySelectorAll("[data-scroll]").forEach((btn) => {
