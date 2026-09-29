@@ -13,6 +13,7 @@ import {
   gateDecision,
   inviteCodeFromSearch,
   normalizeInviteCode,
+  pendingStep,
   type GateStatus,
 } from "./access.js";
 import { setPersonProperties, track } from "./analytics.js";
@@ -69,6 +70,36 @@ function rememberOwner(owner: string): void {
   }
 }
 
+/** The code a disconnected SUBMIT was made with. A social login redirects
+ *  to the provider and back, which reloads the page and drops React state;
+ *  sessionStorage carries the code across that so the redeem still fires on
+ *  return instead of asking for the code a second time. */
+const PENDING_CODE_STORAGE_KEY = "hexo-pending-invite";
+
+function readPendingCode(): string {
+  try {
+    return window.sessionStorage.getItem(PENDING_CODE_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storePendingCode(code: string): void {
+  try {
+    window.sessionStorage.setItem(PENDING_CODE_STORAGE_KEY, code);
+  } catch {
+    // Storage blocked: a redirecting login asks for the code again, as before.
+  }
+}
+
+function clearPendingCode(): void {
+  try {
+    window.sessionStorage.removeItem(PENDING_CODE_STORAGE_KEY);
+  } catch {
+    // nothing to clean up if it never wrote
+  }
+}
+
 /** `?ref=CODE` (spec.md "?ref= capture"), captured into localStorage the
  *  moment it's seen so it survives the gate flow, a wallet connect and a
  *  reload, and stripped from the URL right after. With no `?ref=` on this
@@ -116,7 +147,9 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   }, [owner, access, rememberedOwner]);
   // Read once at mount so it survives the connect flow (this component stays
   // mounted for the app's whole session; connecting never remounts it).
-  const [code, setCode] = useState(() => inviteCodeFromSearch(window.location.search));
+  const [code, setCode] = useState(
+    () => readPendingCode() || inviteCodeFromSearch(window.location.search),
+  );
   const [refCode, setRefCode] = useState(() => captureRefCode());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -204,14 +237,16 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
   // The code comes first: SUBMIT while disconnected opens the wallet, then
   // redeems once the access check says this wallet still needs a code. A
   // wallet that already has access skips the redeem and the gate just closes.
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState(() => readPendingCode() !== "");
   const status = gateDecision({ ready, connected, owner, access, rememberedOwner, fetchFailed });
   useEffect(() => {
-    if (!pending || status === "loading" || status === "connect" || status === "checking")
-      return;
+    if (!pending) return;
+    const step = pendingStep(status, access);
+    if (step === "wait") return;
     setPending(false);
-    if (status === "redeem") redeem();
-  }, [pending, status, redeem]);
+    clearPendingCode();
+    if (step === "redeem") redeem();
+  }, [pending, status, access, redeem]);
 
   // A friend already past the gate who opens a `?ref=` link before
   // depositing applies it with its own signature once connected (spec.md
@@ -256,6 +291,7 @@ export function useAccessGate(options: AccessGateOptions): AccessGateState {
     }
     setError(null);
     setPending(true);
+    storePendingCode(code);
     connect();
   }, [code, connected, redeem, connect]);
 
