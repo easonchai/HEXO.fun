@@ -776,9 +776,10 @@ describe("roles", () => {
 
       const nonce = testNonce();
       const seed = vrfSeed("round", pool.pool, 1n, nonce);
-      // Requests stay Operator-signed by design (spec.md's Implementation
-      // Decisions): the nonce that keeps the randomness address unguessable
-      // has to come from the Operator.
+      // `request_round_randomness` is permissionless (any `payer`); the
+      // Operator is just the usual caller. A stranger who front-runs it pays
+      // the ORAO fee and still cannot pick the result: one request per
+      // Round, and pre-learning a seed's output makes that request fail.
       await program.methods
         .requestRoundRandomness(Array.from(nonce))
         .accountsPartial({

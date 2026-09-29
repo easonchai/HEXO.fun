@@ -925,8 +925,11 @@ describe("epochs", () => {
       const drawing = await fetchEpoch(pool, 1n);
       expect(drawing.status).toBe(epoch_status.DRAWING);
 
-      // past vrf_timeout(2s), never fulfilled
-      await retryUntilOk(() => rolloverEpoch(pool, 1n, drawing.vrfSeed));
+      // past vrf_timeout(2s), never fulfilled. A stranger drives it
+      // (production-hardening 14, Finding 6): the handler never reads
+      // `caller`, so this pins that no `has_one` creeps back in.
+      const stranger = await pool.fundedWallet(0n);
+      await retryUntilOk(() => rolloverEpoch(pool, 1n, drawing.vrfSeed, stranger.keypair));
 
       const rolled = await fetchEpoch(pool, 1n);
       expect(rolled.status).toBe(epoch_status.ROLLED_OVER);
@@ -1066,8 +1069,10 @@ describe("epochs", () => {
         pool.jackpotVault,
       );
       // Any placeholder randomness account: the Registering branch never
-      // reads it (there was never a request to check).
-      const sig = await rolloverEpoch(pool, 1n, new Uint8Array(32));
+      // reads it (there was never a request to check). Driven by a stranger
+      // (production-hardening 14, Finding 6).
+      const stranger = await pool.fundedWallet(0n);
+      const sig = await rolloverEpoch(pool, 1n, new Uint8Array(32), stranger.keypair);
 
       const rolled = await fetchEpoch(pool, 1n);
       expect(rolled.status).toBe(epoch_status.ROLLED_OVER);
@@ -1135,7 +1140,7 @@ describe("epochs", () => {
   );
 
   it(
-    "close_registration checks its own randomness account, and pause/close_registration/draw/rollover_epoch accept any caller",
+    "close_registration checks its own randomness account, and draw accepts any caller",
     async () => {
       const pool = await setupPool({ epochSeconds: 6, vrfTimeout: 2 });
       await beginEpoch(pool, 0n);
@@ -1285,7 +1290,9 @@ describe("epochs", () => {
       );
 
       await sleepUntilOnChain(Number(drawn.drawnAt.toString()) + 2 + 1);
-      await rolloverEpoch(pool, 1n, drawn.vrfSeed);
+      // A stranger drives the Drawn rollover (production-hardening 14, Finding 6).
+      const stranger = await pool.fundedWallet(0n);
+      await rolloverEpoch(pool, 1n, drawn.vrfSeed, stranger.keypair);
 
       const rolled = await fetchEpoch(pool, 1n);
       expect(rolled.status).toBe(epoch_status.ROLLED_OVER);

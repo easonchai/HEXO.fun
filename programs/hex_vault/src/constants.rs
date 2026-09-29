@@ -14,6 +14,21 @@ pub const CURRENT_VERSION: u8 = 1;
 /// Denominator for `base_rate_bps`, an APR: seconds in a 365-day year.
 pub const SECONDS_PER_YEAR: u128 = 31_536_000;
 
+/// Floors for the two timeouts that gate the permissionless `void_round` and
+/// `rollover_epoch` (production-hardening 14, Finding 5). Below these, a
+/// merely slow ORAO fulfilment or an honest late Payout could be voided or
+/// rolled over by any stranger the second the timeout passes. Localnet tests
+/// run epochs of a few seconds, so `test-vrf` builds keep the floor at 1;
+/// `lib.rs` refuses that feature together with `staging` or `mainnet`.
+#[cfg(not(feature = "test-vrf"))]
+pub const MIN_VRF_TIMEOUT: i64 = 60;
+#[cfg(feature = "test-vrf")]
+pub const MIN_VRF_TIMEOUT: i64 = 1;
+#[cfg(not(feature = "test-vrf"))]
+pub const MIN_PAYOUT_TIMEOUT: i64 = 600;
+#[cfg(feature = "test-vrf")]
+pub const MIN_PAYOUT_TIMEOUT: i64 = 1;
+
 pub const SEED_POOL: &[u8] = b"pool";
 pub const SEED_PRINCIPAL: &[u8] = b"principal";
 pub const SEED_JACKPOT: &[u8] = b"jackpot";

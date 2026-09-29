@@ -11,7 +11,10 @@ use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
-use crate::constants::{BPS_DENOMINATOR, SEED_JACKPOT, SEED_PLAYER, SEED_POOL, SEED_PRINCIPAL};
+use crate::constants::{
+    BPS_DENOMINATOR, MIN_PAYOUT_TIMEOUT, MIN_VRF_TIMEOUT, SEED_JACKPOT, SEED_PLAYER, SEED_POOL,
+    SEED_PRINCIPAL,
+};
 use crate::errors::HexVaultError;
 use crate::events::{
     AdminChanged, AdminProposed, Deposited, EmergencyWithdrawn, FeaturePaused, HouseSwept,
@@ -86,7 +89,7 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
         params.epoch_seconds > 0
             && params.epoch_anchor > 0
             && params.round_seconds > 0
-            && params.vrf_timeout > 0,
+            && params.vrf_timeout >= MIN_VRF_TIMEOUT,
         HexVaultError::InvalidParameter
     );
     require!(
@@ -115,7 +118,10 @@ pub fn create_pool(ctx: Context<CreatePool>, params: CreatePoolParams) -> Result
     );
     // Zero would let the operator roll a Drawn epoch over in the same block
     // it was drawn in, which is the thing `payout_timeout` exists to stop.
-    require!(params.payout_timeout > 0, HexVaultError::InvalidParameter);
+    require!(
+        params.payout_timeout >= MIN_PAYOUT_TIMEOUT,
+        HexVaultError::InvalidParameter
+    );
     // Transfer-fee and other Token-2022 extensions would break the
     // vault-balance arithmetic every payout depends on, so only the classic
     // program's mints are accepted.
@@ -231,7 +237,7 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         pool.close_buffer = v;
     }
     if let Some(v) = params.vrf_timeout {
-        require!(v > 0, HexVaultError::InvalidParameter);
+        require!(v >= MIN_VRF_TIMEOUT, HexVaultError::InvalidParameter);
         pool.vrf_timeout = v;
     }
     if let Some(v) = params.min_deposit {
@@ -248,7 +254,7 @@ pub fn set_params(ctx: Context<SetParams>, params: SetParamsArgs) -> Result<()> 
         pool.registration_window = v;
     }
     if let Some(v) = params.payout_timeout {
-        require!(v > 0, HexVaultError::InvalidParameter);
+        require!(v >= MIN_PAYOUT_TIMEOUT, HexVaultError::InvalidParameter);
         pool.payout_timeout = v;
     }
     if let Some(v) = params.base_rate_bps {

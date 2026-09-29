@@ -867,7 +867,7 @@ describe("rounds", () => {
   );
 
   it(
-    "a Round left OPEN past ends_at + vrf_timeout can be voided by the Operator, and its pot carries",
+    "a Round left OPEN past ends_at + vrf_timeout can be voided by anyone, and its pot carries",
     async () => {
       // beta-launch-fixes ticket 02: a Round that never even got its
       // randomness request through (e.g. the Operator crashed before
@@ -882,7 +882,9 @@ describe("rounds", () => {
       // Never requested at all: still OPEN past ends_at + vrf_timeout.
       await waitUntil(endsAt + 2 + 1);
       // Any placeholder randomness account: the OPEN branch never reads it.
-      await voidRound(pool, round, new Uint8Array(32));
+      // A stranger, not the Operator (production-hardening 14, Finding 6).
+      const stranger = await pool.fundedWallet(0n);
+      await voidRound(pool, round, new Uint8Array(32), stranger.keypair);
 
       const voided = await program.account.round.fetch(round);
       expect(voided.status).toBe(4); // Voided
