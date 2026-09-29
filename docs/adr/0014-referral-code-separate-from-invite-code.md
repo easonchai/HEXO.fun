@@ -28,4 +28,4 @@ Considered and rejected: keeping one code and renaming it on screen. The gate's 
 caps a Referrer's reach, and ending the beta would mean deleting the thing referrals hang off.
 
 Consequences: depositors' existing owned Invite codes become their Referral codes, and Referrals
-already bound through them stay as they are. `docs/plan/referral-page/spec.md` has the details.
+already bound through them stay as they are.

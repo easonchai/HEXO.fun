@@ -66,9 +66,9 @@ Starts with `ROUND_VOIDED_RECENTLY` or `EPOCH_ROLLED_OVER_RECENTLY`.
    check `GET /status` / `GET /epochs/current` for a round or epoch parked past its `vrf_timeout`.
 2. Void and rollover fire on their own once the timeout passes: `void_round` once `vrf_timeout`
    passes a round's or a drawing epoch's request, `rollover_epoch` once `payout_timeout` passes a
-   drawn epoch. Today only the operator can call either one, `has_one = operator` on the Pool
-   account; once production-hardening ticket 01 lands, any signer may also call them after the
-   same timeout, as a backstop if the operator itself is down.
+   drawn epoch. Any signer may call either one after the timeout, as a backstop if the operator
+   itself is down. That is why the program floors both: `vrf_timeout` at 60s and `payout_timeout`
+   at 600s (`constants.rs`), so a stranger cannot void a merely slow fulfilment.
 3. Check ORAO's own status page or Discord for a network-wide outage, and whether other ORAO
    consumers on the same cluster are stuck too. A HexVault-only stall points at the operator or its
    RPC instead, see "Chain stall mid-round" above.
