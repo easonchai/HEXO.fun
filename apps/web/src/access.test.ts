@@ -6,6 +6,7 @@ import {
   gateDecision,
   inviteCodeFromSearch,
   normalizeInviteCode,
+  pendingStep,
 } from "./access.js";
 
 describe("normalizeInviteCode", () => {
@@ -71,12 +72,12 @@ describe("gateDecision", () => {
     expect(gateDecision({ ...base, fetchFailed: false })).toBe("checking");
   });
 
-  it("ticket 16: a remembered wallet stays hidden even once the fetch has failed", () => {
-    expect(gateDecision({ ...base, rememberedOwner: WALLET, fetchFailed: true })).toBe("hidden");
+  it("ticket 16: a remembered wallet gets the retry control once the fetch has failed", () => {
+    expect(gateDecision({ ...base, rememberedOwner: WALLET, fetchFailed: true })).toBe("retry");
   });
 
-  it("stays hidden while GET /access re-confirms the wallet that passed last time", () => {
-    expect(gateDecision({ ...base, rememberedOwner: WALLET })).toBe("hidden");
+  it("paints nothing, not the app, while GET /access re-confirms a remembered wallet", () => {
+    expect(gateDecision({ ...base, rememberedOwner: WALLET })).toBe("loading");
   });
 
   it("blocks with the code input until access is allowed, even for a remembered wallet", () => {
@@ -89,6 +90,30 @@ describe("gateDecision", () => {
     expect(
       gateDecision({ ...base, access: { allowed: true, reason: "invite code redeemed" } }),
     ).toBe("hidden");
+  });
+});
+
+describe("pendingStep", () => {
+  const denied = { allowed: false, reason: "no invite code redeemed" };
+  const allowed = { allowed: true, reason: "invite code redeemed" };
+
+  it("waits until the wallet is connected and the access check has answered", () => {
+    expect(pendingStep("loading", null)).toBe("wait");
+    expect(pendingStep("connect", null)).toBe("wait");
+    expect(pendingStep("checking", null)).toBe("wait");
+    expect(pendingStep("retry", null)).toBe("wait");
+  });
+
+  it("keeps waiting on any status with no answer yet", () => {
+    expect(pendingStep("hidden", null)).toBe("wait");
+  });
+
+  it("redeems once the check says this wallet needs a code", () => {
+    expect(pendingStep("redeem", denied)).toBe("redeem");
+  });
+
+  it("drops the submit for a wallet that already has access", () => {
+    expect(pendingStep("hidden", allowed)).toBe("drop");
   });
 });
 

@@ -50,19 +50,31 @@ export interface GateInputs {
   fetchFailed?: boolean;
 }
 
-/** A returning wallet that passed the gate before stays hidden while
- *  `GET /access` is in flight instead of flashing the card. Access is never
- *  revoked once redeemed, so a stale answer can only be wrong for a wallet
- *  that never had it, and the fetch result still shows the card then. */
+/** Only a real `GET /access` answer opens the gate. A returning wallet that
+ *  passed before paints nothing while the check is in flight, instead of
+ *  flashing the card. `rememberedOwner` is localStorage, which anyone can
+ *  edit, so it picks between a blank page and the card and never shows the
+ *  app. */
 export function gateDecision(inputs: GateInputs): GateStatus {
   const { ready, connected, owner, access, rememberedOwner, fetchFailed } = inputs;
   if (!ready) return "loading";
   if (!connected) return "connect";
   if (access === null) {
-    if (owner !== undefined && owner === rememberedOwner) return "hidden";
-    return fetchFailed ? "retry" : "checking";
+    if (fetchFailed) return "retry";
+    return owner !== undefined && owner === rememberedOwner ? "loading" : "checking";
   }
   return access.allowed ? "hidden" : "redeem";
+}
+
+/** What a SUBMIT made while disconnected does once the wallet is in. */
+export type PendingStep = "wait" | "redeem" | "drop";
+
+/** Waits for the real `GET /access` answer: dropping the submit before it
+ *  arrived left the user pressing SUBMIT a second time when the answer came
+ *  back not allowed. */
+export function pendingStep(status: GateStatus, access: AccessDto | null): PendingStep {
+  if (status === "loading" || status === "connect" || access === null) return "wait";
+  return status === "redeem" ? "redeem" : "drop";
 }
 
 /**

@@ -32,6 +32,7 @@ export function AccessGate({ children }: { children: ReactNode }) {
   const busy = gate.busy || checking;
   // "loading": the wallet layer is still restoring last session, so painting
   // the card now would flash it at everyone who is already past the gate.
+  // A spinning logo holds the screen until it settles.
   const showCard = gate.status !== "hidden" && gate.status !== "loading";
   useEffect(() => {
     if (showCard) track("access_gate_shown", { state: gate.status });
@@ -39,7 +40,14 @@ export function AccessGate({ children }: { children: ReactNode }) {
 
   return (
     <>
-      {children}
+      {/* The app mounts only past the gate, so deleting the modal in devtools
+          leaves an empty page instead of the app underneath. */}
+      {gate.status === "hidden" ? children : null}
+      {gate.status === "loading" ? (
+        <div className="invite-loading" role="status" aria-label="Loading" data-testid="access-gate-loading">
+          <LogoCog size={48} />
+        </div>
+      ) : null}
       {!showCard ? null : (
         <div className="invite-gate" data-testid="access-gate">
           <div className="invite-card" role="dialog" aria-modal="true" aria-labelledby="invite-title">
