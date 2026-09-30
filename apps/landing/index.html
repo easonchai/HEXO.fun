@@ -645,6 +645,12 @@
         max-width: 623px;
       }
 
+      /* Google renders its own button into this; the height stops the row
+         jumping when the script lands. */
+      .g-btn {
+        min-height: 44px;
+      }
+
       .form input {
         flex: 1;
         min-width: 0;
@@ -1743,16 +1749,7 @@
 
         <div class="hero-copy">
           <form class="form rv" style="--d: 220ms" data-waitlist novalidate>
-            <input
-              type="email"
-              name="email"
-              placeholder="you@email.com"
-              aria-label="Email address"
-              required
-            />
-            <button class="btn" type="submit">
-              <span>Join now</span>
-            </button>
+            <div class="g-btn" data-google></div>
           </form>
           <div class="form-done" role="status">
             <div class="done-row">
@@ -2061,16 +2058,7 @@
         </div>
         <div class="R rv" style="--d: 90ms">
           <form class="form" data-waitlist novalidate>
-            <input
-              type="email"
-              name="email"
-              placeholder="you@email.com"
-              aria-label="Email address"
-              required
-            />
-            <button class="btn" type="submit">
-              <span>Join now</span>
-            </button>
+            <div class="g-btn" data-google></div>
           </form>
           <div class="form-done" role="status">
             <div class="done-row">
@@ -2715,7 +2703,8 @@
       })();
 
       // ----------------------------- waitlist ------------------------------
-      // One route: commit the email and hand back its id.
+      // Google sign-in commits the signup and sets the session cookie. The
+      // page learns who it is from /api/me.
 
       const UTM = (() => {
         const q = new URLSearchParams(location.search);
@@ -2750,20 +2739,27 @@
       // visits down by code, joined or not.
       if (REF) posthog.register({ ref: REF });
 
-      async function post(body) {
-        const r = await fetch("/api/waitlist", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+      // Rejects with the server's message; `status` and `data` ride along.
+      async function api(url, body) {
+        const r = await fetch(url, {
+          method: body ? "POST" : "GET",
+          headers: body ? { "Content-Type": "application/json" } : {},
+          body: body ? JSON.stringify(body) : undefined,
         });
         const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data.error || "Request failed");
+        if (!r.ok) {
+          throw Object.assign(new Error(data.error || "Request failed"), {
+            status: r.status,
+            data,
+          });
+        }
         return data;
       }
 
-      // One joined state for the whole page, kept in localStorage so a return
-      // visit lands on the share button with the same code. { id, code }
-      const JOINED_KEY = "hexo.waitlist";
+      // Render cache for the last /api/me body, so a return visit doesn't
+      // flash the sign-in button. Never sent as identity: the cookie is.
+      // Own key, so the old { id, code } state from typed emails is ignored.
+      const JOINED_KEY = "hexo.member";
       const readJoined = () => {
         try {
           return JSON.parse(localStorage.getItem(JOINED_KEY)) || null;
@@ -2782,19 +2778,20 @@
         renderers.forEach((r) => r(s));
       };
 
+      // One entry per form. Google's button lives in an iframe, so the page
+      // gets no click from it. Pointer entry says which form the visitor is
+      // about to use, and that is what `where` reports.
+      const forms = {};
+      let activeWhere = "hero";
+
       document.querySelectorAll("form[data-waitlist]").forEach((form) => {
         const scope = form.parentElement;
         const where = form.closest("#top") ? "hero" : "closing";
         const note = scope.querySelector("[data-note]");
         const noteDefault = note.textContent;
         const done = scope.querySelector(".form-done");
-        const submit = form.querySelector("button[type=submit]");
 
-        form.querySelector("input").addEventListener(
-          "input",
-          () => window.posthog?.capture("waitlist_started", { where }),
-          { once: true },
-        );
+        form.addEventListener("pointerenter", () => (activeWhere = where));
 
         renderers.push((s) => {
           scope.classList.toggle("joined", !!s);
@@ -2809,46 +2806,84 @@
           void form.offsetWidth;
           form.classList.add("shake");
         };
-
-        form.addEventListener("submit", async (e) => {
-          e.preventDefault();
-          const input = form.querySelector("input");
-          const email = input.value.trim();
-          if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
-            input.focus();
-            return fail("That email doesn't look right.");
-          }
-          note.classList.remove("form-err");
-          submit.disabled = true;
-          let signup;
-          try {
-            signup = await post({
-              email,
-              ref: REF,
-              referrer: document.referrer || null,
-              utm: UTM,
-            });
-          } catch (err) {
-            submit.disabled = false;
-            posthog.capture("waitlist_failed", {
-              where,
-              reason: String(err.message),
-            });
-            return fail("Couldn't reach the list. Try again in a moment.");
-          }
-          posthog.capture("waitlist_submitted", {
-            where,
-            has_utm: !!UTM,
-            referred: !!REF,
-          });
-          posthog.identify(signup.id, { email });
-          writeJoined({ id: signup.id, code: signup.code });
-          renderJoined();
+        const reset = () => {
           note.textContent = noteDefault;
-          openShareModal();
-        });
-
+          note.classList.remove("form-err");
+        };
+        forms[where] = { fail, reset };
       });
+
+      const failAll = (msg) => Object.values(forms).forEach((f) => f.fail(msg));
+
+      async function onCredential({ credential }) {
+        const where = activeWhere;
+        forms[where].reset();
+        window.posthog?.capture("waitlist_started", { where });
+        let member;
+        try {
+          member = await api("/api/auth/google", {
+            credential,
+            ref: REF,
+            referrer: document.referrer || null,
+            utm: UTM,
+          });
+        } catch (err) {
+          posthog.capture("waitlist_failed", {
+            where,
+            reason: String(err.message),
+          });
+          return forms[where].fail("Couldn't sign you in. Try again in a moment.");
+        }
+        posthog.capture("waitlist_submitted", {
+          where,
+          has_utm: !!UTM,
+          referred: !!REF,
+          method: "google",
+        });
+        posthog.identify(member.id);
+        writeJoined(member);
+        renderJoined();
+        if (member.created) openShareModal();
+      }
+
+      // The button only exists for a visitor without a session, so the GIS
+      // script loads only then.
+      function loadGoogle(clientId) {
+        const s = document.createElement("script");
+        s.src = "https://accounts.google.com/gsi/client";
+        s.async = true;
+        s.onerror = () => failAll("Couldn't load Google sign-in. Reload to retry.");
+        s.onload = () => {
+          google.accounts.id.initialize({
+            client_id: clientId,
+            callback: onCredential,
+          });
+          document.querySelectorAll("[data-google]").forEach((el) =>
+            google.accounts.id.renderButton(el, {
+              theme: "filled_black",
+              size: "large",
+              text: "continue_with",
+              shape: "rectangular",
+            }),
+          );
+        };
+        document.head.appendChild(s);
+      }
+
+      // Session check. 401 is the normal signed-out answer and carries the
+      // client id; anything else leaves the cached state as it was.
+      (async () => {
+        try {
+          writeJoined(await api("/api/me"));
+        } catch (err) {
+          if (err.status !== 401 || !err.data.client_id) {
+            return failAll("Couldn't reach the list. Reload in a moment.");
+          }
+          writeJoined(null);
+          loadGoogle(err.data.client_id);
+        }
+        renderJoined();
+      })();
 
       // ----------------------------- share on x ----------------------------
       // Share buttons only exist inside the joined state, so a code is always
@@ -2914,10 +2949,6 @@
           document
             .querySelector(btn.dataset.scroll)
             .scrollIntoView({ behavior: "smooth" });
-          setTimeout(
-            () => document.querySelector("form[data-waitlist] input").focus(),
-            420,
-          );
         });
       });
 

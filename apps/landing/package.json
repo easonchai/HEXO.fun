@@ -4,7 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "description": "HEXO.fun marketing site. Static HTML plus one serverless route; no bundler.",
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
-    "@neondatabase/serverless": "1.0.2"
+    "@neondatabase/serverless": "1.0.2",
+    "jose": "6.2.12"
   }
 }
