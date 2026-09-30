@@ -2950,17 +2950,21 @@
       // ----------------------------- share on x ----------------------------
       // Share buttons only exist inside the joined state, so a code is always
       // there when one is clicked.
-      const shareUrl = (code) =>
+      // /r/<code> unfurls with the sharer's card. `v` (rank) only busts X's
+      // per-URL cache, so each new share gets a current image. A cached body
+      // without a rank shares the bare link.
+      const shareUrl = (code, rank) =>
         "https://x.com/intent/post?text=" +
         encodeURIComponent(
           "Just signed up for @hexofun\n\n" +
             "Use my link to increase your chances of getting early access\n\n" +
-            `https://hexofun.lol/?ref=${code}`,
+            `https://hexofun.lol/r/${code}` +
+            (rank ? `?v=${rank}` : ""),
         );
       const shareModal = document.querySelector(".share-modal");
       document.querySelectorAll("[data-share]").forEach((a) => {
         renderers.push((s) => {
-          if (s?.code) a.href = shareUrl(s.code);
+          if (s?.code) a.href = shareUrl(s.code, s.rank);
         });
         a.addEventListener("click", () => {
           window.posthog?.capture("waitlist_shared", {

@@ -104,7 +104,12 @@ export function str(v, max) {
 /** The body every signed-in response returns. Later tickets add fields here,
  *  and the routes stay unchanged. Rank is position by total points descending,
  *  then earlier signup, then id so it is always a strict order. */
-export async function loadMember(id) {
+export const loadMember = (id) => loadMemberWhere(id, null);
+
+/** The same body by share code, for the public card and link routes. */
+export const loadMemberByCode = (code) => loadMemberWhere(null, code);
+
+async function loadMemberWhere(id, code) {
   // ponytail: window function over every row on each call, fine at waitlist
   // size. When it shows in latency, cache the ranking for a few seconds or
   // keep a materialised total per row.
@@ -124,7 +129,7 @@ export async function loadMember(id) {
     select w.id, w.code, w.x_handle, r.rank, r.points, r.referrals
     from waitlist w
     join ranked r on r.id = w.id
-    where w.id = ${id}::uuid
+    where w.id = ${id}::uuid or w.code = ${code}
   `;
   return rows[0] ?? null;
 }

@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "1.0.2",
-    "jose": "6.2.12"
+    "@resvg/resvg-wasm": "2.6.2",
+    "jose": "6.2.12",
+    "satori": "0.18.3"
   }
 }
