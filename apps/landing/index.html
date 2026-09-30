@@ -746,6 +746,16 @@
         flex: 0 0 208px;
       }
 
+      .x-line {
+        margin: 12px 0 0;
+        font-size: 12px;
+        letter-spacing: 0.075em;
+      }
+
+      .x-line a {
+        color: var(--lime);
+      }
+
       @keyframes popIn {
         0% {
           opacity: 0;
@@ -1754,7 +1764,7 @@
           <div class="form-done" role="status">
             <div class="done-row">
               <p class="done-line">
-                You're on the list
+                <span data-standing>You're on the list</span>
                 <svg
                   width="16"
                   height="16"
@@ -1780,6 +1790,10 @@
                 ><span>Share on X</span></a
               >
             </div>
+            <p class="x-line">
+              <a href="/api/x/start" data-x-connect>Connect X</a
+              ><span data-x-handle></span> <span data-x-msg></span>
+            </p>
           </div>
 
           <p class="form-note rv" style="--d: 280ms">
@@ -2063,7 +2077,7 @@
           <div class="form-done" role="status">
             <div class="done-row">
               <p class="done-line">
-                You're on the list
+                <span data-standing>You're on the list</span>
                 <svg
                   width="16"
                   height="16"
@@ -2089,6 +2103,10 @@
                 ><span>Share on X</span></a
               >
             </div>
+            <p class="x-line">
+              <a href="/api/x/start" data-x-connect>Connect X</a
+              ><span data-x-handle></span> <span data-x-msg></span>
+            </p>
           </div>
           <p class="form-note" style="margin-top: 8px">
             <span data-note>Save your money. Play your luck.</span>
@@ -2797,6 +2815,11 @@
           scope.classList.toggle("joined", !!s);
           form.classList.toggle("is-done", !!s);
           done.classList.toggle("is-done", !!s);
+          // A cached body from before ranks existed has no rank: keep the default.
+          if (s?.rank) {
+            done.querySelector("[data-standing]").textContent =
+              `You're #${s.rank}, ${s.referrals} referral${s.referrals === 1 ? "" : "s"}`;
+          }
         });
 
         const fail = (msg) => {
@@ -2883,6 +2906,45 @@
           loadGoogle(err.data.client_id);
         }
         renderJoined();
+      })();
+
+      // ----------------------------- connect x -----------------------------
+      // "Connect X" is a plain link to /api/x/start. The round trip lands back
+      // here with ?x=<outcome>, read once, shown as one line, then dropped
+      // from the URL so a reload does not repeat it.
+      const X_COPY = {
+        connected: "X connected.",
+        denied: "You cancelled on X. Connect any time.",
+        taken: "That X account is already linked to another signup.",
+        error: "Couldn't connect X. Try again.",
+      };
+      document.querySelectorAll("[data-x-connect]").forEach((a) => {
+        const handle = a.parentElement.querySelector("[data-x-handle]");
+        renderers.push((s) => {
+          a.hidden = !!s?.x_handle;
+          handle.textContent = s?.x_handle ? "@" + s.x_handle : "";
+        });
+        a.addEventListener("click", () =>
+          window.posthog?.capture("x_connect_started"),
+        );
+      });
+      (() => {
+        const q = new URLSearchParams(location.search);
+        const x = q.get("x");
+        if (!x) return;
+        q.delete("x");
+        const rest = q.toString();
+        history.replaceState(
+          null,
+          "",
+          location.pathname + (rest ? "?" + rest : "") + location.hash,
+        );
+        if (!X_COPY[x]) return;
+        document
+          .querySelectorAll("[data-x-msg]")
+          .forEach((el) => (el.textContent = X_COPY[x]));
+        if (x === "connected") window.posthog?.capture("x_connected");
+        else window.posthog?.capture("x_connect_failed", { reason: x });
       })();
 
       // ----------------------------- share on x ----------------------------

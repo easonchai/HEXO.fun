@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { POINTS } from "./_points.js";
 
 /**
  * Shared by the routes. Files that start with `_` are not routes on Vercel.
@@ -10,6 +11,13 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 // Built on first query so tests can import this file without DATABASE_URL.
 let client;
 export const sql = (...args) => (client ??= neon(process.env.DATABASE_URL))(...args);
+
+/** Tests swap in a tagged-template client over node-postgres, since neon's
+ *  driver needs its HTTP endpoint. Resets the schema check for the new DB. */
+export function useSql(fn) {
+  client = fn;
+  ready = undefined;
+}
 
 const CODE_ATTEMPTS = 5;
 
@@ -35,6 +43,9 @@ export function ensureSchema() {
     await sql`alter table waitlist add column if not exists code text unique`;
     await sql`alter table waitlist add column if not exists referred_by text`;
     await sql`alter table waitlist add column if not exists google_sub text unique`;
+    await sql`alter table waitlist add column if not exists x_user_id text unique`;
+    await sql`alter table waitlist add column if not exists x_handle text`;
+    await sql`alter table waitlist add column if not exists x_connected_at timestamptz`;
     // Backfill signups from before codes existed. Empty after the first run.
     const missing = await sql`select id from waitlist where code is null`;
     for (const { id } of missing) {
@@ -42,6 +53,19 @@ export function ensureSchema() {
         (code) => sql`update waitlist set code = ${code} where id = ${id}::uuid`,
       );
     }
+    await sql`
+      create table if not exists waitlist_points (
+        id          bigserial primary key,
+        waitlist_id uuid not null references waitlist(id),
+        kind        text not null,
+        ref         text not null default '',
+        points      int not null,
+        created_at  timestamptz not null default now(),
+        unique (waitlist_id, kind, ref)
+      )
+    `;
+    // Credit referrals made before the ledger existed. No-op after the first run.
+    await awardReferrals();
   })().catch((err) => {
     ready = undefined; // let the next request retry rather than cache a failure
     throw err;
@@ -77,13 +101,46 @@ export function str(v, max) {
   return typeof v === "string" && v ? v.slice(0, max) : null;
 }
 
-/** The body every signed-in response returns. Later tickets add rank and
- *  points here, and the routes stay unchanged. */
+/** The body every signed-in response returns. Later tickets add fields here,
+ *  and the routes stay unchanged. Rank is position by total points descending,
+ *  then earlier signup, then id so it is always a strict order. */
 export async function loadMember(id) {
+  // ponytail: window function over every row on each call, fine at waitlist
+  // size. When it shows in latency, cache the ranking for a few seconds or
+  // keep a materialised total per row.
   const rows = await sql`
-    select id, code, null::text as x_handle from waitlist where id = ${id}::uuid
+    with ranked as (
+      select
+        w.id,
+        coalesce(sum(p.points), 0)::int as points,
+        (count(p.id) filter (where p.kind = 'referral'))::int as referrals,
+        (row_number() over (
+          order by coalesce(sum(p.points), 0) desc, w.created_at asc, w.id asc
+        ))::int as rank
+      from waitlist w
+      left join waitlist_points p on p.waitlist_id = w.id
+      group by w.id
+    )
+    select w.id, w.code, w.x_handle, r.rank, r.points, r.referrals
+    from waitlist w
+    join ranked r on r.id = w.id
+    where w.id = ${id}::uuid
   `;
   return rows[0] ?? null;
+}
+
+/** Writes the referral award for the owner of `referred_by`. With an id it
+ *  covers that one new row; with none it backfills every row. Safe to repeat,
+ *  the unique key drops the second insert. */
+export function awardReferrals(newId = null) {
+  return sql`
+    insert into waitlist_points (waitlist_id, kind, ref, points)
+    select r.id, 'referral', w.id::text, ${POINTS.referral}::int
+    from waitlist w
+    join waitlist r on r.code = w.referred_by and r.id <> w.id
+    where ${newId}::uuid is null or w.id = ${newId}::uuid
+    on conflict (waitlist_id, kind, ref) do nothing
+  `;
 }
 
 /** Sends the 500 and returns false when an env var is missing. */
@@ -117,12 +174,17 @@ export function verifySession(value, secret) {
 export const sessionCookie = (id, secret) =>
   `${SESSION_COOKIE}=${signSession(id, secret)}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax`;
 
-/** The signed-in waitlist id from a request's Cookie header, or null. */
-export function sessionId(req, secret) {
+/** One cookie's raw value from a request's Cookie header, or undefined. */
+export function getCookie(req, name) {
   const raw = String(req.headers.cookie ?? "")
     .split(/;\s*/)
-    .find((c) => c.startsWith(`${SESSION_COOKIE}=`));
-  return raw ? verifySession(raw.slice(SESSION_COOKIE.length + 1), secret) : null;
+    .find((c) => c.startsWith(`${name}=`));
+  return raw?.slice(name.length + 1);
+}
+
+/** The signed-in waitlist id from a request's Cookie header, or null. */
+export function sessionId(req, secret) {
+  return verifySession(getCookie(req, SESSION_COOKIE), secret);
 }
 
 // -------------------------------- google ---------------------------------
