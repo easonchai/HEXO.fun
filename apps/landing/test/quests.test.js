@@ -41,8 +41,8 @@ let n = 0;
 async function member(x = false) {
   const i = n++;
   const r = await pool.query(
-    "insert into waitlist (email, code, x_user_id) values ($1, $2, $3) returning id",
-    [`q${i}@example.com`, `qq${String(i).padStart(4, "0")}`, x ? `x${i}` : null],
+    "insert into waitlist (email, code, x_user_id, privy_did) values ($1, $2, $3, $4) returning id",
+    [`q${i}@example.com`, `qq${String(i).padStart(4, "0")}`, x ? `x${i}` : null, `did:q${i}`],
   );
   return r.rows[0].id;
 }

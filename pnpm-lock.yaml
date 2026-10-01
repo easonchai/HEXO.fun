@@ -197,7 +197,7 @@ importers:
         version: 0.18.3
     devDependencies:
       esbuild:
-        specifier: ^0.28.2
+        specifier: 0.28.2
         version: 0.28.2
 
   apps/web:

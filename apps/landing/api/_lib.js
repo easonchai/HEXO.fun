@@ -103,7 +103,11 @@ export function str(v, max) {
 
 /** The body every signed-in response returns. Later tickets add fields here,
  *  and the routes stay unchanged. Rank is position by total points descending,
- *  then earlier signup, then id so it is always a strict order. */
+ *  then earlier signup, then id so it is always a strict order.
+ *
+ *  Only rows with a `privy_did` have joined. Rows from the typed-email form
+ *  stay in the table so a Privy login with the same email can take them over,
+ *  but until then they have no rank, no board slot and no referral pay. */
 export const loadMember = (id) => loadMemberWhere(id, null);
 
 /** The same body by share code, for the public card and link routes. */
@@ -124,6 +128,7 @@ async function loadMemberWhere(id, code) {
       from waitlist w
       left join waitlist_points p on p.waitlist_id = w.id
       group by w.id
+      where w.privy_did is not null
       window board as (order by coalesce(sum(p.points), 0) desc, w.created_at asc, w.id asc)
     ),
     invitees as (
@@ -138,7 +143,7 @@ async function loadMemberWhere(id, code) {
         ) as liked
       from waitlist i
       join waitlist w on w.code = i.referred_by and w.id <> i.id
-      where w.id = ${id}::uuid or w.code = ${code}
+      where i.privy_did is not null and (w.id = ${id}::uuid or w.code = ${code})
     )
     select w.id, w.code, w.email, w.x_handle, r.rank, r.points, r.referrals, r.above,
       (select count(*) filter (where verified) from invitees)::int as verified,
@@ -196,6 +201,7 @@ export async function loadLeaderboard() {
     from waitlist w
     left join waitlist_points p on p.waitlist_id = w.id
     group by w.id
+    where w.privy_did is not null
     order by rank
     limit 100
   `;
@@ -226,6 +232,7 @@ export function awardReferrals(id = null) {
         ) as liked
       from waitlist w
     ),
+      where w.privy_did is not null
     q as (
       select r.id as referrer, i.id as invitee, r.verified and i.verified as paid, i.liked
       from v i
@@ -296,8 +303,9 @@ let privyKeys;
 /** Checks a Privy identity token and returns `{ did, email }`. `keySet` is a
  *  jose key resolver; tests pass a local one, production takes the app's JWKS
  *  with a five second fetch timeout. Privy only links an email after its code
- *  is confirmed, so a linked email is a verified one. Errors carry the HTTP
- *  `status` to answer with. */
+ *  is confirmed, and a Google account's email is Google-verified, so either is
+ *  a verified one; a typed email wins when both are linked. Errors carry the
+ *  HTTP `status` to answer with. */
 export async function verifyPrivyToken(idToken, { appId, keySet }) {
   keySet ??= privyKeys ??= createRemoteJWKSet(
     new URL(`https://auth.privy.io/api/v1/apps/${appId}/jwks.json`),
@@ -316,11 +324,12 @@ export async function verifyPrivyToken(idToken, { appId, keySet }) {
   // The claim is a JSON string in Privy's tokens; accept an array as well.
   const raw = payload.linked_accounts;
   const accounts = typeof raw === "string" ? (safeParse(raw) ?? []) : (raw ?? []);
-  const email = Array.isArray(accounts)
-    ? accounts.find((a) => a?.type === "email" && typeof a.address === "string")?.address
-    : null;
+  const list = Array.isArray(accounts) ? accounts : [];
+  const email =
+    list.find((a) => a?.type === "email" && typeof a.address === "string")?.address ??
+    list.find((a) => a?.type === "google_oauth" && typeof a.email === "string")?.email;
   if (!email || !payload.sub) {
-    throw Object.assign(new Error("Sign in with an email address"), { status: 400 });
+    throw Object.assign(new Error("Sign in with email or Google"), { status: 400 });
   }
   return { did: payload.sub, email: email.toLowerCase() };
 }

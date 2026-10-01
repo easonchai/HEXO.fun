@@ -57,6 +57,14 @@ test("an older email row is taken over and keeps its code", { skip }, async () =
   });
 });
 
+test("a typed-email referrer's code pays nothing until they log in with Privy", { skip }, async () => {
+  await pool.query("insert into waitlist (email, code) values ('typed@example.com', 'ee0001')");
+  const guest = await signIn({ did: "did:privy:tg", email: "tg@example.com" }, { ref: "ee0001" });
+  assert.equal((await loadMember(guest.id)).points, 0);
+  await signIn({ did: "did:privy:typed", email: "typed@example.com" });
+  assert.equal((await loadMember(guest.id)).points, POINTS.referred);
+});
+
 test("a matching ref pays the invitee at signup; self or unknown refs pay nothing", { skip }, async () => {
   const host = await signIn({ did: "did:privy:host", email: "host@example.com" });
   const { code } = await row(host.id);

@@ -49,6 +49,16 @@ test("a valid token returns the DID and the lowercased email", async () => {
   assert.deepEqual(await verify(await mint()), { did: "did:privy:abc", email: "me@example.com" });
 });
 
+test("a Google login gives the Google email", async () => {
+  const google = JSON.stringify([
+    { type: "google_oauth", subject: "123", email: "G@Gmail.com", name: "G" },
+  ]);
+  assert.deepEqual(await verify(await mint({ claims: { linked_accounts: google } })), {
+    did: "did:privy:abc",
+    email: "g@gmail.com",
+  });
+});
+
 test("wrong audience or issuer is a 401", async () => {
   await assert.rejects(verify(await mint({ aud: "other-app" })), { status: 401 });
   await assert.rejects(verify(await mint({ iss: "evil.io" })), { status: 401 });

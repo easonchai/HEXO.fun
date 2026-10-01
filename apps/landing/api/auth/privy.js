@@ -50,6 +50,7 @@ export default async function handler(req, res) {
  * takes the old row over (typed or Google), keeping its code, referred_by and
  * points. `ref` is stored raw as `referred_by`, never validated, and only on a
  * new row; a matching code pays the invitee's `referred` bonus right away.
+ * A takeover runs the referral pass too, since the row has only now joined.
  */
 export async function signIn({ did, email }, { ref, referrer, utm, userAgent } = {}) {
   await ensureSchema();
@@ -75,6 +76,6 @@ export async function signIn({ did, email }, { ref, referrer, utm, userAgent } =
       returning id, (xmax = 0) as created
     `,
   );
-  if (row.created) await awardReferrals(row.id);
+  await awardReferrals(row.id);
   return row;
 }

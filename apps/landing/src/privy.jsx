@@ -1,8 +1,11 @@
 // Privy for a page without React. Bundled by build.js into /privy.js, which
 // the page imports lazily: `const { login, logout } = await import("/privy.js")`.
 // The app id is the apps/web one, inlined at build time from PRIVY_APP_ID.
+import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { getIdentityToken, PrivyProvider, useLogin, usePrivy } from "@privy-io/react-auth";
+
+const METHODS = ["email", "google"];
 
 let ready;
 const privy = new Promise((resolve) => (ready = resolve));
@@ -10,6 +13,11 @@ const privy = new Promise((resolve) => (ready = resolve));
 const live = {};
 // [resolve, reject] for the login in flight.
 let pending = null;
+// Google login leaves the page and comes back, so no login() call is waiting
+// by then. That sign-in, or a Privy session the page has no cookie for, goes
+// to the onSignIn handler instead, held here until the page sets one.
+let onSignIn = null;
+let unclaimed = null;
 
 async function token() {
   const t = await getIdentityToken();
@@ -21,7 +29,6 @@ async function token() {
 function Bridge() {
   const { ready: privyReady, authenticated, logout } = usePrivy();
   const { login } = useLogin({
-    onComplete: () => token().then(pending?.[0], pending?.[1]).finally(() => (pending = null)),
     onError: (code) => {
       pending?.[1](Object.assign(new Error(`Privy login: ${code}`), { code }));
       pending = null;
@@ -29,6 +36,21 @@ function Bridge() {
   });
   Object.assign(live, { authenticated, login, logout });
   if (privyReady) ready();
+
+  // One place for every way of becoming authenticated: the modal, a return
+  // from Google, or a session from an earlier visit.
+  useEffect(() => {
+    if (!authenticated) return;
+    const t = token();
+    if (pending) {
+      t.then(...pending);
+      pending = null;
+    } else if (onSignIn) {
+      onSignIn(t);
+    } else {
+      unclaimed = t;
+    }
+  }, [authenticated]);
   return null;
 }
 
@@ -38,7 +60,7 @@ createRoot(el).render(
   <PrivyProvider
     appId={PRIVY_APP_ID}
     config={{
-      loginMethods: ["email"],
+      loginMethods: METHODS,
       appearance: { theme: "#0E1B2B", accentColor: "#B6FF3B", walletChainType: "solana-only" },
       embeddedWallets: {
         showWalletUIs: false,
@@ -50,7 +72,7 @@ createRoot(el).render(
   </PrivyProvider>,
 );
 
-/** Resolves with a Privy identity token, opening the email modal if needed. */
+/** Resolves with a Privy identity token, opening the login modal if needed. */
 export const login = () =>
   privy.then(() =>
     // A Privy session from an earlier visit skips the modal.
@@ -58,8 +80,15 @@ export const login = () =>
       ? token()
       : new Promise((resolve, reject) => {
           pending = [resolve, reject];
-          live.login({ loginMethods: ["email"] });
+          live.login({ loginMethods: METHODS });
         }),
   );
+
+/** `fn(tokenPromise)` runs for a sign-in nobody called login() for. */
+export function signedIn(fn) {
+  onSignIn = fn;
+  if (unclaimed) fn(unclaimed);
+  unclaimed = null;
+}
 
 export const logout = () => privy.then(() => live.logout());

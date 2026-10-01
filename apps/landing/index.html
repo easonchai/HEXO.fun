@@ -3094,12 +3094,12 @@
       let privy;
       const loadPrivy = () => (privy ??= import("/privy/privy.js"));
 
-      async function join(where) {
+      function join(where) {
         forms[where]?.reset();
         window.posthog?.capture("waitlist_started", { where });
         let member;
         try {
-          const idToken = await (await loadPrivy()).login();
+          const idToken = await idTokenPromise;
           member = await api("/api/auth/privy", {
             idToken,
             ref: REF,
@@ -3113,9 +3113,18 @@
             where,
             reason: String(err.message),
           });
-          return forms[where]?.fail("Couldn't sign you in. Try again in a moment.");
+          return (forms[where] ?? forms.hero)?.fail(
+            "Couldn't sign you in. Try again in a moment.",
+          );
         }
         posthog.capture("waitlist_submitted", {
+        return finish(where, loadPrivy().then((p) => p.login()));
+      }
+
+      // Trades a Privy identity token for our session and switches the page
+      // over. Also the landing for a sign-in that started before a reload,
+      // like Google's redirect, where `where` is "return".
+      async function finish(where, idTokenPromise) {
           where,
           has_utm: !!UTM,
           referred: !!REF,
@@ -3139,7 +3148,10 @@
             return;
           }
           writeJoined(null);
-          loadPrivy().catch(() => (privy = undefined));
+          // A Privy sign-in with no login() waiting, e.g. back from Google.
+          loadPrivy()
+            .then((p) => p.signedIn((t) => finish("return", t)))
+            .catch(() => (privy = undefined));
         }
         renderJoined();
       })();

@@ -32,11 +32,11 @@ test.after(async () => {
 });
 
 let n = 0;
-async function member({ code, handle = null, points = 0, createdAt = new Date(), email }) {
+async function member({ code, handle = null, points = 0, createdAt = new Date(), email, privy = true }) {
   const { rows } = await pool.query(
-    `insert into waitlist (email, code, x_handle, created_at)
-     values ($1, $2, $3, $4) returning id`,
-    [email ?? `lb${n++}@example.com`, code, handle, createdAt],
+    `insert into waitlist (email, code, x_handle, created_at, privy_did)
+     values ($1, $2, $3, $4, $5) returning id`,
+    [email ?? `lb${n++}@example.com`, code, handle, createdAt, privy ? `did:${code}` : null],
   );
   if (points) {
     await pool.query(
@@ -93,6 +93,13 @@ test("rank matches loadMember through ties, and the board stops at 100", { skip 
     const row = body[m.rank - 1];
     if (row) assert.deepEqual(row, { rank: m.rank, name: m.name, points: m.points });
   }
+});
+
+test("a typed-email row without a Privy login has no rank or board slot", { skip }, async () => {
+  await member({ code: "dd0001", handle: "legacy", points: 99999, privy: false });
+  const { body } = await call();
+  assert.ok(!body.some((r) => r.name === "@legacy"));
+  assert.equal(await loadMemberByCode("dd0001"), null);
 });
 
 test("rejects non-GET", { skip }, async () => {

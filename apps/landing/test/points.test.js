@@ -37,9 +37,9 @@ test.after(async () => {
 let n = 0;
 async function member({ code, referredBy = null, createdAt = new Date(), x = false, email }) {
   const rows = await pool.query(
-    `insert into waitlist (email, code, referred_by, created_at, x_user_id)
-     values ($1, $2, $3, $4, $5) returning id`,
-    [email ?? `u${n++}@example.com`, code, referredBy, createdAt, x ? `x${code}` : null],
+    `insert into waitlist (email, code, referred_by, created_at, x_user_id, privy_did)
+     values ($1, $2, $3, $4, $5, $6) returning id`,
+    [email ?? `u${n++}@example.com`, code, referredBy, createdAt, x ? `x${code}` : null, `did:${code}`],
   );
   return rows.rows[0].id;
 }
