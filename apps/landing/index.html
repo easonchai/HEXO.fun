@@ -667,7 +667,7 @@
       }
 
       /* "Save your money. Play your luck." + SHARE ON X, 14px, under the form.
-         The span is the error slot; the link hides once joined. */
+         The span is the error slot. */
       .form-note {
         display: flex;
         flex-wrap: wrap;
@@ -697,49 +697,6 @@
         border-radius: 2px;
       }
 
-      .form.is-done {
-        display: none;
-      }
-
-      .form-done {
-        display: none;
-        max-width: 623px;
-      }
-
-      .form-done.is-done {
-        display: block;
-        animation: popIn 380ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
-      }
-
-      /* Joined: the form row becomes the "on the list" pill + Share on X. */
-      .done-row {
-        display: flex;
-        gap: 16px;
-      }
-
-      .done-line {
-        flex: 1;
-        min-width: 0;
-        margin: 0;
-        height: 44px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        border: 1px solid var(--lime);
-        border-radius: 8px;
-        background: var(--moss);
-        color: var(--lime);
-        font-size: 12px;
-        letter-spacing: 0.075em;
-        white-space: nowrap;
-      }
-
-      .btn-share {
-        width: 208px;
-        flex: 0 0 208px;
-      }
-
       /* "Join the waitlist" is wider than the fixed 186px button. */
       .btn[data-login] {
         width: auto;
@@ -748,14 +705,403 @@
         white-space: nowrap;
       }
 
-      .x-line {
-        margin: 12px 0 0;
-        font-size: 12px;
-        letter-spacing: 0.075em;
+      /* ---------------------------- signed in --------------------------- */
+      /* The dashboard replaces the whole page below the nav. */
+      body.signed-in > :is(section, footer),
+      body.signed-in .nav-links,
+      body.signed-in .nav-cta {
+        display: none;
       }
 
-      .x-line a {
+      /* Account pill + dropdown, after the app's wallet menu. */
+      .acct {
+        position: relative;
+        margin-left: auto;
+      }
+
+      .acct-pill {
+        font-family: var(--display);
+        font-size: 11.5px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--navy-800);
+        background: var(--lime);
+        border: 0;
+        border-radius: 24px;
+        padding: 10px 24px;
+        max-width: 60vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: filter var(--quick) var(--ease);
+      }
+
+      .acct-pill:hover {
+        filter: brightness(0.92);
+      }
+
+      .acct-menu {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        width: 220px;
+        padding: 6px;
+        background: var(--navy-800);
+        border: 1px solid var(--line-2);
+        border-radius: 16px;
+        box-shadow: 0 12px 32px rgba(8, 17, 32, 0.6);
+        animation: popIn 200ms var(--ease) both;
+      }
+
+      .acct-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 10px 12px;
+        border: 0;
+        border-radius: 10px;
+        background: none;
+        color: #ff8a6a;
+        font: 600 13px var(--mono);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .acct-item:hover,
+      .acct-item:focus-visible {
+        background: rgba(255, 65, 54, 0.12);
+      }
+
+      .dash-in {
+        max-width: calc(1053px + 2 * var(--pad));
+        padding-top: 56px;
+        padding-bottom: 96px;
+        display: flex;
+        flex-direction: column;
+        gap: 36px;
+      }
+
+      .dash-eyebrow,
+      .dash .lbl {
+        margin: 0;
+        font-family: var(--mono);
+        font-weight: 600;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.6);
+      }
+
+      .dash-eyebrow {
+        font-size: 11.5px;
+        letter-spacing: 0.167em;
+        color: var(--ink-75);
+      }
+
+      .dash-title h1 {
+        margin: 22px 0 0;
+        font-family: var(--display);
+        font-weight: 700;
+        text-transform: uppercase;
+        font-size: clamp(32px, 6vw, 61px);
+        line-height: 0.96;
+        letter-spacing: 0.0175em;
+        color: #fff;
+      }
+
+      .dash .hl,
+      .dash .lime {
         color: var(--lime);
+      }
+
+      .dash-sub {
+        margin: 14px 0 0;
+        font-size: 19px;
+        line-height: 1.575;
+        color: var(--ink-75);
+      }
+
+      .dash-msg {
+        margin: 8px 0 0;
+        font-size: 13px;
+        color: var(--lime);
+      }
+
+      .dash-msg:empty {
+        display: none;
+      }
+
+      .card {
+        padding: 24px;
+        background: var(--slate);
+        border: 1px solid rgba(182, 255, 59, 0.18);
+        border-radius: 12px;
+      }
+
+      .card-h {
+        margin: 0 0 20px;
+        font-family: var(--display);
+        font-size: 16px;
+        line-height: 20px;
+        letter-spacing: 0.11em;
+        text-transform: none;
+        color: var(--lime);
+      }
+
+      .ref-row {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 13px 16px 13px 22px;
+        background: var(--navy-800);
+        border-radius: 8px;
+      }
+
+      .ref-link {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 16px;
+        color: var(--lime);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        user-select: all;
+      }
+
+      .tiles {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+      }
+
+      .tile {
+        padding: 17px;
+        min-height: 105px;
+        background: var(--navy-800);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+      }
+
+      .dash .lbl {
+        font-size: 9px;
+        line-height: 9px;
+        letter-spacing: 0.16em;
+      }
+
+      .big,
+      .mid {
+        margin: 10px 0 0;
+        font-family: var(--display);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: -0.01em;
+        color: #fff;
+      }
+
+      .big {
+        font-size: 52px;
+        line-height: 52px;
+      }
+
+      .mid {
+        margin-top: 14px;
+        font-size: 32px;
+        line-height: 36px;
+      }
+
+      .dash .lime {
+        color: var(--lime);
+      }
+
+      .tile-sub {
+        margin: 4px 0 0;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--lime);
+      }
+
+      .board-h {
+        margin-top: 20px !important;
+      }
+
+      .board {
+        list-style: none;
+        margin: 8px 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .board li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 28.6px;
+        padding: 0 11px;
+        background: var(--navy-800);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        font-size: 11px;
+      }
+
+      .board li.me {
+        background: var(--moss);
+      }
+
+      .board .r {
+        width: 28px;
+        font-weight: 700;
+        color: var(--lime);
+      }
+
+      .board .n {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: rgba(255, 255, 255, 0.6);
+      }
+
+      .board .p,
+      .q-pts {
+        text-transform: uppercase;
+      }
+
+      .board .p {
+        font-weight: 600;
+        color: #fff;
+      }
+
+      .quests {
+        margin-top: 12px;
+      }
+
+      .quests-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+      }
+
+      .quests-head h2 {
+        margin: 0;
+        font-size: 24px;
+        letter-spacing: 0.07em;
+        text-transform: none;
+        color: #fff;
+      }
+
+      .dash .quests-head .lbl {
+        color: rgba(255, 255, 255, 0.3);
+        letter-spacing: 0.12em;
+      }
+
+      .quest-list {
+        list-style: none;
+        margin: 14px 0 0;
+        padding: 0;
+      }
+
+      .quest {
+        display: grid;
+        grid-template-columns: 44px 1fr auto 165px;
+        align-items: center;
+        column-gap: 0;
+        min-height: 84px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+      }
+
+      .q-no {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        color: rgba(255, 255, 255, 0.3);
+      }
+
+      .q-title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: #fff;
+      }
+
+      .q-sub {
+        margin: 6px 0 0;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.55);
+      }
+
+      .q-sub:empty {
+        display: none;
+      }
+
+      .q-pts {
+        padding: 0 34px 0 16px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-align: right;
+        white-space: nowrap;
+        color: var(--lime);
+      }
+
+      .quest.locked .q-title {
+        color: rgba(255, 255, 255, 0.55);
+      }
+
+      .quest.locked .q-pts {
+        color: rgba(255, 255, 255, 0.3);
+      }
+
+      /* Quest button: GO / CLAIM / SHARE (lime), COMPLETED, LOCKED. */
+      .qbtn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 165px;
+        height: 32px;
+        border-radius: 8px;
+        border: 1px solid var(--lime);
+        background: var(--lime);
+        color: #07101c;
+        font: 700 12px var(--display);
+        letter-spacing: 0.075em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition:
+          transform var(--quick) var(--ease),
+          box-shadow var(--std) var(--ease);
+      }
+
+      .qbtn:not(:disabled):hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 20px -10px var(--glow);
+      }
+
+      .qbtn.done {
+        background: var(--moss);
+        color: var(--lime);
+        cursor: default;
+      }
+
+      .qbtn.locked {
+        background: rgba(54, 62, 75, 0.75);
+        border-color: rgba(255, 255, 255, 0.3);
+        color: rgba(255, 255, 255, 0.75);
+        cursor: default;
+      }
+
+      .qbtn:disabled:not(.done, .locked) {
+        opacity: 0.6;
+        cursor: progress;
       }
 
       @keyframes popIn {
@@ -1486,14 +1832,69 @@
         .nav-links {
           display: none;
         }
-        .form,
-        .done-row {
+        .form {
           flex-direction: column;
         }
         /* flex: 1 sets a 0 basis, which is the height in a column. */
-        .form input,
-        .done-line {
+        .form input {
           flex: none;
+        }
+        .dash-in {
+          padding-top: 32px;
+          gap: 28px;
+        }
+        .card {
+          padding: 16px 12px 12px;
+        }
+        .ref-row {
+          flex-direction: column;
+          align-items: stretch;
+          padding: 12px;
+        }
+        .ref-link {
+          font-size: 13px;
+        }
+        .tiles {
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+        .tile-rank {
+          grid-column: 1 / -1;
+        }
+        .mid {
+          font-size: 20px;
+          line-height: 24px;
+        }
+        /* Points move under the title; the number stays in its column. */
+        .quest {
+          grid-template-columns: 24px 1fr 120px;
+          min-height: 65px;
+          padding: 12px 0;
+        }
+        .q-title {
+          font-size: 12px;
+        }
+        .q-pts {
+          grid-column: 2;
+          grid-row: 2;
+          padding: 4px 0 0;
+          text-align: left;
+          font-size: 9px;
+        }
+        .q-no {
+          grid-column: 1;
+          grid-row: 1;
+        }
+        .q-body {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .qbtn {
+          grid-column: 3;
+          grid-row: 1 / span 2;
+          width: 120px;
+          height: 28px;
+          font-size: 10px;
         }
         .btn {
           width: 100%;
@@ -1626,8 +2027,84 @@
           <a href="#rules">The rules</a>
         </div>
         <button class="nav-cta" data-nav-login>Join the waitlist</button>
+        <span class="acct" data-acct hidden>
+          <button
+            type="button"
+            class="acct-pill"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            data-acct-pill
+          ></button>
+          <div class="acct-menu" role="menu" hidden data-acct-menu>
+            <button type="button" role="menuitem" class="acct-item" data-disconnect>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M2.5 2.5v11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                <path
+                  d="M6 8h8M11 5l3 3-3 3"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              Disconnect
+            </button>
+          </div>
+        </span>
       </div>
     </nav>
+
+    <!-- ---------------------------- dashboard ---------------------------
+         Signed in only. body.signed-in hides every landing section and shows
+         this; the JS below fills it from /api/me and /api/leaderboard. -->
+    <main class="dash" hidden data-dash>
+      <div class="wrap dash-in">
+        <header class="dash-title">
+          <p class="dash-eyebrow">Prize-linked savings on Solana</p>
+          <h1>Boost your <span class="hl">rank</span></h1>
+          <p class="dash-sub">Rank higher for a better chance at early access.</p>
+          <p class="dash-msg" role="status" data-x-msg></p>
+        </header>
+
+        <section class="card" aria-labelledby="ref-h">
+          <h2 class="card-h" id="ref-h">Referral link</h2>
+          <div class="ref-row">
+            <span class="ref-link" data-ref-link></span>
+            <button type="button" class="btn" data-copy><span>Copy</span></button>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="ladder-h">
+          <h2 class="card-h" id="ladder-h">Waitlist ladder</h2>
+          <div class="tiles">
+            <div class="tile tile-rank">
+              <p class="lbl">Your rank</p>
+              <p class="big lime" data-rank></p>
+            </div>
+            <div class="tile">
+              <p class="lbl">Your points</p>
+              <p class="mid" data-points></p>
+              <p class="tile-sub" data-next></p>
+            </div>
+            <div class="tile">
+              <p class="lbl">Quests</p>
+              <p class="mid" data-quest-count></p>
+              <p class="tile-sub" data-quest-left></p>
+            </div>
+          </div>
+          <p class="lbl board-h">Top ladder</p>
+          <ol class="board" data-board></ol>
+        </section>
+
+        <section class="quests" aria-labelledby="quests-h">
+          <div class="quests-head">
+            <h2 id="quests-h">Quests</h2>
+            <span class="lbl" data-available></span>
+          </div>
+          <ol class="quest-list" data-quests></ol>
+        </section>
+      </div>
+    </main>
 
     <!-- ------------------------------ hero ------------------------------ -->
     <section class="hero" id="top">
@@ -1658,40 +2135,6 @@
           <form class="form rv" style="--d: 220ms" data-waitlist novalidate>
             <button type="button" class="btn" data-login><span>Join the waitlist</span></button>
           </form>
-          <div class="form-done" role="status">
-            <div class="done-row">
-              <p class="done-line">
-                You're on the list
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M3 8.5l3.2 3.2L13 5"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </p>
-              <a
-                class="btn btn-share"
-                href="https://x.com/intent/post"
-                target="_blank"
-                rel="noopener"
-                data-share
-                ><span>Share on X</span></a
-              >
-            </div>
-            <p class="x-line">
-              <a href="/api/x/start" data-x-connect>Connect X</a
-              ><span data-x-handle></span> <span data-x-msg></span>
-            </p>
-          </div>
 
           <p class="form-note rv" style="--d: 280ms">
             <span data-note>Save your money. Play your luck.</span>
@@ -1971,40 +2414,6 @@
           <form class="form" data-waitlist novalidate>
             <button type="button" class="btn" data-login><span>Join the waitlist</span></button>
           </form>
-          <div class="form-done" role="status">
-            <div class="done-row">
-              <p class="done-line">
-                You're on the list
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M3 8.5l3.2 3.2L13 5"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </p>
-              <a
-                class="btn btn-share"
-                href="https://x.com/intent/post"
-                target="_blank"
-                rel="noopener"
-                data-share
-                ><span>Share on X</span></a
-              >
-            </div>
-            <p class="x-line">
-              <a href="/api/x/start" data-x-connect>Connect X</a
-              ><span data-x-handle></span> <span data-x-msg></span>
-            </p>
-          </div>
           <p class="form-note" style="margin-top: 8px">
             <span data-note>Save your money. Play your luck.</span>
           </p>
@@ -2634,8 +3043,8 @@
 
       // Render cache for the last /api/me body, so a return visit doesn't
       // flash the sign-in button. Never sent as identity: the cookie is.
-      // Own key, so the old { id, code } state from typed emails is ignored.
-      const JOINED_KEY = "hexo.member";
+      // Versioned key, so a cached body from an older page shape is ignored.
+      const JOINED_KEY = "hexo.member.v2";
       const readJoined = () => {
         try {
           return JSON.parse(localStorage.getItem(JOINED_KEY)) || null;
@@ -2662,13 +3071,6 @@
         const where = form.closest("#top") ? "hero" : "closing";
         const note = scope.querySelector("[data-note]");
         const noteDefault = note.textContent;
-        const done = scope.querySelector(".form-done");
-
-        renderers.push((s) => {
-          scope.classList.toggle("joined", !!s);
-          form.classList.toggle("is-done", !!s);
-          done.classList.toggle("is-done", !!s);
-        });
 
         const fail = (msg) => {
           note.textContent = msg;
@@ -2743,25 +3145,17 @@
       })();
 
       // ----------------------------- connect x -----------------------------
-      // "Connect X" is a plain link to /api/x/start. The round trip lands back
-      // here with ?x=<outcome>, read once, shown as one line, then dropped
-      // from the URL so a reload does not repeat it.
+      // Connect X is the first quest, a plain link to /api/x/start. The round
+      // trip lands back here with ?x=<outcome>, read once, shown as one line
+      // on the dashboard, then dropped from the URL so a reload does not
+      // repeat it.
       const X_COPY = {
         connected: "X connected.",
         denied: "You cancelled on X. Connect any time.",
         taken: "That X account is already linked to another signup.",
         error: "Couldn't connect X. Try again.",
       };
-      document.querySelectorAll("[data-x-connect]").forEach((a) => {
-        const handle = a.parentElement.querySelector("[data-x-handle]");
-        renderers.push((s) => {
-          a.hidden = !!s?.x_handle;
-          handle.textContent = s?.x_handle ? "@" + s.x_handle : "";
-        });
-        a.addEventListener("click", () =>
-          window.posthog?.capture("x_connect_started"),
-        );
-      });
+      const dashMsg = document.querySelector("[data-x-msg]");
       (() => {
         const q = new URLSearchParams(location.search);
         const x = q.get("x");
@@ -2774,19 +3168,14 @@
           location.pathname + (rest ? "?" + rest : "") + location.hash,
         );
         if (!X_COPY[x]) return;
-        document
-          .querySelectorAll("[data-x-msg]")
-          .forEach((el) => (el.textContent = X_COPY[x]));
+        dashMsg.textContent = X_COPY[x];
         if (x === "connected") window.posthog?.capture("x_connected");
         else window.posthog?.capture("x_connect_failed", { reason: x });
       })();
 
       // ----------------------------- share on x ----------------------------
-      // Share buttons only exist inside the joined state, so a code is always
-      // there when one is clicked.
       // /r/<code> unfurls with the sharer's card. `v` (rank) only busts X's
-      // per-URL cache, so each new share gets a current image. A cached body
-      // without a rank shares the bare link.
+      // per-URL cache, so each new share gets a current image.
       const shareUrl = (code, rank) =>
         "https://x.com/intent/post?text=" +
         encodeURIComponent(
@@ -2795,29 +3184,240 @@
             `https://hexofun.lol/r/${code}` +
             (rank ? `?v=${rank}` : ""),
         );
-      document.querySelectorAll("[data-share]").forEach((a) => {
-        renderers.push((s) => {
-          if (s?.code) a.href = shareUrl(s.code, s.rank);
+      // The plain link friends get; Copy puts this on the clipboard.
+      const refLink = (code) => `https://hexofun.lol/?ref=${code}`;
+
+      // ----------------------------- dashboard -----------------------------
+      // Signed in, the page is only the nav and this. Built with textContent
+      // throughout: names on the board come from other people.
+      const dash = document.querySelector("[data-dash]");
+      const $ = (sel) => dash.querySelector(sel);
+      const el = (tag, cls, text) => {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text != null) e.textContent = text;
+        return e;
+      };
+      const CLAIM_DELAY = 10_000;
+      // Quest id -> when its CLAIM unlocks. Client-only on purpose: honor
+      // quests aren't checked, the delay only nudges people to do the thing.
+      const claimAt = {};
+
+      renderers.push((s) => {
+        document.body.classList.toggle("signed-in", !!s);
+        dash.hidden = !s;
+        if (s) renderDash(s);
+      });
+
+      function renderDash(s) {
+        $("[data-ref-link]").textContent = refLink(s.code);
+        $("[data-rank]").textContent = `#${s.rank}`;
+        $("[data-points]").textContent = `${s.points} pts`;
+        $("[data-next]").textContent =
+          s.next_gap == null ? "Top of the ladder" : `Next rank · ${s.next_gap} pts`;
+        const done = s.quests.filter((q) => q.done).length;
+        const left = s.quests.length - done;
+        $("[data-quest-count]").textContent = `${done}/${s.quests.length}`;
+        $("[data-quest-left]").textContent = left ? `${left} remaining` : "All done";
+        renderQuests(s);
+        renderBoard(s);
+      }
+
+      function questRows(s) {
+        const now = Date.now();
+        const rows = s.quests.map((q) => ({
+          q,
+          title: q.title,
+          pts: `+${q.points} pts`,
+          state: q.done
+            ? "done"
+            : q.locked
+              ? "locked"
+              : q.check === "honor" && claimAt[q.id] <= now
+                ? "claim"
+                : "go",
+        }));
+        if (s.referred) {
+          rows.push({
+            title: "Joined via a referral link",
+            pts: `+${s.rates.referred} pts`,
+            state: "done",
+          });
+        }
+        // Verified = X plus the follow quest. Until then, referral awards
+        // wait and land all at once.
+        const verified = s.quests.every((q) => q.id === "x_like_repost" || q.done);
+        rows.push({
+          title: "Each verified referral",
+          pts: `+${s.rates.referral} pts each`,
+          sub:
+            `${s.verified} verified` +
+            (!verified && s.verified ? " · connect X and follow to collect" : ""),
+          state: "share",
         });
-        a.addEventListener("click", () =>
-          window.posthog?.capture("waitlist_shared", {
-            where: a.closest("#top") ? "hero" : "closing",
+        rows.push({
+          title: "Referral completes all social tasks",
+          pts: `+${s.rates.referral_bonus} pts each`,
+          sub: `${s.completed} completed`,
+          state: "info",
+        });
+        return rows;
+      }
+
+      function questButton(row, s) {
+        const { q, state } = row;
+        if (state === "info") return el("span");
+        if (state === "done" || state === "locked") {
+          const b = el("button", `qbtn ${state}`, state === "done" ? "Completed" : "Locked");
+          b.disabled = true;
+          return b;
+        }
+        if (state === "share") {
+          const a = el("a", "qbtn", "Share");
+          Object.assign(a, { href: shareUrl(s.code, s.rank), target: "_blank", rel: "noopener" });
+          a.addEventListener("click", () => window.posthog?.capture("waitlist_shared"));
+          return a;
+        }
+        if (q.check === "oauth") {
+          const a = el("a", "qbtn", "Go");
+          a.href = q.url;
+          a.addEventListener("click", () => window.posthog?.capture("x_connect_started"));
+          return a;
+        }
+        const b = el("button", "qbtn", state === "claim" ? "Claim" : "Go");
+        b.type = "button";
+        b.addEventListener("click", async () => {
+          if (state === "go") {
+            window.open(q.url, "_blank", "noopener");
+            window.posthog?.capture("quest_go", { quest: q.id });
+            claimAt[q.id] = Date.now() + CLAIM_DELAY;
+            setTimeout(renderJoined, CLAIM_DELAY);
+            return;
+          }
+          b.disabled = true;
+          try {
+            const member = await api("/api/quests/claim", { id: q.id });
+            window.posthog?.capture("quest_claimed", { quest: q.id });
+            writeJoined(member);
+          } catch (err) {
+            if (err.status === 401) writeJoined(null);
+            else dashMsg.textContent = "Couldn't claim that. Try again.";
+          }
+          renderJoined();
+        });
+        return b;
+      }
+
+      function renderQuests(s) {
+        const rows = questRows(s);
+        const list = $("[data-quests]");
+        list.replaceChildren(
+          ...rows.map((row, i) => {
+            const li = el("li", "quest" + (row.state === "locked" ? " locked" : ""));
+            const body = el("div", "q-body");
+            body.append(el("p", "q-title", row.title), el("p", "q-sub", row.sub ?? ""));
+            li.append(
+              el("span", "q-no", String(i + 1).padStart(2, "0")),
+              body,
+              el("span", "q-pts", row.pts),
+              questButton(row, s),
+            );
+            return li;
           }),
         );
+        const open = rows.filter((r) => ["go", "claim", "share"].includes(r.state)).length;
+        $("[data-available]").textContent = `${String(open).padStart(2, "0")} available`;
+      }
+
+      // Top five from the public board, plus your own row when you're below
+      // it. The board is CDN-cached for 30s, so it can trail /api/me slightly.
+      async function renderBoard(s) {
+        let rows;
+        try {
+          rows = (await api("/api/leaderboard")).slice(0, 5);
+        } catch {
+          rows = [];
+        }
+        if (!rows.some((r) => r.rank === s.rank)) {
+          rows.push({ rank: s.rank, name: s.name, points: s.points });
+        }
+        $("[data-board]").replaceChildren(
+          ...rows.map((r) => {
+            const li = el("li", r.rank === s.rank ? "me" : "");
+            li.append(
+              el("span", "r", `#${r.rank}`),
+              el("span", "n", r.name),
+              el("span", "p", `${r.points} pts`),
+            );
+            return li;
+          }),
+        );
+      }
+
+      $("[data-copy]").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const label = btn.querySelector("span");
+        try {
+          await navigator.clipboard.writeText($("[data-ref-link]").textContent);
+          label.textContent = "Copied";
+          window.posthog?.capture("referral_copied");
+        } catch {
+          // No clipboard permission: select the link so a manual copy works.
+          getSelection().selectAllChildren($("[data-ref-link]"));
+          label.textContent = "Select + copy";
+        }
+        setTimeout(() => (label.textContent = "Copy"), 1600);
+      });
+
+      // ------------------------------ account ------------------------------
+      // The pill replaces the nav CTA once signed in. Its menu has one item.
+      // Closes on outside click and Escape, like the app's wallet menu.
+      const acct = document.querySelector("[data-acct]");
+      const pill = acct.querySelector("[data-acct-pill]");
+      const menu = acct.querySelector("[data-acct-menu]");
+      const setMenu = (open) => {
+        menu.hidden = !open;
+        pill.setAttribute("aria-expanded", String(open));
+      };
+      renderers.push((s) => {
+        acct.hidden = !s;
+        pill.textContent = s?.name ?? "";
+        if (!s) setMenu(false);
+      });
+      pill.addEventListener("click", () => {
+        setMenu(menu.hidden);
+        // Disconnect needs Privy; start fetching it while the menu is open.
+        loadPrivy().catch(() => (privy = undefined));
+      });
+      document.addEventListener("pointerdown", (e) => {
+        if (!acct.contains(e.target)) setMenu(false);
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") setMenu(false);
+      });
+      acct.querySelector("[data-disconnect]").addEventListener("click", async () => {
+        setMenu(false);
+        // Privy first, so the next Join opens the email modal instead of
+        // silently reusing this session. The cookie goes either way.
+        try {
+          await (await loadPrivy()).logout();
+        } catch (err) {
+          console.warn("privy logout failed", err);
+        }
+        await fetch("/api/logout", { method: "POST" }).catch(() => {});
+        writeJoined(null);
+        window.posthog?.capture("signed_out");
+        window.posthog?.reset();
+        location.replace("/");
       });
 
       // ----------------------------- nav cta -------------------------------
-      document.querySelectorAll("[data-nav-login]").forEach((btn) => {
-        const label = btn.textContent;
-        renderers.push((s) => {
-          btn.disabled = !!s;
-          btn.textContent = s ? "You're on the list" : label;
-        });
+      document.querySelectorAll("[data-nav-login]").forEach((btn) =>
         btn.addEventListener("click", () => {
           window.posthog?.capture("waitlist_cta_clicked");
           join("nav");
-        });
-      });
+        }),
+      );
 
       // --------------------------- section views ---------------------------
       const sectionIo = new IntersectionObserver(

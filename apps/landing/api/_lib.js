@@ -167,6 +167,8 @@ async function loadMemberWhere(id, code) {
     // Ties go to the earlier signup, so passing the row above takes one more point.
     next_gap: above == null ? null : above - member.points + 1,
     referred: got.includes("referred:"),
+    // The page labels the referral rows with these, so they live in one place.
+    rates: { referred: POINTS.referred, referral: POINTS.referral, referral_bonus: POINTS.referral_bonus },
     quests,
   };
 }
