@@ -1,12 +1,13 @@
 import { ensureSchema, sessionId, sql } from "../_lib.js";
 import { POINTS } from "../_points.js";
-import { accessToken, clearXCookie, readXCookie } from "../_x.js";
+import { clearXCookie, identify, readXCookie } from "../_x.js";
+import { origin } from "./start.js";
 
 /**
- * Where X sends the browser back. Checks the returned token against the
- * cookie from /start, trades the verifier for the identity, and writes the
- * handle plus the award in one statement. The access token is dropped inside
- * `accessToken` and never reaches here. Every outcome is a redirect home with
+ * Where X sends the browser back. Checks the returned state against the
+ * cookie from /start, trades the code (plus PKCE verifier) for the identity,
+ * and writes the handle plus the award in one statement. The access token is
+ * dropped inside `identify` and never reaches here. Every outcome is a redirect home with
  * `?x=connected|taken|denied|error`.
  */
 export default async function handler(req, res) {
@@ -22,26 +23,26 @@ export default async function handler(req, res) {
   }
   res.setHeader("Cache-Control", "no-store");
   // A redirect, not the 500 the other routes send: the visitor is mid-navigation.
-  const env = ["DATABASE_URL", "X_CONSUMER_KEY", "X_CONSUMER_SECRET", "SESSION_SECRET"];
+  const env = ["DATABASE_URL", "X_CLIENT_ID", "X_CLIENT_SECRET", "SESSION_SECRET"];
   if (!env.every((n) => process.env[n])) {
     console.error("x callback: not configured");
     return home("error");
   }
 
-  const { oauth_token: token, oauth_verifier: verifier, denied } = req.query ?? {};
-  if (denied) return home("denied");
+  const { code, state, error } = req.query ?? {};
+  if (error === "access_denied") return home("denied");
 
   try {
     const id = sessionId(req, process.env.SESSION_SECRET);
     const temp = readXCookie(req, process.env.SESSION_SECRET);
-    if (!id || !temp || !verifier || temp.token !== token) return home("error");
+    if (!id || !temp || !code || temp.state !== state) return home("error");
 
-    const { userId, screenName } = await accessToken({
-      consumerKey: process.env.X_CONSUMER_KEY,
-      consumerSecret: process.env.X_CONSUMER_SECRET,
-      token,
-      tokenSecret: temp.secret,
-      verifier,
+    const { userId, screenName } = await identify({
+      clientId: process.env.X_CLIENT_ID,
+      clientSecret: process.env.X_CLIENT_SECRET,
+      code,
+      redirectUri: `${origin(req)}/api/x/callback`,
+      verifier: temp.verifier,
     });
 
     await ensureSchema();
