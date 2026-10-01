@@ -1764,7 +1764,7 @@
           <div class="form-done" role="status">
             <div class="done-row">
               <p class="done-line">
-                <span data-standing>You're on the list</span>
+                You're on the list
                 <svg
                   width="16"
                   height="16"
@@ -2077,7 +2077,7 @@
           <div class="form-done" role="status">
             <div class="done-row">
               <p class="done-line">
-                <span data-standing>You're on the list</span>
+                You're on the list
                 <svg
                   width="16"
                   height="16"
@@ -2815,11 +2815,6 @@
           scope.classList.toggle("joined", !!s);
           form.classList.toggle("is-done", !!s);
           done.classList.toggle("is-done", !!s);
-          // A cached body from before ranks existed has no rank: keep the default.
-          if (s?.rank) {
-            done.querySelector("[data-standing]").textContent =
-              `You're #${s.rank}, ${s.referrals} referral${s.referrals === 1 ? "" : "s"}`;
-          }
         });
 
         const fail = (msg) => {
