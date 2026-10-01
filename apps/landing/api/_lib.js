@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { POINTS } from "./_points.js";
+import { POINTS, QUESTS } from "./_points.js";
 
 /**
  * Shared by the routes. Files that start with `_` are not routes on Vercel.
@@ -134,12 +134,25 @@ async function loadMemberWhere(id, code) {
       left join waitlist_points p on p.waitlist_id = w.id
       group by w.id
     )
-    select w.id, w.code, w.x_handle, r.rank, r.points, r.referrals
+    select w.id, w.code, w.x_handle, r.rank, r.points, r.referrals,
+      (w.x_user_id is not null) as x,
+      array(
+        select p.kind || ':' || p.ref from waitlist_points p
+        where p.waitlist_id = w.id and p.kind in ('quest', 'x_connect')
+      ) as got
     from waitlist w
     join ranked r on r.id = w.id
     where w.id = ${id}::uuid or w.code = ${code}
   `;
-  return rows[0] ?? null;
+  if (!rows[0]) return null;
+  // Quest state rides along as `x` and `got`, and stays out of the body.
+  const { x, got = [], ...member } = rows[0];
+  const quests = QUESTS.map((q) => ({
+    ...q,
+    done: got.includes(q.check === "oauth" ? `${q.id}:` : `quest:${q.id}`),
+    locked: q.check !== "oauth" && !x,
+  }));
+  return { ...member, quests };
 }
 
 /** Writes the referrer's award and the invitee's own bonus, only for an invitee

@@ -1,0 +1,38 @@
+import { QUESTS } from "../_points.js";
+import { configured, ensureSchema, loadMember, safeParse, sessionId, sql } from "../_lib.js";
+
+/**
+ * Claims an honor quest. 401 without a session, 404 for an unknown or
+ * non-honor quest, 409 until X is connected. A repeat claim writes nothing
+ * and still returns 200 with the member body.
+ */
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  if (!configured(res, "DATABASE_URL", "SESSION_SECRET")) return;
+
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const id = sessionId(req, process.env.SESSION_SECRET);
+    if (!id) return res.status(401).json({ error: "Not signed in" });
+    const body = typeof req.body === "string" ? safeParse(req.body) : req.body;
+    const quest = QUESTS.find((q) => q.id === body?.id);
+    if (quest?.check !== "honor") return res.status(404).json({ error: "No such quest" });
+
+    await ensureSchema();
+    const [row] = await sql`select x_user_id from waitlist where id = ${id}::uuid`;
+    if (!row) return res.status(401).json({ error: "Not signed in" });
+    if (!row.x_user_id) return res.status(409).json({ error: "Connect X first" });
+    await sql`
+      insert into waitlist_points (waitlist_id, kind, ref, points)
+      values (${id}::uuid, 'quest', ${quest.id}, ${quest.points}::int)
+      on conflict (waitlist_id, kind, ref) do nothing
+    `;
+    return res.status(200).json(await loadMember(id));
+  } catch (err) {
+    console.error("quest claim failed", err);
+    return res.status(500).json({ error: "Could not save that. Try again." });
+  }
+}
