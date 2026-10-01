@@ -46,6 +46,7 @@ export function ensureSchema() {
     await sql`alter table waitlist add column if not exists x_user_id text unique`;
     await sql`alter table waitlist add column if not exists x_handle text`;
     await sql`alter table waitlist add column if not exists x_connected_at timestamptz`;
+    await sql`alter table waitlist add column if not exists privy_did text unique`;
     // Backfill signups from before codes existed. Empty after the first run.
     const missing = await sql`select id from waitlist where code is null`;
     for (const { id } of missing) {
@@ -271,6 +272,8 @@ export function verifySession(value, secret) {
 export const sessionCookie = (id, secret) =>
   `${SESSION_COOKIE}=${signSession(id, secret)}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax`;
 
+export const clearSessionCookie = `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+
 /** One cookie's raw value from a request's Cookie header, or undefined. */
 export function getCookie(req, name) {
   const raw = String(req.headers.cookie ?? "")
@@ -286,27 +289,36 @@ export function sessionId(req, secret) {
 
 // -------------------------------- google ---------------------------------
 
-let googleKeys;
+let privyKeys;
 
-/** Checks a Google ID token and returns `{ sub, email }`. `keySet` is a jose
- *  key resolver; tests pass a local one, production takes Google's JWKS with
- *  a five second fetch timeout. Errors carry the HTTP `status` to answer with. */
-export async function verifyGoogleToken(credential, { audience, keySet }) {
-  keySet ??= googleKeys ??= createRemoteJWKSet(
-    new URL("https://www.googleapis.com/oauth2/v3/certs"),
+/** Checks a Privy identity token and returns `{ did, email }`. `keySet` is a
+ *  jose key resolver; tests pass a local one, production takes the app's JWKS
+ *  with a five second fetch timeout. Privy only links an email after its code
+ *  is confirmed, so a linked email is a verified one. Errors carry the HTTP
+ *  `status` to answer with. */
+export async function verifyPrivyToken(idToken, { appId, keySet }) {
+  keySet ??= privyKeys ??= createRemoteJWKSet(
+    new URL(`https://auth.privy.io/api/v1/apps/${appId}/jwks.json`),
     { timeoutDuration: 5000 },
   );
   let payload;
   try {
-    ({ payload } = await jwtVerify(credential, keySet, {
-      issuer: ["accounts.google.com", "https://accounts.google.com"],
-      audience,
+    ({ payload } = await jwtVerify(idToken, keySet, {
+      issuer: "privy.io",
+      audience: appId,
+      algorithms: ["ES256"],
     }));
   } catch (cause) {
-    throw Object.assign(new Error("Google sign-in failed", { cause }), { status: 401 });
+    throw Object.assign(new Error("Sign-in failed", { cause }), { status: 401 });
   }
-  if (payload.email_verified !== true || !payload.email || !payload.sub) {
-    throw Object.assign(new Error("That Google email isn't verified"), { status: 400 });
+  // The claim is a JSON string in Privy's tokens; accept an array as well.
+  const raw = payload.linked_accounts;
+  const accounts = typeof raw === "string" ? (safeParse(raw) ?? []) : (raw ?? []);
+  const email = Array.isArray(accounts)
+    ? accounts.find((a) => a?.type === "email" && typeof a.address === "string")?.address
+    : null;
+  if (!email || !payload.sub) {
+    throw Object.assign(new Error("Sign in with an email address"), { status: 400 });
   }
-  return { sub: payload.sub, email: String(payload.email).toLowerCase() };
+  return { did: payload.sub, email: email.toLowerCase() };
 }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPair, SignJWT } from "jose";
-import { signSession, verifySession, verifyGoogleToken } from "../api/_lib.js";
+import { signSession, verifyPrivyToken, verifySession } from "../api/_lib.js";
 
 const SECRET = "test-secret";
 const ID = "0b0d6c1e-8a3f-4c55-9f0e-6f5a6a1e2b3c";
@@ -24,43 +24,48 @@ test("a tampered signature fails", () => {
   assert.equal(verifySession(undefined, SECRET), null);
 });
 
-// Local key pair standing in for Google's JWKS.
-const AUD = "client-id.apps.googleusercontent.com";
-const { publicKey, privateKey } = await generateKeyPair("RS256");
+// Local key pair standing in for Privy's JWKS.
+const APP = "cm-test-app";
+const { publicKey, privateKey } = await generateKeyPair("ES256");
 const keySet = async () => publicKey;
+const EMAIL = JSON.stringify([
+  { type: "wallet", address: "So1ana", chain_type: "solana" },
+  { type: "email", address: "Me@Example.com" },
+]);
 
-const mint = ({ aud = AUD, exp = "1h", claims = {} } = {}) =>
-  new SignJWT({ email: "Me@Example.com", email_verified: true, ...claims })
-    .setProtectedHeader({ alg: "RS256" })
-    .setIssuer("https://accounts.google.com")
+const mint = ({ aud = APP, iss = "privy.io", exp = "1h", claims = {} } = {}) =>
+  new SignJWT({ linked_accounts: EMAIL, ...claims })
+    .setProtectedHeader({ alg: "ES256" })
+    .setIssuer(iss)
     .setAudience(aud)
-    .setSubject("1234567890")
+    .setSubject("did:privy:abc")
     .setIssuedAt()
     .setExpirationTime(exp)
     .sign(privateKey);
 
-test("a valid token returns sub and lowercased email", async () => {
-  const out = await verifyGoogleToken(await mint(), { audience: AUD, keySet });
-  assert.deepEqual(out, { sub: "1234567890", email: "me@example.com" });
+const verify = (token) => verifyPrivyToken(token, { appId: APP, keySet });
+
+test("a valid token returns the DID and the lowercased email", async () => {
+  assert.deepEqual(await verify(await mint()), { did: "did:privy:abc", email: "me@example.com" });
 });
 
-test("wrong audience is a 401", async () => {
-  await assert.rejects(
-    verifyGoogleToken(await mint({ aud: "someone-else" }), { audience: AUD, keySet }),
-    { status: 401 },
-  );
+test("wrong audience or issuer is a 401", async () => {
+  await assert.rejects(verify(await mint({ aud: "other-app" })), { status: 401 });
+  await assert.rejects(verify(await mint({ iss: "evil.io" })), { status: 401 });
 });
 
 test("an expired token is a 401", async () => {
-  const token = await mint({ exp: Math.floor(Date.now() / 1000) - 60 });
-  await assert.rejects(verifyGoogleToken(token, { audience: AUD, keySet }), {
+  await assert.rejects(verify(await mint({ exp: Math.floor(Date.now() / 1000) - 60 })), {
     status: 401,
   });
 });
 
-test("an unverified email is a 400", async () => {
-  const token = await mint({ claims: { email_verified: false } });
-  await assert.rejects(verifyGoogleToken(token, { audience: AUD, keySet }), {
+test("a token without an email account is a 400", async () => {
+  const wallet = JSON.stringify([{ type: "wallet", address: "So1ana" }]);
+  await assert.rejects(verify(await mint({ claims: { linked_accounts: wallet } })), {
+    status: 400,
+  });
+  await assert.rejects(verify(await mint({ claims: { linked_accounts: "not json" } })), {
     status: 400,
   });
 });

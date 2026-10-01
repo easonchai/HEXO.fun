@@ -17,7 +17,7 @@ test.before(async () => {
   if (skip) return;
   Object.assign(process.env, {
     DATABASE_URL: "x",
-    GOOGLE_CLIENT_ID: "x",
+    PRIVY_APP_ID: "x",
     SESSION_SECRET: SECRET,
   });
   const { Pool } = pg.default;

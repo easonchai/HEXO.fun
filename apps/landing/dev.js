@@ -18,6 +18,11 @@ try {
   if (err.code !== "ENOENT") throw err;
 }
 
+// Rebuilds privy/ on change, the same bundle `npm run build` makes for Vercel.
+const esbuild = await import("esbuild");
+const { options } = await import("./build.js");
+await (await esbuild.context(options())).watch();
+
 const PORT = Number(process.env.PORT) || 3000;
 const TYPES = {
   ".html": "text/html; charset=utf-8",

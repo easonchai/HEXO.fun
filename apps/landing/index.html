@@ -645,12 +645,6 @@
         max-width: 623px;
       }
 
-      /* Google renders its own button into this; the height stops the row
-         jumping when the script lands. */
-      .g-btn {
-        min-height: 44px;
-      }
-
       .form input {
         flex: 1;
         min-width: 0;
@@ -746,6 +740,14 @@
         flex: 0 0 208px;
       }
 
+      /* "Join the waitlist" is wider than the fixed 186px button. */
+      .btn[data-login] {
+        width: auto;
+        flex: none;
+        padding: 0 28px;
+        white-space: nowrap;
+      }
+
       .x-line {
         margin: 12px 0 0;
         font-size: 12px;
@@ -765,100 +767,6 @@
           opacity: 1;
           transform: none;
         }
-      }
-
-      html:has(.share-modal[open]) {
-        overflow: hidden;
-      }
-
-      .share-modal {
-        width: min(480px, calc(100vw - 32px));
-        margin: auto;
-        padding: 84px 36px 40px;
-        border: 1px solid rgba(182, 255, 59, 0.18);
-        border-radius: 16px;
-        background: #0e1b2b;
-        color: #fff;
-        text-align: center;
-        box-shadow: 0 4px 10px #4a5d48;
-      }
-
-      .share-modal[open] {
-        animation: popIn 380ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
-      }
-
-      .share-modal::backdrop {
-        background: rgba(0, 0, 0, 0.75);
-        backdrop-filter: blur(3px);
-      }
-
-      .share-close {
-        position: absolute;
-        top: 18px;
-        right: 15px;
-        width: 32px;
-        height: 32px;
-        font-family: system-ui, sans-serif;
-        font-size: 20px;
-        line-height: 1;
-        letter-spacing: -0.45px;
-        color: rgba(255, 255, 255, 0.3);
-        background: none;
-        border: 0;
-        cursor: pointer;
-        transition: color var(--std) var(--ease);
-      }
-
-      .share-coin {
-        display: block;
-        width: 188px;
-        height: 188px;
-        margin: 0 auto;
-      }
-
-      .share-modal h2 {
-        margin-top: 26px;
-        font-size: 26px;
-        line-height: 1.5;
-        letter-spacing: 0.06em;
-        text-transform: none;
-        color: var(--lime);
-      }
-
-      .share-modal p {
-        max-width: 332px;
-        margin: 6px auto 0;
-        font-size: 14px;
-        line-height: 1.5;
-        color: #fff;
-      }
-
-      .share-modal .btn-share {
-        width: 100%;
-        margin-top: 32px;
-        gap: 8px;
-        text-transform: none;
-        color: #07101c;
-      }
-
-      .share-later {
-        margin-top: 3px;
-        padding: 4px 8px;
-        font-family: var(--mono);
-        font-size: 14px;
-        line-height: 21px;
-        text-decoration: underline;
-        text-underline-offset: 3px;
-        color: rgba(255, 255, 255, 0.55);
-        background: none;
-        border: 0;
-        cursor: pointer;
-        transition: color var(--std) var(--ease);
-      }
-
-      .share-close:hover,
-      .share-later:hover {
-        color: #fff;
       }
 
       .form-err {
@@ -1587,16 +1495,6 @@
         .done-line {
           flex: none;
         }
-        .share-modal {
-          padding: 64px 20px 28px;
-        }
-        .share-coin {
-          width: 140px;
-          height: 140px;
-        }
-        .share-modal h2 {
-          font-size: 20px;
-        }
         .btn {
           width: 100%;
           flex: none;
@@ -1657,8 +1555,7 @@
         }
         .ruler .now,
         .stage-svg .core,
-        .btn::before,
-        .share-modal[open] {
+        .btn::before {
           animation: none;
           transition: none;
         }
@@ -1728,7 +1625,7 @@
           <a href="#draw">The draw</a>
           <a href="#rules">The rules</a>
         </div>
-        <button class="nav-cta" data-scroll="#top">Join the waitlist</button>
+        <button class="nav-cta" data-nav-login>Join the waitlist</button>
       </div>
     </nav>
 
@@ -1759,7 +1656,7 @@
 
         <div class="hero-copy">
           <form class="form rv" style="--d: 220ms" data-waitlist novalidate>
-            <div class="g-btn" data-google></div>
+            <button type="button" class="btn" data-login><span>Join the waitlist</span></button>
           </form>
           <div class="form-done" role="status">
             <div class="done-row">
@@ -2072,7 +1969,7 @@
         </div>
         <div class="R rv" style="--d: 90ms">
           <form class="form" data-waitlist novalidate>
-            <div class="g-btn" data-google></div>
+            <button type="button" class="btn" data-login><span>Join the waitlist</span></button>
           </form>
           <div class="form-done" role="status">
             <div class="done-row">
@@ -2187,45 +2084,6 @@
       </div>
     </footer>
 
-    <!-- method="dialog": each button closes the modal with its value as the
-         returnValue, no click handlers needed. -->
-    <dialog class="share-modal" aria-labelledby="share-modal-title">
-      <form method="dialog">
-        <button class="share-close" value="close" aria-label="Close">
-          ×
-        </button>
-        <img
-          class="share-coin"
-          src="/check-coin.webp"
-          width="188"
-          height="188"
-          alt=""
-        />
-        <h2 id="share-modal-title">You're on the list</h2>
-        <p>Share on X to increase your chances of moving up the waitlist.</p>
-        <a
-          class="btn btn-share"
-          href="https://x.com/intent/post"
-          target="_blank"
-          rel="noopener"
-          data-share
-          autofocus
-          ><span>Share on</span
-          ><svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            role="img"
-            aria-label="X"
-          >
-            <path
-              d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"
-            /></svg
-        ></a>
-        <button class="share-later" value="later">Maybe Later</button>
-      </form>
-    </dialog>
 
     <script>
       const REDUCED = window.matchMedia(
@@ -2721,8 +2579,8 @@
       })();
 
       // ----------------------------- waitlist ------------------------------
-      // Google sign-in commits the signup and sets the session cookie. The
-      // page learns who it is from /api/me.
+      // Privy email login commits the signup and sets the session cookie.
+      // The page learns who it is from /api/me.
 
       const UTM = (() => {
         const q = new URLSearchParams(location.search);
@@ -2796,11 +2654,8 @@
         renderers.forEach((r) => r(s));
       };
 
-      // One entry per form. Google's button lives in an iframe, so the page
-      // gets no click from it. Pointer entry says which form the visitor is
-      // about to use, and that is what `where` reports.
+      // One entry per form, keyed by where it sits on the page.
       const forms = {};
-      let activeWhere = "hero";
 
       document.querySelectorAll("form[data-waitlist]").forEach((form) => {
         const scope = form.parentElement;
@@ -2808,8 +2663,6 @@
         const note = scope.querySelector("[data-note]");
         const noteDefault = note.textContent;
         const done = scope.querySelector(".form-done");
-
-        form.addEventListener("pointerenter", () => (activeWhere = where));
 
         renderers.push((s) => {
           scope.classList.toggle("joined", !!s);
@@ -2829,76 +2682,62 @@
           note.classList.remove("form-err");
         };
         forms[where] = { fail, reset };
+        form
+          .querySelector("[data-login]")
+          .addEventListener("click", () => join(where));
       });
 
-      const failAll = (msg) => Object.values(forms).forEach((f) => f.fail(msg));
+      // The Privy bundle is big, so it loads only for a signed-out visitor,
+      // in the background once /api/me says so, or on the first click.
+      let privy;
+      const loadPrivy = () => (privy ??= import("/privy/privy.js"));
 
-      async function onCredential({ credential }) {
-        const where = activeWhere;
-        forms[where].reset();
+      async function join(where) {
+        forms[where]?.reset();
         window.posthog?.capture("waitlist_started", { where });
         let member;
         try {
-          member = await api("/api/auth/google", {
-            credential,
+          const idToken = await (await loadPrivy()).login();
+          member = await api("/api/auth/privy", {
+            idToken,
             ref: REF,
             referrer: document.referrer || null,
             utm: UTM,
           });
         } catch (err) {
+          // Closing the modal is not a failure worth a red line.
+          if (err.code === "exited_auth_flow") return;
           posthog.capture("waitlist_failed", {
             where,
             reason: String(err.message),
           });
-          return forms[where].fail("Couldn't sign you in. Try again in a moment.");
+          return forms[where]?.fail("Couldn't sign you in. Try again in a moment.");
         }
         posthog.capture("waitlist_submitted", {
           where,
           has_utm: !!UTM,
           referred: !!REF,
-          method: "google",
+          method: "privy",
         });
         posthog.identify(member.id);
         writeJoined(member);
         renderJoined();
-        if (member.created) openShareModal();
       }
 
-      // The button only exists for a visitor without a session, so the GIS
-      // script loads only then.
-      function loadGoogle(clientId) {
-        const s = document.createElement("script");
-        s.src = "https://accounts.google.com/gsi/client";
-        s.async = true;
-        s.onerror = () => failAll("Couldn't load Google sign-in. Reload to retry.");
-        s.onload = () => {
-          google.accounts.id.initialize({
-            client_id: clientId,
-            callback: onCredential,
-          });
-          document.querySelectorAll("[data-google]").forEach((el) =>
-            google.accounts.id.renderButton(el, {
-              theme: "filled_black",
-              size: "large",
-              text: "continue_with",
-              shape: "rectangular",
-            }),
-          );
-        };
-        document.head.appendChild(s);
-      }
-
-      // Session check. 401 is the normal signed-out answer and carries the
-      // client id; anything else leaves the cached state as it was.
+      // Session check. 401 is the normal signed-out answer; anything else
+      // leaves the cached state as it was.
       (async () => {
         try {
           writeJoined(await api("/api/me"));
         } catch (err) {
-          if (err.status !== 401 || !err.data.client_id) {
-            return failAll("Couldn't reach the list. Reload in a moment.");
+          if (err.status !== 401) {
+            Object.values(forms).forEach((f) =>
+              f.fail("Couldn't reach the list. Reload in a moment."),
+            );
+            return;
           }
           writeJoined(null);
-          loadGoogle(err.data.client_id);
+          loadPrivy().catch(() => (privy = undefined));
         }
         renderJoined();
       })();
@@ -2956,50 +2795,19 @@
             `https://hexofun.lol/r/${code}` +
             (rank ? `?v=${rank}` : ""),
         );
-      const shareModal = document.querySelector(".share-modal");
       document.querySelectorAll("[data-share]").forEach((a) => {
         renderers.push((s) => {
           if (s?.code) a.href = shareUrl(s.code, s.rank);
         });
-        a.addEventListener("click", () => {
+        a.addEventListener("click", () =>
           window.posthog?.capture("waitlist_shared", {
-            where: a.closest("dialog")
-              ? "modal"
-              : a.closest("#top")
-                ? "hero"
-                : "closing",
-            joined: !!readJoined(),
-          });
-          if (a.closest("dialog")) shareModal.close("shared");
-        });
+            where: a.closest("#top") ? "hero" : "closing",
+          }),
+        );
       });
-
-      // ----------------------------- share modal ---------------------------
-      // Opens once, right after a fresh submit. A return visit already lands
-      // on the joined state, so it never re-prompts.
-      function openShareModal() {
-        if (!shareModal?.showModal) return;
-        shareModal.showModal();
-        window.posthog?.capture("share_modal_opened");
-      }
-      // A backdrop click targets the dialog itself but lands outside its box.
-      shareModal?.addEventListener("click", (e) => {
-        const r = shareModal.getBoundingClientRect();
-        const outside =
-          e.clientX < r.left ||
-          e.clientX > r.right ||
-          e.clientY < r.top ||
-          e.clientY > r.bottom;
-        if (e.target === shareModal && outside) shareModal.close("backdrop");
-      });
-      shareModal?.addEventListener("close", () =>
-        window.posthog?.capture("share_modal_closed", {
-          via: shareModal.returnValue || "dismiss",
-        }),
-      );
 
       // ----------------------------- nav cta -------------------------------
-      document.querySelectorAll("[data-scroll]").forEach((btn) => {
+      document.querySelectorAll("[data-nav-login]").forEach((btn) => {
         const label = btn.textContent;
         renderers.push((s) => {
           btn.disabled = !!s;
@@ -3007,9 +2815,7 @@
         });
         btn.addEventListener("click", () => {
           window.posthog?.capture("waitlist_cta_clicked");
-          document
-            .querySelector(btn.dataset.scroll)
-            .scrollIntoView({ behavior: "smooth" });
+          join("nav");
         });
       });
 
