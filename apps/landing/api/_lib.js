@@ -64,7 +64,15 @@ export function ensureSchema() {
         unique (waitlist_id, kind, ref)
       )
     `;
-    // Credit referrals made before the ledger existed. No-op after the first run.
+    // Referrals pay on X connect. Drop awards paid at sign-in for invitees
+    // without X, then credit the qualified ones. Both repeat safely.
+    await sql`
+      delete from waitlist_points p
+      where p.kind = 'referral'
+        and not exists (
+          select 1 from waitlist w where w.id::text = p.ref and w.x_user_id is not null
+        )
+    `;
     await awardReferrals();
   })().catch((err) => {
     ready = undefined; // let the next request retry rather than cache a failure
@@ -134,16 +142,22 @@ async function loadMemberWhere(id, code) {
   return rows[0] ?? null;
 }
 
-/** Writes the referral award for the owner of `referred_by`. With an id it
- *  covers that one new row; with none it backfills every row. Safe to repeat,
- *  the unique key drops the second insert. */
+/** Writes the referrer's award and the invitee's own bonus, only for an invitee
+ *  with X connected. With an id it covers that one row; with none it backfills
+ *  every row. Safe to repeat, the unique key drops the second insert. */
 export function awardReferrals(newId = null) {
   return sql`
+    with q as (
+      select r.id as referrer, w.id as invitee
+      from waitlist w
+      join waitlist r on r.code = w.referred_by and r.id <> w.id
+      where w.x_user_id is not null
+        and (${newId}::uuid is null or w.id = ${newId}::uuid)
+    )
     insert into waitlist_points (waitlist_id, kind, ref, points)
-    select r.id, 'referral', w.id::text, ${POINTS.referral}::int
-    from waitlist w
-    join waitlist r on r.code = w.referred_by and r.id <> w.id
-    where ${newId}::uuid is null or w.id = ${newId}::uuid
+    select referrer, 'referral', invitee::text, ${POINTS.referral}::int from q
+    union all
+    select invitee, 'referred', '', ${POINTS.referred}::int from q
     on conflict (waitlist_id, kind, ref) do nothing
   `;
 }

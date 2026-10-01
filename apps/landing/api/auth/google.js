@@ -1,5 +1,4 @@
 import {
-  awardReferrals,
   configured,
   ensureSchema,
   loadMember,
@@ -67,9 +66,6 @@ export default async function handler(req, res) {
         `,
       );
       ({ id, created } = rows[0]);
-      // Only a fresh row earns its referrer a point award. A takeover keeps
-      // its old referred_by, and the backfill already credited that.
-      if (created) await awardReferrals(id);
     }
 
     res.setHeader("Set-Cookie", sessionCookie(id, process.env.SESSION_SECRET));

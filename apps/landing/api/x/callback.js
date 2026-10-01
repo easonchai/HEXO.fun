@@ -1,4 +1,4 @@
-import { ensureSchema, sessionId, sql } from "../_lib.js";
+import { awardReferrals, ensureSchema, sessionId, sql } from "../_lib.js";
 import { POINTS } from "../_points.js";
 import { clearXCookie, identify, readXCookie } from "../_x.js";
 import { origin } from "./start.js";
@@ -59,6 +59,8 @@ export default async function handler(req, res) {
       select id, 'x_connect', '', ${POINTS.x_connect}::int from u
       on conflict (waitlist_id, kind, ref) do nothing
     `;
+    // Pays the referrer and the invitee now that this row has X. No-op without a referrer.
+    await awardReferrals(id);
     return home("connected");
   } catch (err) {
     if (err.constraint === "waitlist_x_user_id_key") return home("taken");
