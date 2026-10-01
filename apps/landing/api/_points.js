@@ -1,0 +1,22 @@
+/** The only place a point value lives. An award stores the value at write
+ *  time, so a change applies to new awards. `referral` and `referral_bonus` go
+ *  to the referrer, `referred` to the invitee. */
+export const POINTS = { x_connect: 10, referred: 10, referral: 40, referral_bonus: 10 };
+
+/** `check`: `oauth` is granted by its own flow, `honor` by the claim route.
+ *  Honor quests need X connected. A member is verified once they have X and
+ *  the follow quest; the referral payout reads `FOLLOW` and `LIKE_REPOST`. */
+export const FOLLOW = "x_follow";
+export const LIKE_REPOST = "x_like_repost";
+
+export const QUESTS = [
+  { id: "x_connect", title: "Connect X", url: "/api/x/start", points: POINTS.x_connect, check: "oauth" },
+  { id: FOLLOW, title: "Follow @Hexofun on X", url: "https://x.com/Hexofun", points: 10, check: "honor" },
+  {
+    id: LIKE_REPOST,
+    title: "Like + repost the waitlist post",
+    url: "https://x.com/Hexofun/status/2104929707770921450",
+    points: 20,
+    check: "honor",
+  },
+];
