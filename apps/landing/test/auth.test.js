@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ensureSchema, loadMember, useSql } from "../api/_lib.js";
-import { signIn } from "../api/auth/privy.js";
+import handler, { signIn } from "../api/auth/privy.js";
 import { POINTS } from "../api/_points.js";
 
 // Same harness as points.test.js: needs TEST_DATABASE_URL and pg.
@@ -31,6 +31,16 @@ test.after(async () => {
   await pool.end();
 });
 
+test("a post that is not JSON is refused before anything else", async () => {
+  // What a cross-site form can send without a preflight.
+  for (const type of ["text/plain", "application/x-www-form-urlencoded", undefined]) {
+    const out = {};
+    const res = { setHeader() {}, status: (c) => ((out.status = c), res), json() {} };
+    await handler({ method: "POST", headers: { "content-type": type }, body: { idToken: "t" } }, res);
+    assert.equal(out.status, 415);
+  }
+});
+
 const row = async (id) =>
   (await pool.query("select email, privy_did, code, referred_by from waitlist where id = $1", [id]))
     .rows[0];
@@ -45,7 +55,7 @@ test("a new email makes a row with the DID, and the DID finds it again", { skip 
 
 test("an older email row is taken over and keeps its code", { skip }, async () => {
   const { rows } = await pool.query(
-    "insert into waitlist (email, code, google_sub) values ('old@example.com', 'ab12cd', 'g1') returning id",
+    "insert into waitlist (email, code) values ('old@example.com', 'ab12cd') returning id",
   );
   const out = await signIn({ did: "did:privy:old", email: "old@example.com" }, { ref: "ffffff" });
   assert.deepEqual(out, { id: rows[0].id, created: false });

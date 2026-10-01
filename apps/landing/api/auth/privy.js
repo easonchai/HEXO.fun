@@ -21,6 +21,11 @@ export default async function handler(req, res) {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
+  // JSON only. A cross-site form can post text/plain or urlencoded with no
+  // preflight, which would sign the visitor's browser into someone else's row.
+  if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) {
+    return res.status(415).json({ error: "Expected application/json" });
+  }
   if (!configured(res, "DATABASE_URL", "PRIVY_APP_ID", "SESSION_SECRET")) return;
 
   const body = typeof req.body === "string" ? safeParse(req.body) : req.body;

@@ -42,7 +42,6 @@ export function ensureSchema() {
     `;
     await sql`alter table waitlist add column if not exists code text unique`;
     await sql`alter table waitlist add column if not exists referred_by text`;
-    await sql`alter table waitlist add column if not exists google_sub text unique`;
     await sql`alter table waitlist add column if not exists x_user_id text unique`;
     await sql`alter table waitlist add column if not exists x_handle text`;
     await sql`alter table waitlist add column if not exists x_connected_at timestamptz`;
@@ -170,6 +169,8 @@ async function loadMemberWhere(id, code) {
   return {
     ...member,
     name: displayName(member.x_handle, email),
+    // The referral link unlocks with X, so the code stays here until then.
+    code: x ? member.code : null,
     // Ties go to the earlier signup, so passing the row above takes one more point.
     next_gap: above == null ? null : above - member.points + 1,
     referred: got.includes("referred:"),
@@ -297,7 +298,7 @@ export function sessionId(req, secret) {
   return verifySession(getCookie(req, SESSION_COOKIE), secret);
 }
 
-// -------------------------------- google ---------------------------------
+// -------------------------------- privy ----------------------------------
 
 let privyKeys;
 

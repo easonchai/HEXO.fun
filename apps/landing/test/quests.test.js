@@ -110,6 +110,7 @@ test("/me reports done and locked before and after X connect", { skip }, async (
   const id = await member();
   const before = (await call(me, { method: "GET", id })).body;
   assert.equal(before.quests.length, 3);
+  assert.equal(before.code, null, "the referral code waits for X");
   assert.deepEqual(
     before.quests.map((q) => [q.id, q.done, q.locked]),
     [["x_connect", false, false], ["x_follow", false, true], ["x_like_repost", false, true]],
@@ -122,4 +123,5 @@ test("/me reports done and locked before and after X connect", { skip }, async (
     [["x_connect", true, false], ["x_follow", false, false], ["x_like_repost", true, false]],
   );
   assert.equal(after.points, 30);
+  assert.match(after.code, /^qq\d{4}$/);
 });

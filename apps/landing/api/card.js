@@ -62,10 +62,10 @@ async function render(member) {
 
 /**
  * The share card, 1200x630. Handle, avatar and rank come from the row at
- * render time, and nothing caches the result, so the card is always current.
- * `v` (the share's timestamp) is only part of the URL so X's own cache sees a
- * new image per share. It is never read. A code with no X handle goes to the
- * static image.
+ * render time. The CDN holds each URL for a minute, so a loop on one link
+ * costs one render. `v` (the share's timestamp) is only part of the URL so
+ * each share is a new URL, for X's cache and ours. It is never read. A code
+ * with no X handle goes to the static image.
  */
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -88,8 +88,7 @@ export default async function handler(req, res) {
 
     const png = await render(member);
     res.setHeader("Content-Type", "image/png");
-    res.setHeader("Cache-Control", "no-store, max-age=0");
-    res.setHeader("CDN-Cache-Control", "no-store");
+    res.setHeader("Cache-Control", "public, max-age=0, s-maxage=60");
     return res.status(200).send(png);
   } catch (err) {
     console.error("card failed", err);

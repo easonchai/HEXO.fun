@@ -886,6 +886,16 @@
         text-decoration: none;
       }
 
+      /* Until X is connected: the field holds the hint, the buttons go. */
+      .card-ref.locked .ref-link {
+        color: var(--ink-3);
+        user-select: none;
+      }
+
+      .card-ref.locked .btn {
+        display: none;
+      }
+
       .tiles {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -3214,6 +3224,12 @@
             "Use my link to increase your chances of getting early access\n\n" +
             `${location.origin}/r/${code}?v=${Date.now()}`,
         );
+      // Click handler for both Share links. Restamps `v` at click time, so a
+      // second share from the same render is still a URL X has not cached.
+      const share = (e) => {
+        e.currentTarget.href = shareUrl(readJoined().code);
+        window.posthog?.capture("waitlist_shared");
+      };
       // The plain link friends get; Copy puts this on the clipboard. Both
       // links use the current host, so preview deploys share themselves.
       const refLink = (code) => `${location.origin}/?ref=${code}`;
@@ -3241,8 +3257,12 @@
       });
 
       function renderDash(s) {
-        $("[data-ref-link]").textContent = refLink(s.code);
-        $("[data-share-x]").href = shareUrl(s.code);
+        // The server holds the code back until X is connected.
+        $(".card-ref").classList.toggle("locked", !s.code);
+        $("[data-ref-link]").textContent = s.code
+          ? refLink(s.code)
+          : "Connect X to unlock your referral link";
+        if (s.code) $("[data-share-x]").href = shareUrl(s.code);
         $("[data-rank]").textContent = `#${s.rank}`;
         $("[data-points]").textContent = `${s.points} pts`;
         $("[data-next]").textContent =
@@ -3285,7 +3305,7 @@
           sub:
             `${s.verified} verified` +
             (!verified && s.verified ? " · connect X and follow to collect" : ""),
-          state: "share",
+          state: s.code ? "share" : "locked",
         });
         rows.push({
           title: "Referral completes all social tasks",
@@ -3307,7 +3327,7 @@
         if (state === "share") {
           const a = el("a", "qbtn", "Share");
           Object.assign(a, { href: shareUrl(s.code), target: "_blank", rel: "noopener" });
-          a.addEventListener("click", () => window.posthog?.capture("waitlist_shared"));
+          a.addEventListener("click", share);
           return a;
         }
         if (q.check === "oauth") {
@@ -3323,7 +3343,8 @@
             window.open(q.url, "_blank", "noopener");
             window.posthog?.capture("quest_go", { quest: q.id });
             claimAt[q.id] = Date.now() + CLAIM_DELAY;
-            setTimeout(renderJoined, CLAIM_DELAY);
+            // A timer can fire a millisecond early, which would leave "Go" up.
+            setTimeout(renderJoined, CLAIM_DELAY + 50);
             return;
           }
           b.disabled = true;
@@ -3386,7 +3407,7 @@
         );
       }
 
-      $("[data-share-x]").addEventListener("click", () => window.posthog?.capture("waitlist_shared"));
+      $("[data-share-x]").addEventListener("click", share);
 
       $("[data-copy]").addEventListener("click", async (e) => {
         const btn = e.currentTarget;

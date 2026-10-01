@@ -103,14 +103,14 @@ test("card route: invalid code, or a row without a handle, goes to the static im
   assert.equal(none.code, 302);
 });
 
-test("card route: a row with a handle renders an uncached PNG", async () => {
+test("card route: a row with a handle renders a PNG the CDN holds for a minute", async () => {
   // A non-X avatar host is never fetched, so the letter fallback renders offline.
   const res = await run({ code: "abc123", v: "9" }, [
     { code: "abc123", email: "a@b.co", x_handle: "mo", x_avatar: process.env.CARD_AVATAR ?? "https://evil.example/a.png", rank: 3 },
   ]);
   assert.equal(res.code, 200);
   assert.equal(res.headers["Content-Type"], "image/png");
-  assert.match(res.headers["Cache-Control"], /no-store/);
+  assert.match(res.headers["Cache-Control"], /s-maxage=60/);
   assert.equal(res.body.subarray(1, 4).toString(), "PNG");
   if (process.env.CARD_OUT) {
     const { writeFileSync } = await import("node:fs");

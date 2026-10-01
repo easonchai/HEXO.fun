@@ -1,5 +1,5 @@
-// Privy for a page without React. Bundled by build.js into /privy.js, which
-// the page imports lazily: `const { login, logout } = await import("/privy.js")`.
+// Privy for a page without React. Bundled by build.js into /privy/, which the
+// page imports lazily: `const { login, logout } = await import("/privy/privy.js")`.
 // The app id is the apps/web one, inlined at build time from PRIVY_APP_ID.
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
