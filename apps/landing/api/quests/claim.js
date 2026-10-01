@@ -1,5 +1,13 @@
 import { QUESTS } from "../_points.js";
-import { configured, ensureSchema, loadMember, safeParse, sessionId, sql } from "../_lib.js";
+import {
+  awardReferrals,
+  configured,
+  ensureSchema,
+  loadMember,
+  safeParse,
+  sessionId,
+  sql,
+} from "../_lib.js";
 
 /**
  * Claims an honor quest. 401 without a session, 404 for an unknown or
@@ -30,6 +38,9 @@ export default async function handler(req, res) {
       values (${id}::uuid, 'quest', ${quest.id}, ${quest.points}::int)
       on conflict (waitlist_id, kind, ref) do nothing
     `;
+    // The follow can verify this member as invitee or referrer, and the like
+    // completes the bonus. Pays whatever that unlocks, on either side.
+    await awardReferrals(id);
     return res.status(200).json(await loadMember(id));
   } catch (err) {
     console.error("quest claim failed", err);

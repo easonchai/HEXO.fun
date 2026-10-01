@@ -1,12 +1,22 @@
-/** The only place a point value lives. Placeholders the team will change. An
- *  award stores the value at write time, so a change applies to new awards. */
-export const POINTS = { referral: 100, x_connect: 50, referred: 25 };
+/** The only place a point value lives. An award stores the value at write
+ *  time, so a change applies to new awards. `referral` and `referral_bonus` go
+ *  to the referrer, `referred` to the invitee. */
+export const POINTS = { x_connect: 10, referred: 10, referral: 40, referral_bonus: 10 };
 
-/** Placeholders until the team supplies the real list. `check`: `oauth` is
- *  granted by its own flow, `honor` by the claim route. Honor and later checks
- *  need X connected. The ledger stores `points` at write time. */
+/** `check`: `oauth` is granted by its own flow, `honor` by the claim route.
+ *  Honor quests need X connected. A member is verified once they have X and
+ *  the follow quest; the referral payout reads `FOLLOW` and `LIKE_REPOST`. */
+export const FOLLOW = "x_follow";
+export const LIKE_REPOST = "x_like_repost";
+
 export const QUESTS = [
-  { id: "x_connect", title: "Connect X", url: "/", points: POINTS.x_connect, check: "oauth" },
-  { id: "x_follow", title: "Follow @hexo", url: "https://x.com/hexo", points: 25, check: "honor" },
-  { id: "x_retweet", title: "Retweet the launch post", url: "https://x.com/hexo", points: 25, check: "honor" },
+  { id: "x_connect", title: "Connect X", url: "/api/x/start", points: POINTS.x_connect, check: "oauth" },
+  { id: FOLLOW, title: "Follow @Hexofun on X", url: "https://x.com/Hexofun", points: 10, check: "honor" },
+  {
+    id: LIKE_REPOST,
+    title: "Like + repost the waitlist post",
+    url: "https://x.com/Hexofun/status/2104929707770921450",
+    points: 20,
+    check: "honor",
+  },
 ];

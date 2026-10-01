@@ -32,11 +32,11 @@ test.after(async () => {
 });
 
 let n = 0;
-async function member({ code, handle = null, points = 0, createdAt = new Date() }) {
+async function member({ code, handle = null, points = 0, createdAt = new Date(), email }) {
   const { rows } = await pool.query(
     `insert into waitlist (email, code, x_handle, created_at)
      values ($1, $2, $3, $4) returning id`,
-    [`lb${n++}@example.com`, code, handle, createdAt],
+    [email ?? `lb${n++}@example.com`, code, handle, createdAt],
   );
   if (points) {
     await pool.query(
@@ -65,17 +65,18 @@ async function call(method = "GET") {
   return res;
 }
 
-test("name is the X handle, else the code, and no email leaks", { skip }, async () => {
+test("name is the X handle, else the masked email, never the code", { skip }, async () => {
   await member({ code: "bb0001", handle: "alice", points: 900 });
-  await member({ code: "bb0002", points: 800 });
+  await member({ code: "bb0002", points: 800, email: "bobby@proton.me" });
   const res = await call();
   assert.equal(res.code, 200);
   assert.equal(res.headers["Cache-Control"], "public, s-maxage=30");
   assert.deepEqual(res.body, [
-    { rank: 1, name: "alice", points: 900 },
-    { rank: 2, name: "bb0002", points: 800 },
+    { rank: 1, name: "@alice", points: 900 },
+    { rank: 2, name: "bo***@proton.me", points: 800 },
   ]);
-  assert.ok(!JSON.stringify(res.body).includes("@"));
+  const text = JSON.stringify(res.body);
+  assert.ok(!text.includes("bobby") && !text.includes("bb000"));
 });
 
 test("rank matches loadMember through ties, and the board stops at 100", { skip }, async () => {
@@ -86,8 +87,11 @@ test("rank matches loadMember through ties, and the board stops at 100", { skip 
   }
   const { body } = await call();
   assert.equal(body.length, 100);
-  for (const row of body.filter((r) => r.name.startsWith("cc"))) {
-    assert.equal((await loadMemberByCode(row.name)).rank, row.rank, row.name);
+  // Names repeat once masked, so match each member to the board by rank.
+  for (let i = 0; i < 105; i++) {
+    const m = await loadMemberByCode(`cc${String(i).padStart(4, "0")}`);
+    const row = body[m.rank - 1];
+    if (row) assert.deepEqual(row, { rank: m.rank, name: m.name, points: m.points });
   }
 });
 

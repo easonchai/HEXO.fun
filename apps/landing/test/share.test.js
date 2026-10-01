@@ -90,12 +90,12 @@ test("card route: invalid code, or a row without a handle, goes to the static im
   const bad = await run({ code: "nope" }, []);
   assert.equal(bad.code, 302);
   assert.equal(bad.headers.Location, "/og-image.png");
-  const none = await run({ code: "abc123" }, [{ code: "abc123", x_handle: null, rank: 3 }]);
+  const none = await run({ code: "abc123" }, [{ code: "abc123", email: "a@b.co", x_handle: null, rank: 3 }]);
   assert.equal(none.code, 302);
 });
 
 test("card route: a row with a handle renders a cached PNG", async () => {
-  const res = await run({ code: "abc123", v: "9" }, [{ code: "abc123", x_handle: "mo", rank: 3 }]);
+  const res = await run({ code: "abc123", v: "9" }, [{ code: "abc123", email: "a@b.co", x_handle: "mo", rank: 3 }]);
   assert.equal(res.code, 200);
   assert.equal(res.headers["Content-Type"], "image/png");
   assert.match(res.headers["Cache-Control"], /immutable/);

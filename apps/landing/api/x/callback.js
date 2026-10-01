@@ -59,7 +59,7 @@ export default async function handler(req, res) {
       select id, 'x_connect', '', ${POINTS.x_connect}::int from u
       on conflict (waitlist_id, kind, ref) do nothing
     `;
-    // Pays the referrer and the invitee now that this row has X. No-op without a referrer.
+    // X is half of verified; pays whatever that unlocks, on either side.
     await awardReferrals(id);
     return home("connected");
   } catch (err) {

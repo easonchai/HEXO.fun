@@ -49,7 +49,7 @@ async function member(x = false) {
 async function connectX(id) {
   await pool.query("update waitlist set x_user_id = 'x' || id::text where id = $1", [id]);
   await pool.query(
-    "insert into waitlist_points (waitlist_id, kind, points) values ($1, 'x_connect', 50)",
+    "insert into waitlist_points (waitlist_id, kind, points) values ($1, 'x_connect', 10)",
     [id],
   );
 }
@@ -80,10 +80,10 @@ test("claim writes one row and a repeat writes none", { skip }, async () => {
   const a = await call(claim, { id, body: { id: "x_follow" } });
   assert.equal(a.status, 200);
   assert.equal(quest(a.body, "x_follow").done, true);
-  assert.equal(a.body.points, 25);
+  assert.equal(a.body.points, 10);
   const b = await call(claim, { id, body: { id: "x_follow" } });
   assert.equal(b.status, 200);
-  assert.deepEqual(await rows(id), [{ kind: "quest", ref: "x_follow", points: 25 }]);
+  assert.deepEqual(await rows(id), [{ kind: "quest", ref: "x_follow", points: 10 }]);
 });
 
 test("claim without X is 409 and writes nothing", { skip }, async () => {
@@ -112,14 +112,14 @@ test("/me reports done and locked before and after X connect", { skip }, async (
   assert.equal(before.quests.length, 3);
   assert.deepEqual(
     before.quests.map((q) => [q.id, q.done, q.locked]),
-    [["x_connect", false, false], ["x_follow", false, true], ["x_retweet", false, true]],
+    [["x_connect", false, false], ["x_follow", false, true], ["x_like_repost", false, true]],
   );
   await connectX(id);
-  await call(claim, { id, body: { id: "x_retweet" } });
+  await call(claim, { id, body: { id: "x_like_repost" } });
   const after = await loadMember(id);
   assert.deepEqual(
     after.quests.map((q) => [q.id, q.done, q.locked]),
-    [["x_connect", true, false], ["x_follow", false, false], ["x_retweet", true, false]],
+    [["x_connect", true, false], ["x_follow", false, false], ["x_like_repost", true, false]],
   );
-  assert.equal(after.points, 75);
+  assert.equal(after.points, 30);
 });

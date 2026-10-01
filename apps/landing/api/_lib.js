@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { POINTS, QUESTS } from "./_points.js";
+import { FOLLOW, LIKE_REPOST, POINTS, QUESTS } from "./_points.js";
 
 /**
  * Shared by the routes. Files that start with `_` are not routes on Vercel.
@@ -64,15 +64,6 @@ export function ensureSchema() {
         unique (waitlist_id, kind, ref)
       )
     `;
-    // Referrals pay on X connect. Drop awards paid at sign-in for invitees
-    // without X, then credit the qualified ones. Both repeat safely.
-    await sql`
-      delete from waitlist_points p
-      where p.kind = 'referral'
-        and not exists (
-          select 1 from waitlist w where w.id::text = p.ref and w.x_user_id is not null
-        )
-    `;
     await awardReferrals();
   })().catch((err) => {
     ready = undefined; // let the next request retry rather than cache a failure
@@ -127,67 +118,124 @@ async function loadMemberWhere(id, code) {
         w.id,
         coalesce(sum(p.points), 0)::int as points,
         (count(p.id) filter (where p.kind = 'referral'))::int as referrals,
-        (row_number() over (
-          order by coalesce(sum(p.points), 0) desc, w.created_at asc, w.id asc
-        ))::int as rank
+        (row_number() over board)::int as rank,
+        (lag(coalesce(sum(p.points), 0)) over board)::int as above
       from waitlist w
       left join waitlist_points p on p.waitlist_id = w.id
       group by w.id
+      window board as (order by coalesce(sum(p.points), 0) desc, w.created_at asc, w.id asc)
+    ),
+    invitees as (
+      select
+        (i.x_user_id is not null and exists (
+          select 1 from waitlist_points p
+          where p.waitlist_id = i.id and p.kind = 'quest' and p.ref = ${FOLLOW}
+        )) as verified,
+        exists (
+          select 1 from waitlist_points p
+          where p.waitlist_id = i.id and p.kind = 'quest' and p.ref = ${LIKE_REPOST}
+        ) as liked
+      from waitlist i
+      join waitlist w on w.code = i.referred_by and w.id <> i.id
+      where w.id = ${id}::uuid or w.code = ${code}
     )
-    select w.id, w.code, w.x_handle, r.rank, r.points, r.referrals,
+    select w.id, w.code, w.email, w.x_handle, r.rank, r.points, r.referrals, r.above,
+      (select count(*) filter (where verified) from invitees)::int as verified,
+      (select count(*) filter (where verified and liked) from invitees)::int as completed,
       (w.x_user_id is not null) as x,
       array(
         select p.kind || ':' || p.ref from waitlist_points p
-        where p.waitlist_id = w.id and p.kind in ('quest', 'x_connect')
+        where p.waitlist_id = w.id and p.kind in ('quest', 'x_connect', 'referred')
       ) as got
     from waitlist w
     join ranked r on r.id = w.id
     where w.id = ${id}::uuid or w.code = ${code}
   `;
   if (!rows[0]) return null;
-  // Quest state rides along as `x` and `got`, and stays out of the body.
-  const { x, got = [], ...member } = rows[0];
+  // Quest state rides along as `x` and `got`, and stays out of the body, as
+  // does the email: only its masked form leaves the server.
+  const { x, got = [], email, above, ...member } = rows[0];
   const quests = QUESTS.map((q) => ({
     ...q,
     done: got.includes(q.check === "oauth" ? `${q.id}:` : `quest:${q.id}`),
     locked: q.check !== "oauth" && !x,
   }));
-  return { ...member, quests };
+  return {
+    ...member,
+    name: displayName(member.x_handle, email),
+    // Ties go to the earlier signup, so passing the row above takes one more point.
+    next_gap: above == null ? null : above - member.points + 1,
+    referred: got.includes("referred:"),
+    quests,
+  };
 }
+
+/** `ab***@domain` from `abcdef@domain`. Shows on the public board, so it
+ *  never includes more than two characters of the local part. */
+export function maskEmail(email) {
+  const at = email.lastIndexOf("@");
+  return `${email.slice(0, Math.min(2, at))}***${email.slice(at)}`;
+}
+
+const displayName = (handle, email) => (handle ? `@${handle}` : maskEmail(email));
 
 /** Top 100 for the public board. Same order as the rank in `loadMemberWhere`
  *  (points, then earlier signup, then id). Not shared as SQL, since a tagged
  *  template cannot splice a fragment; a test pins the two together. */
-export const loadLeaderboard = () => sql`
-  select
-    (row_number() over (
-      order by coalesce(sum(p.points), 0) desc, w.created_at asc, w.id asc
-    ))::int as rank,
-    coalesce(w.x_handle, w.code) as name,
-    coalesce(sum(p.points), 0)::int as points
-  from waitlist w
-  left join waitlist_points p on p.waitlist_id = w.id
-  group by w.id
-  order by rank
-  limit 100
-`;
+export async function loadLeaderboard() {
+  const rows = await sql`
+    select
+      (row_number() over (
+        order by coalesce(sum(p.points), 0) desc, w.created_at asc, w.id asc
+      ))::int as rank,
+      w.x_handle, w.email,
+      coalesce(sum(p.points), 0)::int as points
+    from waitlist w
+    left join waitlist_points p on p.waitlist_id = w.id
+    group by w.id
+    order by rank
+    limit 100
+  `;
+  return rows.map(({ rank, x_handle, email, points }) => ({
+    rank,
+    name: displayName(x_handle, email),
+    points,
+  }));
+}
 
-/** Writes the referrer's award and the invitee's own bonus, only for an invitee
- *  with X connected. With an id it covers that one row; with none it backfills
- *  every row. Safe to repeat, the unique key drops the second insert. */
-export function awardReferrals(newId = null) {
+/** Every referral award, for the pairs where `id` is the invitee or the
+ *  referrer; with no id, every pair. The invitee's `referred` bonus is paid as
+ *  soon as the code matches. The referrer's `referral` waits until both sides
+ *  are verified (X plus the follow quest), and `referral_bonus` also waits for
+ *  the invitee's like + repost. Safe to repeat, the unique key drops the
+ *  second insert, so a held-back award lands on whichever call comes first. */
+export function awardReferrals(id = null) {
   return sql`
-    with q as (
-      select r.id as referrer, w.id as invitee
+    with v as (
+      select w.id, w.code, w.referred_by,
+        (w.x_user_id is not null and exists (
+          select 1 from waitlist_points p
+          where p.waitlist_id = w.id and p.kind = 'quest' and p.ref = ${FOLLOW}
+        )) as verified,
+        exists (
+          select 1 from waitlist_points p
+          where p.waitlist_id = w.id and p.kind = 'quest' and p.ref = ${LIKE_REPOST}
+        ) as liked
       from waitlist w
-      join waitlist r on r.code = w.referred_by and r.id <> w.id
-      where w.x_user_id is not null
-        and (${newId}::uuid is null or w.id = ${newId}::uuid)
+    ),
+    q as (
+      select r.id as referrer, i.id as invitee, r.verified and i.verified as paid, i.liked
+      from v i
+      join v r on r.code = i.referred_by and r.id <> i.id
+      where ${id}::uuid is null or i.id = ${id}::uuid or r.id = ${id}::uuid
     )
     insert into waitlist_points (waitlist_id, kind, ref, points)
-    select referrer, 'referral', invitee::text, ${POINTS.referral}::int from q
-    union all
     select invitee, 'referred', '', ${POINTS.referred}::int from q
+    union all
+    select referrer, 'referral', invitee::text, ${POINTS.referral}::int from q where paid
+    union all
+    select referrer, 'referral_bonus', invitee::text, ${POINTS.referral_bonus}::int
+    from q where paid and liked
     on conflict (waitlist_id, kind, ref) do nothing
   `;
 }
