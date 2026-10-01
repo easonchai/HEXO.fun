@@ -3230,9 +3230,10 @@
         e.currentTarget.href = shareUrl(readJoined().code);
         window.posthog?.capture("waitlist_shared");
       };
-      // The plain link friends get; Copy puts this on the clipboard. Both
-      // links use the current host, so preview deploys share themselves.
-      const refLink = (code) => `${location.origin}/?ref=${code}`;
+      // The link friends get; Copy puts this on the clipboard. /r/<code> so
+      // a pasted link unfurls with the sharer's card too. Both links use the
+      // current host, so preview deploys share themselves.
+      const refLink = (code) => `${location.origin}/r/${code}`;
 
       // ----------------------------- dashboard -----------------------------
       // Signed in, the page is only the nav and this. Built with textContent
