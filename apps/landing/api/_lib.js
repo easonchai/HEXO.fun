@@ -46,6 +46,7 @@ export function ensureSchema() {
     await sql`alter table waitlist add column if not exists x_user_id text unique`;
     await sql`alter table waitlist add column if not exists x_handle text`;
     await sql`alter table waitlist add column if not exists x_connected_at timestamptz`;
+    await sql`alter table waitlist add column if not exists x_avatar text`;
     await sql`alter table waitlist add column if not exists privy_did text unique`;
     // Backfill signups from before codes existed. Empty after the first run.
     const missing = await sql`select id from waitlist where code is null`;
@@ -127,8 +128,8 @@ async function loadMemberWhere(id, code) {
         (lag(coalesce(sum(p.points), 0)) over board)::int as above
       from waitlist w
       left join waitlist_points p on p.waitlist_id = w.id
-      group by w.id
       where w.privy_did is not null
+      group by w.id
       window board as (order by coalesce(sum(p.points), 0) desc, w.created_at asc, w.id asc)
     ),
     invitees as (
@@ -145,7 +146,7 @@ async function loadMemberWhere(id, code) {
       join waitlist w on w.code = i.referred_by and w.id <> i.id
       where i.privy_did is not null and (w.id = ${id}::uuid or w.code = ${code})
     )
-    select w.id, w.code, w.email, w.x_handle, r.rank, r.points, r.referrals, r.above,
+    select w.id, w.code, w.email, w.x_handle, w.x_avatar, r.rank, r.points, r.referrals, r.above,
       (select count(*) filter (where verified) from invitees)::int as verified,
       (select count(*) filter (where verified and liked) from invitees)::int as completed,
       (w.x_user_id is not null) as x,
@@ -200,8 +201,8 @@ export async function loadLeaderboard() {
       coalesce(sum(p.points), 0)::int as points
     from waitlist w
     left join waitlist_points p on p.waitlist_id = w.id
-    group by w.id
     where w.privy_did is not null
+    group by w.id
     order by rank
     limit 100
   `;
@@ -231,8 +232,8 @@ export function awardReferrals(id = null) {
           where p.waitlist_id = w.id and p.kind = 'quest' and p.ref = ${LIKE_REPOST}
         ) as liked
       from waitlist w
-    ),
       where w.privy_did is not null
+    ),
     q as (
       select r.id as referrer, i.id as invitee, r.verified and i.verified as paid, i.liked
       from v i

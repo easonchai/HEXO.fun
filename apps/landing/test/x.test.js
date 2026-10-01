@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { authorizeUrl, challengeOf, newVerifier, xCookie, readXCookie } from "../api/_x.js";
+import { authorizeUrl, challengeOf, newVerifier, parseAvatar, xCookie, readXCookie } from "../api/_x.js";
 import { signSession } from "../api/_lib.js";
 
 test("PKCE challenge matches RFC 7636 appendix B", () => {
@@ -46,4 +46,14 @@ test("x cookie rejects a wrong secret, tampering and a session cookie", () => {
   assert.equal(readXCookie(reqWith(v.replace("hexo_x=", "hexo_x=z")), "S"), null);
   assert.equal(readXCookie(reqWith(`hexo_x=${signSession("just-an-id", "S")}`), "S"), null);
   assert.equal(readXCookie(reqWith(""), "S"), null);
+});
+
+test("parseAvatar keeps X's CDN only, at 400px", () => {
+  const base = "https://pbs.twimg.com/profile_images/1661201415899951105/azNjKOSH";
+  assert.equal(parseAvatar(`${base}_normal.jpg`), `${base}_400x400.jpg`);
+  assert.equal(parseAvatar(`${base}_normal.png`), `${base}_400x400.png`);
+  assert.equal(parseAvatar("https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png"), null);
+  assert.equal(parseAvatar("http://pbs.twimg.com/a_normal.jpg"), null);
+  assert.equal(parseAvatar("https://pbs.twimg.com.evil.example/a.jpg"), null);
+  assert.equal(parseAvatar(undefined), null);
 });

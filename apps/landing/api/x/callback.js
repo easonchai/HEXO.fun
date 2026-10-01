@@ -37,7 +37,7 @@ export default async function handler(req, res) {
     const temp = readXCookie(req, process.env.SESSION_SECRET);
     if (!id || !temp || !code || temp.state !== state) return home("error");
 
-    const { userId, screenName } = await identify({
+    const { userId, screenName, avatar } = await identify({
       clientId: process.env.X_CLIENT_ID,
       clientSecret: process.env.X_CLIENT_SECRET,
       code,
@@ -51,7 +51,8 @@ export default async function handler(req, res) {
     await sql`
       with u as (
         update waitlist
-          set x_user_id = ${userId}, x_handle = ${screenName}, x_connected_at = now()
+          set x_user_id = ${userId}, x_handle = ${screenName}, x_avatar = ${avatar},
+            x_connected_at = now()
           where id = ${id}::uuid
           returning id
       )

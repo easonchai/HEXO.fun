@@ -18,7 +18,8 @@ test("parseV keeps digits only", () => {
   assert.equal(parseV("42"), "42");
   assert.equal(parseV("4x2"), null);
   assert.equal(parseV('1"><script>'), null);
-  assert.equal(parseV("1234567890"), null);
+  assert.equal(parseV("1790846971155"), "1790846971155");
+  assert.equal(parseV("17908469711550"), null);
   assert.equal(parseV(undefined), null);
 });
 
@@ -65,10 +66,18 @@ test("sharePage uses the static image without a handle", () => {
   assert.ok(!html.includes("/api/card"));
 });
 
-test("cardTree shows the handle and the rank, never v", () => {
-  const json = JSON.stringify(cardTree({ handle: "mo_x", rank: 12 }));
+const ART = { bg: "data:bg", logo: "data:logo", mark: "data:mark" };
+
+test("cardTree shows the handle, the rank and the avatar, never v", () => {
+  const json = JSON.stringify(cardTree({ handle: "mo_x", rank: 12, avatar: "data:face", art: ART }));
   assert.ok(json.includes("@mo_x"));
   assert.ok(json.includes("#12"));
+  assert.ok(json.includes("data:face"));
+});
+
+test("cardTree draws the handle's first letter without an avatar", () => {
+  const json = JSON.stringify(cardTree({ handle: "mo_x", rank: 12, avatar: null, art: ART }));
+  assert.ok(json.includes('"children":"M"'));
 });
 
 // The route, over a fake client: real ImageResponse, no database.
@@ -94,11 +103,14 @@ test("card route: invalid code, or a row without a handle, goes to the static im
   assert.equal(none.code, 302);
 });
 
-test("card route: a row with a handle renders a cached PNG", async () => {
-  const res = await run({ code: "abc123", v: "9" }, [{ code: "abc123", email: "a@b.co", x_handle: "mo", rank: 3 }]);
+test("card route: a row with a handle renders an uncached PNG", async () => {
+  // A non-X avatar host is never fetched, so the letter fallback renders offline.
+  const res = await run({ code: "abc123", v: "9" }, [
+    { code: "abc123", email: "a@b.co", x_handle: "mo", x_avatar: process.env.CARD_AVATAR ?? "https://evil.example/a.png", rank: 3 },
+  ]);
   assert.equal(res.code, 200);
   assert.equal(res.headers["Content-Type"], "image/png");
-  assert.match(res.headers["Cache-Control"], /immutable/);
+  assert.match(res.headers["Cache-Control"], /no-store/);
   assert.equal(res.body.subarray(1, 4).toString(), "PNG");
   if (process.env.CARD_OUT) {
     const { writeFileSync } = await import("node:fs");

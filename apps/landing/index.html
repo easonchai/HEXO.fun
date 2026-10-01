@@ -849,26 +849,41 @@
         color: var(--lime);
       }
 
+      /* Figma 587:23280: borderless, link field and buttons side by side. */
+      .card-ref {
+        padding: 18px 15px 16px;
+        border: 0;
+        border-radius: 14px;
+      }
+
+      .card-ref .card-h {
+        margin-bottom: 18px;
+      }
+
       .ref-row {
         display: flex;
-        align-items: center;
-        gap: 16px;
-        padding: 13px 16px 13px 22px;
-        background: var(--navy-800);
-        border-radius: 8px;
+        gap: 12px;
       }
 
       .ref-link {
         flex: 1;
         min-width: 0;
+        height: 44px;
+        padding: 0 17px;
+        line-height: 44px;
+        background: var(--navy-800);
+        border-radius: 8px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         font-size: 16px;
-        color: var(--lime);
-        text-decoration: underline;
-        text-underline-offset: 3px;
+        color: var(--ink);
         user-select: all;
+      }
+
+      .ref-row .btn {
+        flex-basis: 182px;
+        text-decoration: none;
       }
 
       .tiles {
@@ -1847,12 +1862,15 @@
           padding: 16px 12px 12px;
         }
         .ref-row {
-          flex-direction: column;
-          align-items: stretch;
-          padding: 12px;
+          flex-wrap: wrap;
         }
         .ref-link {
+          flex-basis: 100%;
           font-size: 13px;
+        }
+        .ref-row .btn {
+          flex: 1 1 0;
+          width: auto;
         }
         .tiles {
           grid-template-columns: 1fr 1fr;
@@ -2066,11 +2084,12 @@
           <p class="dash-msg" role="status" data-x-msg></p>
         </header>
 
-        <section class="card" aria-labelledby="ref-h">
+        <section class="card card-ref" aria-labelledby="ref-h">
           <h2 class="card-h" id="ref-h">Referral link</h2>
           <div class="ref-row">
             <span class="ref-link" data-ref-link></span>
             <button type="button" class="btn" data-copy><span>Copy</span></button>
+            <a class="btn" target="_blank" rel="noopener" data-share-x><span>Share on X</span></a>
           </div>
         </section>
 
@@ -3097,6 +3116,13 @@
       function join(where) {
         forms[where]?.reset();
         window.posthog?.capture("waitlist_started", { where });
+        return finish(where, loadPrivy().then((p) => p.login()));
+      }
+
+      // Trades a Privy identity token for our session and switches the page
+      // over. Also the landing for a sign-in that started before a reload,
+      // like Google's redirect, where `where` is "return".
+      async function finish(where, idTokenPromise) {
         let member;
         try {
           const idToken = await idTokenPromise;
@@ -3118,13 +3144,6 @@
           );
         }
         posthog.capture("waitlist_submitted", {
-        return finish(where, loadPrivy().then((p) => p.login()));
-      }
-
-      // Trades a Privy identity token for our session and switches the page
-      // over. Also the landing for a sign-in that started before a reload,
-      // like Google's redirect, where `where` is "return".
-      async function finish(where, idTokenPromise) {
           where,
           has_utm: !!UTM,
           referred: !!REF,
@@ -3186,18 +3205,18 @@
       })();
 
       // ----------------------------- share on x ----------------------------
-      // /r/<code> unfurls with the sharer's card. `v` (rank) only busts X's
-      // per-URL cache, so each new share gets a current image.
-      const shareUrl = (code, rank) =>
+      // /r/<code> unfurls with the sharer's card. `v` (a timestamp) only
+      // busts X's per-URL cache, so each new share gets a current image.
+      const shareUrl = (code) =>
         "https://x.com/intent/post?text=" +
         encodeURIComponent(
           "Just signed up for @hexofun\n\n" +
             "Use my link to increase your chances of getting early access\n\n" +
-            `https://hexofun.lol/r/${code}` +
-            (rank ? `?v=${rank}` : ""),
+            `${location.origin}/r/${code}?v=${Date.now()}`,
         );
-      // The plain link friends get; Copy puts this on the clipboard.
-      const refLink = (code) => `https://hexofun.lol/?ref=${code}`;
+      // The plain link friends get; Copy puts this on the clipboard. Both
+      // links use the current host, so preview deploys share themselves.
+      const refLink = (code) => `${location.origin}/?ref=${code}`;
 
       // ----------------------------- dashboard -----------------------------
       // Signed in, the page is only the nav and this. Built with textContent
@@ -3223,6 +3242,7 @@
 
       function renderDash(s) {
         $("[data-ref-link]").textContent = refLink(s.code);
+        $("[data-share-x]").href = shareUrl(s.code);
         $("[data-rank]").textContent = `#${s.rank}`;
         $("[data-points]").textContent = `${s.points} pts`;
         $("[data-next]").textContent =
@@ -3286,7 +3306,7 @@
         }
         if (state === "share") {
           const a = el("a", "qbtn", "Share");
-          Object.assign(a, { href: shareUrl(s.code, s.rank), target: "_blank", rel: "noopener" });
+          Object.assign(a, { href: shareUrl(s.code), target: "_blank", rel: "noopener" });
           a.addEventListener("click", () => window.posthog?.capture("waitlist_shared"));
           return a;
         }
@@ -3365,6 +3385,8 @@
           }),
         );
       }
+
+      $("[data-share-x]").addEventListener("click", () => window.posthog?.capture("waitlist_shared"));
 
       $("[data-copy]").addEventListener("click", async (e) => {
         const btn = e.currentTarget;

@@ -7,7 +7,7 @@ import { getCookie, signSession, verifySession } from "./_lib.js";
 // The app must sit inside a Project, or v2 answers 403 client-not-enrolled.
 const AUTHORIZE_URL = "https://x.com/i/oauth2/authorize";
 const TOKEN_URL = "https://api.x.com/2/oauth2/token";
-const ME_URL = "https://api.x.com/2/users/me";
+const ME_URL = "https://api.x.com/2/users/me?user.fields=profile_image_url";
 const SCOPES = "users.read tweet.read"; // users/me needs both
 
 const b64url = (buf) => buf.toString("base64url");
@@ -35,7 +35,15 @@ async function call(what, url, init) {
   return { res, json: JSON.parse(text) };
 }
 
-/** Code -> access token -> `{ userId, screenName }`. The token is dropped here. */
+/** The avatar URL worth keeping: X's https CDN only, at 400px instead of the
+ *  48px `_normal` it returns. Anything else is null, so the card never
+ *  fetches a host we didn't expect. */
+export function parseAvatar(raw) {
+  if (typeof raw !== "string" || !raw.startsWith("https://pbs.twimg.com/")) return null;
+  return raw.replace(/_normal(\.\w+)$/, "_400x400$1").slice(0, 500);
+}
+
+/** Code -> access token -> `{ userId, screenName, avatar }`. The token is dropped here. */
 export async function identify({ clientId, clientSecret, code, redirectUri, verifier }) {
   const { json: tok } = await call("token", TOKEN_URL, {
     method: "POST",
@@ -57,7 +65,7 @@ export async function identify({ clientId, clientSecret, code, redirectUri, veri
   const userId = me.data?.id;
   const screenName = me.data?.username;
   if (!userId || !screenName) throw new Error("X users/me failed: missing identity in response");
-  return { userId, screenName };
+  return { userId, screenName, avatar: parseAvatar(me.data.profile_image_url) };
 }
 
 // State and PKCE verifier ride between /start and /callback in this cookie:

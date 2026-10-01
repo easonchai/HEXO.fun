@@ -12,10 +12,11 @@ export function parseCode(raw) {
   return CODE.test(code) ? code : null;
 }
 
-/** The `v` cache key as digits only, or null. Never shown on the card. */
+/** The `v` cache key (a share's timestamp in ms) as digits only, or null.
+ *  Never shown on the card. */
 export function parseV(raw) {
   const v = String(Array.isArray(raw) ? raw[0] : (raw ?? ""));
-  return /^[0-9]{1,9}$/.test(v) ? v : null;
+  return /^[0-9]{1,13}$/.test(v) ? v : null;
 }
 
 export const escapeHtml = (s) =>
@@ -68,62 +69,73 @@ export function sharePage({ origin, code, handle, v }) {
 `;
 }
 
-// Landing palette (index.html :root) and type.
-const NAVY = "#081120";
-const INK = "#e2e4e9";
-const INK3 = "#838a93";
+// Landing palette (index.html :root).
+const NAVY = "#0e1b2b";
+const NAVY_700 = "#132133";
 const LIME = "#b6ff3b";
-const LINE = "rgba(226, 228, 233, 0.18)";
 
 const el = (type, style, children) => ({ type, props: { style, children } });
+const img = (src, style) => ({ type: "img", props: { src, style } });
+const at = (left, top, style = {}) => ({ position: "absolute", left, top, display: "flex", ...style });
 
-/** Element tree for `ImageResponse`, 1200x630. Plain objects, no JSX. */
-export function cardTree({ handle, rank }) {
-  const name = `@${handle}`;
-  // Syncopate is wide, about 0.95em a character. X handles run to 15 characters,
-  // so size the name to fit one line in the 1056px content box.
-  const nameSize = Math.min(104, Math.floor(1056 / (name.length * 0.95)));
-  return el(
-    "div",
-    {
-      width: 1200,
-      height: 630,
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "space-between",
-      padding: 72,
-      background: NAVY,
-      color: INK,
-      fontFamily: "Syncopate",
-      borderTop: `8px solid ${LIME}`,
-    },
-    [
-      el("div", { display: "flex", fontSize: 40, fontWeight: 700, color: LIME }, "HEXO.fun"),
-      el("div", { display: "flex", flexDirection: "column" }, [
-        el("div", { display: "flex", fontSize: 24, color: INK3, letterSpacing: 4 }, "ON THE WAITLIST"),
-        el(
-          "div",
-          { display: "flex", fontSize: nameSize, fontWeight: 700, marginTop: 20, color: INK },
-          name,
-        ),
-      ]),
-      el(
+/**
+ * Element tree for satori, 1200x630. Plain objects, no JSX. Figma's
+ * "Waitlist Ladder Template" (540:45456) is 1200x670; X shows 1.91:1, so the
+ * layout is that frame with 20px trimmed off the top and bottom.
+ * `art` holds the background, logo and mark as data URIs; `avatar` is one too,
+ * or null, which draws the handle's first letter instead.
+ */
+export function cardTree({ handle, rank, avatar, art }) {
+  const label = `#${rank}`;
+  // Syncopate digits run about 0.76em wide; keep the rank clear of the avatar.
+  const rankSize = Math.min(200, Math.floor(720 / (label.length * 0.76)));
+  const face = avatar
+    ? img(avatar, { width: 276, height: 276, borderRadius: 34, objectFit: "cover" })
+    : el(
         "div",
         {
+          width: 276,
+          height: 276,
+          borderRadius: 34,
           display: "flex",
-          alignItems: "flex-end",
-          justifyContent: "space-between",
-          borderTop: `2px solid ${LINE}`,
-          paddingTop: 32,
+          alignItems: "center",
+          justifyContent: "center",
+          background: NAVY_700,
+          color: LIME,
+          fontSize: 140,
         },
-        [
-          el("div", { display: "flex", fontSize: 28, color: INK3 }, "Earn 5%. Play for jackpot."),
-          el("div", { display: "flex", alignItems: "baseline" }, [
-            el("div", { display: "flex", fontSize: 28, color: INK3, marginRight: 20 }, "RANK"),
-            el("div", { display: "flex", fontSize: 96, fontWeight: 700, color: LIME }, `#${rank}`),
-          ]),
-        ],
+        handle.slice(0, 1).toUpperCase(),
+      );
+  return el(
+    "div",
+    { width: 1200, height: 630, display: "flex", position: "relative", background: NAVY, fontFamily: "Syncopate" },
+    [
+      img(art.bg, at(0, -20, { width: 1200, height: 670 })),
+      img(art.logo, at(64, 44, { width: 162, height: 47.5 })),
+      el("div", at(64, 154, { fontSize: rankSize, lineHeight: 1.1, letterSpacing: 2.8, color: LIME }), label),
+      el("div", at(64, 383, { flexDirection: "column", fontSize: 32, lineHeight: "40px", letterSpacing: 0.88, color: "#fff" }), [
+        el("div", { display: "flex" }, [
+          // Satori trims a trailing plain space at a span edge.
+          el("span", {}, "On the "),
+          el("span", { color: LIME }, "HEXO"),
+        ]),
+        el("div", { display: "flex" }, "Waitlist Ladder"),
+      ]),
+      el("div", at(823, 160), [face]),
+      el(
+        "div",
+        at(803, 452, {
+          width: 316,
+          justifyContent: "center",
+          fontFamily: "Roboto Mono",
+          fontSize: 22.4,
+          letterSpacing: 2.6,
+          color: "#fff",
+        }),
+        `@${handle}`,
       ),
+      el("div", at(64, 557, { fontSize: 16, lineHeight: "52px", letterSpacing: 0.3, color: LIME }), "A no-loss savings app"),
+      img(art.mark, at(1001, 566, { width: 135, height: 22.5 })),
     ],
   );
 }
