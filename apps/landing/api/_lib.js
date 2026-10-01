@@ -155,6 +155,23 @@ async function loadMemberWhere(id, code) {
   return { ...member, quests };
 }
 
+/** Top 100 for the public board. Same order as the rank in `loadMemberWhere`
+ *  (points, then earlier signup, then id). Not shared as SQL, since a tagged
+ *  template cannot splice a fragment; a test pins the two together. */
+export const loadLeaderboard = () => sql`
+  select
+    (row_number() over (
+      order by coalesce(sum(p.points), 0) desc, w.created_at asc, w.id asc
+    ))::int as rank,
+    coalesce(w.x_handle, w.code) as name,
+    coalesce(sum(p.points), 0)::int as points
+  from waitlist w
+  left join waitlist_points p on p.waitlist_id = w.id
+  group by w.id
+  order by rank
+  limit 100
+`;
+
 /** Writes the referrer's award and the invitee's own bonus, only for an invitee
  *  with X connected. With an id it covers that one row; with none it backfills
  *  every row. Safe to repeat, the unique key drops the second insert. */
