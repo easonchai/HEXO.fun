@@ -3314,7 +3314,11 @@
           sub: `${s.completed} completed`,
           state: "info",
         });
-        return rows;
+        // Completed rows sink to the bottom so open quests stay on top.
+        return [
+          ...rows.filter((r) => r.state !== "done"),
+          ...rows.filter((r) => r.state === "done"),
+        ];
       }
 
       function questButton(row, s) {
