@@ -1133,6 +1133,8 @@
       }
 
       .q-form {
+        flex-direction: column;
+        gap: 0;
         margin-top: 8px;
       }
 
@@ -3486,10 +3488,14 @@
           required: true,
         });
         input.setAttribute("aria-label", "Link to your post on X");
-        form.append(input);
+        const hint = el("p", "q-sub form-err", "Paste a post link: x.com/you/status/123");
+        Object.assign(hint, { id: `${form.id}-hint`, hidden: true });
+        input.setAttribute("aria-describedby", hint.id);
+        form.append(input, hint);
         const button = () => dash.querySelector(`button[form="${form.id}"]`);
         input.addEventListener("input", () => {
           input.removeAttribute("aria-invalid");
+          hint.hidden = true;
           button().disabled = !input.value.trim();
         });
         form.addEventListener("submit", (e) => {
@@ -3497,6 +3503,7 @@
           if (!input.value.trim()) return;
           claim(q, button(), input.value, () => {
             input.setAttribute("aria-invalid", "true");
+            hint.hidden = false;
             form.classList.remove("shake");
             void form.offsetWidth;
             form.classList.add("shake");
