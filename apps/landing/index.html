@@ -1142,6 +1142,14 @@
         font-size: 12px;
       }
 
+      .q-form input[aria-invalid="true"] {
+        border-color: #ff8a6a;
+      }
+
+      .qbtn[form]:disabled {
+        cursor: not-allowed;
+      }
+
       .q-pts {
         padding: 0 34px 0 16px;
         font-size: 11px;
@@ -1970,6 +1978,7 @@
         /* Points move under the title; the number stays in its column. */
         .quest {
           grid-template-columns: 24px 1fr 104px;
+          column-gap: 12px;
           min-height: 65px;
           padding: 12px 0;
         }
@@ -3420,9 +3429,10 @@
         }
         const b = el("button", "qbtn", state === "claim" ? "Claim" : "Go");
         b.type = "button";
-        // A proof quest's Claim submits the link form under its title.
+        // A proof quest's Claim submits the link form under its title, and
+        // stays off until the field has something in it.
         if (state === "claim" && q.proof) {
-          b.type = "submit";
+          Object.assign(b, { type: "submit", disabled: true });
           b.setAttribute("form", `proof-${q.id}`);
           return b;
         }
@@ -3437,7 +3447,8 @@
         return b;
       }
 
-      async function claim(q, b, url) {
+      // `bad` runs instead of a re-render when the server rejects the link.
+      async function claim(q, b, url, bad) {
         b.disabled = true;
         try {
           const member = await api("/api/quests/claim", { id: q.id, url });
@@ -3445,17 +3456,18 @@
           writeJoined(member);
         } catch (err) {
           window.posthog?.capture("quest_claim_failed", { quest: q.id, status: err.status });
+          if (err.status === 400 && bad) {
+            b.disabled = false;
+            return bad();
+          }
           if (err.status === 401) writeJoined(null);
-          else dashMsg.textContent =
-            err.status === 400 ? err.message : "Couldn't claim that. Try again.";
-          b.disabled = false;
-          if (err.status === 400) return;
+          else dashMsg.textContent = "Couldn't claim that. Try again.";
         }
         renderJoined();
       }
 
-      // The waitlist email field, shrunk to fit a quest row. A bad link keeps
-      // the row and the text so the person can fix it.
+      // The waitlist email field, shrunk to fit a quest row. A bad link
+      // shakes the field and keeps the text so the person can fix it.
       function proofForm(q) {
         const form = el("form", "form q-form");
         Object.assign(form, { id: `proof-${q.id}`, noValidate: true });
@@ -3468,10 +3480,20 @@
         });
         input.setAttribute("aria-label", "Link to your post on X");
         form.append(input);
+        const button = () => dash.querySelector(`button[form="${form.id}"]`);
+        input.addEventListener("input", () => {
+          input.removeAttribute("aria-invalid");
+          button().disabled = !input.value.trim();
+        });
         form.addEventListener("submit", (e) => {
           e.preventDefault();
-          const b = dash.querySelector(`button[form="${form.id}"]`);
-          claim(q, b, input.value);
+          if (!input.value.trim()) return;
+          claim(q, button(), input.value, () => {
+            input.setAttribute("aria-invalid", "true");
+            form.classList.remove("shake");
+            void form.offsetWidth;
+            form.classList.add("shake");
+          });
         });
         return form;
       }
