@@ -3081,10 +3081,20 @@
           return null;
         }
       };
+      // Every member write also identifies, so a cookie session restored on a
+      // fresh browser and a claim's new points both reach the person in PostHog.
       const writeJoined = (state) => {
         try {
           localStorage.setItem(JOINED_KEY, JSON.stringify(state));
         } catch {}
+        if (state)
+          window.posthog?.identify(state.id, {
+            points: state.points,
+            rank: state.rank,
+            referrals: state.referrals,
+            x_connected: !!state.x_handle,
+            quests_done: state.quests?.filter((q) => q.done).length ?? 0,
+          });
       };
       const renderers = [];
       const renderJoined = () => {
@@ -3159,7 +3169,6 @@
           referred: !!REF,
           method: "privy",
         });
-        posthog.identify(member.id);
         writeJoined(member);
         renderJoined();
       }
@@ -3358,6 +3367,7 @@
             window.posthog?.capture("quest_claimed", { quest: q.id });
             writeJoined(member);
           } catch (err) {
+            window.posthog?.capture("quest_claim_failed", { quest: q.id, status: err.status });
             if (err.status === 401) writeJoined(null);
             else dashMsg.textContent = "Couldn't claim that. Try again.";
           }
