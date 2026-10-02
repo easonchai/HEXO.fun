@@ -1138,7 +1138,10 @@
         margin-top: 8px;
       }
 
+      /* Column so the hint sits under the field. flex: 1 would be a 0 height
+         basis in a column, same as the mobile .form input. */
       .q-form input {
+        flex: none;
         height: 32px;
         padding: 0 12px;
         font-size: 12px;
