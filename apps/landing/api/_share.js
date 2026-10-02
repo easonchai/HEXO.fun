@@ -33,7 +33,9 @@ export function ogImage(origin, code, handle, v) {
 }
 
 /** The small document crawlers read. People get sent on to `/?ref=<code>`,
- *  which is where the referral is credited. Every interpolation is escaped. */
+ *  which is where the referral is credited. Every interpolation is escaped.
+ *  The redirect is JS only: Telegram's crawler follows a meta refresh and
+ *  would read the landing page's tags instead of these. */
 export function sharePage({ origin, code, handle, v }) {
   const e = escapeHtml;
   const title = handle
@@ -61,7 +63,6 @@ export function sharePage({ origin, code, handle, v }) {
 <meta name="twitter:title" content="${e(title)}" />
 <meta name="twitter:description" content="${e(desc)}" />
 <meta name="twitter:image" content="${e(image)}" />
-<meta http-equiv="refresh" content="0;url=${e(target)}" />
 <script>location.replace(${JSON.stringify(target)});</script>
 </head>
 <body><a href="${e(target)}">HEXO.fun</a></body>

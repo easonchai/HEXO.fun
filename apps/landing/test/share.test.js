@@ -42,11 +42,11 @@ test("sharePage carries the tags and redirects to ?ref=", () => {
     'name="twitter:card" content="summary_large_image"',
     'name="twitter:site" content="@Hexofun"',
     `name="twitter:image" content="${ORIGIN}/api/card?code=abc123&amp;v=7"`,
-    'http-equiv="refresh" content="0;url=/?ref=abc123"',
     'location.replace("/?ref=abc123")',
   ]) {
     assert.ok(html.includes(want), want);
   }
+  assert.ok(!html.includes("http-equiv"), "no meta refresh, Telegram follows it");
 });
 
 test("sharePage escapes a hostile handle and origin", () => {
