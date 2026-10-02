@@ -65,6 +65,7 @@ export function ensureSchema() {
         unique (waitlist_id, kind, ref)
       )
     `;
+    await sql`alter table waitlist_points add column if not exists proof text`;
     await awardReferrals();
   })().catch((err) => {
     ready = undefined; // let the next request retry rather than cache a failure

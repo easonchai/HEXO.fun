@@ -1132,6 +1132,29 @@
         pointer-events: auto;
       }
 
+      .q-form {
+        flex-direction: column;
+        gap: 0;
+        margin-top: 8px;
+      }
+
+      /* Column so the hint sits under the field. flex: 1 would be a 0 height
+         basis in a column, same as the mobile .form input. */
+      .q-form input {
+        flex: none;
+        height: 32px;
+        padding: 0 12px;
+        font-size: 12px;
+      }
+
+      .q-form input[aria-invalid="true"] {
+        border-color: #ff8a6a;
+      }
+
+      .qbtn[form]:disabled {
+        cursor: not-allowed;
+      }
+
       .q-pts {
         padding: 0 34px 0 16px;
         font-size: 11px;
@@ -1957,14 +1980,21 @@
           font-size: 20px;
           line-height: 24px;
         }
-        /* Points move under the title; the number stays in its column. */
+        /* Points move under the title; the number stays in its column. The
+           number and button line up with the title's first line, so a tall
+           row (sub line, link field) doesn't push them down. The title's
+           padding centres that line on the 28px button. */
         .quest {
           grid-template-columns: 24px 1fr 104px;
+          column-gap: 12px;
+          align-items: start;
           min-height: 65px;
           padding: 12px 0;
         }
         .q-title {
+          padding-top: 6px;
           font-size: 12px;
+          line-height: 16px;
         }
         .q-pts {
           grid-column: 2;
@@ -1976,6 +2006,7 @@
         .q-no {
           grid-column: 1;
           grid-row: 1;
+          line-height: 28px;
         }
         .q-body {
           grid-column: 2;
@@ -3410,28 +3441,78 @@
         }
         const b = el("button", "qbtn", state === "claim" ? "Claim" : "Go");
         b.type = "button";
-        b.addEventListener("click", async () => {
-          if (state === "go") {
-            window.open(q.url, "_blank", "noopener");
-            window.posthog?.capture("quest_go", { quest: q.id });
-            claimAt[q.id] = Date.now() + CLAIM_DELAY;
-            // A timer can fire a millisecond early, which would leave "Go" up.
-            setTimeout(renderJoined, CLAIM_DELAY + 50);
-            return;
-          }
-          b.disabled = true;
-          try {
-            const member = await api("/api/quests/claim", { id: q.id });
-            window.posthog?.capture("quest_claimed", { quest: q.id });
-            writeJoined(member);
-          } catch (err) {
-            window.posthog?.capture("quest_claim_failed", { quest: q.id, status: err.status });
-            if (err.status === 401) writeJoined(null);
-            else dashMsg.textContent = "Couldn't claim that. Try again.";
-          }
-          renderJoined();
+        // A proof quest's Claim submits the link form under its title, and
+        // stays off until the field has something in it.
+        if (state === "claim" && q.proof) {
+          Object.assign(b, { type: "submit", disabled: true });
+          b.setAttribute("form", `proof-${q.id}`);
+          return b;
+        }
+        b.addEventListener("click", () => {
+          if (state === "claim") return claim(q, b);
+          window.open(q.url, "_blank", "noopener");
+          window.posthog?.capture("quest_go", { quest: q.id });
+          claimAt[q.id] = Date.now() + CLAIM_DELAY;
+          // A timer can fire a millisecond early, which would leave "Go" up.
+          setTimeout(renderJoined, CLAIM_DELAY + 50);
         });
         return b;
+      }
+
+      // `bad` runs instead of a re-render when the server rejects the link.
+      async function claim(q, b, url, bad) {
+        b.disabled = true;
+        try {
+          const member = await api("/api/quests/claim", { id: q.id, url });
+          window.posthog?.capture("quest_claimed", { quest: q.id });
+          writeJoined(member);
+        } catch (err) {
+          window.posthog?.capture("quest_claim_failed", { quest: q.id, status: err.status });
+          if (err.status === 400 && bad) {
+            b.disabled = false;
+            return bad();
+          }
+          if (err.status === 401) writeJoined(null);
+          else dashMsg.textContent = "Couldn't claim that. Try again.";
+        }
+        renderJoined();
+      }
+
+      // The waitlist email field, shrunk to fit a quest row. A bad link
+      // shakes the field and keeps the text so the person can fix it.
+      function proofForm(q) {
+        const form = el("form", "form q-form");
+        Object.assign(form, { id: `proof-${q.id}`, noValidate: true });
+        const input = el("input");
+        Object.assign(input, {
+          type: "url",
+          name: "url",
+          placeholder: "x.com/you/status/…",
+          required: true,
+        });
+        input.setAttribute("aria-label", "Link to your post on X");
+        const hint = el("p", "q-sub form-err", "Paste a post link: x.com/you/status/123");
+        Object.assign(hint, { id: `${form.id}-hint`, hidden: true });
+        input.setAttribute("aria-describedby", hint.id);
+        form.append(input, hint);
+        const button = () => dash.querySelector(`button[form="${form.id}"]`);
+        input.addEventListener("input", () => {
+          input.removeAttribute("aria-invalid");
+          hint.hidden = true;
+          button().disabled = !input.value.trim();
+        });
+        form.addEventListener("submit", (e) => {
+          e.preventDefault();
+          if (!input.value.trim()) return;
+          claim(q, button(), input.value, () => {
+            input.setAttribute("aria-invalid", "true");
+            hint.hidden = false;
+            form.classList.remove("shake");
+            void form.offsetWidth;
+            form.classList.add("shake");
+          });
+        });
+        return form;
       }
 
       // Port of the web app's InfoTip (apps/web/src/InfoTip.tsx): opens on
@@ -3478,6 +3559,7 @@
               title.replaceChildren(row.title.slice(0, cut), tail);
             }
             body.append(title, el("p", "q-sub", row.sub ?? ""));
+            if (row.state === "claim" && row.q.proof) body.append(proofForm(row.q));
             li.append(
               el("span", "q-no", String(i + 1).padStart(2, "0")),
               body,
