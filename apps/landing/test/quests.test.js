@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ensureSchema, loadMember, sessionCookie, useSql } from "../api/_lib.js";
 import me from "../api/me.js";
-import claim from "../api/quests/claim.js";
+import claim, { postLink } from "../api/quests/claim.js";
 
 // Same harness as points.test.js: needs TEST_DATABASE_URL and pg.
 const url = process.env.TEST_DATABASE_URL;
@@ -116,7 +116,7 @@ test("/me reports done and locked before and after X connect", { skip }, async (
     [["x_connect", false, false], ["x_follow", false, true], ["x_like_repost", false, true]],
   );
   await connectX(id);
-  await call(claim, { id, body: { id: "x_like_repost" } });
+  await call(claim, { id, body: { id: "x_like_repost", url: "https://x.com/a/status/1" } });
   const after = await loadMember(id);
   assert.deepEqual(
     after.quests.map((q) => [q.id, q.done, q.locked]),
@@ -124,4 +124,43 @@ test("/me reports done and locked before and after X connect", { skip }, async (
   );
   assert.equal(after.points, 30);
   assert.match(after.code, /^qq\d{4}$/);
+});
+
+test("postLink keeps x.com and twitter.com post links only", () => {
+  const want = "https://x.com/some_one/status/123";
+  for (const v of [
+    want,
+    " https://twitter.com/some_one/status/123?s=20 ",
+    "https://mobile.x.com/some_one/status/123/photo/1",
+  ]) {
+    assert.equal(postLink(v), want);
+  }
+  for (const v of [
+    "",
+    undefined,
+    "x.com/a/status/1",
+    "https://x.com/some_one",
+    "https://evil.com/a/status/1",
+    "https://x.com.evil.com/a/status/1",
+    "https://x.com/a/status/1abc",
+  ]) {
+    assert.equal(postLink(v), null, String(v));
+  }
+});
+
+test("like + repost needs a post link and stores it", { skip }, async () => {
+  const id = await member(true);
+  const bad = await call(claim, { id, body: { id: "x_like_repost", url: "nope" } });
+  assert.equal(bad.status, 400);
+  assert.deepEqual(await rows(id), []);
+  const ok = await call(claim, {
+    id,
+    body: { id: "x_like_repost", url: "https://twitter.com/me/status/9?s=20" },
+  });
+  assert.equal(ok.status, 200);
+  const { rows: got } = await pool.query(
+    "select proof from waitlist_points where waitlist_id = $1 and ref = 'x_like_repost'",
+    [id],
+  );
+  assert.deepEqual(got, [{ proof: "https://x.com/me/status/9" }]);
 });

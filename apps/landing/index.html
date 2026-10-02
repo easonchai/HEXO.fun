@@ -1132,6 +1132,16 @@
         pointer-events: auto;
       }
 
+      .q-form {
+        margin-top: 8px;
+      }
+
+      .q-form input {
+        height: 32px;
+        padding: 0 12px;
+        font-size: 12px;
+      }
+
       .q-pts {
         padding: 0 34px 0 16px;
         font-size: 11px;
@@ -3410,28 +3420,60 @@
         }
         const b = el("button", "qbtn", state === "claim" ? "Claim" : "Go");
         b.type = "button";
-        b.addEventListener("click", async () => {
-          if (state === "go") {
-            window.open(q.url, "_blank", "noopener");
-            window.posthog?.capture("quest_go", { quest: q.id });
-            claimAt[q.id] = Date.now() + CLAIM_DELAY;
-            // A timer can fire a millisecond early, which would leave "Go" up.
-            setTimeout(renderJoined, CLAIM_DELAY + 50);
-            return;
-          }
-          b.disabled = true;
-          try {
-            const member = await api("/api/quests/claim", { id: q.id });
-            window.posthog?.capture("quest_claimed", { quest: q.id });
-            writeJoined(member);
-          } catch (err) {
-            window.posthog?.capture("quest_claim_failed", { quest: q.id, status: err.status });
-            if (err.status === 401) writeJoined(null);
-            else dashMsg.textContent = "Couldn't claim that. Try again.";
-          }
-          renderJoined();
+        // A proof quest's Claim submits the link form under its title.
+        if (state === "claim" && q.proof) {
+          b.type = "submit";
+          b.setAttribute("form", `proof-${q.id}`);
+          return b;
+        }
+        b.addEventListener("click", () => {
+          if (state === "claim") return claim(q, b);
+          window.open(q.url, "_blank", "noopener");
+          window.posthog?.capture("quest_go", { quest: q.id });
+          claimAt[q.id] = Date.now() + CLAIM_DELAY;
+          // A timer can fire a millisecond early, which would leave "Go" up.
+          setTimeout(renderJoined, CLAIM_DELAY + 50);
         });
         return b;
+      }
+
+      async function claim(q, b, url) {
+        b.disabled = true;
+        try {
+          const member = await api("/api/quests/claim", { id: q.id, url });
+          window.posthog?.capture("quest_claimed", { quest: q.id });
+          writeJoined(member);
+        } catch (err) {
+          window.posthog?.capture("quest_claim_failed", { quest: q.id, status: err.status });
+          if (err.status === 401) writeJoined(null);
+          else dashMsg.textContent =
+            err.status === 400 ? err.message : "Couldn't claim that. Try again.";
+          b.disabled = false;
+          if (err.status === 400) return;
+        }
+        renderJoined();
+      }
+
+      // The waitlist email field, shrunk to fit a quest row. A bad link keeps
+      // the row and the text so the person can fix it.
+      function proofForm(q) {
+        const form = el("form", "form q-form");
+        Object.assign(form, { id: `proof-${q.id}`, noValidate: true });
+        const input = el("input");
+        Object.assign(input, {
+          type: "url",
+          name: "url",
+          placeholder: "x.com/you/status/…",
+          required: true,
+        });
+        input.setAttribute("aria-label", "Link to your post on X");
+        form.append(input);
+        form.addEventListener("submit", (e) => {
+          e.preventDefault();
+          const b = dash.querySelector(`button[form="${form.id}"]`);
+          claim(q, b, input.value);
+        });
+        return form;
       }
 
       // Port of the web app's InfoTip (apps/web/src/InfoTip.tsx): opens on
@@ -3478,6 +3520,7 @@
               title.replaceChildren(row.title.slice(0, cut), tail);
             }
             body.append(title, el("p", "q-sub", row.sub ?? ""));
+            if (row.state === "claim" && row.q.proof) body.append(proofForm(row.q));
             li.append(
               el("span", "q-no", String(i + 1).padStart(2, "0")),
               body,
