@@ -1,11 +1,11 @@
 /** The only place a point value lives. An award stores the value at write
- *  time, so a change applies to new awards. `referral` and `referral_bonus` go
- *  to the referrer, `referred` to the invitee. */
-export const POINTS = { x_connect: 10, referred: 10, referral: 40, referral_bonus: 10 };
+ *  time, so a change applies to new awards. `referral` goes to the
+ *  referrer, `referred` to the invitee. */
+export const POINTS = { x_connect: 10, referred: 10, referral: 40 };
 
 /** `check`: `oauth` is granted by its own flow, `honor` by the claim route.
  *  Honor quests need X connected. A member is verified once they have X and
- *  the follow quest; the referral payout reads `FOLLOW` and `LIKE_REPOST`. */
+ *  the follow quest; the referral payout reads `FOLLOW`. */
 export const FOLLOW = "x_follow";
 export const LIKE_REPOST = "x_like_repost";
 

@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { FOLLOW, LIKE_REPOST, POINTS, QUESTS } from "./_points.js";
+import { FOLLOW, POINTS, QUESTS } from "./_points.js";
 
 /**
  * Shared by the routes. Files that start with `_` are not routes on Vercel.
@@ -136,18 +136,13 @@ async function loadMemberWhere(id, code) {
         (i.x_user_id is not null and exists (
           select 1 from waitlist_points p
           where p.waitlist_id = i.id and p.kind = 'quest' and p.ref = ${FOLLOW}
-        )) as verified,
-        exists (
-          select 1 from waitlist_points p
-          where p.waitlist_id = i.id and p.kind = 'quest' and p.ref = ${LIKE_REPOST}
-        ) as liked
+        )) as verified
       from waitlist i
       join waitlist w on w.code = i.referred_by and w.id <> i.id
       where i.privy_did is not null and (w.id = ${id}::uuid or w.code = ${code})
     )
     select w.id, w.code, w.email, w.x_handle, w.x_avatar, r.rank, r.points, r.referrals, r.above,
       (select count(*) filter (where verified) from invitees)::int as verified,
-      (select count(*) filter (where verified and liked) from invitees)::int as completed,
       (w.x_user_id is not null) as x,
       array(
         select p.kind || ':' || p.ref from waitlist_points p
@@ -175,7 +170,7 @@ async function loadMemberWhere(id, code) {
     next_gap: above == null ? null : above - member.points + 1,
     referred: got.includes("referred:"),
     // The page labels the referral rows with these, so they live in one place.
-    rates: { referred: POINTS.referred, referral: POINTS.referral, referral_bonus: POINTS.referral_bonus },
+    rates: { referred: POINTS.referred, referral: POINTS.referral },
     quests,
   };
 }
@@ -217,8 +212,7 @@ export async function loadLeaderboard() {
 /** Every referral award, for the pairs where `id` is the invitee or the
  *  referrer; with no id, every pair. The invitee's `referred` bonus is paid as
  *  soon as the code matches. The referrer's `referral` waits until both sides
- *  are verified (X plus the follow quest), and `referral_bonus` also waits for
- *  the invitee's like + repost. Safe to repeat, the unique key drops the
+ *  are verified (X plus the follow quest). Safe to repeat, the unique key drops the
  *  second insert, so a held-back award lands on whichever call comes first. */
 export function awardReferrals(id = null) {
   return sql`
@@ -227,16 +221,12 @@ export function awardReferrals(id = null) {
         (w.x_user_id is not null and exists (
           select 1 from waitlist_points p
           where p.waitlist_id = w.id and p.kind = 'quest' and p.ref = ${FOLLOW}
-        )) as verified,
-        exists (
-          select 1 from waitlist_points p
-          where p.waitlist_id = w.id and p.kind = 'quest' and p.ref = ${LIKE_REPOST}
-        ) as liked
+        )) as verified
       from waitlist w
       where w.privy_did is not null
     ),
     q as (
-      select r.id as referrer, i.id as invitee, r.verified and i.verified as paid, i.liked
+      select r.id as referrer, i.id as invitee, r.verified and i.verified as paid
       from v i
       join v r on r.code = i.referred_by and r.id <> i.id
       where ${id}::uuid is null or i.id = ${id}::uuid or r.id = ${id}::uuid
@@ -245,9 +235,6 @@ export function awardReferrals(id = null) {
     select invitee, 'referred', '', ${POINTS.referred}::int from q
     union all
     select referrer, 'referral', invitee::text, ${POINTS.referral}::int from q where paid
-    union all
-    select referrer, 'referral_bonus', invitee::text, ${POINTS.referral_bonus}::int
-    from q where paid and liked
     on conflict (waitlist_id, kind, ref) do nothing
   `;
 }

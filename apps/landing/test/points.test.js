@@ -80,7 +80,6 @@ test("a verified invitee pays nothing until the referrer is verified", { skip },
   assert.equal((await awards(referrer)).length, 0);
   const held = await loadMember(referrer);
   assert.equal(held.verified, 1);
-  assert.equal(held.completed, 1);
   assert.equal(held.referrals, 0);
 
   await verify(referrer);
@@ -88,7 +87,6 @@ test("a verified invitee pays nothing until the referrer is verified", { skip },
   await awardReferrals(referrer);
   assert.deepEqual(await awards(referrer), [
     { waitlist_id: referrer, kind: "referral", ref: fresh, points: POINTS.referral },
-    { waitlist_id: referrer, kind: "referral_bonus", ref: fresh, points: POINTS.referral_bonus },
   ]);
   assert.equal((await loadMember(referrer)).referrals, 1);
 });
@@ -101,14 +99,14 @@ test("a referrer verified first is paid when the invitee verifies", { skip }, as
   assert.equal((await awards(referrer)).length, 0, "X alone is not verified");
   await claim(fresh, FOLLOW);
   await awardReferrals(fresh);
+  assert.deepEqual((await awards(referrer)).map((a) => a.kind), ["referral"]);
+  await claim(fresh, LIKE_REPOST);
+  await awardReferrals(fresh);
   assert.deepEqual(
     (await awards(referrer)).map((a) => a.kind),
     ["referral"],
-    "no bonus before the like + repost",
+    "the like + repost pays no referral bonus",
   );
-  await claim(fresh, LIKE_REPOST);
-  await awardReferrals(fresh);
-  assert.deepEqual((await awards(referrer)).map((a) => a.kind), ["referral", "referral_bonus"]);
 });
 
 test("self-referral earns nothing", { skip }, async () => {
