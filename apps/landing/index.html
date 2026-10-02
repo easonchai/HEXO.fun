@@ -1975,15 +1975,21 @@
           font-size: 20px;
           line-height: 24px;
         }
-        /* Points move under the title; the number stays in its column. */
+        /* Points move under the title; the number stays in its column. The
+           number and button line up with the title's first line, so a tall
+           row (sub line, link field) doesn't push them down. The title's
+           padding centres that line on the 28px button. */
         .quest {
           grid-template-columns: 24px 1fr 104px;
           column-gap: 12px;
+          align-items: start;
           min-height: 65px;
           padding: 12px 0;
         }
         .q-title {
+          padding-top: 6px;
           font-size: 12px;
+          line-height: 16px;
         }
         .q-pts {
           grid-column: 2;
@@ -1995,6 +2001,7 @@
         .q-no {
           grid-column: 1;
           grid-row: 1;
+          line-height: 28px;
         }
         .q-body {
           grid-column: 2;
