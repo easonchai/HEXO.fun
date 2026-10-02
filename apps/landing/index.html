@@ -3522,7 +3522,11 @@
         const btn = e.currentTarget;
         const label = btn.querySelector("span");
         try {
-          await navigator.clipboard.writeText($("[data-ref-link]").textContent);
+          // Shown clean, copied with a fresh `v`: Telegram, Discord and X
+          // cache unfurls per URL, so each copy gets a current card.
+          await navigator.clipboard.writeText(
+            `${refLink(readJoined().code)}?v=${Date.now()}`,
+          );
           label.textContent = "Copied";
           window.posthog?.capture("referral_copied");
         } catch {
