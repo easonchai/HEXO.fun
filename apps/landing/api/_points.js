@@ -15,7 +15,7 @@ export const QUESTS = [
   { id: FOLLOW, title: "Follow @Hexofun on X", url: "https://x.com/Hexofun", points: 10, check: "honor" },
   {
     id: LIKE_REPOST,
-    title: "Like + repost the waitlist post",
+    title: "Like + QRT the waitlist post",
     url: "https://x.com/Hexofun/status/2104929707770921450",
     points: 20,
     check: "honor",
