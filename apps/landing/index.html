@@ -3452,9 +3452,11 @@
           if (state === "claim") return claim(q, b);
           window.open(q.url, "_blank", "noopener");
           window.posthog?.capture("quest_go", { quest: q.id });
-          claimAt[q.id] = Date.now() + CLAIM_DELAY;
+          // A proof quest has the link field as its own gate, so no delay.
+          const delay = q.proof ? 0 : CLAIM_DELAY;
+          claimAt[q.id] = Date.now() + delay;
           // A timer can fire a millisecond early, which would leave "Go" up.
-          setTimeout(renderJoined, CLAIM_DELAY + 50);
+          setTimeout(renderJoined, delay + 50);
         });
         return b;
       }
